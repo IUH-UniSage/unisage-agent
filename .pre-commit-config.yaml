@@ -1,0 +1,10 @@
+repos:
+  # Python - Ruff linter & formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff-check
+        args: [ --fix ]
+        exclude: ^(\.agents/|\.github/)
+      - id: ruff-format
+        exclude: ^(\.agents/|\.github/)
