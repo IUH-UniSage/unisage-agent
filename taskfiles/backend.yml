@@ -1,0 +1,16 @@
+version: '3'
+
+tasks:
+  dev:
+    desc: "Chạy FastAPI dev server qua uv run uvicorn"
+    dotenv: ['.env']
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '{{.UV_RUN}} uvicorn app.main:app --reload --host {{.HOST}} --port {{.PORT}} {{.CLI_ARGS}}'
+
+  prod:
+    desc: "Chạy FastAPI production server qua gunicorn / uvicorn workers"
+    dotenv: ['.env']
+    cmds:
+      - '{{.UV_RUN}} gunicorn -w ${WORKERS:-4} -k uvicorn.workers.UvicornWorker -b {{.HOST}}:{{.PORT}} app.main:app'

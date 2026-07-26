@@ -1,0 +1,44 @@
+version: '3'
+
+tasks:
+  help:
+    desc: "Hiển thị menu help chi tiết với ví dụ"
+    vars:
+      C: "{{.COLOR_CYAN}}"
+      Y: "{{.COLOR_BOLD_YELLOW}}"
+      G: "{{.COLOR_GREEN}}"
+      W: "{{.COLOR_BOLD_WHITE}}"
+      GR: "{{.COLOR_GRAY}}"
+      R: "{{.COLOR_RESET}}"
+      L: "{{.BOX_LINE}}"
+    cmds:
+      - |
+        printf "{{.C}}{{.BOX_TOP}}{{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}  {{.W}}UniSage AI Agent - Task Runner Help{{.R}}\n"
+        printf "{{.C}}{{.BOX_MID}}{{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}  {{.Y}}BACKEND (be){{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task be:dev{{.R}}                 - FastAPI dev server (chạy uvicorn)\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task be:prod{{.R}}                - Production server (gunicorn + uvicorn)\n"
+        printf "{{.C}}{{.L}}{{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}  {{.Y}}CODE QUALITY (code){{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task code:fix{{.R}}               - Auto-fix TẤT CẢ (ruff format + lint --fix)\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task code:check{{.R}}             - Daily check (ruff lint + format check)\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task code:check-strict{{.R}}      - Pre-PR check strict (+ mypy strict)\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task code:lint{{.R}}              - Ruff check linter\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task code:format{{.R}}            - Ruff format code\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task code:type-strict{{.R}}       - Mypy type check\n"
+        printf "{{.C}}{{.L}}{{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}  {{.Y}}TESTING (test){{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task test{{.R}}                   - Chạy tất cả tests (pytest)\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task test:file -- <file>{{.R}}    - Chạy test cho file cụ thể\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task test:cov{{.R}}               - Coverage report (terminal)\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task test:cov:html{{.R}}          - Coverage report HTML\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task test:cov:check{{.R}}         - Check min 80%% coverage\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task test:cov:clean{{.R}}         - Xóa coverage reports\n"
+        printf "{{.C}}{{.L}}{{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}  {{.Y}}DATABASE (db){{.R}}\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task db:up{{.R}}                  - Apply database migrations\n"
+        printf "{{.C}}{{.L}}{{.R}}\n"
+        printf "{{.C}}{{.BOX_BTM}}{{.R}}\n"
+    silent: true
