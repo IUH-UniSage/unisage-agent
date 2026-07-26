@@ -19,9 +19,5 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
 
-    # JWT
-    JWT_SECRET_KEY: str = "secret"
-    JWT_ALGORITHM: str = "HS256"
-
 
 settings = Settings()
