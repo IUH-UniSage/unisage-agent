@@ -1,0 +1,4 @@
+interface:
+  display_name: "UniSage Project Structure"
+  short_description: "Enforce UniSage RAG package boundaries"
+  default_prompt: "Use $project-structure to scaffold or reorganize the UniSage agent application."

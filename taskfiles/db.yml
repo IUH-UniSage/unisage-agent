@@ -1,0 +1,27 @@
+version: '3'
+
+tasks:
+  migrate:
+    desc: "Tạo migration mới (usage: task db:migrate -- 'message')"
+    cmds:
+      - '{{.UV_RUN}} alembic revision --autogenerate -m "{{.CLI_ARGS}}"'
+
+  up:
+    desc: "Apply tất cả migrations"
+    cmds:
+      - '{{.UV_RUN}} alembic upgrade head'
+
+  down:
+    desc: "Rollback 1 migration"
+    cmds:
+      - '{{.UV_RUN}} alembic downgrade -1'
+
+  history:
+    desc: "Xem lịch sử migrations"
+    cmds:
+      - '{{.UV_RUN}} alembic history'
+
+  current:
+    desc: "Xem migration hiện tại"
+    cmds:
+      - '{{.UV_RUN}} alembic current'

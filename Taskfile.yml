@@ -1,0 +1,51 @@
+version: '3'
+
+vars:
+  # Python environment runner (uses project .venv)
+  UV_RUN: '.venv/Scripts/python -m'
+
+  # Host & Port defaults for Windows/POSIX compatibility
+  HOST: '{{.HOST | default "127.0.0.1"}}'
+  PORT: '{{.PORT | default "8000"}}'
+
+  # ANSI Color Codes
+  COLOR_RESET: '\033[0m'
+  COLOR_BOLD_WHITE: '\033[1;37m'
+  COLOR_BOLD_YELLOW: '\033[1;33m'
+  COLOR_CYAN: '\033[1;36m'
+  COLOR_GREEN: '\033[0;32m'
+  COLOR_GRAY: '\033[0;90m'
+
+  # Box Drawing Characters
+  BOX_TOP: '╔═══════════════════════════════════════════════════════════════════'
+  BOX_MID: '╠═══════════════════════════════════════════════════════════════════'
+  BOX_BTM: '╚═══════════════════════════════════════════════════════════════════'
+  BOX_LINE: '║'
+
+includes:
+  help:
+    taskfile: ./taskfiles/help.yml
+    optional: false
+
+  be:
+    taskfile: ./taskfiles/backend.yml
+    optional: false
+
+  code:
+    taskfile: ./taskfiles/code.yml
+    optional: false
+
+  test:
+    taskfile: ./taskfiles/test.yml
+    optional: false
+
+  db:
+    taskfile: ./taskfiles/db.yml
+    optional: false
+
+tasks:
+  default:
+    desc: "Hiển thị menu help với các nhóm task"
+    cmds:
+      - task: help:help
+    silent: true

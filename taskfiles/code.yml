@@ -1,0 +1,50 @@
+version: '3'
+
+vars:
+  SOURCE_DIRS: app/
+  TYPE_CHECK_DIRS: app/
+
+tasks:
+  lint:
+    desc: "Chạy linter (ruff)"
+    cmds:
+      - '{{.UV_RUN}} ruff check {{.SOURCE_DIRS}}'
+
+  lint-fix:
+    desc: "Fix linting issues tự động (ruff)"
+    cmds:
+      - '{{.UV_RUN}} ruff check {{.SOURCE_DIRS}} --fix'
+
+  format:
+    desc: "Format code với ruff"
+    cmds:
+      - '{{.UV_RUN}} ruff format {{.SOURCE_DIRS}}'
+
+  format-check:
+    desc: "Kiểm tra formatting không thay đổi file"
+    cmds:
+      - '{{.UV_RUN}} ruff format {{.SOURCE_DIRS}} --check'
+
+  type-strict:
+    desc: "Type check strict (mypy)"
+    cmds:
+      - '{{.UV_RUN}} mypy {{.TYPE_CHECK_DIRS}}'
+
+  fix:
+    desc: "Auto-fix TẤT CẢ (ruff format + ruff lint --fix)"
+    cmds:
+      - '{{.UV_RUN}} ruff format {{.SOURCE_DIRS}}'
+      - '{{.UV_RUN}} ruff check {{.SOURCE_DIRS}} --fix'
+
+  check:
+    desc: "Daily check (ruff lint + format check)"
+    deps:
+      - lint
+      - format-check
+
+  check-strict:
+    desc: "Pre-PR check (ruff lint + format check + mypy strict)"
+    deps:
+      - lint
+      - format-check
+      - type-strict

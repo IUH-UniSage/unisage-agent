@@ -1,0 +1,42 @@
+version: '3'
+
+tasks:
+  default:
+    desc: "Chạy tất cả tests qua pytest"
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '{{.UV_RUN}} pytest'
+
+  file:
+    desc: "Chạy test cho file cụ thể (usage: task test:file -- tests/test_file.py)"
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '{{.UV_RUN}} pytest {{.CLI_ARGS}}'
+
+  cov:
+    desc: "Chạy tests với coverage report (terminal)"
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '{{.UV_RUN}} pytest --cov=app --cov-report=term-missing'
+
+  cov:html:
+    desc: "Chạy tests và generate HTML coverage report"
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '{{.UV_RUN}} pytest --cov=app --cov-report=html'
+
+  cov:check:
+    desc: "Kiểm tra coverage threshold (minimum 80%)"
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    cmds:
+      - '{{.UV_RUN}} pytest --cov=app --cov-fail-under=80 --cov-report=term-missing'
+
+  cov:clean:
+    desc: "Xóa coverage files và reports cross-platform"
+    cmds:
+      - 'python -c "import shutil, os; [shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else os.remove(p) for p in [\".coverage\", \"htmlcov\", \"coverage.xml\", \".pytest_cache\"] if os.path.exists(p)]"'
