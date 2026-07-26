@@ -1,135 +1,190 @@
 # UniSage AI Agent (`unisage-agent`)
 
-**UniSage AI Agent** là dịch vụ xử lý AI RAG Engine & Pydantic Graph State Machine cho Hệ thống Trợ lý Học vụ Thông minh **UniSage** (IUH).
+`unisage-agent` is the AI/RAG and graph orchestration service for the UniSage
+academic assistant. The current repository is a lightweight base scaffold built
+with FastAPI, Pydantic Graph, SQLAlchemy, PostgreSQL, and pgvector.
 
-Dự án kết hợp tìm kiếm lai (Hybrid Vector + Keyword Search với `pgvector` và `tsvector`), tái xếp hạng (Reranking), và luồng xử lý suy luận định hướng trạng thái (State-machine graph bằng `pydantic-graph`).
-
----
+The service is organized as a pipeline-oriented modular monolith so each RAG
+stage can be implemented incrementally without introducing full DDD or
+Hexagonal layers too early.
 
 ## Quick Start
 
 ### Requirements
 
-- Python >= 3.12
-- PostgreSQL với extension `pgvector` enabled
-- (Tùy chọn) [uv](https://github.com/astral-sh/uv) package manager hoặc Docker với VS Code DevContainers
+- Python 3.12+
+- [go-task](https://taskfile.dev/) for Taskfile commands
+- PostgreSQL 16 with pgvector when running migrations or persistence features
 
-### Installation & Local Setup
+PostgreSQL and external model keys are not required to try the current
+provider-free fallback flow.
 
-```bash
-# 1. Clone repository & truy cập thư mục
+### Windows PowerShell
+
+```powershell
 cd unisage-agent
 
-# 2. Setup môi trường Python ảo (.venv)
-python -m venv .venv
-.venv\Scripts\Activate.ps1   # Windows PowerShell
-# source .venv/bin/activate  # Linux / macOS
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+Copy-Item .env.example .env
 
-# 3. Cài đặt dependencies
-pip install -e .[dev]
+task be:dev
+```
 
-# 4. Tạo file cấu hình môi trường
+Run the server directly when `go-task` is unavailable:
+
+```powershell
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+### Linux / macOS
+
+```bash
+cd unisage-agent
+
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
 cp .env.example .env
-# Chỉnh sửa .env với OPENAI_API_KEY và DATABASE_URL của bạn
 
-# 5. Chạy database migrations (Alembic)
+task be:dev
+```
+
+## API Endpoints
+
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- ReDoc: `http://127.0.0.1:8000/redoc`
+- Health: `GET /api/v1/health`
+- Chat: `POST /api/v1/chat`
+- Text ingestion: `POST /api/v1/ingestion`
+
+## Development Commands
+
+```powershell
+# Show the command menu
+task
+
+# Application
+task be:dev
+
+# Tests and coverage
+task test
+task test:cov
+task test:cov:html
+
+# Code quality
+task code:check
+task code:check-strict
+task code:fix
+
+# Database
 task db:up
+task db:current
+task db:history
+task db:migrate -- "migration message"
 ```
 
-### Start Development Server
-
-```bash
-task dev         # Backend Server → http://127.0.0.1:8000
-```
-
-* **Swagger API Docs:** http://127.0.0.1:8000/docs
-* **ReDoc:** http://127.0.0.1:8000/redoc
-
----
-
-## Key Automation Commands (`Taskfile.yml`)
-
-```bash
-# Development
-task dev                  # Chạy FastAPI dev server với auto-reload
-
-# Testing & Coverage
-task test                 # Chạy tất cả Pytest unit tests
-task test:cov             # Tự động xuất báo cáo test coverage trên terminal
-task test:cov:html        # Tạo báo cáo HTML chi tiết trong htmlcov/
-
-# Code Quality & Format
-task code:check           # Kiểm tra linter (ruff) và type check (mypy)
-task code:check-strict    # Kiểm tra nghiêm ngặt trước khi tạo Pull Request
-task code:format          # Tự động format code (ruff format)
-
-# Database & Migrations
-task db:up                # Apply tất cả migrations lên PostgreSQL
-task db:migrate           # Tạo migration mới từ SQLAlchemy Models
-
-task help                 # Xem danh sách tất cả lệnh hỗ trợ
-```
-
----
+Run `task --list-all` to see every available command.
 
 ## Project Structure
 
-```
+```text
 unisage-agent/
-├── app/
-│   ├── main.py              # Entry point ứng dụng FastAPI
-│   ├── api/                 # API Routes (V1)
-│   ├── core/                # Infrastructure (config, db, exceptions, middleware, trace, sanitizer)
-│   ├── domains/             # Business Domains
-│   ├── graph/               # Orchestration State Machine (pydantic-graph)
-│   │   ├── nodes/           # Graph Nodes (IntentNode, RAGNode, LLMNode, GreetingNode)
-│   │   ├── state.py         # ChatState Dataclass
-│   │   ├── deps.py          # ChatDeps Dependency Injection
-│   │   └── graph.py         # Graph Topology Definition
-│   ├── schemas/             # Pydantic Request/Response Models
-│   └── services/            # Retrieval, Embedding, Chunking & Ingestion Services
-├── database/                # Alembic database migrations & config
-├── docs/                    # Tài liệu kiến trúc dự án & Onboarding (xem docs/README.md)
-├── scripts/                 # Utility Scripts (ví dụ: tạo sơ đồ Mermaid từ Pydantic Graph)
-├── storage/                 # Thư mục chứa dữ liệu thô (.jsonl, .pdf uploads)
-├── taskfiles/               # Modular Taskfile automation
-├── tests/                   # Pytest suite (health, chat, graph nodes)
-└── .devcontainer/           # Cấu hình Docker & VS Code DevContainers
+|-- app/
+|   |-- main.py              # FastAPI application entry point
+|   |-- api/                 # Routes and request dependency wiring
+|   |-- core/                # Settings and cross-cutting concerns
+|   |-- rag/
+|   |   |-- ingestion/       # Loading, parsing, and ingestion orchestration
+|   |   |-- chunking/        # Recursive and semantic chunking
+|   |   |-- embeddings/      # Embedding implementations
+|   |   |-- retrieval/       # Vector, keyword, hybrid, and context building
+|   |   |-- reranking/       # Reranking implementations
+|   |   `-- generation/      # Grounded responses, citations, and suggestions
+|   |-- graph/               # Pydantic Graph state and orchestration nodes
+|   |-- database/            # Async sessions, models, and repositories
+|   `-- schemas/             # API and pipeline contracts
+|-- docs/                    # Architecture and onboarding documentation
+|-- migrations/              # Alembic environment and versions
+|-- scripts/                 # Development utilities
+|-- storage/                 # Local development storage
+|-- taskfiles/               # Modular Taskfile commands
+|-- tests/                   # Pytest suite
+`-- .devcontainer/           # Python and PostgreSQL/pgvector environment
 ```
 
----
+Dependency direction:
 
-## Architecture & Graph Pipeline
+```text
+API -> Graph -> RAG services -> Database repositories
+```
 
-### Chat Graph (`pydantic-graph`)
+API handlers validate and delegate. Graph nodes orchestrate the RAG stages.
+Provider logic stays in its corresponding RAG package, while SQL stays in
+repositories.
+
+## Current Runtime Flow
 
 ```mermaid
 flowchart LR
     Client["Client / Backend"] --> API["FastAPI"]
-    API --> Graph["Pydantic Graph Engine"]
-    Graph --> Intent["IntentNode"]
-    Intent --> RAG["RAGNode (Hybrid Search)"]
-    RAG --> LLM["LLMNode (Generative + Citation)"]
-    LLM --> Response["Grounded Response"]
+
+    API --> Chat["Chat endpoint"]
+    Chat --> Graph["Pydantic Graph"]
+    Graph --> Intent["Intent detection"]
+    Intent --> Retrieval["Fallback retrieval"]
+    Retrieval --> Rerank["Deterministic rerank"]
+    Rerank --> Generation["Fallback generation"]
+    Generation --> Response["Response + citations"]
+
+    API --> Ingestion["Ingestion endpoint"]
+    Ingestion --> Parser["Text parser"]
+    Parser --> Chunking["Recursive chunking"]
+    Chunking --> Chunks["Ingestion response"]
 ```
 
-Luồng xử lý gồm 4 Node chính:
-1. **GreetingNode**: Phản hồi chào hỏi nhanh cho các câu hỏi tổng quan.
-2. **IntentNode**: Phân loại ý định sinh viên (Single-intent vs Multi-intent sub-queries).
-3. **RAGNode**: Tìm kiếm truy vấn lai (pgvector Cosine Similarity + tsvector Full-text Search + RRF Fusion).
-4. **LLMNode**: Sinh câu trả lời grounding từ tài liệu kèm trích dẫn nguồn (Citations).
+The base currently uses an in-memory fallback corpus, deterministic scoring,
+deterministic reranking, and provider-free generation. It validates the API,
+package boundaries, graph execution, metadata visibility, citations, and tests
+without claiming the complete SRS pipeline is already implemented.
 
----
+The target SRS-aligned pipeline, including trusted access context, HyDE,
+sub-query routing, Dense/BM25/RRF retrieval, Cross-Encoder reranking, context
+compression, and safe fallback behavior, is documented in
+[`docs/architecture/rag-pipeline.md`](docs/architecture/rag-pipeline.md).
 
-## Commit & Branch Conventions
+## Database
 
-Tuân thủ chuẩn **English Conventional Commits** không dùng emoji (xem chi tiết tại [SKILL.md](.agents/skills/git-commit-instructions/SKILL.md)):
+Start PostgreSQL with pgvector:
 
-* **Tên Branch:** `<prefix>/<owner>-<task-id>-<short-name>` (VD: `feature/huy-unisage-3-hybrid-retrieval`)
-* **Format Commit:** `<type>(<scope>): [UNISAGE-xxx] <short title in English>`
+```powershell
+docker compose -f .devcontainer/docker-compose.yml up -d db
+task db:up
+```
 
----
+The initial ingestion endpoint only parses and chunks text. Persisting
+documents, embeddings, and vectors is follow-up work.
 
-## License & Support
+## Verification
 
-Dự án thuộc Khoá luận tốt nghiệp **UniSage Academic Assistant System** - Đại học Công nghiệp TP.HCM (IUH).
+```powershell
+task test
+task code:check-strict
+```
+
+## Commit and Branch Conventions
+
+- Branch: `<prefix>/<owner>-<task-id>-<short-name>`
+- Commit: `<type>(<scope>): [UNISAGE-xxx] <short English title>`
+- Use English Conventional Commits without emoji.
+- Never commit directly to `main` or force-push a shared branch.
+
+Example:
+
+```text
+feature/huyen-unisage-02-rag-agent-base
+feat(rag): [UNISAGE-02] implement retrieval flow
+```
+
+## Documentation
+
+See [`docs/README.md`](docs/README.md) for the documentation index.
