@@ -1,0 +1,4 @@
+interface:
+  display_name: "UniSage Git Workflow"
+  short_description: "Enforce UniSage branch and commit rules"
+  default_prompt: "Use $git-commit-instructions to name a branch or prepare a UniSage commit."
