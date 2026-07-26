@@ -24,6 +24,23 @@ The Jira link is added automatically from the PR title or branch name.
 
 ---
 
+#### Flow
+
+```mermaid
+flowchart LR
+    Client["Client / Backend"] --> API["FastAPI"]
+    API --> Graph["Pydantic Graph"]
+    Graph --> Intent["Intent"]
+    Intent --> Retrieval["Retrieval"]
+    Retrieval --> Reranking["Reranking"]
+    Reranking --> Generation["Generation + Citation"]
+    Retrieval --> Repositories["Repositories"]
+    Repositories --> Database[("PostgreSQL + pgvector")]
+    Generation --> Response["Grounded response"]
+```
+
+---
+
 #### Impact
 
 [Affected flows, modules, API endpoints, or UI areas.]

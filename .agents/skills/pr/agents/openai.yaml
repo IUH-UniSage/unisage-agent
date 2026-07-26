@@ -1,0 +1,4 @@
+interface:
+  display_name: "Write UniSage PR"
+  short_description: "Draft polished UniSage pull request content"
+  default_prompt: "Use $pr to draft a polished UniSage pull request from the current branch."
