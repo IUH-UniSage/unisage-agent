@@ -1,0 +1,71 @@
+name: Link Jira issue
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  link-jira:
+    name: Add Jira link to pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Update pull request description
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pullRequest = context.payload.pull_request;
+            const findIssueKeys = (value) => [
+              ...value.matchAll(/UNISAGE-(\d+)/gi),
+            ].map((match) => Number.parseInt(match[1], 10));
+
+            const titleIssueNumbers = findIssueKeys(pullRequest.title);
+            const branchIssueNumbers = findIssueKeys(pullRequest.head.ref);
+            const issueNumbers = titleIssueNumbers.length > 0
+              ? titleIssueNumbers
+              : branchIssueNumbers;
+            const validIssueNumbers = [
+              ...new Set(issueNumbers.filter((issueNumber) => issueNumber > 0)),
+            ];
+
+            if (validIssueNumbers.length === 0) {
+              core.setFailed(
+                "Add UNISAGE-<number> to the PR title or branch name.",
+              );
+              return;
+            }
+
+            const jiraBaseUrl = "https://tranngochuyen.atlassian.net";
+            const links = validIssueNumbers
+              .map((issueNumber) => {
+                const issueKey = `UNISAGE-${issueNumber}`;
+                return `[${issueKey}](${jiraBaseUrl}/browse/${issueKey})`;
+              })
+              .join(", ");
+
+            const markerStart = "<!-- jira-link:start -->";
+            const markerEnd = "<!-- jira-link:end -->";
+            const jiraBlock = `${markerStart}\n${links}\n${markerEnd}`;
+            const markerPattern =
+              /<!-- jira-link:start -->[\s\S]*?<!-- jira-link:end -->/;
+            const currentBody = pullRequest.body ?? "";
+            const nextBody = markerPattern.test(currentBody)
+              ? currentBody.replace(markerPattern, jiraBlock)
+              : `#### Jira\n\n${jiraBlock}\n\n---\n\n${currentBody}`;
+
+            if (nextBody === currentBody) {
+              core.info("The Jira link is already up to date.");
+              return;
+            }
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullRequest.number,
+              body: nextBody,
+            });
