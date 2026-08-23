@@ -215,3 +215,35 @@ class ChunkingStrategy(Protocol):
      which routes it gates.
    - **Never**: accept an ingestion request without a valid
      `X-Internal-Secret`, even for local/dev convenience.
+
+7. **`ChunkingRequest` gains a required `document_id` field**: added to
+   support `docs/specs/SPEC-ingestion-resume.md` (the chunking-draft
+   persistence feature) — `document_process_logs.document_id` is the unique
+   key that draft is stored/retrieved under, and `ChunkingRequest` was the
+   only one of the three request schemas that didn't already carry it
+   (`EmbeddingRequest` already has `document_id`; `PreviewRequest` doesn't
+   need one, since preview is never persisted per the resume spec's Scope
+   Boundaries). Rejected alternatives: deriving `document_id` from
+   `object_key` via a MinIO key-naming convention (never documented
+   anywhere, silently breaks if Java's naming changes) and making the field
+   optional (would make the resume feature silently no-op for any caller
+   that forgets to pass it). The client already has `document_id` (it's
+   Java's own `Document.id`, the same one already sent to
+   `EmbeddingRequest`), so requiring it on `ChunkingRequest` too is a
+   natural, low-risk contract change.
+   - **This is a real (if small) breaking change to an already-shipped
+     request schema.** Everything else about the preview/chunking/embedding
+     endpoints (response shapes, chunking's always-re-fetch behavior, no
+     caching) is unchanged — only this one required field is added to one
+     request model.
+   - **Status: decided, not yet implemented.** As of this spec revision,
+     `app/schemas/ingestion.py`'s `ChunkingRequest` and the
+     `POST /api/v1/ingestion/chunking` handler do not yet have this field,
+     and existing tests (`tests/test_ingestion_chunking.py`,
+     `tests/test_chunking_strategy.py`'s callers via the endpoint,
+     `tests/test_ingestion_schemas.py`) do not yet send it. This becomes a
+     required prerequisite of `changes/22-08-2026-Ingestion-Resume-State/`'s
+     Task 4 (wiring `upsert_chunking_draft` into the chunking handler) —
+     add the field and update all existing chunking-endpoint tests to send
+     `document_id` before or as part of that task, not silently deferred
+     further.

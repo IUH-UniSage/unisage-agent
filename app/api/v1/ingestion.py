@@ -1,10 +1,13 @@
 import asyncio
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, WebSocket, status
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TrustedContext, get_trusted_context
 from app.core.security import verify_internal_secret
+from app.database.repositories.ingestion_job import delete_draft, get_draft, upsert_chunking_draft
+from app.database.session import get_db_session
 from app.rag.chunking import strategy
 from app.rag.ingestion import minio_client
 from app.rag.ingestion.parser import extract_raw_text
@@ -15,6 +18,7 @@ from app.schemas.ingestion import (
     ChunkingResponse,
     EmbeddingAcceptedResponse,
     EmbeddingRequest,
+    IngestionJobResponse,
     PreviewRequest,
     PreviewResponse,
 )
@@ -55,12 +59,43 @@ async def preview_document(request: PreviewRequest) -> PreviewResponse:
 
 
 @router.post("/ingestion/chunking", response_model=ChunkingResponse)
-async def chunk_document(request: ChunkingRequest) -> ChunkingResponse:
+async def chunk_document(
+    request: ChunkingRequest,
+    db_session: AsyncSession = Depends(get_db_session),
+) -> ChunkingResponse:
     """Fetch the stored object fresh and chunk it with the requested strategy."""
 
     content = minio_client.get_object_bytes(request.object_key)
     chunks = strategy.dispatch(request.strategy, request.params, content, request.object_key)
-    return ChunkingResponse(chunks=chunks)
+    response = ChunkingResponse(chunks=chunks)
+    await upsert_chunking_draft(
+        db_session,
+        document_id=request.document_id,
+        object_key=request.object_key,
+        strategy=request.strategy.value,
+        params=request.params,
+        chunks=chunks,
+    )
+    return response
+
+
+@router.get("/ingestion/jobs/{document_id}", response_model=IngestionJobResponse)
+async def get_ingestion_job(
+    document_id: str,
+    db_session: AsyncSession = Depends(get_db_session),
+) -> IngestionJobResponse:
+    """Return the resumable chunking draft for a document, or 404 if none exists."""
+
+    draft = await get_draft(db_session, document_id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No draft found.")
+    return IngestionJobResponse(
+        object_key=draft.object_key,
+        current_step=draft.current_step.value,
+        chunking_strategy=draft.chunking_strategy,
+        chunking_params=draft.chunking_params,
+        chunks=draft.chunks,
+    )
 
 
 @router.post(
@@ -71,6 +106,7 @@ async def chunk_document(request: ChunkingRequest) -> ChunkingResponse:
 async def embed_document(
     request: EmbeddingRequest,
     context: TrustedContext = Depends(get_trusted_context),
+    db_session: AsyncSession = Depends(get_db_session),
 ) -> EmbeddingAcceptedResponse:
     """Dispatch the client-approved chunk list for background enrichment + embedding."""
 
@@ -81,7 +117,9 @@ async def embed_document(
         context.department,
         context.access_level,
     )
-    return EmbeddingAcceptedResponse(task_id=task.id)
+    response = EmbeddingAcceptedResponse(task_id=task.id)
+    await delete_draft(db_session, request.document_id)
+    return response
 
 
 @router.websocket("/ingestion/embedding/{task_id}/progress")

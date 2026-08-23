@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from app.worker.celery_app import celery_app
+from tests.fixtures.documents import make_pdf_bytes
 
 celery_app.conf.update(
     broker_url="memory://",
@@ -48,6 +49,44 @@ def test_embedding_returns_202_and_task_id_for_valid_request(
 
     assert response.status_code == 202
     assert response.json()["task_id"]
+
+
+@patch("app.worker.celery_app.qdrant_store")
+@patch("app.worker.celery_app.MultiRepresentationEnricher")
+@patch("app.worker.celery_app.OpenAIEmbedder")
+def test_successful_embedding_dispatch_removes_any_existing_draft(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    client: TestClient,
+) -> None:
+    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
+    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
+        summary="a summary", questions=["Q1?", "Q2?"]
+    )
+    mock_qdrant_store.get_client.return_value = MagicMock()
+
+    with patch("app.api.v1.ingestion.minio_client.get_object_bytes") as mock_get_object_bytes:
+        mock_get_object_bytes.return_value = make_pdf_bytes("A paragraph for chunking.")
+        client.post(
+            "/api/v1/ingestion/chunking",
+            json={
+                "document_id": "doc-embed-1",
+                "object_key": "docs/handbook.pdf",
+                "strategy": "recursive",
+            },
+        )
+    assert client.get("/api/v1/ingestion/jobs/doc-embed-1").status_code == 200
+
+    payload = {**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-1"}
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json=payload,
+        headers={"X-User-Department": "CNTT", "X-User-Access-Level": "STUDENT"},
+    )
+
+    assert response.status_code == 202
+    assert client.get("/api/v1/ingestion/jobs/doc-embed-1").status_code == 404
 
 
 @patch("app.worker.celery_app.qdrant_store")

@@ -13,9 +13,16 @@ from app.schemas.ingestion import (
 
 @pytest.mark.parametrize("strategy", list(ChunkingStrategyName))
 def test_chunking_request_accepts_all_five_strategies(strategy: ChunkingStrategyName) -> None:
-    request = ChunkingRequest(object_key="docs/handbook.pdf", strategy=strategy)
+    request = ChunkingRequest(
+        document_id="doc-1", object_key="docs/handbook.pdf", strategy=strategy
+    )
 
     assert request.strategy == strategy
+
+
+def test_chunking_request_rejects_missing_document_id() -> None:
+    with pytest.raises(ValidationError):
+        ChunkingRequest.model_validate({"object_key": "docs/handbook.pdf", "strategy": "recursive"})
 
 
 def test_chunking_request_rejects_unknown_strategy() -> None:

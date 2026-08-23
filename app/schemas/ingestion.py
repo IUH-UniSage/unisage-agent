@@ -37,6 +37,7 @@ class PreviewResponse(BaseModel):
 class ChunkingRequest(BaseModel):
     """Request to chunk a stored object using the given strategy."""
 
+    document_id: str = Field(min_length=1, max_length=100)
     object_key: str = Field(min_length=1, max_length=1024)
     strategy: ChunkingStrategyName
     params: dict[str, Any] = Field(default_factory=dict)
@@ -68,3 +69,13 @@ class EmbeddingAcceptedResponse(BaseModel):
     """Returned immediately after an embedding task is dispatched."""
 
     task_id: str
+
+
+class IngestionJobResponse(BaseModel):
+    """A resumable chunking draft for one document."""
+
+    object_key: str
+    current_step: str
+    chunking_strategy: str
+    chunking_params: dict[str, Any]
+    chunks: list[Chunk]

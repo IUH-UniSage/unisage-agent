@@ -1,10 +1,15 @@
 # Spec: Ingestion Resume State (unisage-agent)
 
-> **This spec is additive.** It does not modify, override, or change the
-> behavior of `docs/specs/SPEC-ingestion.md` (the 3-API ingestion pipeline:
-> preview, chunking, embedding). Every existing endpoint's request/response
-> contract from that spec is unchanged. This feature only adds a persistence
-> side-effect and one new read-only endpoint.
+> **This spec is additive, with one narrow exception.** It does not modify,
+> override, or change the *behavior* of any endpoint in
+> `docs/specs/SPEC-ingestion.md` (the 3-API ingestion pipeline: preview,
+> chunking, embedding) — response shapes, re-fetch-every-call semantics, and
+> the embedding pipeline are all unchanged. The one exception (see
+> `SPEC-ingestion.md`'s Decision 7): `ChunkingRequest` gains a new required
+> `document_id` field, needed so a chunking draft can be keyed and later
+> retrieved by `document_id`. That's the only schema this feature touches;
+> everything else — including chunking's request-independent behavior once
+> `document_id` is read — is unaffected.
 
 ## Objective
 
@@ -26,12 +31,16 @@ since it's no longer a draft at that point).
 - **Preview (step 1): not persisted at all.** Re-opening a document at the
   preview stage always re-fetches and re-parses from MinIO. Nothing to
   restore, nothing to go stale.
-- **Chunking (step 2): endpoint behavior is unchanged.** `POST
-  /api/v1/ingestion/chunking` still always re-fetches the object from MinIO
-  and re-parses from scratch on every call — it never reads a cache to build
-  its response. This spec adds a **side effect only**: after a successful
-  call, the result is additionally persisted for later retrieval through a
-  *different* endpoint (see below).
+- **Chunking (step 2): response behavior is unchanged; request gains one
+  required field.** `POST /api/v1/ingestion/chunking` still always
+  re-fetches the object from MinIO and re-parses from scratch on every
+  call — it never reads a cache to build its response, and its response
+  shape (`ChunkingResponse`) is untouched. The one change is on the request
+  side: `ChunkingRequest` now requires `document_id` (see
+  `SPEC-ingestion.md`'s Decision 7), so this feature has a key to persist
+  the draft under. Persistence itself is a **side effect only**: after a
+  successful call, the result is additionally persisted for later retrieval
+  through a *different* endpoint (see below).
 - **Embedding (step 3): out of scope.** If an admin leaves while an embedding
   Celery task is in flight, reconnecting to it is not handled here — that's
   what SPEC-ingestion.md's `task_id` + WebSocket mechanism is for, already.
@@ -89,7 +98,7 @@ class DocumentProcessStep(str, Enum):
 | Column | Type | Notes |
 |---|---|---|
 | `id` | UUID | PK |
-| `document_id` | VARCHAR | **Unique.** Java's Document id. No FK — see above. |
+| `document_id` | VARCHAR | **Unique.** Java's Document id, read from `ChunkingRequest.document_id` (SPEC-ingestion.md Decision 7). No FK — see above. |
 | `object_key` | VARCHAR | MinIO key, mirrored from the chunking request for convenience. |
 | `current_step` | VARCHAR (`DocumentProcessStep`) | Always `CHUNKED` in this feature (see above). |
 | `chunking_strategy` | VARCHAR | One of SPEC-ingestion.md's 5 strategy names. |
@@ -110,12 +119,14 @@ class DocumentProcessStep(str, Enum):
 ## Lifecycle
 
 1. **On a successful `POST /api/v1/ingestion/chunking` call** (existing
-   endpoint, unchanged contract): upsert the `document_process_logs` row for
-   that `document_id` (insert if absent; otherwise update
-   `chunking_strategy`, `chunking_params`, `updated_at`), and replace all of
-   that row's `document_chunks` (delete existing, insert the freshly
-   computed list). This runs *after* the endpoint has already computed its
-   normal response — it never influences what that endpoint returns.
+   endpoint, response contract unchanged; request now requires
+   `document_id` per SPEC-ingestion.md Decision 7): upsert the
+   `document_process_logs` row for that `document_id` (insert if absent;
+   otherwise update `chunking_strategy`, `chunking_params`, `updated_at`),
+   and replace all of that row's `document_chunks` (delete existing, insert
+   the freshly computed list). This runs *after* the endpoint has already
+   computed its normal response — it never influences what that endpoint
+   returns.
 2. **On a successful `POST /api/v1/ingestion/embedding` call** (existing
    endpoint, unchanged contract) that successfully dispatches the Celery
    task: delete the `document_process_logs` row for that `document_id`
@@ -144,6 +155,8 @@ app/
 │   ├── models.py                 # + DocumentProcessLog, DocumentChunk ORM models
 │   └── repositories/
 │       └── ingestion_job.py      # new: upsert/replace/get/delete for the two tables
+├── schemas/
+│   └── ingestion.py               # + document_id field on existing ChunkingRequest
 ├── api/v1/
 │   └── ingestion.py               # + GET /ingestion/jobs/{document_id};
 │                                   #   existing preview/chunking/embedding handlers
@@ -173,6 +186,11 @@ async def upsert_chunking_draft(
     """Persist (or replace) the chunking draft for one document."""
 ```
 
+The chunking handler passes `document_id`, `object_key`, `strategy`, and
+`params` straight from the already-validated `request: ChunkingRequest` it
+already has — no second DTO or re-parsing needed; only `chunks` comes from
+the response it just computed.
+
 ## Testing Strategy
 
 - `pytest` + `pytest-asyncio`, using a test Postgres schema (or SQLite for
@@ -186,21 +204,26 @@ async def upsert_chunking_draft(
   by a `GET /ingestion/jobs/{document_id}` returning the same
   strategy/params/chunks; a `POST /ingestion/embedding` call is followed by
   the same `GET` returning 404.
-- No test asserts on `POST /ingestion/chunking`'s own response shape
-  changing — SPEC-ingestion.md's existing tests for that endpoint must stay
-  green untouched.
+- `POST /ingestion/chunking`'s own *response* shape does not change —
+  SPEC-ingestion.md's existing tests for that endpoint's response must stay
+  green. Its *request* does change (new required `document_id`): every
+  existing chunking-endpoint test (and any other caller) must be updated to
+  send `document_id` as part of this feature's Task 4, not left broken.
 
 ## Boundaries
 
-- **Always**: keep `SPEC-ingestion.md`'s endpoints' request/response
-  contracts unchanged; keep this feature's tables in Python's own
-  schema/database, no FK into Java's tables.
+- **Always**: keep `SPEC-ingestion.md`'s endpoints' *response* contracts and
+  chunking's re-fetch-every-call *behavior* unchanged; keep this feature's
+  tables in Python's own schema/database, no FK into Java's tables.
 - **Ask first**: changing `DocumentProcessStep` to have more than one value
   (a real state machine) — that's a bigger design than what's shipped here;
-  reusing this feature's tables for anything beyond the resume use case.
+  reusing this feature's tables for anything beyond the resume use case;
+  any further change to `SPEC-ingestion.md`'s request/response schemas
+  beyond the one `ChunkingRequest.document_id` addition already decided.
 - **Never**: add a cross-schema FK to Java's `documents` table; have Python
   call Java or vice versa to compose a document-detail view; modify Java's
-  `DocStatus` enum or any Java code; touch SPEC-ingestion.md.
+  `DocStatus` enum or any Java code; change any *response* shape or
+  chunking/embedding *behavior* defined in `SPEC-ingestion.md`.
 
 ## Success Criteria
 
@@ -210,8 +233,9 @@ async def upsert_chunking_draft(
   duplicates) the draft.
 - Successfully dispatching embedding for that document makes the `GET`
   endpoint return 404 afterward.
-- `SPEC-ingestion.md`'s existing preview/chunking/embedding tests remain
-  green, unmodified.
+- `SPEC-ingestion.md`'s existing preview/embedding tests remain green,
+  unmodified; its chunking-endpoint tests are updated to send
+  `document_id` and remain green.
 - `ruff check`, `ruff format --check`, `mypy`, `pytest` all pass.
 - A migration (`alembic upgrade head`) creates both tables cleanly against a
   fresh database.
@@ -220,4 +244,5 @@ async def upsert_chunking_draft(
 
 None outstanding — all resolved during the interview (DB placement, no
 cross-service FK, `DocumentProcessStep`'s single-value nature, frontend-side
-composition, no locking, step-3 out of scope).
+composition, no locking, step-3 out of scope) plus the later `document_id`
+source decision (see `SPEC-ingestion.md` Decision 7).

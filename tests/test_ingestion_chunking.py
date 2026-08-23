@@ -31,7 +31,7 @@ def test_chunking_returns_non_empty_chunk_list_for_each_strategy(
 
     response = client.post(
         "/api/v1/ingestion/chunking",
-        json={"object_key": object_key, "strategy": strategy_name},
+        json={"document_id": "doc-1", "object_key": object_key, "strategy": strategy_name},
     )
 
     assert response.status_code == 200
@@ -52,7 +52,7 @@ def test_chunking_semantic_strategy_without_live_openai_calls(
 
     response = client.post(
         "/api/v1/ingestion/chunking",
-        json={"object_key": "docs/handbook.pdf", "strategy": "semantic"},
+        json={"document_id": "doc-1", "object_key": "docs/handbook.pdf", "strategy": "semantic"},
     )
 
     assert response.status_code == 200
@@ -67,7 +67,49 @@ def test_chunking_excel_row_on_non_xlsx_returns_422(
 
     response = client.post(
         "/api/v1/ingestion/chunking",
-        json={"object_key": "docs/handbook.pdf", "strategy": "excel_row"},
+        json={"document_id": "doc-1", "object_key": "docs/handbook.pdf", "strategy": "excel_row"},
     )
 
     assert response.status_code == 422
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_successful_chunking_persists_a_resumable_draft(
+    mock_get_object_bytes: MagicMock, client: TestClient
+) -> None:
+    mock_get_object_bytes.return_value = make_pdf_bytes("A paragraph for chunking.")
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-draft-1",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "recursive",
+        },
+    )
+    assert response.status_code == 200
+
+    job = client.get("/api/v1/ingestion/jobs/doc-draft-1")
+    assert job.status_code == 200
+    assert job.json()["chunking_strategy"] == "recursive"
+    assert job.json()["chunks"] == response.json()["chunks"]
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_failed_chunking_call_does_not_write_a_draft_row(
+    mock_get_object_bytes: MagicMock, client: TestClient
+) -> None:
+    mock_get_object_bytes.return_value = make_pdf_bytes("Not a spreadsheet.")
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-draft-failed",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "excel_row",
+        },
+    )
+    assert response.status_code == 422
+
+    job = client.get("/api/v1/ingestion/jobs/doc-draft-failed")
+    assert job.status_code == 404

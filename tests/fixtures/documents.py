@@ -1,8 +1,8 @@
 import io
-import zipfile
 
 import openpyxl
 import pymupdf
+from docx import Document
 
 
 def make_xlsx_bytes(header: list[str], rows: list[list[object]]) -> bytes:
@@ -56,41 +56,27 @@ def make_pdf_bytes_with_table(intro_text: str, outro_text: str) -> bytes:
 
 
 def make_docx_bytes(text: str) -> bytes:
-    """Build a minimal in-memory OOXML `.docx` containing one paragraph."""
+    """Build a minimal in-memory `.docx` containing one paragraph."""
 
+    document = Document()
+    document.add_paragraph(text)
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(
-            "[Content_Types].xml",
-            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels"
-    ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/word/document.xml"
-    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>""",
-        )
-        archive.writestr(
-            "_rels/.rels",
-            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1"
-    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
-    Target="word/document.xml"/>
-</Relationships>""",
-        )
-        archive.writestr(
-            "word/_rels/document.xml.rels",
-            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-</Relationships>""",
-        )
-        archive.writestr(
-            "word/document.xml",
-            f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body>
-</w:document>""",
-        )
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def make_docx_bytes_with_table(intro_text: str, outro_text: str) -> bytes:
+    """Build a `.docx` with an intro paragraph, a real Word table, then an outro paragraph."""
+
+    document = Document()
+    document.add_paragraph(intro_text)
+    table = document.add_table(rows=3, cols=2)
+    for row, cells in zip(
+        table.rows, [["Name", "Score"], ["Alice", "90"], ["Bob", "85"]], strict=True
+    ):
+        for cell, value in zip(row.cells, cells, strict=True):
+            cell.text = value
+    document.add_paragraph(outro_text)
+    buffer = io.BytesIO()
+    document.save(buffer)
     return buffer.getvalue()

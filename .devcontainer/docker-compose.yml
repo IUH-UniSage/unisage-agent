@@ -4,28 +4,25 @@ services:
     volumes:
       - ..:/workspace:cached
     command: sleep infinity
+    ports:
+      - "8402:8402"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/unisage_db
+      # unisage-agent connects to the same physical Postgres/MinIO as
+      # backend-java (their containers, published on the host - see
+      # SPEC-ingestion-resume.md and app/core/config.py), not
+      # container-local ones. `.env`'s DATABASE_URL/MINIO_ENDPOINT use
+      # `localhost`, which only resolves from the host itself; from inside
+      # this container `host.docker.internal` reaches the host instead.
+      - DATABASE_URL=postgresql+asyncpg://postgres:123456@host.docker.internal:5433/unisage_agent_db
+      - MINIO_ENDPOINT=host.docker.internal:9000
       - REDIS_URL=redis://redis:6379/0
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - db
       - redis
       - qdrant
-
-  db:
-    image: pgvector/pgvector:pg16
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: unisage_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-db:/docker-entrypoint-initdb.d
 
   redis:
     image: redis:7-alpine
@@ -43,5 +40,4 @@ services:
       - qdrant_data:/qdrant/storage
 
 volumes:
-  postgres_data:
   qdrant_data:

@@ -19,8 +19,12 @@ class Settings(BaseSettings):
     # out-of-the-box; override both sides together in real deployments.
     INTERNAL_SECRET_KEY: str = "unisage-internal-secret-key-2026"
 
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/unisage_db"
+    # Database: same physical Postgres server as backend-java (see
+    # backend-java/docker-compose.yml's `unisage-db` service, port 5433 on
+    # host), but a separate database (`unisage_agent_db`, not Java's
+    # `assistant_DB`) - per SPEC-ingestion-resume.md, no shared
+    # schema/tables, no cross-service FK.
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5433/unisage_agent_db"
 
     # OpenAI
     OPENAI_API_KEY: str = ""

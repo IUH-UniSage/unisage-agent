@@ -35,7 +35,9 @@ Run the server directly when `go-task` is unavailable:
 
 ```powershell
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8402
+
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8402
+celery -A app.worker.celery_app worker --loglevel=info
 ```
 
 ### Linux / macOS

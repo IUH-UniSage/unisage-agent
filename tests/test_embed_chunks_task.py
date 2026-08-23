@@ -1,3 +1,4 @@
+import uuid
 from unittest.mock import MagicMock, patch
 
 from app.worker.celery_app import celery_app, embed_chunks
@@ -49,6 +50,13 @@ def test_embed_chunks_runs_enrich_embed_upsert_in_order(
 
     enrich_order = [call.args[0].chunk_index for call in mock_enricher.enrich.call_args_list]
     assert enrich_order == [0, 1]
+
+    point_ids = [call.kwargs["point_id"] for call in mock_qdrant_store.ChunkPoint.call_args_list]
+    for point_id in point_ids:
+        uuid.UUID(point_id)  # Qdrant requires an unsigned int or a UUID; raises if invalid
+    assert len(set(point_ids)) == len(point_ids)
+    chunk_ids = [call.kwargs["chunk_id"] for call in mock_qdrant_store.ChunkPoint.call_args_list]
+    assert chunk_ids == ["doc-1:0", "doc-1:1"]
 
 
 @patch("app.worker.celery_app.qdrant_store")

@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import Any
 
 from celery import Celery
@@ -54,14 +55,15 @@ def embed_chunks(
             content_vector, summary_vector, questions_vector = embedder.embed(
                 [chunk.content, summary_text, questions_text]
             )
-            point_id = f"{document_id}:{chunk.chunk_index}"
+            chunk_id = f"{document_id}:{chunk.chunk_index}"
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
             qdrant_store.upsert_chunk(
                 client,
                 qdrant_store.ChunkPoint(
                     point_id=point_id,
                     document_id=document_id,
                     object_key=object_key,
-                    chunk_id=point_id,
+                    chunk_id=chunk_id,
                     content=chunk.content,
                     summary=enriched.summary,
                     questions=enriched.questions,

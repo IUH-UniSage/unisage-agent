@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
     "You summarize a document chunk and propose hypothetical questions it answers. "
+    "Always respond in Vietnamese, regardless of the input chunk's language - the "
+    "summary and questions must match the language a Vietnamese student would "
+    "actually ask in, so they embed close to real user queries. "
     'Respond with JSON only: {{"summary": string, "questions": string[]}}. '
     "Produce exactly {question_count} questions."
 )
