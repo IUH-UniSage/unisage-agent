@@ -34,7 +34,8 @@ task be:dev
 Run the server directly when `go-task` is unavailable:
 
 ```powershell
-.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8402
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8402
 ```
 
 ### Linux / macOS
@@ -51,8 +52,8 @@ task be:dev
 
 ## API Endpoints
 
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
+- Swagger UI: `http://127.0.0.1:8402/docs`
+- ReDoc: `http://127.0.0.1:8402/redoc`
 - Health: `GET /api/v1/health`
 - Chat: `POST /api/v1/chat`
 - Text ingestion: `POST /api/v1/ingestion`

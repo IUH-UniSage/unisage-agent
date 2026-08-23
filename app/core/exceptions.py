@@ -31,6 +31,56 @@ class InvalidQueryException(UniSageException):
         )
 
 
+class InvalidInternalSecretException(UniSageException):
+    """Exception raised when a request is missing or has a wrong `X-Internal-Secret`.
+
+    This gates every client-facing route so it can only be reached through
+    the API Gateway (the only holder of the shared secret) rather than
+    directly - which is what makes gateway-injected headers like
+    `X-User-Department` trustworthy in the first place.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="Forbidden: invalid or missing X-Internal-Secret header.",
+            error_code=ErrorCode.UNAUTHORIZED,
+            status_code=403,
+        )
+
+
+class UnsupportedFileTypeException(UniSageException):
+    """Exception raised when a file extension has no ingestion parser."""
+
+    def __init__(self, filename: str):
+        super().__init__(
+            message=f"File '{filename}' has an unsupported extension for ingestion.",
+            error_code=ErrorCode.UNSUPPORTED_FILE_TYPE,
+            status_code=415,
+        )
+
+
+class StrategyFileTypeMismatchException(UniSageException):
+    """Exception raised when a chunking strategy cannot apply to the object's file type."""
+
+    def __init__(self, strategy: str, filename: str):
+        super().__init__(
+            message=f"Strategy '{strategy}' cannot be applied to file '{filename}'.",
+            error_code=ErrorCode.STRATEGY_FILE_TYPE_MISMATCH,
+            status_code=422,
+        )
+
+
+class MissingTrustedContextException(UniSageException):
+    """Exception raised when the gateway-injected trusted headers are absent."""
+
+    def __init__(self, header_name: str):
+        super().__init__(
+            message=f"Required trusted header '{header_name}' is missing.",
+            error_code=ErrorCode.MISSING_TRUSTED_CONTEXT,
+            status_code=400,
+        )
+
+
 class LLMProviderException(UniSageException):
     """Exception raised when LLM provider API fails."""
 

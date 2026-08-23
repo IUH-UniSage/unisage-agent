@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_chat_deps
 from app.core.exceptions import InvalidQueryException
 from app.core.sanitizer import sanitize_input_text
+from app.core.security import verify_internal_secret
 from app.core.trace import TraceLogger
 from app.graph.deps import ChatDeps
 from app.graph.graph import chat_graph
@@ -10,7 +11,7 @@ from app.graph.state import ChatState
 from app.rag.generation.suggestions import SuggestionService
 from app.schemas.chat import ChatRequest, ChatResponse, Citation
 
-router = APIRouter(tags=["Chat"])
+router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)])
 suggestion_service = SuggestionService()
 
 

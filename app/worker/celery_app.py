@@ -1,0 +1,86 @@
+import logging
+from typing import Any
+
+from celery import Celery
+
+from app.core.config import settings
+from app.rag.embeddings.openai_embedder import OpenAIEmbedder
+from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
+from app.rag.vectorstore import qdrant_store
+from app.schemas.ingestion import Chunk
+
+logger = logging.getLogger(__name__)
+
+celery_app = Celery(
+    "unisage_ingestion",
+    broker=settings.REDIS_URL,
+    backend=settings.REDIS_URL,
+)
+
+
+@celery_app.task(bind=True, name="embed_chunks")
+def embed_chunks(
+    self: Any,
+    document_id: str,
+    object_key: str,
+    chunks: list[dict[str, Any]],
+    department: str,
+    access_level: str,
+) -> dict[str, Any]:
+    """Enrich, embed, and upsert a client-approved chunk list into Qdrant.
+
+    Reports percent-complete via `update_state` after each chunk. One
+    chunk's enrichment/embedding failure is recorded in the returned
+    per-chunk results rather than raised, so it doesn't abort the batch.
+    """
+
+    embedder = OpenAIEmbedder()
+    enricher = MultiRepresentationEnricher()
+    client = qdrant_store.get_client()
+    qdrant_store.ensure_collection(client)
+
+    total = len(chunks)
+    results: list[dict[str, Any]] = []
+
+    for position, raw_chunk in enumerate(chunks):
+        chunk = Chunk.model_validate(raw_chunk)
+        try:
+            enriched = enricher.enrich(chunk)
+            # Empty summary/questions (the enrichment fallback) would send an
+            # empty string to the embeddings API; fall back to the chunk's own
+            # content so every point still gets three valid vectors.
+            summary_text = enriched.summary or chunk.content
+            questions_text = " ".join(enriched.questions) or chunk.content
+            content_vector, summary_vector, questions_vector = embedder.embed(
+                [chunk.content, summary_text, questions_text]
+            )
+            point_id = f"{document_id}:{chunk.chunk_index}"
+            qdrant_store.upsert_chunk(
+                client,
+                qdrant_store.ChunkPoint(
+                    point_id=point_id,
+                    document_id=document_id,
+                    object_key=object_key,
+                    chunk_id=point_id,
+                    content=chunk.content,
+                    summary=enriched.summary,
+                    questions=enriched.questions,
+                    department=department,
+                    access_level=access_level,
+                    region_type=chunk.region_type.value,
+                    content_vector=content_vector,
+                    summary_vector=summary_vector,
+                    questions_vector=questions_vector,
+                ),
+            )
+            results.append({"chunk_index": chunk.chunk_index, "status": "SUCCESS"})
+        except Exception as exc:
+            logger.exception("Failed to embed chunk %s of %s", chunk.chunk_index, document_id)
+            results.append(
+                {"chunk_index": chunk.chunk_index, "status": "FAILED", "error": str(exc)}
+            )
+
+        percent = round((position + 1) / total * 100)
+        self.update_state(state="PROGRESS", meta={"percent": percent})
+
+    return {"percent": 100, "results": results}

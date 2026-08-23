@@ -25,6 +25,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
     "pymupdf4llm>=0.0.1",
+    "minio>=7.2.0",
+    "celery[redis]>=5.4.0",
+    "qdrant-client>=1.12.0",
+    "openai>=1.55.0",
+    "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +39,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
+    "types-openpyxl>=3.1.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -49,3 +55,24 @@ python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["pymupdf4llm", "celery", "celery.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# celery ships without inline type annotations, so `@celery_app.task` is seen
+# as an untyped decorator under strict mode; relax that check just here.
+module = "app.worker.celery_app"
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+# pymupdf/pymupdf4llm ship without inline type annotations; these modules are
+# the only ones that touch that API directly, so relax untyped-call checking
+# just here.
+module = [
+    "app.rag.ingestion.parser",
+    "app.rag.ingestion.table_aware_parser",
+    "tests.fixtures.documents",
+]
+disallow_untyped_calls = false

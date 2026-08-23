@@ -6,7 +6,7 @@ vars:
 
   # Host & Port defaults for Windows/POSIX compatibility
   HOST: '{{.HOST | default "127.0.0.1"}}'
-  PORT: '{{.PORT | default "8000"}}'
+  PORT: '{{.PORT | default "8402"}}'
 
   # ANSI Color Codes
   COLOR_RESET: '\033[0m'

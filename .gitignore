@@ -40,3 +40,6 @@ wheels/
 .ruff_cache/
 htmlcov/
 .coverage
+
+changes
+_to_delete
