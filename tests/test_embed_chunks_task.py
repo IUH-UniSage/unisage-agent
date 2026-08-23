@@ -37,7 +37,7 @@ def test_embed_chunks_runs_enrich_embed_upsert_in_order(
             "docs/handbook.pdf",
             [_chunk_payload(0), _chunk_payload(1)],
             "CNTT",
-            "STUDENT",
+            2,
         )
     ).get()
 
@@ -88,7 +88,7 @@ def test_embed_chunks_reports_strictly_increasing_progress_to_100(
                 "docs/handbook.pdf",
                 [_chunk_payload(i) for i in range(4)],
                 "CNTT",
-                "STUDENT",
+                2,
             )
         ).get()
 
@@ -120,7 +120,7 @@ def test_embed_chunks_records_per_chunk_failure_without_aborting_batch(
             "docs/handbook.pdf",
             [_chunk_payload(0), _chunk_payload(1)],
             "CNTT",
-            "STUDENT",
+            2,
         )
     ).get()
 

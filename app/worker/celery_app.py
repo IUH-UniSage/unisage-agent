@@ -25,8 +25,8 @@ def embed_chunks(
     document_id: str,
     object_key: str,
     chunks: list[dict[str, Any]],
-    department: str,
-    access_level: str,
+    department_id: str,
+    access_level: int,
 ) -> dict[str, Any]:
     """Enrich, embed, and upsert a client-approved chunk list into Qdrant.
 
@@ -67,7 +67,7 @@ def embed_chunks(
                     content=chunk.content,
                     summary=enriched.summary,
                     questions=enriched.questions,
-                    department=department,
+                    department=department_id,
                     access_level=access_level,
                     region_type=chunk.region_type.value,
                     content_vector=content_vector,

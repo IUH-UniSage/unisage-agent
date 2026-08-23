@@ -4,7 +4,8 @@ from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import TrustedContext, get_trusted_context
+from app.api.deps import TrustedContext, require_department_membership, require_document_permission
+from app.core.exceptions import DepartmentAccessDeniedException
 from app.core.security import verify_internal_secret
 from app.database.repositories.ingestion_job import delete_draft, get_draft, upsert_chunking_draft
 from app.database.session import get_db_session
@@ -50,9 +51,13 @@ async def ingest_document(
 
 
 @router.post("/ingestion/preview", response_model=PreviewResponse)
-async def preview_document(request: PreviewRequest) -> PreviewResponse:
+async def preview_document(
+    request: PreviewRequest,
+    context: TrustedContext = Depends(require_document_permission),
+) -> PreviewResponse:
     """Fetch the stored object and return its raw extracted text."""
 
+    require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
     raw_text = extract_raw_text(content, request.object_key)
     return PreviewResponse(raw_text=raw_text)
@@ -61,10 +66,12 @@ async def preview_document(request: PreviewRequest) -> PreviewResponse:
 @router.post("/ingestion/chunking", response_model=ChunkingResponse)
 async def chunk_document(
     request: ChunkingRequest,
+    context: TrustedContext = Depends(require_document_permission),
     db_session: AsyncSession = Depends(get_db_session),
 ) -> ChunkingResponse:
     """Fetch the stored object fresh and chunk it with the requested strategy."""
 
+    require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
     chunks = strategy.dispatch(request.strategy, request.params, content, request.object_key)
     response = ChunkingResponse(chunks=chunks)
@@ -105,21 +112,40 @@ async def get_ingestion_job(
 )
 async def embed_document(
     request: EmbeddingRequest,
-    context: TrustedContext = Depends(get_trusted_context),
+    context: TrustedContext = Depends(require_document_permission),
     db_session: AsyncSession = Depends(get_db_session),
 ) -> EmbeddingAcceptedResponse:
     """Dispatch the client-approved chunk list for background enrichment + embedding."""
+
+    _require_department_access_within_grant(request, context)
 
     task = embed_chunks.delay(
         request.document_id,
         request.object_key,
         [chunk.model_dump(mode="json") for chunk in request.chunks],
-        context.department,
-        context.access_level,
+        request.department_id,
+        request.access_level,
     )
     response = EmbeddingAcceptedResponse(task_id=task.id)
     await delete_draft(db_session, request.document_id)
     return response
+
+
+def _require_department_access_within_grant(
+    request: EmbeddingRequest, context: TrustedContext
+) -> None:
+    """Raise 403 unless the caller's granted access_level for the department covers the request."""
+
+    granted_level = next(
+        (
+            entry.access_level
+            for entry in context.department_access
+            if entry.department_id == request.department_id
+        ),
+        None,
+    )
+    if granted_level is None or request.access_level > granted_level:
+        raise DepartmentAccessDeniedException(request.department_id)
 
 
 @router.websocket("/ingestion/embedding/{task_id}/progress")

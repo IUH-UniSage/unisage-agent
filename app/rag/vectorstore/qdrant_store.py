@@ -45,7 +45,7 @@ class ChunkPoint:
     summary: str
     questions: list[str]
     department: str
-    access_level: str
+    access_level: int
     region_type: str
     content_vector: list[float]
     summary_vector: list[float]

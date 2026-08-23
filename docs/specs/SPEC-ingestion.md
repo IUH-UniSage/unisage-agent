@@ -85,8 +85,10 @@ app/
 └── schemas/
     └── ingestion.py          # new: Preview/Chunking/Embedding request+response models
 
-app/api/deps.py                # + get_trusted_context (reads X-User-Department,
-                                #   X-User-Access-Level headers injected by gateway)
+app/api/deps.py                # + get_trusted_context (reads X-User-Department-Access,
+                                #   X-User-Permissions headers injected by gateway;
+                                #   see Decision 8) + require_document_permission /
+                                #   require_department_membership
 app/core/security.py           # + verify_internal_secret (reads X-Internal-Secret,
                                 #   applied at router level to every ingestion route)
 ```
@@ -174,14 +176,14 @@ class ChunkingStrategy(Protocol):
      `region_type` (`"text"` | `"table"` | `"excel_row"`).
    - Collection name: `unisage_chunks`.
 
-3. **`department` / `access_level` source**: read from **trusted headers
-   injected by the API Gateway** after JWT verification (e.g.
-   `X-User-Department`, `X-User-Access-Level`), the same Access-Context-
-   Verifier pattern already implied by the system architecture — **not**
-   passed in the request body, and **not** fetched by Python calling Java.
-   The ingested document inherits the calling user's department/access level.
-   A FastAPI dependency (e.g. `get_trusted_context`) reads and validates the
-   presence of these headers for the embedding endpoint.
+3. **`department` / `access_level` source**: ~~read from trusted headers
+   injected by the API Gateway after JWT verification (`X-User-Department`,
+   `X-User-Access-Level`), inherited from the calling user~~ — **superseded
+   by Decision 8**: the client now sends `department_id`/`access_level`
+   directly in the request body, validated against (not derived from) the
+   caller's trusted context. The trusted-header mechanism itself (Gateway
+   injects headers after JWT verification, read via a FastAPI dependency)
+   is unchanged in spirit, only its shape and what it's used for changed.
 
 4. **Multi-representation LLM**: confirmed — `gpt-4o-mini` via OpenAI, one
    summary + 3 hypothetical questions per chunk, count configurable via env.
@@ -247,3 +249,105 @@ class ChunkingStrategy(Protocol):
      add the field and update all existing chunking-endpoint tests to send
      `document_id` before or as part of that task, not silently deferred
      further.
+
+8. **Chunk metadata authorization — `department_id`/`access_level` come from
+   the request, `TrustedContext` becomes a permission/membership check, not
+   a metadata source** (implemented in
+   `changes/23-08-2026-Chunk-Metadata-Authorization/`). Supersedes Decision
+   3. Reading real code surfaced a conceptual bug: Decision 3 stamped the
+   *calling user's own* department/access level onto every chunk of
+   whatever document they embedded — but "which department/level the
+   caller belongs to" and "which department/level this particular document
+   should be tagged with" are not the same thing, and once a caller can
+   belong to multiple departments (per `java-jwt-claims`'s
+   `department_access` JWT claim, an array) there's no way to pick the
+   right one from a single string context.
+   - **`EmbeddingRequest` gains required fields `department_id: str`,
+     `access_level: int` (`>= 0`, no upper bound — Python doesn't have its
+     own `access_levels` catalog to validate against, so it only rejects
+     the obviously-invalid negative case and otherwise trusts whatever the
+     caller's JWT-derived `department_access` grant allows at the Task 3
+     check below; Java's `access_levels` table is the actual source of
+     truth for which values are meaningful).** The client (frontend,
+     already knowing which department a
+     document belongs to and at what level, same as it already does for
+     `documents.min_access_level_id`) sends these directly — Python does
+     not infer them from the caller's own context, and does not call back
+     into Java to look them up (`SPEC-ingestion-resume.md`'s "Python never
+     calls Java" boundary holds). `embed_document` passes
+     `request.department_id`/`request.access_level` to `embed_chunks`, not
+     `context.department`/`context.access_level`.
+   - **`PreviewRequest`/`ChunkingRequest` gain a required `department_id:
+     str`** (same breaking-change precedent as Decision 7's
+     `ChunkingRequest.document_id`) — used only for a department-membership
+     check (see below), not stamped onto any output.
+   - **`ChunkPoint.access_level` and the Qdrant payload's `"access_level"`
+     changed from `str` to `int`**, matching `access_levels.level` (Integer)
+     on the Java side so a future retrieval-time `<=` filter comparison
+     works; the old string values (e.g. `"STUDENT"`) were never comparable
+     that way. Because Qdrant doesn't enforce a payload type at the
+     collection level, the existing `unisage_chunks` collection (test data
+     only, confirmed with the user) was deleted and left for
+     `ensure_collection` to recreate, rather than letting old string
+     payloads and new integer payloads coexist and silently break
+     retrieval-time comparisons later.
+   - **`TrustedContext` changes shape**: the two single-value fields
+     `department: str`/`access_level: str` are replaced by
+     `department_access: list[DepartmentAccessEntry]` (each entry
+     `{department_id: str, access_level: int}`), read from one new header
+     `X-User-Department-Access` (a JSON-encoded array) instead of the two
+     old headers `X-User-Department`/`X-User-Access-Level` — matching the
+     `department_access` JWT claim shape `java-jwt-claims` embeds and the
+     header `gateway-claim-forwarding` forwards it as. A malformed header
+     (bad JSON, an entry missing a field) raises the new
+     `InvalidTrustedContextException` (400) — distinct from
+     `MissingTrustedContextException` (400) for "the header isn't there at
+     all" — rather than a generic 500 or the wrong exception type. A new
+     field `permissions: list[str]` is read from another new header,
+     `X-User-Permissions` (a JSON array of permission names, e.g.
+     `["DOCUMENT_ALL", "DOCUMENT_CREATE"]`), matching the `permissions` JWT
+     claim.
+   - **`POST /ingestion/embedding` now validates `department_id`/
+     `access_level` from the request against the caller's
+     `context.department_access`** before dispatching the Celery task: the
+     department must be present in the caller's grant, and the requested
+     `access_level` must be `<=` the level granted for that department.
+     Either failing raises `DepartmentAccessDeniedException` (403) — before
+     `embed_chunks.delay(...)` is called, not after the task has already
+     started running in the background.
+   - **All three ingestion endpoints (`preview`, `chunking`, `embedding`)
+     now gate on permission**: the caller's `context.permissions` must
+     contain `"DOCUMENT_ALL"` or `"DOCUMENT_CREATE"` (ingest and document
+     CRUD share one permission cluster, a decision already made on the Java
+     side), enforced by a shared dependency,
+     `require_document_permission`, raising
+     `InsufficientDocumentPermissionException` (403) otherwise. This is a
+     genuinely new restriction for `preview`/`chunking` — before this
+     change, neither had *any* `TrustedContext` dependency at all, so
+     anyone who could reach the service through the Gateway (i.e. anyone
+     with a valid `X-Internal-Secret`) could preview or chunk any document
+     regardless of role.
+   - **`preview`/`chunking` additionally gate on department membership**:
+     `require_department_membership(request.department_id, context)`
+     raises `DepartmentAccessDeniedException` (403) unless the caller's
+     `department_access` contains that department — membership only, not
+     an `access_level` comparison, since `access_level` is a property of
+     the content being *embedded*, a concept that doesn't yet exist at the
+     preview/chunk (read-only) stage. `embedding` does **not** get this
+     same helper — it already has the fuller check above (membership *and*
+     level ceiling), and applying both would be redundant. This closes a
+     real gap: previously, a caller with `DOCUMENT_CREATE` but
+     `department_access` granted for only one department could still
+     preview/chunk another department's documents, only getting blocked at
+     the final embed step.
+   - **Sequencing**: this module (`python-trusted-context` in the
+     "Ingestion Authorization" capability map) depends on
+     `java-jwt-claims` (embeds the `department_access`/`permissions`
+     claims) and `gateway-claim-forwarding` (forwards them as
+     `X-User-Department-Access`/`X-User-Permissions` headers) — both
+     confirmed implemented by reading their code as of 2026-08-23, though
+     `gateway-claim-forwarding` still lacks its own automated tests (does
+     not block this module's runtime behavior, only its own test
+     coverage). A real end-to-end manual test through a running Gateway
+     (not just a test client setting the headers directly) is still
+     pending as of this decision.

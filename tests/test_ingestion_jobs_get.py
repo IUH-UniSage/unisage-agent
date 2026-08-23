@@ -1,8 +1,14 @@
+import json
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 from tests.fixtures.documents import make_pdf_bytes
+
+_TRUSTED_HEADERS = {
+    "X-User-Department-Access": json.dumps([{"department_id": "CNTT", "access_level": 3}]),
+    "X-User-Permissions": json.dumps(["DOCUMENT_ALL"]),
+}
 
 
 @patch("app.api.v1.ingestion.minio_client.get_object_bytes")
@@ -15,10 +21,12 @@ def test_get_job_returns_the_draft_after_chunking(
         "/api/v1/ingestion/chunking",
         json={
             "document_id": "doc-jobs-1",
+            "department_id": "CNTT",
             "object_key": "docs/handbook.pdf",
             "strategy": "recursive",
             "params": {"chunk_size": 800, "overlap": 120},
         },
+        headers=_TRUSTED_HEADERS,
     )
 
     response = client.get("/api/v1/ingestion/jobs/doc-jobs-1")
@@ -48,17 +56,21 @@ def test_rechunking_replaces_rather_than_duplicates_the_draft(
         "/api/v1/ingestion/chunking",
         json={
             "document_id": "doc-jobs-2",
+            "department_id": "CNTT",
             "object_key": "docs/handbook.pdf",
             "strategy": "recursive",
         },
+        headers=_TRUSTED_HEADERS,
     )
     client.post(
         "/api/v1/ingestion/chunking",
         json={
             "document_id": "doc-jobs-2",
+            "department_id": "CNTT",
             "object_key": "docs/handbook.pdf",
             "strategy": "token_based",
         },
+        headers=_TRUSTED_HEADERS,
     )
 
     response = client.get("/api/v1/ingestion/jobs/doc-jobs-2")

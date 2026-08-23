@@ -81,6 +81,50 @@ class MissingTrustedContextException(UniSageException):
         )
 
 
+class InvalidTrustedContextException(UniSageException):
+    """Exception raised when a gateway-injected trusted header is present but malformed.
+
+    Distinct from `MissingTrustedContextException`: this is "the header is
+    there but its JSON is broken or missing a required field", not "the
+    header is absent altogether".
+    """
+
+    def __init__(self, header_name: str, reason: str):
+        super().__init__(
+            message=f"Trusted header '{header_name}' is malformed: {reason}",
+            error_code=ErrorCode.INVALID_TRUSTED_CONTEXT,
+            status_code=400,
+        )
+
+
+class InsufficientDocumentPermissionException(UniSageException):
+    """Exception raised when the caller lacks DOCUMENT_ALL/DOCUMENT_CREATE permission."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="Forbidden: requires DOCUMENT_ALL or DOCUMENT_CREATE permission.",
+            error_code=ErrorCode.FORBIDDEN_DOCUMENT_PERMISSION,
+            status_code=403,
+        )
+
+
+class DepartmentAccessDeniedException(UniSageException):
+    """Exception raised when the caller isn't granted access to the requested department.
+
+    Covers both "the department isn't in the caller's department_access at
+    all" and "it is, but the requested access_level exceeds the level
+    granted for that department".
+    """
+
+    def __init__(self, department_id: str) -> None:
+        super().__init__(
+            message=f"Forbidden: caller is not granted sufficient access to department "
+            f"'{department_id}'.",
+            error_code=ErrorCode.FORBIDDEN_DEPARTMENT_ACCESS,
+            status_code=403,
+        )
+
+
 class LLMProviderException(UniSageException):
     """Exception raised when LLM provider API fails."""
 

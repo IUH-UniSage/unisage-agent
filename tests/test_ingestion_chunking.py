@@ -1,9 +1,15 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tests.fixtures.documents import make_pdf_bytes, make_xlsx_bytes
+
+_TRUSTED_HEADERS = {
+    "X-User-Department-Access": json.dumps([{"department_id": "CNTT", "access_level": 3}]),
+    "X-User-Permissions": json.dumps(["DOCUMENT_ALL"]),
+}
 
 
 @pytest.mark.parametrize(
@@ -31,7 +37,13 @@ def test_chunking_returns_non_empty_chunk_list_for_each_strategy(
 
     response = client.post(
         "/api/v1/ingestion/chunking",
-        json={"document_id": "doc-1", "object_key": object_key, "strategy": strategy_name},
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": object_key,
+            "strategy": strategy_name,
+        },
+        headers=_TRUSTED_HEADERS,
     )
 
     assert response.status_code == 200
@@ -52,7 +64,13 @@ def test_chunking_semantic_strategy_without_live_openai_calls(
 
     response = client.post(
         "/api/v1/ingestion/chunking",
-        json={"document_id": "doc-1", "object_key": "docs/handbook.pdf", "strategy": "semantic"},
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "semantic",
+        },
+        headers=_TRUSTED_HEADERS,
     )
 
     assert response.status_code == 200
@@ -67,7 +85,13 @@ def test_chunking_excel_row_on_non_xlsx_returns_422(
 
     response = client.post(
         "/api/v1/ingestion/chunking",
-        json={"document_id": "doc-1", "object_key": "docs/handbook.pdf", "strategy": "excel_row"},
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "excel_row",
+        },
+        headers=_TRUSTED_HEADERS,
     )
 
     assert response.status_code == 422
@@ -83,9 +107,11 @@ def test_successful_chunking_persists_a_resumable_draft(
         "/api/v1/ingestion/chunking",
         json={
             "document_id": "doc-draft-1",
+            "department_id": "CNTT",
             "object_key": "docs/handbook.pdf",
             "strategy": "recursive",
         },
+        headers=_TRUSTED_HEADERS,
     )
     assert response.status_code == 200
 
@@ -105,11 +131,45 @@ def test_failed_chunking_call_does_not_write_a_draft_row(
         "/api/v1/ingestion/chunking",
         json={
             "document_id": "doc-draft-failed",
+            "department_id": "CNTT",
             "object_key": "docs/handbook.pdf",
             "strategy": "excel_row",
         },
+        headers=_TRUSTED_HEADERS,
     )
     assert response.status_code == 422
 
     job = client.get("/api/v1/ingestion/jobs/doc-draft-failed")
     assert job.status_code == 404
+
+
+def test_chunking_returns_403_when_missing_document_permission(client: TestClient) -> None:
+    headers = {**_TRUSTED_HEADERS, "X-User-Permissions": json.dumps(["CHAT_MODEL_READ"])}
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "recursive",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+
+
+def test_chunking_returns_403_when_department_not_granted(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-1",
+            "department_id": "KHOA_KINH_TE",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "recursive",
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 403

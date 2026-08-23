@@ -25,6 +25,7 @@ class RegionType(StrEnum):
 class PreviewRequest(BaseModel):
     """Request to fetch and preview the raw text of a stored object."""
 
+    department_id: str = Field(min_length=1, max_length=100)
     object_key: str = Field(min_length=1, max_length=1024)
 
 
@@ -38,6 +39,7 @@ class ChunkingRequest(BaseModel):
     """Request to chunk a stored object using the given strategy."""
 
     document_id: str = Field(min_length=1, max_length=100)
+    department_id: str = Field(min_length=1, max_length=100)
     object_key: str = Field(min_length=1, max_length=1024)
     strategy: ChunkingStrategyName
     params: dict[str, Any] = Field(default_factory=dict)
@@ -61,6 +63,8 @@ class EmbeddingRequest(BaseModel):
     """Request to enrich, embed, and upsert a client-approved chunk list."""
 
     document_id: str = Field(min_length=1, max_length=100)
+    department_id: str = Field(min_length=1, max_length=100)
+    access_level: int = Field(ge=0)
     object_key: str = Field(min_length=1, max_length=1024)
     chunks: list[Chunk] = Field(min_length=1)
 
