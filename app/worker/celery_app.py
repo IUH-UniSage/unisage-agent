@@ -5,6 +5,7 @@ from typing import Any
 from celery import Celery
 
 from app.core.config import settings
+from app.core.events import publish_ingestion_event
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
@@ -17,6 +18,9 @@ celery_app = Celery(
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
 )
+# Keep task results well past a wizard tab's lifetime so the client's
+# reconciliation sweep can still read a terminal state days later.
+celery_app.conf.result_expires = 60 * 60 * 24 * 7
 
 
 @celery_app.task(bind=True, name="embed_chunks")
@@ -30,10 +34,24 @@ def embed_chunks(
 ) -> dict[str, Any]:
     """Enrich, embed, and upsert a client-approved chunk list into Qdrant.
 
-    Reports percent-complete via `update_state` after each chunk. One
-    chunk's enrichment/embedding failure is recorded in the returned
+    Reports percent-complete via `update_state` (for the client's
+    reconciliation sweep) and a Redis `progress` event per chunk (for the
+    live `WS /ingestion/events` relay), then a `completed` event on finish.
+    One chunk's enrichment/embedding failure is recorded in the returned
     per-chunk results rather than raised, so it doesn't abort the batch.
     """
+
+    task_id = self.request.id
+
+    def _publish(payload: dict[str, Any]) -> None:
+        publish_ingestion_event(
+            {
+                "task_id": task_id,
+                "document_id": document_id,
+                "department_id": department_id,
+                **payload,
+            }
+        )
 
     embedder = OpenAIEmbedder()
     enricher = MultiRepresentationEnricher()
@@ -84,5 +102,7 @@ def embed_chunks(
 
         percent = round((position + 1) / total * 100)
         self.update_state(state="PROGRESS", meta={"percent": percent})
+        _publish({"type": "progress", "percent": percent})
 
+    _publish({"type": "completed", "state": "SUCCESS"})
     return {"percent": 100, "results": results}

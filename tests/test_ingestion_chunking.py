@@ -115,7 +115,7 @@ def test_successful_chunking_persists_a_resumable_draft(
     )
     assert response.status_code == 200
 
-    job = client.get("/api/v1/ingestion/jobs/doc-draft-1")
+    job = client.get("/api/v1/ingestion/jobs/doc-draft-1", headers=_TRUSTED_HEADERS)
     assert job.status_code == 200
     assert job.json()["chunking_strategy"] == "recursive"
     assert job.json()["chunks"] == response.json()["chunks"]
@@ -139,7 +139,7 @@ def test_failed_chunking_call_does_not_write_a_draft_row(
     )
     assert response.status_code == 422
 
-    job = client.get("/api/v1/ingestion/jobs/doc-draft-failed")
+    job = client.get("/api/v1/ingestion/jobs/doc-draft-failed", headers=_TRUSTED_HEADERS)
     assert job.status_code == 404
 
 

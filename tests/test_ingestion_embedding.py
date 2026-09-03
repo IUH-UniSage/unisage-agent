@@ -1,8 +1,13 @@
 import json
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+from app.main import app
 from app.worker.celery_app import celery_app
 from tests.fixtures.documents import make_pdf_bytes
 
@@ -144,7 +149,8 @@ def test_successful_embedding_dispatch_marks_draft_as_embedding(
             },
             headers=_TRUSTED_HEADERS,
         )
-    assert client.get("/api/v1/ingestion/jobs/doc-embed-1").status_code == 200
+    job_before = client.get("/api/v1/ingestion/jobs/doc-embed-1", headers=_TRUSTED_HEADERS)
+    assert job_before.status_code == 200
 
     payload = {**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-1"}
     response = client.post(
@@ -156,80 +162,48 @@ def test_successful_embedding_dispatch_marks_draft_as_embedding(
     assert response.status_code == 202
     task_id = response.json()["task_id"]
 
-    job = client.get("/api/v1/ingestion/jobs/doc-embed-1")
+    job = client.get("/api/v1/ingestion/jobs/doc-embed-1", headers=_TRUSTED_HEADERS)
     assert job.status_code == 200
     body = job.json()
     assert body["current_step"] == "embedding"
     assert body["task_id"] == task_id
-
-    delete_response = client.delete("/api/v1/ingestion/jobs/doc-embed-1")
-    assert delete_response.status_code == 204
-    assert client.get("/api/v1/ingestion/jobs/doc-embed-1").status_code == 404
-
-
-def test_deleting_a_nonexistent_ingestion_job_is_a_no_op(client: TestClient) -> None:
-    response = client.delete("/api/v1/ingestion/jobs/no-such-document")
-
-    assert response.status_code == 204
+    # The job endpoint carries the live task state inline, so the client's
+    # reconciliation sweep needs only this one authorized call.
+    assert body["task_state"] == "SUCCESS"
+    assert body["task_percent"] == 100
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
-def test_websocket_receives_progress_frames_and_terminal_state(
-    mock_embedder_cls: MagicMock,
-    mock_enricher_cls: MagicMock,
-    mock_qdrant_store: MagicMock,
-    client: TestClient,
-) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
-    )
-    mock_qdrant_store.get_client.return_value = MagicMock()
+def _canned_stream(
+    *frames: dict[str, Any],
+) -> Callable[[], AsyncIterator[dict[str, Any]]]:
+    async def _stream() -> AsyncIterator[dict[str, Any]]:
+        for frame in frames:
+            yield frame
 
-    response = client.post(
-        "/api/v1/ingestion/embedding",
-        json=_EMBEDDING_PAYLOAD,
-        headers=_TRUSTED_HEADERS,
-    )
-    task_id = response.json()["task_id"]
-
-    with client.websocket_connect(f"/api/v1/ingestion/embedding/{task_id}/progress") as ws:
-        frame = ws.receive_json()
-        assert frame["state"] in {"PROGRESS", "SUCCESS"}
-        while frame["state"] not in {"SUCCESS", "FAILURE"}:
-            frame = ws.receive_json()
-
-    assert frame["state"] == "SUCCESS"
-    assert frame["percent"] == 100
+    return _stream
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
-def test_embedding_status_endpoint_reports_the_same_terminal_state_as_the_websocket(
-    mock_embedder_cls: MagicMock,
-    mock_enricher_cls: MagicMock,
-    mock_qdrant_store: MagicMock,
-    client: TestClient,
-) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
-    )
-    mock_qdrant_store.get_client.return_value = MagicMock()
+def test_events_ws_only_forwards_frames_for_the_callers_departments(client: TestClient) -> None:
+    own = {"type": "completed", "document_id": "doc-a", "department_id": "CNTT", "state": "SUCCESS"}
+    other = {
+        "type": "completed",
+        "document_id": "doc-b",
+        "department_id": "KHOA_KT",
+        "state": "SUCCESS",
+    }
 
-    response = client.post(
-        "/api/v1/ingestion/embedding",
-        json=_EMBEDDING_PAYLOAD,
-        headers=_TRUSTED_HEADERS,
-    )
-    task_id = response.json()["task_id"]
+    with patch("app.api.v1.ingestion.ingestion_event_stream", _canned_stream(other, own, other)):
+        with client.websocket_connect("/api/v1/ingestion/events", headers=_TRUSTED_HEADERS) as ws:
+            received = ws.receive_json()
 
-    status_response = client.get(f"/api/v1/ingestion/embedding/{task_id}/status")
+    assert received == own
 
-    assert status_response.status_code == 200
-    body = status_response.json()
-    assert body["state"] == "SUCCESS"
-    assert body["percent"] == 100
+
+def test_events_ws_rejects_a_connection_without_the_internal_secret() -> None:
+    bare_client = TestClient(app)
+
+    with pytest.raises(WebSocketDisconnect):
+        with bare_client.websocket_connect(
+            "/api/v1/ingestion/events", headers=_TRUSTED_HEADERS
+        ) as ws:
+            ws.receive_json()

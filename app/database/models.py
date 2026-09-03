@@ -15,18 +15,20 @@ class Base(DeclarativeBase):
 
 
 class DocumentProcessStep(StrEnum):
-    """Which ingestion stage last wrote a document's draft record.
+    """Which ingestion stage last wrote a document's process-log record.
 
     `CHUNKED`: a chunking draft exists, not yet embedded - resuming restores
     the review step. `EMBEDDING`: the client dispatched the Celery embed
     task for this draft's chunks and the row's `celery_task_id` identifies
-    it - resuming reconnects the WebSocket progress view instead of
-    restarting from preview. There is still no terminal "embedded" value:
-    the row is deleted once a client observes the task reach a terminal
-    state (see `DELETE /ingestion/jobs/{document_id}`), not written by the
-    Celery worker itself (which has no DB session) - so a draft whose
-    browser tab is closed before that observation lingers in `EMBEDDING`
-    indefinitely. Documented as a known gap, not fixed here.
+    it - resuming reconnects the progress view instead of restarting from
+    preview.
+
+    There is deliberately no terminal "embedded" value. The row is a
+    permanent history record - it is never deleted on completion. Whether an
+    embed has finished is answered by the Celery task state (broadcast on
+    `WS /ingestion/events` and read back inline on
+    `GET /ingestion/jobs/{document_id}`) and, authoritatively, by Java's
+    `Document.status`, not by a column here or by row deletion.
     """
 
     CHUNKED = "chunked"
@@ -34,11 +36,15 @@ class DocumentProcessStep(StrEnum):
 
 
 class DocumentProcessLog(Base):
-    """A resumable chunking draft for one document, keyed by Java's document_id.
+    """A resumable chunking draft / embedding record for one document, keyed
+    by Java's document_id.
 
     `document_id` is a plain, unconstrained column (no FK into Java's
     `documents` table): this feature lives in Python's own schema/database,
     separate from Java's Hibernate-managed one, by design.
+
+    The row is a permanent history record - it is not deleted when embedding
+    finishes (see `DocumentProcessStep`).
     """
 
     __tablename__ = "document_process_logs"
@@ -46,6 +52,10 @@ class DocumentProcessLog(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     document_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     object_key: Mapped[str] = mapped_column(String, nullable=False)
+    # Owning department, copied from the chunking request. Nullable only for
+    # rows written before the column existed; new rows always set it, and
+    # `GET /ingestion/jobs/{document_id}` authorizes membership against it.
+    department_id: Mapped[str | None] = mapped_column(String, nullable=True)
     current_step: Mapped[DocumentProcessStep] = mapped_column(
         SqlEnum(DocumentProcessStep, name="documentprocessstep", native_enum=True),
         nullable=False,

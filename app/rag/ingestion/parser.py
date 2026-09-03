@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 import pymupdf
@@ -34,23 +33,3 @@ def extract_raw_text(content: bytes, filename: str) -> str:
         finally:
             document.close()
     raise UnsupportedFileTypeException(filename)
-
-
-@dataclass(frozen=True)
-class ParsedDocument:
-    """Normalized document content ready for chunking."""
-
-    source: str
-    content: str
-    metadata: dict[str, object]
-
-
-def parse_text_document(
-    source: str,
-    content: str,
-    metadata: dict[str, object] | None = None,
-) -> ParsedDocument:
-    """Normalize whitespace while preserving the document source."""
-
-    normalized = "\n".join(line.strip() for line in content.splitlines() if line.strip())
-    return ParsedDocument(source, normalized, metadata or {})
