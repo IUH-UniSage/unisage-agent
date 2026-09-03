@@ -17,14 +17,20 @@ class Base(DeclarativeBase):
 class DocumentProcessStep(StrEnum):
     """Which ingestion stage last wrote a document's draft record.
 
-    Ships with exactly one member on purpose: this feature only tracks "a
-    chunking draft exists, not yet embedded." Preview isn't tracked (no row
-    created for it) and a successful embed deletes the row entirely, so
-    there is no state machine to model yet - this enum is a
-    forward-compatible extension point for a later feature to add one.
+    `CHUNKED`: a chunking draft exists, not yet embedded - resuming restores
+    the review step. `EMBEDDING`: the client dispatched the Celery embed
+    task for this draft's chunks and the row's `celery_task_id` identifies
+    it - resuming reconnects the WebSocket progress view instead of
+    restarting from preview. There is still no terminal "embedded" value:
+    the row is deleted once a client observes the task reach a terminal
+    state (see `DELETE /ingestion/jobs/{document_id}`), not written by the
+    Celery worker itself (which has no DB session) - so a draft whose
+    browser tab is closed before that observation lingers in `EMBEDDING`
+    indefinitely. Documented as a known gap, not fixed here.
     """
 
     CHUNKED = "chunked"
+    EMBEDDING = "embedding"
 
 
 class DocumentProcessLog(Base):
@@ -49,6 +55,7 @@ class DocumentProcessLog(Base):
     chunking_params: Mapped[dict[str, Any]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
     )
+    celery_task_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -7,8 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import DocumentChunk, DocumentProcessLog, DocumentProcessStep
 
 
-def test_document_process_step_has_exactly_one_member() -> None:
-    assert list(DocumentProcessStep) == [DocumentProcessStep.CHUNKED]
+def test_document_process_step_has_exactly_two_members() -> None:
+    assert list(DocumentProcessStep) == [
+        DocumentProcessStep.CHUNKED,
+        DocumentProcessStep.EMBEDDING,
+    ]
 
 
 @pytest.mark.asyncio

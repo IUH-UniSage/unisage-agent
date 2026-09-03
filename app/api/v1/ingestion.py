@@ -1,13 +1,19 @@
 import asyncio
+import contextlib
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, status
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TrustedContext, require_department_membership, require_document_permission
 from app.core.exceptions import DepartmentAccessDeniedException
 from app.core.security import verify_internal_secret
-from app.database.repositories.ingestion_job import delete_draft, get_draft, upsert_chunking_draft
+from app.database.repositories.ingestion_job import (
+    delete_draft,
+    get_draft,
+    mark_embedding,
+    upsert_chunking_draft,
+)
 from app.database.session import get_db_session
 from app.rag.chunking import strategy
 from app.rag.ingestion import minio_client
@@ -19,6 +25,7 @@ from app.schemas.ingestion import (
     ChunkingResponse,
     EmbeddingAcceptedResponse,
     EmbeddingRequest,
+    EmbeddingStatusResponse,
     IngestionJobResponse,
     PreviewRequest,
     PreviewResponse,
@@ -102,7 +109,21 @@ async def get_ingestion_job(
         chunking_strategy=draft.chunking_strategy,
         chunking_params=draft.chunking_params,
         chunks=draft.chunks,
+        task_id=draft.celery_task_id,
     )
+
+
+@router.delete("/ingestion/jobs/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ingestion_job(
+    document_id: str,
+    db_session: AsyncSession = Depends(get_db_session),
+) -> None:
+    """Clear a document's draft/in-flight-embedding row once its client has
+    observed the embed task reach a terminal state (see
+    `DocumentProcessStep.EMBEDDING`'s docstring for why this can't be done
+    from the Celery worker itself). A no-op if there's no row."""
+
+    await delete_draft(db_session, document_id)
 
 
 @router.post(
@@ -127,7 +148,7 @@ async def embed_document(
         request.access_level,
     )
     response = EmbeddingAcceptedResponse(task_id=task.id)
-    await delete_draft(db_session, request.document_id)
+    await mark_embedding(db_session, document_id=request.document_id, celery_task_id=task.id)
     return response
 
 
@@ -148,22 +169,60 @@ def _require_department_access_within_grant(
         raise DepartmentAccessDeniedException(request.department_id)
 
 
+def _read_task_progress(task_id: str) -> EmbeddingStatusResponse:
+    """Read one embedding task's current {percent, state} from the Celery result backend.
+
+    Shared by the WebSocket loop below (one push per poll interval) and
+    `GET /ingestion/embedding/{task_id}/status` (one pull per HTTP call) -
+    same read, two transports.
+    """
+
+    result = AsyncResult(task_id, app=celery_app)
+    percent = 0
+    info = result.info
+    if isinstance(info, dict) and "percent" in info:
+        percent = int(info["percent"])
+    return EmbeddingStatusResponse(percent=percent, state=result.state)
+
+
+@router.get("/ingestion/embedding/{task_id}/status", response_model=EmbeddingStatusResponse)
+async def get_embedding_status(task_id: str) -> EmbeddingStatusResponse:
+    """Poll-friendly HTTP equivalent of one WebSocket progress frame.
+
+    Lets a client detect a task finishing without keeping a WebSocket (and
+    therefore a wizard page) open - e.g. the Processing queue polling every
+    document it knows has an in-flight embed, so `Document.status` still
+    gets updated even if nobody reopens that document's wizard to watch the
+    WebSocket directly.
+    """
+
+    return _read_task_progress(task_id)
+
+
 @router.websocket("/ingestion/embedding/{task_id}/progress")
 async def embedding_progress(websocket: WebSocket, task_id: str) -> None:
-    """Push percent-complete progress frames until the embedding task finishes or fails."""
+    """Push percent-complete progress frames until the embedding task finishes or fails.
+
+    A client can disconnect at any point mid-loop (tab closed, page
+    navigated away, resumed-then-abandoned view) - `send_json` then raises
+    `WebSocketDisconnect` because the peer is already gone. That's an
+    expected shutdown path here, not an error: swallow it and skip the
+    `close()` call entirely, since closing an already-disconnected socket
+    itself raises (`Cannot call "send" once a close message has been
+    sent.`), which would otherwise surface as a second, misleading
+    exception in the logs for what is just a normal disconnect.
+    """
 
     await websocket.accept()
-    result = AsyncResult(task_id, app=celery_app)
     try:
         while True:
-            state = result.state
-            percent = 0
-            info = result.info
-            if isinstance(info, dict) and "percent" in info:
-                percent = int(info["percent"])
-            await websocket.send_json({"percent": percent, "state": state})
-            if state in _TERMINAL_STATES:
+            progress = _read_task_progress(task_id)
+            await websocket.send_json({"percent": progress.percent, "state": progress.state})
+            if progress.state in _TERMINAL_STATES:
                 break
             await asyncio.sleep(_PROGRESS_POLL_INTERVAL_SECONDS)
+    except WebSocketDisconnect:
+        return
     finally:
-        await websocket.close()
+        with contextlib.suppress(RuntimeError):
+            await websocket.close()

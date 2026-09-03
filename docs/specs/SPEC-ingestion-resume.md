@@ -76,21 +76,23 @@ since it's no longer a draft at that point).
 
 ### `DocumentProcessStep` (enum)
 
-A marker of which ingestion stage last wrote this draft record. **As shipped
-in this feature, it only ever takes one value: `CHUNKED`** — meaning "a
-chunking draft exists for this document, not yet embedded." Preview isn't
-tracked (no row created for it) and a successful embed deletes the row
-entirely (no "embedded" state to represent) — so there is currently no
-state machine with transitions, just one meaningful state while a row
-exists. The enum type exists as a **forward-compatible extension point**:
-if a later feature needs to track, say, "embedding in progress" or
-"previewed but not yet chunked," it adds a new enum value, not a new
-column or a new table. Do not read more into it than that — it is
-intentionally a one-value enum today.
+> **Amended after initial ship.** The paragraph below described the
+> single-value enum as originally shipped; a follow-up change (see
+> "Extension: resuming into an in-flight embed" at the end of this doc) added
+> a second value, `EMBEDDING`, using exactly the extension point this
+> paragraph anticipated.
+
+A marker of which ingestion stage last wrote this draft record — originally
+`CHUNKED` only, meaning "a chunking draft exists for this document, not yet
+embedded." Preview isn't tracked (no row created for it). The enum type
+exists as a **forward-compatible extension point**: if a later feature
+needs to track, say, "embedding in progress" or "previewed but not yet
+chunked," it adds a new enum value, not a new column or a new table.
 
 ```python
 class DocumentProcessStep(str, Enum):
     CHUNKED = "chunked"
+    EMBEDDING = "embedding"  # added by the resume-into-embed extension
 ```
 
 ### Table `document_process_logs`
@@ -100,9 +102,10 @@ class DocumentProcessStep(str, Enum):
 | `id` | UUID | PK |
 | `document_id` | VARCHAR | **Unique.** Java's Document id, read from `ChunkingRequest.document_id` (SPEC-ingestion.md Decision 7). No FK — see above. |
 | `object_key` | VARCHAR | MinIO key, mirrored from the chunking request for convenience. |
-| `current_step` | VARCHAR (`DocumentProcessStep`) | Always `CHUNKED` in this feature (see above). |
+| `current_step` | VARCHAR (`DocumentProcessStep`) | `CHUNKED` after a chunking call, `EMBEDDING` after an embedding call dispatches a Celery task (see extension section). |
 | `chunking_strategy` | VARCHAR | One of SPEC-ingestion.md's 5 strategy names. |
 | `chunking_params` | JSONB | Whatever params were used for that strategy. |
+| `celery_task_id` | VARCHAR, nullable | Set when `current_step` becomes `EMBEDDING`; the Celery task id to reconnect the WebSocket progress view to. `NULL` while `current_step` is `CHUNKED`. |
 | `created_at` | TIMESTAMPTZ | Set on first upsert. |
 | `updated_at` | TIMESTAMPTZ | Set on every upsert. |
 
@@ -129,12 +132,15 @@ class DocumentProcessStep(str, Enum):
    returns.
 2. **On a successful `POST /api/v1/ingestion/embedding` call** (existing
    endpoint, unchanged contract) that successfully dispatches the Celery
-   task: delete the `document_process_logs` row for that `document_id`
-   (cascades to its `document_chunks`). The draft is gone because it's no
-   longer a draft — embedding has started.
+   task: **(amended, see extension section)** flip the row's `current_step`
+   to `EMBEDDING` and record `celery_task_id`, rather than deleting it.
 3. **`GET /api/v1/ingestion/jobs/{document_id}`** (new): returns
-   `{object_key, current_step, chunking_strategy, chunking_params, chunks: [...]}`
-   if a row exists, else `404`.
+   `{object_key, current_step, chunking_strategy, chunking_params, chunks: [...], task_id}`
+   if a row exists, else `404`. `task_id` is `null` while `current_step` is
+   `CHUNKED`.
+4. **`DELETE /api/v1/ingestion/jobs/{document_id}`** (new, see extension
+   section): deletes the row, once a client has observed the embed task
+   reach a terminal state.
 
 ## Commands
 
@@ -246,3 +252,52 @@ None outstanding — all resolved during the interview (DB placement, no
 cross-service FK, `DocumentProcessStep`'s single-value nature, frontend-side
 composition, no locking, step-3 out of scope) plus the later `document_id`
 source decision (see `SPEC-ingestion.md` Decision 7).
+
+## Extension: resuming into an in-flight embed
+
+Originally, step 3 (embedding) was explicitly out of scope (see "Scope
+Boundaries" above) and a successful embed dispatch deleted the draft row.
+In practice this meant: a client that dispatched embedding and then
+navigated away (or reloaded) before the WebSocket reported a terminal state
+had no way back in — `GET /ingestion/jobs/{document_id}` 404'd, and the
+frontend fell back to restarting the wizard from preview even though the
+document was mid-embed server-side.
+
+This extension closes that gap using exactly the mechanism the original
+`DocumentProcessStep` docstring reserved for it:
+
+- `DocumentProcessStep` gains `EMBEDDING`. `document_process_logs` gains a
+  nullable `celery_task_id` column.
+- `POST /ingestion/embedding`, on a successful dispatch, now calls
+  `mark_embedding(document_id, task.id)` instead of `delete_draft` — the row
+  survives, flipped to `current_step="embedding"` with `celery_task_id` set.
+- `GET /ingestion/jobs/{document_id}`'s response gains `task_id` (from
+  `celery_task_id`, `null` while `current_step` is `chunked`). A frontend
+  resuming a document whose job has `current_step="embedding"` reconnects
+  the `/ingestion/embedding/{task_id}/progress` WebSocket directly, instead
+  of hydrating into the chunk-review step.
+- New `DELETE /ingestion/jobs/{document_id}` (204, no-op if no row) deletes
+  the row. The frontend calls this once it observes the WebSocket reach a
+  terminal state (`SUCCESS`/`FAILURE`) — the same moment it already calls
+  Java's `PATCH /documents/{id}/status`, so both cleanups happen together
+  from the one place that's actually watching the task finish.
+- Re-chunking a document whose row is still `EMBEDDING` (e.g. the user
+  starts over) resets `current_step` back to `CHUNKED` and clears
+  `celery_task_id`, same as any other chunking upsert.
+
+**Known gap, accepted rather than solved here**: the Celery worker
+(`app/worker/celery_app.py`) has no DB session and does not write to
+`document_process_logs` itself — it only reports progress via the Celery
+result backend, which is what the WebSocket endpoint already polls. So the
+row transitions to a terminal state only when *some* client observes the
+WebSocket's terminal frame and calls the `DELETE`. If the browser is closed
+for the entire duration of an embed and never reopened, the row lingers
+forever with `current_step="embedding"` and a task id whose Celery result
+has long since expired from the backend — reopening the document then shows
+a progress view stuck on `state: "error"` (the WebSocket's own "can't
+determine state" fallback) rather than resolving one way or the other.
+Fixing this for real would mean the Celery task itself writing terminal
+state to the DB (a sync DB session inside the worker, a separate design
+decision this extension does not make) or a scheduled sweep for stale
+`EMBEDDING` rows. Neither is implemented; this is the same category of
+accepted, documented gap as this project's existing `known-gaps.md` entries.

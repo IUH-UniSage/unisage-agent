@@ -120,7 +120,7 @@ def test_valid_request_dispatches_task_with_request_department_and_level(
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
 @patch("app.worker.celery_app.OpenAIEmbedder")
-def test_successful_embedding_dispatch_removes_any_existing_draft(
+def test_successful_embedding_dispatch_marks_draft_as_embedding(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
@@ -154,7 +154,23 @@ def test_successful_embedding_dispatch_removes_any_existing_draft(
     )
 
     assert response.status_code == 202
+    task_id = response.json()["task_id"]
+
+    job = client.get("/api/v1/ingestion/jobs/doc-embed-1")
+    assert job.status_code == 200
+    body = job.json()
+    assert body["current_step"] == "embedding"
+    assert body["task_id"] == task_id
+
+    delete_response = client.delete("/api/v1/ingestion/jobs/doc-embed-1")
+    assert delete_response.status_code == 204
     assert client.get("/api/v1/ingestion/jobs/doc-embed-1").status_code == 404
+
+
+def test_deleting_a_nonexistent_ingestion_job_is_a_no_op(client: TestClient) -> None:
+    response = client.delete("/api/v1/ingestion/jobs/no-such-document")
+
+    assert response.status_code == 204
 
 
 @patch("app.worker.celery_app.qdrant_store")
@@ -187,3 +203,33 @@ def test_websocket_receives_progress_frames_and_terminal_state(
 
     assert frame["state"] == "SUCCESS"
     assert frame["percent"] == 100
+
+
+@patch("app.worker.celery_app.qdrant_store")
+@patch("app.worker.celery_app.MultiRepresentationEnricher")
+@patch("app.worker.celery_app.OpenAIEmbedder")
+def test_embedding_status_endpoint_reports_the_same_terminal_state_as_the_websocket(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    client: TestClient,
+) -> None:
+    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
+    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
+        summary="a summary", questions=["Q1?", "Q2?"]
+    )
+    mock_qdrant_store.get_client.return_value = MagicMock()
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json=_EMBEDDING_PAYLOAD,
+        headers=_TRUSTED_HEADERS,
+    )
+    task_id = response.json()["task_id"]
+
+    status_response = client.get(f"/api/v1/ingestion/embedding/{task_id}/status")
+
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["state"] == "SUCCESS"
+    assert body["percent"] == 100

@@ -12,13 +12,15 @@ from app.schemas.ingestion import Chunk, RegionType
 
 @dataclass(frozen=True)
 class DraftDTO:
-    """A resumable chunking draft read back from `document_process_logs`."""
+    """A resumable chunking or in-flight-embedding draft, read back from
+    `document_process_logs`."""
 
     object_key: str
     current_step: DocumentProcessStep
     chunking_strategy: str
     chunking_params: dict[str, Any]
     chunks: list[Chunk]
+    celery_task_id: str | None
 
 
 async def upsert_chunking_draft(
@@ -54,8 +56,10 @@ async def upsert_chunking_draft(
         session.add(log)
     else:
         log.object_key = object_key
+        log.current_step = DocumentProcessStep.CHUNKED
         log.chunking_strategy = strategy
         log.chunking_params = params
+        log.celery_task_id = None
         await session.execute(delete(DocumentChunk).where(DocumentChunk.process_log_id == log.id))
 
     session.add_all(
@@ -68,6 +72,26 @@ async def upsert_chunking_draft(
         )
         for chunk in chunks
     )
+    await session.commit()
+
+
+async def mark_embedding(session: AsyncSession, *, document_id: str, celery_task_id: str) -> None:
+    """Flip an existing draft to `EMBEDDING` and record the dispatched task's id.
+
+    A no-op if no draft row exists for `document_id` - shouldn't happen in
+    practice (embedding always follows a chunking call, which upserts the
+    row), but there's nothing to persist a task id onto if it's missing.
+    """
+
+    result = await session.execute(
+        select(DocumentProcessLog).where(DocumentProcessLog.document_id == document_id)
+    )
+    log = result.scalar_one_or_none()
+    if log is None:
+        return
+
+    log.current_step = DocumentProcessStep.EMBEDDING
+    log.celery_task_id = celery_task_id
     await session.commit()
 
 
@@ -88,6 +112,7 @@ async def get_draft(session: AsyncSession, document_id: str) -> DraftDTO | None:
         current_step=log.current_step,
         chunking_strategy=log.chunking_strategy,
         chunking_params=log.chunking_params,
+        celery_task_id=log.celery_task_id,
         chunks=[
             Chunk(
                 chunk_index=chunk.chunk_index,

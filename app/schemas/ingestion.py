@@ -75,11 +75,20 @@ class EmbeddingAcceptedResponse(BaseModel):
     task_id: str
 
 
+class EmbeddingStatusResponse(BaseModel):
+    """One embedding task's current progress - the HTTP-pollable equivalent
+    of a single `/ingestion/embedding/{task_id}/progress` WebSocket frame."""
+
+    percent: int
+    state: str
+
+
 class IngestionJobResponse(BaseModel):
-    """A resumable chunking draft for one document."""
+    """A resumable chunking draft, or in-flight embedding job, for one document."""
 
     object_key: str
     current_step: str
     chunking_strategy: str
     chunking_params: dict[str, Any]
     chunks: list[Chunk]
+    task_id: str | None = None

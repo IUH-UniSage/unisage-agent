@@ -23,6 +23,22 @@ change adds a webhook/callback (out of scope here, and explicitly listed as
 never in `SPEC-ingestion.md`'s Boundaries: "never call back into the Java
 backend from Python").
 
+## A closed browser tab leaves a draft stuck in `EMBEDDING` forever
+
+`document_process_logs.current_step` moves from `CHUNKED` to `EMBEDDING`
+when `POST /ingestion/embedding` dispatches a Celery task, and back out
+(row deleted) only via `DELETE /ingestion/jobs/{document_id}`, which the
+frontend calls once it observes the task's WebSocket progress reach a
+terminal state. The Celery worker itself has no DB session and never
+writes this transition. If no client is ever open to observe the terminal
+frame (tab closed and never reopened for that document), the row stays
+`EMBEDDING` indefinitely with a `celery_task_id` whose Celery result will
+eventually expire from the result backend — reopening the document later
+shows a progress view stuck in the WebSocket's `error` fallback state
+rather than resolving. See `SPEC-ingestion-resume.md`'s "Extension:
+resuming into an in-flight embed" section for the full design and why a
+worker-side or scheduled-sweep fix was left out of scope.
+
 ## `.doc` (legacy binary Word format) is not parsed
 
 `extract_raw_text` (`app/rag/ingestion/parser.py`) and `split_regions`
