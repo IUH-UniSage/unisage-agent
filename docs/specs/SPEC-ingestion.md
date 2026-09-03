@@ -1,0 +1,353 @@
+# Spec: Ingestion Service (unisage-agent, Python)
+
+## Objective
+
+Add three independent, client-facing REST APIs to `unisage-agent` that implement
+the document ingestion pipeline: **preview** (read raw text), **chunking**
+(split into reviewable chunks with a chosen strategy), and **embedding**
+(enrich + embed the client-approved chunks into Qdrant). The client calls all
+three directly through the API Gateway. Java is not an orchestrator for this
+flow — it only performs the earlier, out-of-scope step of storing the raw file
+in MinIO and creating a `Document` metadata row.
+
+Success = a KLTN defense-ready slice: three working APIs matching the
+contracts below, embedding running asynchronously so real-time chat/query
+embedding calls are not starved under load, and the untouched parts of
+`unisage-agent` (chat/graph/retrieval/reranking/generation) still import and
+run exactly as before.
+
+This spec supersedes `Diagrams/architecture/arc.md` for the ingestion flow
+(that document's Java-driven Kafka orchestration and PostgreSQL/pgvector vector
+store are stale and not implemented here).
+
+## Tech Stack
+
+- Python 3.12, FastAPI (existing `unisage-agent` scaffold)
+- `minio` (Python SDK) — internal docker-network MinIO client, own credentials
+- `celery[redis]` + Redis — async task queue and result/progress backend for
+  the embedding step (chosen over Kafka: single producer/single consumer here,
+  no other service needs to subscribe to this event; Celery gives native
+  priority queues so real-time query embedding can be prioritized over
+  ingestion under load, and free progress state via `task.update_state` —
+  Kafka would need both a broker *and* a hand-rolled state store to match this)
+- `qdrant-client` — vector store for chunk + multi-representation vectors
+- `openai` SDK — `text-embedding-3-small` for embeddings, `gpt-4o-mini` for the
+  multi-representation summary/hypothetical-question generation step
+- `tiktoken` (already a dependency) — token-based chunking
+- `pymupdf4llm` (already a dependency) — PDF/DOCX text and table-as-markdown
+  extraction
+- `python-docx` or existing `pymupdf4llm` path for `.docx`/`.doc`
+- `openpyxl` — `.xlsx` row-based chunking (Java does not yet whitelist XLSX
+  uploads — see Open Questions / Known Gaps)
+- FastAPI `WebSocket` — realtime embedding progress push (chosen over SSE per
+  explicit user decision, to leave room for future cancel/pause commands)
+
+## Commands
+
+```
+Dev:    uvicorn app.main:app --reload --port 8402
+Worker: celery -A app.worker.celery_app worker --loglevel=info
+Test:   pytest
+Lint:   ruff check app tests
+Format: ruff format --check app tests
+Types:  mypy app tests
+```
+
+## Project Structure (additions/changes only)
+
+```
+app/
+├── api/v1/
+│   └── ingestion.py          # 3 endpoints: preview, chunking, embedding + WS route
+├── core/
+│   └── config.py             # + MinIO, Redis/Celery, Qdrant, OpenAI settings
+├── rag/
+│   ├── ingestion/
+│   │   ├── minio_client.py   # object fetch by object_key
+│   │   ├── parser.py         # per-filetype raw text extraction (preview)
+│   │   └── table_aware_parser.py  # text/table region split (chunking only)
+│   ├── chunking/
+│   │   ├── recursive.py      # existing, reused
+│   │   ├── semantic.py       # upgraded: real semantic chunking (~400 tok, 20% overlap)
+│   │   ├── token_based.py    # new: tiktoken-based
+│   │   ├── markdown_aware.py # new: heading/table-block aware
+│   │   ├── excel_rows.py     # new: row-based .xlsx chunking
+│   │   └── strategy.py       # new: strategy registry/dispatch + shared params schema
+│   ├── embeddings/
+│   │   ├── openai_embedder.py     # replaces huggingface.py as the active provider
+│   │   └── provider.py            # new: EmbeddingProvider protocol (swap point)
+│   ├── enrichment/
+│   │   └── multi_representation.py  # new: LLM summary + hypothetical questions
+│   └── vectorstore/
+│       └── qdrant_store.py   # new: collection bootstrap + upsert
+├── worker/
+│   └── celery_app.py         # new: Celery app + embed_chunks task
+└── schemas/
+    └── ingestion.py          # new: Preview/Chunking/Embedding request+response models
+
+app/api/deps.py                # + get_trusted_context (reads X-User-Department-Access,
+                                #   X-User-Permissions headers injected by gateway;
+                                #   see Decision 8) + require_document_permission /
+                                #   require_department_membership
+app/core/security.py           # + verify_internal_secret (reads X-Internal-Secret,
+                                #   applied at router level to every ingestion route)
+```
+
+## Code Style
+
+Match existing conventions in the repo (see `AGENTS.md`): Python 3.12 syntax,
+strict type hints, request/response models in `app/schemas`, provider-specific
+code stays inside its own RAG stage module, no DDD layers/ports without a
+second real implementation.
+
+```python
+class ChunkingStrategy(Protocol):
+    """One chunking strategy: pure function from parsed regions to chunks."""
+
+    def split(self, regions: list[ParsedRegion], params: ChunkingParams) -> list[Chunk]: ...
+```
+
+## Testing Strategy
+
+- `pytest` + `pytest-asyncio`, tests under `tests/`, mirroring existing
+  `tests/test_ingestion.py` naming.
+- Unit tests per chunking strategy (pure functions, no I/O) — fixed input text
+  → expected chunk boundaries/counts.
+- Unit tests for the embedding-provider and multi-representation modules using
+  mocked OpenAI client (no live API calls in CI).
+- Integration test for preview/chunking endpoints against a MinIO test
+  container or a mocked MinIO client.
+- Celery task tested in eager mode (`task_always_eager=True`) to assert
+  progress states are emitted in order and Qdrant upsert is called with the
+  expected payload shape (mocked Qdrant client).
+- No live external calls (OpenAI, Qdrant, MinIO) in the default test run.
+
+## Boundaries
+
+- **Always**: keep chat/graph/retrieval/reranking/generation modules
+  untouched; keep embedding model swappable behind `EmbeddingProvider`; run
+  `ruff`/`mypy`/`pytest` before considering a task done; never silently invent
+  a Java-side change (XLSX whitelist, DocStatus callback) — flag instead.
+- **Ask first**: removing the existing Postgres/SQLAlchemy/alembic plumbing
+  (still used by out-of-scope modules — default is leave it alone, see Open
+  Questions); changing the embedding model or multi-representation LLM;
+  renaming the Qdrant collection/payload schema once chosen.
+- **Never**: call back into the Java backend from Python; implement Kafka;
+  cache preview/chunking file state between requests; re-derive chunks from
+  `object_key` inside the embedding step (client-sent chunk list is the only
+  input); accept a client-facing ingestion request without a valid
+  `X-Internal-Secret` header (see Decision 6) — this is what makes the
+  Gateway the only caller and the trusted headers in Decision 3 trustworthy.
+
+## Success Criteria
+
+- `POST /api/v1/ingestion/preview` returns raw text for a given `object_key`
+  for txt/pdf/docx/doc files fetched from MinIO.
+- `POST /api/v1/ingestion/chunking` returns a chunk list for any of the 5
+  strategies, re-parsing (incl. table-aware split) from `object_key` on every
+  call, no server-side caching.
+- `POST /api/v1/ingestion/embedding` accepts a client-supplied chunk list,
+  returns a `task_id` immediately (202), and a Celery worker performs
+  multi-representation enrichment + OpenAI embedding + Qdrant upsert in the
+  background.
+- `WS /api/v1/ingestion/embedding/{task_id}/progress` streams percent-complete
+  updates in realtime until the task finishes or fails.
+- Existing chat/graph/retrieval endpoints and tests remain green,
+  unmodified.
+- `ruff check`, `ruff format --check`, `mypy`, and `pytest` all pass.
+
+## Resolved Decisions (confirmed by user, superseding the earlier draft)
+
+1. **Postgres/alembic plumbing**: confirmed dead code — `get_db_session` is
+   threaded into `ChatDeps` but nothing queries it (`RetrievalService` uses an
+   in-memory demo corpus; `DocumentRepository`/`ChunkRepository`/
+   `ConversationRepository` are empty stub classes with no methods). **Leave
+   untouched** — do not remove, do not add ingestion tables to it.
+
+2. **Qdrant point/vector design**: **one point per original chunk**, using
+   Qdrant **named vectors** so content, summary, and hypothetical-questions
+   are each independently searchable on the same point (not separate points
+   linked by `parent_chunk_id`):
+   - Named vectors: `content_vector`, `summary_vector`, `questions_vector`
+     (the joined/concatenated hypothetical questions embedded as one vector).
+     Three OpenAI embedding calls per chunk.
+   - Payload fields: `document_id`, `object_key`, `chunk_id`, `content`,
+     `summary`, `questions` (`list[str]`), `department`, `access_level`,
+     `region_type` (`"text"` | `"table"` | `"excel_row"`).
+   - Collection name: `unisage_chunks`.
+
+3. **`department` / `access_level` source**: ~~read from trusted headers
+   injected by the API Gateway after JWT verification (`X-User-Department`,
+   `X-User-Access-Level`), inherited from the calling user~~ — **superseded
+   by Decision 8**: the client now sends `department_id`/`access_level`
+   directly in the request body, validated against (not derived from) the
+   caller's trusted context. The trusted-header mechanism itself (Gateway
+   injects headers after JWT verification, read via a FastAPI dependency)
+   is unchanged in spirit, only its shape and what it's used for changed.
+
+4. **Multi-representation LLM**: confirmed — `gpt-4o-mini` via OpenAI, one
+   summary + 3 hypothetical questions per chunk, count configurable via env.
+
+5. **Known gaps, documented not silently patched**: Java's `AllowedFileType`
+   has no `.xlsx` yet (Excel chunking strategy is unreachable end-to-end until
+   Java adds it); Java's `DocStatus` lifecycle (`PENDING → COMPLETED`) has no
+   caller in this scope since Python never calls back to Java.
+
+6. **Service-to-service auth: shared-secret gate, not just the trusted
+   headers**: every route on the ingestion router (`preview`, `chunking`,
+   `embedding`, and the WebSocket progress endpoint) requires a matching
+   `X-Internal-Secret` header, verified by a router-level FastAPI dependency
+   (`verify_internal_secret` in `app/core/security.py`) before any handler
+   runs. The value is a shared secret configured on both sides — this
+   service's `INTERNAL_SECRET_KEY` setting and the corresponding value the
+   API Gateway sends on its `python-ai-agent-route` proxy filters — not a
+   per-user credential. A request without it (or with the wrong value) is
+   rejected with `403` before it ever reaches the handler, which is what
+   makes the Gateway the only path into this service and is precisely what
+   makes the `X-User-Department`/`X-User-Access-Level` headers in Decision 3
+   trustworthy: only the Gateway holds the shared secret, so only the
+   Gateway can be the one injecting those headers. `/api/v1/health` is
+   intentionally exempt (not gated) so infra health checks don't need the
+   secret. Same pattern already used in `KLTN-Academic-Agent-AI`'s
+   `app/security.py`; ported here rather than reinvented.
+   - **Settings**: `INTERNAL_SECRET_KEY` (default matches the Gateway
+     route's own fallback, so local dev works out of the box — override
+     both sides together in real deployments).
+   - **Ask first**: rotating or removing the shared secret, or changing
+     which routes it gates.
+   - **Never**: accept an ingestion request without a valid
+     `X-Internal-Secret`, even for local/dev convenience.
+
+7. **`ChunkingRequest` gains a required `document_id` field**: added to
+   support `docs/specs/SPEC-ingestion-resume.md` (the chunking-draft
+   persistence feature) — `document_process_logs.document_id` is the unique
+   key that draft is stored/retrieved under, and `ChunkingRequest` was the
+   only one of the three request schemas that didn't already carry it
+   (`EmbeddingRequest` already has `document_id`; `PreviewRequest` doesn't
+   need one, since preview is never persisted per the resume spec's Scope
+   Boundaries). Rejected alternatives: deriving `document_id` from
+   `object_key` via a MinIO key-naming convention (never documented
+   anywhere, silently breaks if Java's naming changes) and making the field
+   optional (would make the resume feature silently no-op for any caller
+   that forgets to pass it). The client already has `document_id` (it's
+   Java's own `Document.id`, the same one already sent to
+   `EmbeddingRequest`), so requiring it on `ChunkingRequest` too is a
+   natural, low-risk contract change.
+   - **This is a real (if small) breaking change to an already-shipped
+     request schema.** Everything else about the preview/chunking/embedding
+     endpoints (response shapes, chunking's always-re-fetch behavior, no
+     caching) is unchanged — only this one required field is added to one
+     request model.
+   - **Status: decided, not yet implemented.** As of this spec revision,
+     `app/schemas/ingestion.py`'s `ChunkingRequest` and the
+     `POST /api/v1/ingestion/chunking` handler do not yet have this field,
+     and existing tests (`tests/test_ingestion_chunking.py`,
+     `tests/test_chunking_strategy.py`'s callers via the endpoint,
+     `tests/test_ingestion_schemas.py`) do not yet send it. This becomes a
+     required prerequisite of `changes/22-08-2026-Ingestion-Resume-State/`'s
+     Task 4 (wiring `upsert_chunking_draft` into the chunking handler) —
+     add the field and update all existing chunking-endpoint tests to send
+     `document_id` before or as part of that task, not silently deferred
+     further.
+
+8. **Chunk metadata authorization — `department_id`/`access_level` come from
+   the request, `TrustedContext` becomes a permission/membership check, not
+   a metadata source** (implemented in
+   `changes/23-08-2026-Chunk-Metadata-Authorization/`). Supersedes Decision
+   3. Reading real code surfaced a conceptual bug: Decision 3 stamped the
+   *calling user's own* department/access level onto every chunk of
+   whatever document they embedded — but "which department/level the
+   caller belongs to" and "which department/level this particular document
+   should be tagged with" are not the same thing, and once a caller can
+   belong to multiple departments (per `java-jwt-claims`'s
+   `department_access` JWT claim, an array) there's no way to pick the
+   right one from a single string context.
+   - **`EmbeddingRequest` gains required fields `department_id: str`,
+     `access_level: int` (`>= 0`, no upper bound — Python doesn't have its
+     own `access_levels` catalog to validate against, so it only rejects
+     the obviously-invalid negative case and otherwise trusts whatever the
+     caller's JWT-derived `department_access` grant allows at the Task 3
+     check below; Java's `access_levels` table is the actual source of
+     truth for which values are meaningful).** The client (frontend,
+     already knowing which department a
+     document belongs to and at what level, same as it already does for
+     `documents.min_access_level_id`) sends these directly — Python does
+     not infer them from the caller's own context, and does not call back
+     into Java to look them up (`SPEC-ingestion-resume.md`'s "Python never
+     calls Java" boundary holds). `embed_document` passes
+     `request.department_id`/`request.access_level` to `embed_chunks`, not
+     `context.department`/`context.access_level`.
+   - **`PreviewRequest`/`ChunkingRequest` gain a required `department_id:
+     str`** (same breaking-change precedent as Decision 7's
+     `ChunkingRequest.document_id`) — used only for a department-membership
+     check (see below), not stamped onto any output.
+   - **`ChunkPoint.access_level` and the Qdrant payload's `"access_level"`
+     changed from `str` to `int`**, matching `access_levels.level` (Integer)
+     on the Java side so a future retrieval-time `<=` filter comparison
+     works; the old string values (e.g. `"STUDENT"`) were never comparable
+     that way. Because Qdrant doesn't enforce a payload type at the
+     collection level, the existing `unisage_chunks` collection (test data
+     only, confirmed with the user) was deleted and left for
+     `ensure_collection` to recreate, rather than letting old string
+     payloads and new integer payloads coexist and silently break
+     retrieval-time comparisons later.
+   - **`TrustedContext` changes shape**: the two single-value fields
+     `department: str`/`access_level: str` are replaced by
+     `department_access: list[DepartmentAccessEntry]` (each entry
+     `{department_id: str, access_level: int}`), read from one new header
+     `X-User-Department-Access` (a JSON-encoded array) instead of the two
+     old headers `X-User-Department`/`X-User-Access-Level` — matching the
+     `department_access` JWT claim shape `java-jwt-claims` embeds and the
+     header `gateway-claim-forwarding` forwards it as. A malformed header
+     (bad JSON, an entry missing a field) raises the new
+     `InvalidTrustedContextException` (400) — distinct from
+     `MissingTrustedContextException` (400) for "the header isn't there at
+     all" — rather than a generic 500 or the wrong exception type. A new
+     field `permissions: list[str]` is read from another new header,
+     `X-User-Permissions` (a JSON array of permission names, e.g.
+     `["DOCUMENT_ALL", "DOCUMENT_CREATE"]`), matching the `permissions` JWT
+     claim.
+   - **`POST /ingestion/embedding` now validates `department_id`/
+     `access_level` from the request against the caller's
+     `context.department_access`** before dispatching the Celery task: the
+     department must be present in the caller's grant, and the requested
+     `access_level` must be `<=` the level granted for that department.
+     Either failing raises `DepartmentAccessDeniedException` (403) — before
+     `embed_chunks.delay(...)` is called, not after the task has already
+     started running in the background.
+   - **All three ingestion endpoints (`preview`, `chunking`, `embedding`)
+     now gate on permission**: the caller's `context.permissions` must
+     contain `"DOCUMENT_ALL"` or `"DOCUMENT_CREATE"` (ingest and document
+     CRUD share one permission cluster, a decision already made on the Java
+     side), enforced by a shared dependency,
+     `require_document_permission`, raising
+     `InsufficientDocumentPermissionException` (403) otherwise. This is a
+     genuinely new restriction for `preview`/`chunking` — before this
+     change, neither had *any* `TrustedContext` dependency at all, so
+     anyone who could reach the service through the Gateway (i.e. anyone
+     with a valid `X-Internal-Secret`) could preview or chunk any document
+     regardless of role.
+   - **`preview`/`chunking` additionally gate on department membership**:
+     `require_department_membership(request.department_id, context)`
+     raises `DepartmentAccessDeniedException` (403) unless the caller's
+     `department_access` contains that department — membership only, not
+     an `access_level` comparison, since `access_level` is a property of
+     the content being *embedded*, a concept that doesn't yet exist at the
+     preview/chunk (read-only) stage. `embedding` does **not** get this
+     same helper — it already has the fuller check above (membership *and*
+     level ceiling), and applying both would be redundant. This closes a
+     real gap: previously, a caller with `DOCUMENT_CREATE` but
+     `department_access` granted for only one department could still
+     preview/chunk another department's documents, only getting blocked at
+     the final embed step.
+   - **Sequencing**: this module (`python-trusted-context` in the
+     "Ingestion Authorization" capability map) depends on
+     `java-jwt-claims` (embeds the `department_access`/`permissions`
+     claims) and `gateway-claim-forwarding` (forwards them as
+     `X-User-Department-Access`/`X-User-Permissions` headers) — both
+     confirmed implemented by reading their code as of 2026-08-23, though
+     `gateway-claim-forwarding` still lacks its own automated tests (does
+     not block this module's runtime behavior, only its own test
+     coverage). A real end-to-end manual test through a running Gateway
+     (not just a test client setting the headers directly) is still
+     pending as of this decision.

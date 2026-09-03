@@ -3,7 +3,6 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1 import chat, health, ingestion
@@ -32,13 +31,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORSMiddleware here - only the API Gateway sets CORS headers (see
+# api-gateway/application.yml's globalcors config), same pattern
+# backend-java already follows ("disable direct cors in backend and rely
+# on gateway"). This service is only ever reached through the Gateway
+# (verify_internal_secret gates every route), so a browser never talks to
+# it directly - and stacking a second CORSMiddleware here made every
+# response carry two Access-Control-Allow-Origin values
+# ("http://localhost:5173, *"), which browsers reject outright.
 app.middleware("http")(request_logging_middleware)
 
 

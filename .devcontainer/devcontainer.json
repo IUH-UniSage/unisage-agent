@@ -3,6 +3,10 @@
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspace",
+  "forwardPorts": [8402],
+  "portsAttributes": {
+    "8402": { "label": "unisage-agent" }
+  },
   "customizations": {
     "vscode": {
       "extensions": [
