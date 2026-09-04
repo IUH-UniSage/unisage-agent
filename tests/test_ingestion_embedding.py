@@ -93,7 +93,7 @@ def test_embedding_returns_202_and_task_id_for_valid_request(
     )
 
     assert response.status_code == 202
-    assert response.json()["task_id"]
+    assert response.json()["data"]["task_id"]
 
 
 @patch("app.worker.celery_app.qdrant_store")
@@ -160,11 +160,11 @@ def test_successful_embedding_dispatch_marks_draft_as_embedding(
     )
 
     assert response.status_code == 202
-    task_id = response.json()["task_id"]
+    task_id = response.json()["data"]["task_id"]
 
     job = client.get("/api/v1/ingestion/jobs/doc-embed-1", headers=_TRUSTED_HEADERS)
     assert job.status_code == 200
-    body = job.json()
+    body = job.json()["data"]
     assert body["current_step"] == "embedding"
     assert body["task_id"] == task_id
     # The job endpoint carries the live task state inline, so the client's

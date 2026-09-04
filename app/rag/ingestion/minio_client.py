@@ -13,9 +13,8 @@ class ObjectNotFoundException(UniSageException):
 
     def __init__(self, object_key: str):
         super().__init__(
-            message=f"Object '{object_key}' was not found in storage.",
-            error_code=ErrorCode.OBJECT_NOT_FOUND,
-            status_code=404,
+            ErrorCode.OBJECT_NOT_FOUND,
+            message=f"Không tìm thấy file '{object_key}' trong storage.",
         )
 
 

@@ -10,19 +10,20 @@ from app.graph.graph import chat_graph
 from app.graph.state import ChatState
 from app.rag.generation.suggestions import SuggestionService
 from app.schemas.chat import ChatRequest, ChatResponse, Citation
+from app.schemas.common import ApiResponse
 
 router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)])
 suggestion_service = SuggestionService()
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ApiResponse[ChatResponse])
 async def chat_endpoint(
     request: ChatRequest,
     deps: ChatDeps = Depends(get_chat_deps),
-) -> ChatResponse:
+) -> ApiResponse[ChatResponse]:
     clean_query = sanitize_input_text(request.query)
     if not clean_query:
-        raise InvalidQueryException("Query text cannot be empty or invalid.")
+        raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")
 
     trace_logger = TraceLogger(query=clean_query, user_faculty=request.user_faculty)
     state = ChatState(
@@ -40,14 +41,16 @@ async def chat_endpoint(
         ],
     )
 
-    return ChatResponse(
-        trace_id=trace_logger.trace.trace_id,
-        query=state.query,
-        response=state.final_response or response_text,
-        intent=state.intent,
-        citations=[Citation.model_validate(citation) for citation in state.citations],
-        suggestions=suggestion_service.generate_suggestions(
-            query=clean_query,
+    return ApiResponse.success(
+        ChatResponse(
+            trace_id=trace_logger.trace.trace_id,
+            query=state.query,
+            response=state.final_response or response_text,
             intent=state.intent,
-        ),
+            citations=[Citation.model_validate(citation) for citation in state.citations],
+            suggestions=suggestion_service.generate_suggestions(
+                query=clean_query,
+                intent=state.intent,
+            ),
+        )
     )

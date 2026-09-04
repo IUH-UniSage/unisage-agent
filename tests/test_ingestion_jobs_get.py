@@ -38,7 +38,7 @@ def test_get_job_returns_the_draft_after_chunking(client: TestClient) -> None:
     response = client.get("/api/v1/ingestion/jobs/doc-jobs-1", headers=_TRUSTED_HEADERS)
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["data"]
     assert body["object_key"] == "docs/handbook.pdf"
     assert body["current_step"] == "chunked"
     assert body["chunking_strategy"] == "recursive"
@@ -98,4 +98,4 @@ def test_rechunking_replaces_rather_than_duplicates_the_draft(client: TestClient
     response = client.get("/api/v1/ingestion/jobs/doc-jobs-2", headers=_TRUSTED_HEADERS)
 
     assert response.status_code == 200
-    assert response.json()["chunking_strategy"] == "token_based"
+    assert response.json()["data"]["chunking_strategy"] == "token_based"

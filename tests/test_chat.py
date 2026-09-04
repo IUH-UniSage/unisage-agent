@@ -12,7 +12,9 @@ def test_chat_endpoint(client: TestClient) -> None:
     response = client.post("/api/v1/chat", json=payload)
 
     assert response.status_code == 200
-    data = response.json()
+    body = response.json()
+    assert body["code"] == 1000
+    data = body["data"]
     assert "trace_id" in data
     assert data["query"] == payload["query"]
     assert data["intent"] == "SINGLE_INTENT"

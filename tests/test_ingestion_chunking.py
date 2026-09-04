@@ -47,7 +47,7 @@ def test_chunking_returns_non_empty_chunk_list_for_each_strategy(
     )
 
     assert response.status_code == 200
-    assert response.json()["chunks"]
+    assert response.json()["data"]["chunks"]
 
 
 @patch("app.api.v1.ingestion.minio_client.get_object_bytes")
@@ -74,7 +74,7 @@ def test_chunking_semantic_strategy_without_live_openai_calls(
     )
 
     assert response.status_code == 200
-    assert response.json()["chunks"]
+    assert response.json()["data"]["chunks"]
 
 
 @patch("app.api.v1.ingestion.minio_client.get_object_bytes")
@@ -117,8 +117,8 @@ def test_successful_chunking_persists_a_resumable_draft(
 
     job = client.get("/api/v1/ingestion/jobs/doc-draft-1", headers=_TRUSTED_HEADERS)
     assert job.status_code == 200
-    assert job.json()["chunking_strategy"] == "recursive"
-    assert job.json()["chunks"] == response.json()["chunks"]
+    assert job.json()["data"]["chunking_strategy"] == "recursive"
+    assert job.json()["data"]["chunks"] == response.json()["data"]["chunks"]
 
 
 @patch("app.api.v1.ingestion.minio_client.get_object_bytes")

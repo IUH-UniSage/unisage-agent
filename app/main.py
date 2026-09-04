@@ -1,12 +1,15 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import chat, health, ingestion
+from app.api.v1 import chat, documents, health, ingestion
 from app.core.config import settings
+from app.core.error_codes import ErrorCode
 from app.core.exceptions import UniSageException
 from app.core.middleware import request_logging_middleware
 
@@ -42,24 +45,67 @@ app = FastAPI(
 app.middleware("http")(request_logging_middleware)
 
 
+def _error_content(code: int, message: str, errors: dict[str, str] | None = None) -> dict[str, Any]:
+    """Build the `{code, message, errors}` envelope - `data` and `errors` are
+    omitted when absent, matching Java's `@JsonInclude(NON_NULL)` on
+    `ApiResponse`."""
+
+    content: dict[str, Any] = {"code": code, "message": message}
+    if errors:
+        content["errors"] = errors
+    return content
+
+
 @app.exception_handler(UniSageException)
 async def unisage_exception_handler(request: Request, exc: UniSageException) -> JSONResponse:
-    """Map application exceptions to the stable HTTP error contract."""
+    """Map application exceptions to the same envelope backend-java's
+    `GlobalExceptionHandler` produces for its `AppException`."""
 
     del request
     return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error_code": exc.error_code,
-            "message": exc.message,
-            "details": exc.details,
-        },
+        status_code=exc.error_code.http_status,
+        content=_error_content(exc.error_code.code, exc.message, exc.errors),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Map Pydantic/FastAPI request-validation failures, mirroring Java's
+    `MethodArgumentNotValidException` handler: one `errors` entry per
+    invalid field."""
+
+    del request
+    field_errors = {
+        ".".join(str(part) for part in error["loc"][1:]) or str(error["loc"][-1]): error["msg"]
+        for error in exc.errors()
+    }
+    return JSONResponse(
+        status_code=ErrorCode.VALIDATION_ERROR.http_status,
+        content=_error_content(
+            ErrorCode.VALIDATION_ERROR.code, ErrorCode.VALIDATION_ERROR.message, field_errors
+        ),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all fallback, mirroring Java's `Exception.class` handler: log the
+    full traceback server-side, return a generic 500 to the client."""
+
+    del request
+    logger.exception("Unhandled exception", exc_info=exc)
+    return JSONResponse(
+        status_code=ErrorCode.INTERNAL_ERROR.http_status,
+        content=_error_content(ErrorCode.INTERNAL_ERROR.code, ErrorCode.INTERNAL_ERROR.message),
     )
 
 
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(ingestion.router, prefix="/api/v1")
+app.include_router(documents.router, prefix="/api/v1")
 
 
 @app.get("/")
