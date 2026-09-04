@@ -6,7 +6,6 @@ from fastapi import (
     APIRouter,
     Depends,
     Header,
-    HTTPException,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -21,7 +20,11 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.events import ingestion_event_stream
-from app.core.exceptions import DepartmentAccessDeniedException, UniSageException
+from app.core.exceptions import (
+    DepartmentAccessDeniedException,
+    IngestionJobNotFoundException,
+    UniSageException,
+)
 from app.core.security import verify_internal_secret
 from app.database.models import DocumentProcessStep
 from app.database.repositories.ingestion_job import (
@@ -34,6 +37,7 @@ from app.database.session import get_db_session
 from app.rag.chunking import strategy
 from app.rag.ingestion import minio_client
 from app.rag.ingestion.parser import extract_raw_text
+from app.schemas.common import ApiResponse
 from app.schemas.ingestion import (
     ChunkingRequest,
     ChunkingResponse,
@@ -51,31 +55,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Ingestion"], dependencies=[Depends(verify_internal_secret)])
 
 
-@router.post("/ingestion/preview", response_model=PreviewResponse)
+@router.post("/ingestion/preview", response_model=ApiResponse[PreviewResponse])
 async def preview_document(
     request: PreviewRequest,
     context: TrustedContext = Depends(require_document_permission),
-) -> PreviewResponse:
+) -> ApiResponse[PreviewResponse]:
     """Fetch the stored object and return its raw extracted text."""
 
     require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
     raw_text = extract_raw_text(content, request.object_key)
-    return PreviewResponse(raw_text=raw_text)
+    return ApiResponse.success(PreviewResponse(raw_text=raw_text))
 
 
-@router.post("/ingestion/chunking", response_model=ChunkingResponse)
+@router.post("/ingestion/chunking", response_model=ApiResponse[ChunkingResponse])
 async def chunk_document(
     request: ChunkingRequest,
     context: TrustedContext = Depends(require_document_permission),
     db_session: AsyncSession = Depends(get_db_session),
-) -> ChunkingResponse:
+) -> ApiResponse[ChunkingResponse]:
     """Fetch the stored object fresh and chunk it with the requested strategy."""
 
     require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
     chunks = strategy.dispatch(request.strategy, request.params, content, request.object_key)
-    response = ChunkingResponse(chunks=chunks)
     await upsert_chunking_draft(
         db_session,
         document_id=request.document_id,
@@ -85,15 +88,15 @@ async def chunk_document(
         params=request.params,
         chunks=chunks,
     )
-    return response
+    return ApiResponse.success(ChunkingResponse(chunks=chunks))
 
 
-@router.get("/ingestion/jobs/{document_id}", response_model=IngestionJobResponse)
+@router.get("/ingestion/jobs/{document_id}", response_model=ApiResponse[IngestionJobResponse])
 async def get_ingestion_job(
     document_id: str,
     context: TrustedContext = Depends(require_document_permission),
     db_session: AsyncSession = Depends(get_db_session),
-) -> IngestionJobResponse:
+) -> ApiResponse[IngestionJobResponse]:
     """Return the resumable process-log record for a document, or 404 if none exists.
 
     When the record is at the `embedding` step, the response carries the
@@ -103,7 +106,7 @@ async def get_ingestion_job(
 
     draft = await get_draft(db_session, document_id)
     if draft is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No draft found.")
+        raise IngestionJobNotFoundException(document_id)
 
     if draft.department_id is not None:
         require_department_membership(draft.department_id, context)
@@ -115,19 +118,19 @@ async def get_ingestion_job(
         )
 
     task_progress = _draft_task_progress(draft)
-    return IngestionJobResponse.from_draft(draft, task_progress)
+    return ApiResponse.success(IngestionJobResponse.from_draft(draft, task_progress))
 
 
 @router.post(
     "/ingestion/embedding",
-    response_model=EmbeddingAcceptedResponse,
+    response_model=ApiResponse[EmbeddingAcceptedResponse],
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def embed_document(
     request: EmbeddingRequest,
     context: TrustedContext = Depends(require_document_permission),
     db_session: AsyncSession = Depends(get_db_session),
-) -> EmbeddingAcceptedResponse:
+) -> ApiResponse[EmbeddingAcceptedResponse]:
     """Dispatch the client-approved chunk list for background enrichment + embedding."""
 
     _require_department_access_within_grant(request, context)
@@ -139,9 +142,8 @@ async def embed_document(
         request.department_id,
         request.access_level,
     )
-    response = EmbeddingAcceptedResponse(task_id=task.id)
     await mark_embedding(db_session, document_id=request.document_id, celery_task_id=task.id)
-    return response
+    return ApiResponse.success(EmbeddingAcceptedResponse(task_id=task.id))
 
 
 def _require_department_access_within_grant(

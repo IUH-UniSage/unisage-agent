@@ -25,7 +25,7 @@ def test_preview_returns_raw_text_for_valid_object_key(
     )
 
     assert response.status_code == 200
-    assert "Hello from PDF fixture." in response.json()["raw_text"]
+    assert "Hello from PDF fixture." in response.json()["data"]["raw_text"]
 
 
 @patch("app.api.v1.ingestion.minio_client.get_object_bytes")

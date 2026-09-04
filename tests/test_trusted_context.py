@@ -18,7 +18,7 @@ app = FastAPI()
 @app.exception_handler(UniSageException)
 async def _unisage_exception_handler(request: Request, exc: UniSageException) -> JSONResponse:
     del request
-    return JSONResponse(status_code=exc.status_code, content={"message": exc.message})
+    return JSONResponse(status_code=exc.error_code.http_status, content={"message": exc.message})
 
 
 @app.get("/whoami")

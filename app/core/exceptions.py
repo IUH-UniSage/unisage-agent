@@ -1,34 +1,35 @@
-from typing import Any
-
 from app.core.error_codes import ErrorCode
 
 
 class UniSageException(Exception):
-    """Base Exception for UniSage AI Agent Service."""
+    """Base exception for UniSage AI Agent Service.
+
+    Mirrors backend-java's `AppException`: carries one `ErrorCode` member
+    (which supplies the HTTP status and default message) plus an optional
+    per-field `errors` map, exactly like Java's `AppException(ErrorCode,
+    Map<String, String>)`. `app/main.py`'s exception handler reads
+    `error_code.http_status`/`error_code.code` off of it to build the
+    response envelope.
+    """
 
     def __init__(
         self,
-        message: str,
-        error_code: ErrorCode = ErrorCode.INTERNAL_ERROR,
-        status_code: int = 500,
-        details: dict[str, Any] | None = None,
+        error_code: ErrorCode,
+        message: str | None = None,
+        errors: dict[str, str] | None = None,
     ):
-        super().__init__(message)
-        self.message = message
+        resolved_message = message or error_code.message
+        super().__init__(resolved_message)
+        self.message = resolved_message
         self.error_code = error_code
-        self.status_code = status_code
-        self.details = details or {}
+        self.errors = errors or {}
 
 
 class InvalidQueryException(UniSageException):
     """Exception raised when student query is invalid or empty."""
 
-    def __init__(self, message: str = "Query string cannot be empty."):
-        super().__init__(
-            message=message,
-            error_code=ErrorCode.INVALID_QUERY,
-            status_code=400,
-        )
+    def __init__(self, message: str = ErrorCode.INVALID_QUERY.message):
+        super().__init__(ErrorCode.INVALID_QUERY, message=message)
 
 
 class InvalidInternalSecretException(UniSageException):
@@ -41,11 +42,7 @@ class InvalidInternalSecretException(UniSageException):
     """
 
     def __init__(self) -> None:
-        super().__init__(
-            message="Forbidden: invalid or missing X-Internal-Secret header.",
-            error_code=ErrorCode.UNAUTHORIZED,
-            status_code=403,
-        )
+        super().__init__(ErrorCode.UNAUTHORIZED)
 
 
 class UnsupportedFileTypeException(UniSageException):
@@ -53,9 +50,8 @@ class UnsupportedFileTypeException(UniSageException):
 
     def __init__(self, filename: str):
         super().__init__(
-            message=f"File '{filename}' has an unsupported extension for ingestion.",
-            error_code=ErrorCode.UNSUPPORTED_FILE_TYPE,
-            status_code=415,
+            ErrorCode.UNSUPPORTED_FILE_TYPE,
+            message=f"Định dạng file '{filename}' chưa được hỗ trợ nạp liệu.",
         )
 
 
@@ -64,9 +60,8 @@ class StrategyFileTypeMismatchException(UniSageException):
 
     def __init__(self, strategy: str, filename: str):
         super().__init__(
-            message=f"Strategy '{strategy}' cannot be applied to file '{filename}'.",
-            error_code=ErrorCode.STRATEGY_FILE_TYPE_MISMATCH,
-            status_code=422,
+            ErrorCode.STRATEGY_FILE_TYPE_MISMATCH,
+            message=f"Chiến lược '{strategy}' không thể áp dụng cho file '{filename}'.",
         )
 
 
@@ -75,9 +70,8 @@ class MissingTrustedContextException(UniSageException):
 
     def __init__(self, header_name: str):
         super().__init__(
-            message=f"Required trusted header '{header_name}' is missing.",
-            error_code=ErrorCode.MISSING_TRUSTED_CONTEXT,
-            status_code=400,
+            ErrorCode.MISSING_TRUSTED_CONTEXT,
+            message=f"Thiếu header bắt buộc '{header_name}'.",
         )
 
 
@@ -91,9 +85,8 @@ class InvalidTrustedContextException(UniSageException):
 
     def __init__(self, header_name: str, reason: str):
         super().__init__(
-            message=f"Trusted header '{header_name}' is malformed: {reason}",
-            error_code=ErrorCode.INVALID_TRUSTED_CONTEXT,
-            status_code=400,
+            ErrorCode.INVALID_TRUSTED_CONTEXT,
+            message=f"Header '{header_name}' không hợp lệ: {reason}",
         )
 
 
@@ -101,11 +94,7 @@ class InsufficientDocumentPermissionException(UniSageException):
     """Exception raised when the caller lacks DOCUMENT_ALL/DOCUMENT_CREATE permission."""
 
     def __init__(self) -> None:
-        super().__init__(
-            message="Forbidden: requires DOCUMENT_ALL or DOCUMENT_CREATE permission.",
-            error_code=ErrorCode.FORBIDDEN_DOCUMENT_PERMISSION,
-            status_code=403,
-        )
+        super().__init__(ErrorCode.FORBIDDEN_DOCUMENT_PERMISSION)
 
 
 class DepartmentAccessDeniedException(UniSageException):
@@ -118,19 +107,33 @@ class DepartmentAccessDeniedException(UniSageException):
 
     def __init__(self, department_id: str) -> None:
         super().__init__(
-            message=f"Forbidden: caller is not granted sufficient access to department "
-            f"'{department_id}'.",
-            error_code=ErrorCode.FORBIDDEN_DEPARTMENT_ACCESS,
-            status_code=403,
+            ErrorCode.FORBIDDEN_DEPARTMENT_ACCESS,
+            message=f"Bạn không có quyền truy cập phòng ban '{department_id}'.",
         )
 
 
 class LLMProviderException(UniSageException):
     """Exception raised when LLM provider API fails."""
 
-    def __init__(self, message: str = "LLM Provider API encountered an error."):
+    def __init__(self, message: str = ErrorCode.LLM_PROVIDER_ERROR.message):
+        super().__init__(ErrorCode.LLM_PROVIDER_ERROR, message=message)
+
+
+class DocumentChunksNotFoundException(UniSageException):
+    """Exception raised when a document has no chunking draft yet."""
+
+    def __init__(self, document_id: str) -> None:
         super().__init__(
-            message=message,
-            error_code=ErrorCode.LLM_PROVIDER_ERROR,
-            status_code=502,
+            ErrorCode.DOCUMENT_CHUNKS_NOT_FOUND,
+            message=f"Tài liệu '{document_id}' chưa được chia đoạn.",
+        )
+
+
+class IngestionJobNotFoundException(UniSageException):
+    """Exception raised when no process-log/draft row exists for a document."""
+
+    def __init__(self, document_id: str) -> None:
+        super().__init__(
+            ErrorCode.INGESTION_JOB_NOT_FOUND,
+            message=f"Không tìm thấy bản nháp nạp liệu cho tài liệu '{document_id}'.",
         )
