@@ -3,6 +3,8 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
@@ -60,16 +62,21 @@ def get_graph_models() -> GraphModels:
     """FastAPI dependency: the 4 LLM-backed nodes' models for the streaming graph.
 
     Overridden in tests with `pydantic_ai.models.function.FunctionModel`
-    doubles (see tests/llm_mocks.py) - production resolves a real provider
-    model string pydantic_ai understands.
+    doubles (see tests/llm_mocks.py). Production builds a real `OpenAIChatModel`
+    with `settings.OPENAI_API_KEY` passed explicitly - a bare `"openai:<name>"`
+    string instead relies on pydantic_ai reading `OPENAI_API_KEY` from the OS
+    environment, which `.env` alone does not set.
     """
 
-    model_id = f"openai:{settings.OPENAI_MODEL}"
+    model = OpenAIChatModel(
+        settings.OPENAI_MODEL,
+        provider=OpenAIProvider(api_key=settings.OPENAI_API_KEY),
+    )
     return GraphModels(
-        classification=model_id,
-        direct_llm=model_id,
-        query_transformation=model_id,
-        generation=model_id,
+        classification=model,
+        direct_llm=model,
+        query_transformation=model,
+        generation=model,
     )
 
 
