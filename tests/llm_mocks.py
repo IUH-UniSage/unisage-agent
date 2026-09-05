@@ -14,6 +14,7 @@ it exercises the real `Agent.run`/`run_stream` code path rather than
 stubbing the graph node itself.
 """
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -27,6 +28,30 @@ def make_streaming_llm_model(tokens: Sequence[str]) -> FunctionModel:
         _messages: list[ModelMessage], _agent_info: AgentInfo
     ) -> AsyncIterator[str]:
         for token in tokens:
+            yield token
+
+    return FunctionModel(stream_function=stream_function)
+
+
+def make_gated_streaming_llm_model(tokens: Sequence[str], gate: asyncio.Event) -> FunctionModel:
+    """Like `make_streaming_llm_model`, but pauses after yielding the FIRST
+    token until `gate` is set, before yielding the rest.
+
+    For tests that need to deterministically catch a stream "mid-flight"
+    (e.g. cancelling the client's SSE connection while the background
+    `run_and_persist` task is still running) without racing real wall-clock
+    timing: a test can await its own signal that the first token has reached
+    the client, act (e.g. cancel), and only then `gate.set()` to let the
+    graph - and so the background task - actually finish.
+    """
+
+    async def stream_function(
+        _messages: list[ModelMessage], _agent_info: AgentInfo
+    ) -> AsyncIterator[str]:
+        first, *rest = tokens
+        yield first
+        await gate.wait()
+        for token in rest:
             yield token
 
     return FunctionModel(stream_function=stream_function)

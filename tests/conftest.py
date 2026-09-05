@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator, Callable, Generator, Sequence
 
 import pytest
@@ -17,7 +18,11 @@ from app.core.config import settings
 from app.database.models import Base
 from app.database.session import get_db_session
 from app.main import app
-from tests.llm_mocks import make_streaming_llm_model, make_sync_llm_model
+from tests.llm_mocks import (
+    make_gated_streaming_llm_model,
+    make_streaming_llm_model,
+    make_sync_llm_model,
+)
 
 settings.INTERNAL_SECRET_KEY = "test-internal-secret"
 
@@ -115,6 +120,16 @@ def mock_streaming_llm_model() -> Callable[[Sequence[str]], FunctionModel]:
     """
 
     return make_streaming_llm_model
+
+
+@pytest.fixture
+def mock_gated_streaming_llm_model() -> Callable[[Sequence[str], asyncio.Event], FunctionModel]:
+    """Factory fixture: `mock_gated_streaming_llm_model(["a", "b"], gate)` builds a
+    streaming model double that yields the first token, then pauses until `gate`
+    is set before yielding the rest - for tests that need to deterministically
+    observe a stream "mid-flight" (see tests/llm_mocks.py)."""
+
+    return make_gated_streaming_llm_model
 
 
 @pytest.fixture
