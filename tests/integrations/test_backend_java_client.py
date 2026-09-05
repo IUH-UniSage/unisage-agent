@@ -251,3 +251,22 @@ async def test_create_conversation_forwards_authorization() -> None:
 
     assert seen["authorization"] == "Bearer xyz"
     assert result == {"id": "conv-99"}
+
+
+@pytest.mark.asyncio
+async def test_unwraps_java_api_response_envelope() -> None:
+    """backend-java's `ApiResponse<T>` wraps every 2xx body as
+    `{code, message, data}` - real responses look like this, not the flat
+    dicts other tests in this file use for brevity."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            201,
+            json={"code": 1000, "message": "Successful", "data": {"id": "msg-1"}},
+        )
+
+    client = _client_with(handler)
+
+    result = await client.create_message(conversation_id="conv-1", role="USER", content="hi")
+
+    assert result == {"id": "msg-1"}

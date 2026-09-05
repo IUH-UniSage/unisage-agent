@@ -9,7 +9,7 @@ def test_new_phase1_settings_have_sane_defaults() -> None:
 
     fresh = Settings()
 
-    assert fresh.BACKEND_JAVA_BASE_URL == "http://localhost:8080"
+    assert fresh.BACKEND_JAVA_BASE_URL == "http://localhost:8401/api/v1"
     assert fresh.CLARIFICATION_MAX_RETRY == 2
     assert fresh.RETRIEVAL_MAX_CHUNKS == 8
     assert fresh.RERANK_SCORE_THRESHOLD == 0.70

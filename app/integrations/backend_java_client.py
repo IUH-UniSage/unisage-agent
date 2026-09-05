@@ -143,7 +143,11 @@ class BackendJavaClient:
         # `TypeError` on this exact case).
         if not response.content:
             return None
-        return response.json()
+        # Java wraps every response as {code, message, data} (see
+        # backend-java's ApiResponse<T>) - unwrap to the payload callers
+        # actually want.
+        payload = response.json()
+        return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
 
     async def create_conversation(
         self,
