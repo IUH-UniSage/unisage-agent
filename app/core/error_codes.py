@@ -48,7 +48,11 @@ class ErrorCode(Enum):
     LLM_TIMEOUT = (504, 5001, "Hệ thống AI phản hồi quá lâu, thử lại sau nhé.")
     LLM_PROVIDER_ERROR = (502, 5002, "Hệ thống AI đang gặp sự cố, thử lại sau nhé.")
     DATABASE_ERROR = (500, 5003, "Có lỗi xảy ra, bạn thử lại sau nhé.")
-    BACKEND_JAVA_UNAVAILABLE = (502, 5004, "Không kết nối được hệ thống quản lý hội thoại, thử lại sau nhé.")
+    BACKEND_JAVA_UNAVAILABLE = (
+        502,
+        5004,
+        "Không kết nối được hệ thống quản lý hội thoại, thử lại sau nhé.",
+    )
 
     def __init__(self, http_status: int, code: int, message: str) -> None:
         self.http_status = http_status
