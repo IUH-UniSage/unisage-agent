@@ -1,3 +1,4 @@
+from app.core.config import settings
 from app.rag.retrieval.hybrid import hybrid_score
 from app.schemas.retrieval import RetrievedChunk
 
@@ -38,10 +39,17 @@ class RetrievalService:
         *,
         user_faculty: str,
         user_level: int,
-        limit: int = 5,
+        limit: int | None = None,
     ) -> list[RetrievedChunk]:
-        """Apply faculty visibility before ranking and returning context."""
+        """Apply faculty visibility before ranking and returning context.
 
+        `limit` defaults to `settings.RETRIEVAL_MAX_CHUNKS` (T1.9) rather
+        than a hardcoded constant, per plan.md. Deliberately does not filter
+        by `department_access`/permission - that is Phase 4 scope, not this
+        phase.
+        """
+
+        effective_limit = limit if limit is not None else settings.RETRIEVAL_MAX_CHUNKS
         visible = [
             chunk.model_copy(update={"score": hybrid_score(query, chunk.content)})
             for chunk in self._CORPUS
@@ -49,4 +57,4 @@ class RetrievalService:
             and int(chunk.metadata.get("min_user_level", 1)) <= user_level
         ]
         ranked = sorted(visible, key=lambda chunk: chunk.score, reverse=True)
-        return ranked[:limit]
+        return ranked[:effective_limit]
