@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
+from app.api.deps import get_session_factory
 from app.core.config import settings
 from app.database.models import Base
 from app.database.session import get_db_session
@@ -61,6 +62,10 @@ def client() -> Generator[TestClient, None, None]:
             yield session
 
     app.dependency_overrides[get_db_session] = override_get_db_session
+    # run_and_persist (T1.13c/d) opens its OWN session via this factory,
+    # independent of the request's db_session - point it at the same
+    # in-memory SQLite engine so a streaming test can see what it wrote.
+    app.dependency_overrides[get_session_factory] = lambda: session_factory
     with TestClient(
         app, headers={"X-Internal-Secret": settings.INTERNAL_SECRET_KEY}
     ) as test_client:

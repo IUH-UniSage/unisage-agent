@@ -11,6 +11,18 @@ class ChatRequest(BaseModel):
     user_level: int = Field(default=1, ge=1, le=10)
 
 
+class ChatStreamRequest(BaseModel):
+    """HTTP request for `POST /chat/stream` (T1.13b).
+
+    `conversation_id` is required - ownership/existence is validated by
+    backend-java on the `POST /messages` call this triggers, never by
+    Python (see tasks/plan.md conversation_id ownership invariant).
+    """
+
+    conversation_id: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=2000)
+
+
 class Citation(BaseModel):
     """Source reference attached to a generated answer."""
 

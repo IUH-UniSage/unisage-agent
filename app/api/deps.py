@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.exceptions import (
@@ -12,8 +12,10 @@ from app.core.exceptions import (
     InvalidTrustedContextException,
     MissingTrustedContextException,
 )
-from app.database.session import get_db_session
+from app.database.session import async_session_factory, get_db_session
 from app.graph.deps import ChatDeps
+from app.graph.streaming_state import GraphModels
+from app.integrations.backend_java_client import BackendJavaClient
 
 _DOCUMENT_WRITE_PERMISSIONS = {"DOCUMENT_ALL", "DOCUMENT_CREATE"}
 
@@ -27,6 +29,47 @@ async def get_chat_deps(
         db_session=db_session,
         openai_api_key=settings.OPENAI_API_KEY,
         model_name=settings.OPENAI_MODEL,
+    )
+
+
+def get_backend_java_client() -> BackendJavaClient:
+    """FastAPI dependency: one `BackendJavaClient` per request.
+
+    Overridden in tests (see tests/api/test_chat_stream_endpoint.py) with a
+    client built on `httpx.MockTransport` - never hits a live Java instance
+    in the default test run.
+    """
+
+    return BackendJavaClient()
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """FastAPI dependency: the session factory `run_and_persist` uses for its
+    OWN database session (independent of the request's `db_session`, since
+    that background task must keep running after the request scope ends).
+
+    Overridden in tests so `run_and_persist`'s clarification-state write
+    lands in the same in-memory SQLite engine the rest of the test uses,
+    instead of the real (unreachable in CI) Postgres `DATABASE_URL`.
+    """
+
+    return async_session_factory
+
+
+def get_graph_models() -> GraphModels:
+    """FastAPI dependency: the 4 LLM-backed nodes' models for the streaming graph.
+
+    Overridden in tests with `pydantic_ai.models.function.FunctionModel`
+    doubles (see tests/llm_mocks.py) - production resolves a real provider
+    model string pydantic_ai understands.
+    """
+
+    model_id = f"openai:{settings.OPENAI_MODEL}"
+    return GraphModels(
+        classification=model_id,
+        direct_llm=model_id,
+        query_transformation=model_id,
+        generation=model_id,
     )
 
 
