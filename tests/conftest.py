@@ -1,8 +1,9 @@
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator, Sequence
 
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
+from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -15,6 +16,7 @@ from app.core.config import settings
 from app.database.models import Base
 from app.database.session import get_db_session
 from app.main import app
+from tests.llm_mocks import make_streaming_llm_model, make_sync_llm_model
 
 settings.INTERNAL_SECRET_KEY = "test-internal-secret"
 
@@ -78,3 +80,24 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
     await engine.dispose()
+
+
+@pytest.fixture
+def mock_streaming_llm_model() -> Callable[[Sequence[str]], FunctionModel]:
+    """Factory fixture (T0.3): `mock_streaming_llm_model(["Xin ", "chào"])` builds a
+    `pydantic_ai` model double whose `Agent.run_stream()` yields those tokens in
+    order. For nodes that stream (DirectLLMNode/05A, GenerationSynthesisNode/12).
+    """
+
+    return make_streaming_llm_model
+
+
+@pytest.fixture
+def mock_sync_llm_model() -> Callable[[str], FunctionModel]:
+    """Factory fixture (T0.3): `mock_sync_llm_model("some text")` builds a
+    `pydantic_ai` model double whose `Agent.run()`/`run_sync()` returns that text
+    as one response. For non-streaming nodes (message classification, query
+    transformation, comparison/calculation).
+    """
+
+    return make_sync_llm_model

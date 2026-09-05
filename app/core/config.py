@@ -48,5 +48,21 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "unisage_chunks"
 
+    # backend-java integration (see tasks/plan.md "Auth" section): Python
+    # forwards the caller's original `Authorization` header as-is on every
+    # call - no separate service secret needed, Java's GatewayHeaderFilter
+    # re-verifies it.
+    BACKEND_JAVA_BASE_URL: str = "http://localhost:8080"
+
+    # Missing-metadata clarification guard (node 02) - see
+    # missing_metadata_clarification_design.md section 5. Number of mismatched
+    # replies tolerated before the pending clarification is discarded and the
+    # flow falls back to a safe, branch-covering answer.
+    CLARIFICATION_MAX_RETRY: int = 2
+
+    # Retrieval / rerank (nodes 10/11).
+    RETRIEVAL_MAX_CHUNKS: int = 8
+    RERANK_SCORE_THRESHOLD: float = 0.70
+
 
 settings = Settings()
