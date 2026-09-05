@@ -4,6 +4,7 @@ import pytest
 from pydantic_ai.models.function import FunctionModel
 
 from app.core.config import settings
+from app.core.graph_trace import GraphTrace
 from app.graph.nodes.greeting import GREETING_TEMPLATE
 from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
@@ -12,6 +13,8 @@ from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.schemas.clarification import PendingClarification
 from app.schemas.security import AcademicSecurityContext
+
+_TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
 
 
 def _models(
@@ -49,7 +52,7 @@ async def test_greeting_fast_path_on_first_turn_no_llm_needed(
     tokens: list[str] = []
 
     result = await run_graph(
-        graph_input, _models(mock_sync_llm_model, mock_streaming_llm_model), _sink(tokens)
+        graph_input, _models(mock_sync_llm_model, mock_streaming_llm_model), _sink(tokens), _TRACE
     )
 
     assert result.response_text == GREETING_TEMPLATE
@@ -73,6 +76,7 @@ async def test_social_chat_routes_to_static_template(
         graph_input,
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="social_chat"),
         _sink(tokens),
+        _TRACE,
     )
 
     assert result.response_text == SOCIAL_CHAT_TEMPLATE
@@ -95,6 +99,7 @@ async def test_off_topic_routes_to_static_template(
         graph_input,
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="off_topic"),
         _sink(tokens),
+        _TRACE,
     )
 
     assert result.response_text == OFF_TOPIC_TEMPLATE
@@ -117,6 +122,7 @@ async def test_general_knowledge_routes_to_direct_llm(
         graph_input,
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="general_knowledge"),
         _sink(tokens),
+        _TRACE,
     )
 
     assert result.response_text == "42"
@@ -143,6 +149,7 @@ async def test_academic_advisory_routes_through_full_rag_pipeline(
         graph_input,
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="academic_advisory"),
         _sink(tokens),
+        _TRACE,
     )
 
     assert result.response_text == "Câu trả lời cuối cùng [1]."
@@ -168,6 +175,7 @@ async def test_no_valid_context_falls_back_to_ticket(
         graph_input,
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="academic_advisory"),
         _sink(tokens),
+        _TRACE,
     )
 
     assert result.used_ticket_fallback is True
@@ -202,6 +210,7 @@ async def test_clarification_guard_match_skips_classification_and_resumes_adviso
         graph_input,
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="off_topic"),
         _sink(tokens),
+        _TRACE,
     )
 
     assert result.response_text == "Câu trả lời cuối cùng [1]."

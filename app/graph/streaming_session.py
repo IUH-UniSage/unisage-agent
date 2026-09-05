@@ -34,6 +34,7 @@ from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.graph_trace import GraphTrace
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import async_session_factory
 from app.graph.streaming_graph import run_graph
@@ -75,12 +76,19 @@ async def run_and_persist(
         accumulated.append(token)
         await queue.put(token)
 
+    trace = GraphTrace(
+        conversation_id=conversation_id,
+        message_id=assistant_message_id,
+        user_id=graph_input.security.user_id,
+        client_ip=client_ip,
+    )
+
     status: Literal["COMPLETED", "ERROR"]
     response_text: str
     graph_output = None
     try:
         try:
-            graph_output = await run_graph(graph_input, models, sink)
+            graph_output = await run_graph(graph_input, models, sink, trace)
             response_text = graph_output.response_text
             status = "COMPLETED"
         except Exception:

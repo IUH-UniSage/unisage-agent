@@ -13,8 +13,25 @@ from app.core.error_codes import ErrorCode
 from app.core.exceptions import UniSageException
 from app.core.middleware import request_logging_middleware
 
-logging.basicConfig(level=logging.INFO if not settings.DEBUG else logging.DEBUG)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+# `settings.DEBUG` only controls our own verbose output (see
+# app/core/graph_trace.py's prompt dump) - it must NOT raise the root level,
+# or every third-party library's own DEBUG logs (httpx, httpcore, the
+# OpenAI SDK's vendored httpx fork, SQLAlchemy's engine echo) drown out the
+# one thing worth reading here: which graph node a request went through.
+for _noisy_logger in (
+    "httpx",
+    "httpcore",
+    "httpx2",
+    "httpcore2",
+    "openai",
+    "openai._base_client",
+    "sqlalchemy.engine",
+    "asyncio",
+):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
 
 
 @asynccontextmanager

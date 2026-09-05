@@ -3,6 +3,7 @@ from collections.abc import Callable, Sequence
 import pytest
 from pydantic_ai.models.function import FunctionModel
 
+from app.core.graph_trace import GraphTrace
 from app.graph.nodes.generation_synthesis import (
     build_generation_agent,
     collect_pending_clarification,
@@ -11,6 +12,8 @@ from app.graph.nodes.generation_synthesis import (
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+
+_TRACE = GraphTrace(conversation_id="conv-1", message_id="msg-1", user_id=None, client_ip=None)
 
 
 @pytest.mark.asyncio
@@ -34,6 +37,7 @@ async def test_streams_full_response_and_no_pending_when_no_json_block(
         previous_pending=None,
         origin_node="QueryTransformationNode",
         token_sink=sink,
+        trace=_TRACE,
     )
 
     assert result.response_text == "Câu trả lời cuối cùng kèm trích dẫn [1]."
@@ -66,6 +70,7 @@ async def test_extracts_pending_clarification_from_trailing_json_block(
         previous_pending=None,
         origin_node="QueryTransformationNode",
         token_sink=sink,
+        trace=_TRACE,
     )
 
     assert result.pending_clarification is not None
