@@ -87,6 +87,26 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     await engine.dispose()
 
 
+@pytest_asyncio.fixture
+async def db_session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    """A session factory bound to one fresh in-memory SQLite engine.
+
+    Unlike `db_session`, this hands out the factory itself (not a single
+    session) so a test can open multiple independent `AsyncSession`s against
+    the same schema/data - needed to simulate two genuinely concurrent
+    callers racing the same row (see the clarification-state upsert
+    concurrency test).
+    """
+
+    engine, session_factory = _in_memory_sqlite_engine_and_sessions()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    yield session_factory
+
+    await engine.dispose()
+
+
 @pytest.fixture
 def mock_streaming_llm_model() -> Callable[[Sequence[str]], FunctionModel]:
     """Factory fixture (T0.3): `mock_streaming_llm_model(["Xin ", "chào"])` builds a
