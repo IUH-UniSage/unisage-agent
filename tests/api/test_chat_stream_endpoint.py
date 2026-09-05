@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from pydantic_ai.models.function import FunctionModel
 
 from app.api.deps import get_backend_java_client, get_graph_models
+from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
@@ -35,6 +36,8 @@ class _JavaBackend:
                 "path": request.url.path,
                 "body": body,
                 "authorization": request.headers.get("authorization"),
+                "x_internal_secret": request.headers.get("x-internal-secret"),
+                "x_forwarded_for": request.headers.get("x-forwarded-for"),
             }
         )
 
@@ -184,3 +187,81 @@ def test_successful_stream_creates_user_then_assistant_then_patches_completed(
     patches = [c for c in java.calls if c["method"] == "PATCH"]
     assert len(patches) == 1
     assert patches[0]["body"]["status"] == "COMPLETED"
+
+
+def test_every_java_call_carries_x_internal_secret(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    """Bug 1: this service calls backend-java directly (bypassing the API
+    Gateway), so it must send `X-Internal-Secret` itself on every call, not
+    rely on `Authorization` forwarding alone."""
+
+    java = _JavaBackend()
+    _override_java(java)
+    _override_models(mock_graph_models)
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "Điều kiện học bổng là gì?"},
+    ) as response:
+        assert response.status_code == 200
+        list(response.iter_text())
+
+    assert len(java.calls) >= 3  # GET history, POST user, POST assistant, PATCH
+    assert all(call["x_internal_secret"] == settings.INTERNAL_SECRET_KEY for call in java.calls)
+
+
+def test_incoming_x_forwarded_for_is_forwarded_to_java(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    """Bug 1: prefer an `X-Forwarded-For` already set on the inbound request
+    (e.g. by the API Gateway) over `request.client.host`, and forward its
+    first IP to Java as our own outgoing `X-Forwarded-For` - this is how
+    Java's guest-conversation ownership `claim()` check can see the real
+    browser IP even though Python is the one calling `POST /messages`."""
+
+    java = _JavaBackend()
+    _override_java(java)
+    _override_models(mock_graph_models)
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "Điều kiện học bổng là gì?"},
+        headers={"X-Forwarded-For": "203.0.113.7, 10.0.0.1"},
+    ) as response:
+        assert response.status_code == 200
+        list(response.iter_text())
+
+    message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
+    assert len(message_posts) == 2
+    assert all(c["x_forwarded_for"] == "203.0.113.7" for c in message_posts)
+
+    patches = [c for c in java.calls if c["method"] == "PATCH"]
+    assert len(patches) == 1
+    assert patches[0]["x_forwarded_for"] == "203.0.113.7"
+
+
+def test_falls_back_to_request_client_host_without_x_forwarded_for(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    """No inbound `X-Forwarded-For` -> fall back to the request's own peer
+    address (`request.client.host`) rather than sending nothing."""
+
+    java = _JavaBackend()
+    _override_java(java)
+    _override_models(mock_graph_models)
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "Điều kiện học bổng là gì?"},
+    ) as response:
+        assert response.status_code == 200
+        list(response.iter_text())
+
+    message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
+    assert len(message_posts) == 2
+    # Starlette's TestClient sets the synthetic peer address to "testclient".
+    assert all(c["x_forwarded_for"] == "testclient" for c in message_posts)

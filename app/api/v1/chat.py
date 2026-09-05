@@ -3,7 +3,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -94,6 +94,35 @@ async def chat_endpoint(
     )
 
 
+def _resolve_client_ip(http_request: Request, x_forwarded_for: str | None) -> str | None:
+    """Best client IP available for this request, to forward to backend-java.
+
+    Java trusts an `X-Forwarded-For` header from us only together with a
+    valid `X-Internal-Secret` (see `BackendJavaClient`) - this is how the
+    guest-conversation ownership check (matching a guest conversation's
+    stored `ipAddress` for the `claim()` flow) works when this service is
+    the one calling Java instead of the browser directly.
+
+    Prefers an `X-Forwarded-For` the API Gateway may already have set on
+    this inbound request (first IP in the list is the original client, per
+    the header's usual left-to-right convention) over
+    `request.client.host`, since the latter would just be the gateway's own
+    address once traffic passes through it - not the real caller. Falls
+    back to `request.client.host` when no such header is present (e.g. the
+    gateway is not between the caller and this service in some deployment).
+    Appending our own hop is unnecessary here - we're just forwarding the
+    best client IP we already have, not extending the chain.
+    """
+
+    if x_forwarded_for:
+        first_ip = x_forwarded_for.split(",")[0].strip()
+        if first_ip:
+            return first_ip
+    if http_request.client is not None:
+        return http_request.client.host
+    return None
+
+
 async def _sse_token_generator(queue: "asyncio.Queue[str | None]") -> AsyncGenerator[str, None]:
     """Reads tokens from `queue` until the end-of-stream sentinel (`None`).
 
@@ -114,8 +143,10 @@ async def _sse_token_generator(queue: "asyncio.Queue[str | None]") -> AsyncGener
 @router.post("/chat/stream")
 async def chat_stream_endpoint(
     request: ChatStreamRequest,
+    http_request: Request,
     security: AcademicSecurityContext = Depends(parse_security_headers),
     authorization: str | None = Header(default=None),
+    x_forwarded_for: str | None = Header(default=None),
     db_session: AsyncSession = Depends(get_db_session),
     java_client: BackendJavaClient = Depends(get_backend_java_client),
     models: GraphModels = Depends(get_graph_models),
@@ -132,7 +163,11 @@ async def chat_stream_endpoint(
        inside this request/response cycle. If Java rejects it (404/403 -
        conversation doesn't exist or belongs to someone else), this raises
        straight back to the client as an HTTP error - no graph run, no
-       assistant placeholder, ever.
+       assistant placeholder, ever. Forwards the best client IP we have
+       (`_resolve_client_ip`) as `X-Forwarded-For` alongside our
+       `X-Internal-Secret` on every `BackendJavaClient` call in this
+       request, so Java can run its guest-conversation `ipAddress` ownership
+       check even though it's us calling, not the browser directly.
     3. Only once that succeeds: create the ASSISTANT `STREAMING` placeholder.
     4. Load this conversation's clarification state (T1.1).
     5. Schedule `run_and_persist` as an independent `asyncio.create_task()`
@@ -143,6 +178,8 @@ async def chat_stream_endpoint(
     clean_message = sanitize_input_text(request.message)
     if not clean_message:
         raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")
+
+    client_ip = _resolve_client_ip(http_request, x_forwarded_for)
 
     first_turn = await is_first_turn(
         java_client, conversation_id=request.conversation_id, authorization=authorization
@@ -155,6 +192,7 @@ async def chat_stream_endpoint(
             content=clean_message,
             status="COMPLETED",
             authorization=authorization,
+            client_ip=client_ip,
         )
     except BackendJavaHTTPError as exc:
         raise ConversationRejectedException(exc.status_code) from exc
@@ -168,6 +206,7 @@ async def chat_stream_endpoint(
             content="",
             status="STREAMING",
             authorization=authorization,
+            client_ip=client_ip,
         )
     except (BackendJavaHTTPError, BackendJavaConnectionError) as exc:
         raise BackendJavaUnavailableException() from exc
@@ -197,6 +236,7 @@ async def chat_stream_endpoint(
             conversation_id=request.conversation_id,
             assistant_message_id=assistant_message_id,
             authorization=authorization,
+            client_ip=client_ip,
             graph_input=graph_input,
             models=models,
             queue=queue,

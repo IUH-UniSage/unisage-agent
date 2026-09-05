@@ -170,3 +170,65 @@ async def test_run_and_persist_persists_clarification_state_on_success(
     # general_knowledge -> DirectLLMNode never touches confirmed_metadata,
     # but a row should still exist (upserted with the empty defaults).
     assert await repo.get_confirmed_metadata("conv-42") == {}
+
+
+@pytest.mark.asyncio
+async def test_queue_sentinel_still_arrives_when_java_patch_raises_unexpected_error(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bug 2 regression: before the fix, `run_and_persist` only wrapped the
+    Java PATCH call in `except BackendJavaError` - an unexpected exception
+    type (e.g. the `update_message`/`_request` `TypeError` on an empty
+    response body, or any other bug) propagated straight out of
+    `run_and_persist`, skipping `await queue.put(None)` entirely and hanging
+    the SSE generator's `while True: token = await queue.get()` forever.
+
+    Simulates that by making `update_message` raise a plain `TypeError`
+    (deliberately NOT a `BackendJavaError`) and asserting the sentinel still
+    reaches the queue - with a real deadline so this test fails fast, not by
+    hanging, if the regression comes back.
+    """
+
+    async def _boom_update_message(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise TypeError("'NoneType' object is not a mapping")
+
+    monkeypatch.setattr(BackendJavaClient, "update_message", _boom_update_message)
+
+    java_client = BackendJavaClient(
+        base_url="http://java.test",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={})),
+    )
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    class _SessionCtx:
+        async def __aenter__(self) -> AsyncSession:
+            return db_session
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    await run_and_persist(
+        java_client=java_client,
+        conversation_id="conv-1",
+        assistant_message_id="msg-2",
+        authorization=None,
+        graph_input=_graph_input(),
+        models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        queue=queue,
+        session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
+    )
+
+    async def _drain_to_sentinel() -> None:
+        while await queue.get() is not None:
+            pass
+
+    await asyncio.wait_for(_drain_to_sentinel(), timeout=2.0)
+
+    # The clarification-state write (which runs AFTER the Java PATCH in the
+    # function body) must still have happened too - the PATCH failure must
+    # not short-circuit it.
+    repo = ClarificationStateRepository(db_session)
+    assert await repo.get_confirmed_metadata("conv-1") == {}

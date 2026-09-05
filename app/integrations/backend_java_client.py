@@ -6,6 +6,16 @@ does (see tasks/plan.md). Every call here forwards the caller's original
 Java's `GatewayHeaderFilter` can re-verify the JWT and enforce ownership
 itself; this client never sends a separate service secret.
 
+This client bypasses the API Gateway and talks to `backend-java` directly
+(`settings.BACKEND_JAVA_BASE_URL`), so it also always sends
+`X-Internal-Secret` (the same shared-secret gate this service itself
+enforces on its own inbound endpoints via `app/core/security.py`) - Java
+uses this to (a) authenticate the caller as `unisage-agent` itself, and (b)
+decide whether to trust an accompanying `X-Forwarded-For` header for the
+guest-conversation `ipAddress` ownership check, since Python is the one
+calling Java here instead of the browser directly (see `client_ip` on
+`create_message`/`update_message`).
+
 `PATCH /messages/{id}` and the `limit` param on
 `GET /messages/conversation/{id}` are being added to `backend-java` in
 parallel (see tasks/plan.md checkpoint notes) — this client is written
@@ -53,16 +63,27 @@ class BackendJavaConnectionError(BackendJavaError):
         super().__init__(f"backend-java {method} {url} -> network error: {cause}")
 
 
-def _auth_headers(authorization: str | None) -> dict[str, str]:
+def _auth_headers(authorization: str | None, client_ip: str | None = None) -> dict[str, str]:
     """Build the header dict to forward for one call.
 
     Absent/empty `authorization` means the caller is a guest (`KHACH`) —
     deliberately sends no `Authorization` header at all rather than an empty
     one, matching how the gateway itself behaves for unauthenticated
     requests (see tasks/plan.md "Auth" section).
+
+    `X-Internal-Secret` is always sent (this client talks to backend-java
+    directly, bypassing the API Gateway). `X-Forwarded-For` is sent only
+    when `client_ip` is given - Java only honors it when
+    `X-Internal-Secret` is also present and valid, so it's safe to always
+    include once we're already sending the secret.
     """
 
-    return {"Authorization": authorization} if authorization else {}
+    headers: dict[str, str] = {"X-Internal-Secret": settings.INTERNAL_SECRET_KEY}
+    if authorization:
+        headers["Authorization"] = authorization
+    if client_ip:
+        headers["X-Forwarded-For"] = client_ip
+    return headers
 
 
 class BackendJavaClient:
@@ -96,8 +117,9 @@ class BackendJavaClient:
         authorization: str | None,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        client_ip: str | None = None,
     ) -> Any:
-        headers = _auth_headers(authorization)
+        headers = _auth_headers(authorization, client_ip)
         try:
             async with self._client() as client:
                 response = await client.request(
@@ -113,6 +135,12 @@ class BackendJavaClient:
                 body = response.text
             raise BackendJavaHTTPError(method, path, response.status_code, body)
 
+        # An empty 200 body is a valid response, not an error - Java may
+        # return one for an idempotent no-op (e.g. a PATCH that matches the
+        # message's already-final state). Callers must not blindly
+        # `dict(...)` this without checking for `None` first (see
+        # `update_message`, which used to do exactly that and raised a bare
+        # `TypeError` on this exact case).
         if not response.content:
             return None
         return response.json()
@@ -131,7 +159,7 @@ class BackendJavaClient:
         result = await self._request(
             "POST", "/conversations", authorization=authorization, json_body=body
         )
-        return dict(result)
+        return dict(result) if result is not None else {}
 
     async def create_message(
         self,
@@ -141,6 +169,7 @@ class BackendJavaClient:
         content: str,
         status: MessageStatus = "COMPLETED",
         authorization: str | None = None,
+        client_ip: str | None = None,
     ) -> dict[str, Any]:
         """`POST /messages`.
 
@@ -148,6 +177,13 @@ class BackendJavaClient:
         tasks/plan.md invariant) — a 404/403 here means "do not run the
         graph, do not create a placeholder", which callers detect via
         `BackendJavaHTTPError.status_code`.
+
+        `client_ip`, when given, is forwarded as `X-Forwarded-For` - this is
+        how Java's guest-conversation ownership check (matching the
+        conversation's stored `ipAddress` for the `claim()` flow) works when
+        this Python service is the caller instead of the browser directly.
+        Only meaningful together with a valid `X-Internal-Secret`, which
+        `_request` always sends.
         """
 
         body = {
@@ -157,9 +193,9 @@ class BackendJavaClient:
             "status": status,
         }
         result = await self._request(
-            "POST", "/messages", authorization=authorization, json_body=body
+            "POST", "/messages", authorization=authorization, json_body=body, client_ip=client_ip
         )
-        return dict(result)
+        return dict(result) if result is not None else {}
 
     async def update_message(
         self,
@@ -172,6 +208,7 @@ class BackendJavaClient:
         retrieval_score: float | None = None,
         metadata: dict[str, Any] | None = None,
         authorization: str | None = None,
+        client_ip: str | None = None,
     ) -> dict[str, Any]:
         """`PATCH /messages/{id}` — finalizes a `STREAMING` assistant message.
 
@@ -179,6 +216,15 @@ class BackendJavaClient:
         `conversation_id`, only `role=ASSISTANT`, only
         `STREAMING -> COMPLETED|ERROR`, idempotent on identical payload.
         Enforced entirely by Java; this client just shapes the request.
+
+        Java requires `X-Internal-Secret` on this call (`_request` always
+        sends it). An idempotent no-op PATCH (identical payload to the
+        message's current state) may come back as `200` with an EMPTY body -
+        that's a valid response, not an error, so this returns `{}` for it
+        rather than raising (previously did a bare `dict(result)` here,
+        which raised `TypeError: 'NoneType' object is not a mapping` on
+        exactly this case since `_request` returns `None` for an empty
+        body).
         """
 
         body: dict[str, Any] = {
@@ -194,9 +240,13 @@ class BackendJavaClient:
             body["metadata"] = metadata
 
         result = await self._request(
-            "PATCH", f"/messages/{message_id}", authorization=authorization, json_body=body
+            "PATCH",
+            f"/messages/{message_id}",
+            authorization=authorization,
+            json_body=body,
+            client_ip=client_ip,
         )
-        return dict(result)
+        return dict(result) if result is not None else {}
 
     async def get_conversation_messages(
         self,
