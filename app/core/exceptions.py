@@ -129,6 +129,31 @@ class DocumentChunksNotFoundException(UniSageException):
         )
 
 
+class ConversationRejectedException(UniSageException):
+    """Java rejected `POST /messages` for this conversation_id.
+
+    Covers both "conversation doesn't exist" (404) and "conversation belongs
+    to someone else" (403) - the graph must NOT run and no assistant
+    placeholder must be created when this is raised (see tasks/plan.md
+    conversation_id ownership invariant).
+    """
+
+    def __init__(self, status_code: int) -> None:
+        error_code = (
+            ErrorCode.CONVERSATION_NOT_FOUND
+            if status_code == 404
+            else ErrorCode.CONVERSATION_ACCESS_DENIED
+        )
+        super().__init__(error_code)
+
+
+class BackendJavaUnavailableException(UniSageException):
+    """Network-level failure calling backend-java (not an HTTP error response)."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.BACKEND_JAVA_UNAVAILABLE)
+
+
 class IngestionJobNotFoundException(UniSageException):
     """Exception raised when no process-log/draft row exists for a document."""
 

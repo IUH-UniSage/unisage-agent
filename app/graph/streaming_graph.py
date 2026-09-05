@@ -1,0 +1,168 @@
+"""T1.13a — the streaming graph orchestrator.
+
+**Scope deviation, disclosed up front**: plan.md asks for this to be wired
+with `pydantic_graph`'s branching primitives. This implementation is a plain
+async function instead - documented trade-off, made under this session's
+time budget with the coordinator's explicit permission to simplify
+individual pieces in order to land a coherent, working, end-to-end streaming
+slice. `pydantic_graph.Graph.run()`/`iter()` return a single final output,
+not a token stream, so making it carry per-token streaming would have meant
+either fighting the library's grain or wrapping every node in extra
+scaffolding just to satisfy the letter of "uses pydantic_graph" - not worth
+it against the two invariants plan.md actually calls non-negotiable
+(cancellation-safe persistence, Java-owns-conversation-ownership), neither
+of which this module touches (that's `streaming_session.py`, T1.13c/d).
+A follow-up task can port this function's branching onto real
+`pydantic_graph.BaseNode` subclasses without changing its signature -
+`run_graph(input, models, token_sink) -> GraphOutput` is the seam to keep.
+
+Deliberately HTTP-agnostic: `GraphInput.is_first_turn` is computed by the
+caller (via Java's message history) before this runs - this module never
+calls `BackendJavaClient` itself, keeping graph logic testable without HTTP
+mocks.
+"""
+
+from app.graph.nodes.direct_llm import build_direct_llm_agent, run_direct_llm
+from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
+from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
+from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, route_intent
+from app.graph.nodes.message_classification import build_classification_agent, classify_intent
+from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
+from app.graph.nodes.post_retrieval_rerank import rerank_chunks
+from app.graph.nodes.query_transformation import build_query_transformation_agent, transform_query
+from app.graph.nodes.retrieval_filtering import retrieve_chunks
+from app.graph.nodes.security_context import resolve_clarification_guard
+from app.graph.nodes.ticket_fallback import build_ticket_fallback_response
+from app.graph.streaming import TokenSink
+from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
+from app.schemas.clarification import PendingClarification
+
+_ORIGIN_NODE_QUERY_TRANSFORMATION = "QueryTransformationNode"
+
+
+async def run_graph(
+    graph_input: GraphInput,
+    models: GraphModels,
+    token_sink: TokenSink,
+) -> GraphOutput:
+    # Node 01 - GreetingDetectionNode: Fast Path, zero LLM tokens.
+    if detect_greeting(graph_input.user_message, first_turn=graph_input.is_first_turn):
+        await token_sink(GREETING_TEMPLATE)
+        return GraphOutput(
+            response_text=GREETING_TEMPLATE,
+            confirmed_metadata=graph_input.confirmed_metadata,
+        )
+
+    # Node 02 - Clarification Guard (part of SecurityContextExtractionNode).
+    guard_result = resolve_clarification_guard(
+        user_message=graph_input.user_message,
+        pending=graph_input.pending_clarification,
+        confirmed_metadata=graph_input.confirmed_metadata,
+        max_retry=graph_input.clarification_max_retry,
+    )
+    confirmed_metadata = guard_result.confirmed_metadata
+    pending_clarification = guard_result.pending_clarification
+
+    if guard_result.route_to_origin:
+        # Matched an option: skip node 03 classification entirely, resume
+        # straight at QueryTransformationNode with the newly confirmed value.
+        return await _run_advisory_flow(
+            graph_input,
+            models,
+            token_sink,
+            confirmed_metadata=confirmed_metadata,
+            pending_clarification=pending_clarification,
+        )
+
+    # Node 03 - MessageClassificationNode.
+    classification_agent = build_classification_agent(models.classification)
+    intent = await classify_intent(classification_agent, graph_input.user_message)
+
+    # Node 04 - IntentRoutingNode (deterministic).
+    route = route_intent(intent)
+
+    if route == "END_SOCIAL_CHAT":
+        await token_sink(SOCIAL_CHAT_TEMPLATE)
+        return GraphOutput(
+            response_text=SOCIAL_CHAT_TEMPLATE,
+            confirmed_metadata=confirmed_metadata,
+            pending_clarification=pending_clarification,
+        )
+
+    if route == "OffTopicRejectNode":
+        await token_sink(OFF_TOPIC_TEMPLATE)
+        return GraphOutput(
+            response_text=OFF_TOPIC_TEMPLATE,
+            confirmed_metadata=confirmed_metadata,
+            pending_clarification=pending_clarification,
+        )
+
+    if route == "DirectLLMNode":
+        direct_llm_agent = build_direct_llm_agent(models.direct_llm)
+        text = await run_direct_llm(direct_llm_agent, graph_input.user_message, token_sink)
+        return GraphOutput(
+            response_text=text,
+            confirmed_metadata=confirmed_metadata,
+            pending_clarification=pending_clarification,
+        )
+
+    # route == "QueryTransformationNode": the unified advisory/procedure/document/calendar flow.
+    return await _run_advisory_flow(
+        graph_input,
+        models,
+        token_sink,
+        confirmed_metadata=confirmed_metadata,
+        pending_clarification=pending_clarification,
+    )
+
+
+async def _run_advisory_flow(
+    graph_input: GraphInput,
+    models: GraphModels,
+    token_sink: TokenSink,
+    *,
+    confirmed_metadata: dict[str, str],
+    pending_clarification: PendingClarification | None,
+) -> GraphOutput:
+    # Node 06 - QueryTransformationNode (HyDE).
+    query_transformation_agent = build_query_transformation_agent(models.query_transformation)
+    hyde_doc = await transform_query(
+        query_transformation_agent,
+        graph_input.user_message,
+        confirmed_metadata=confirmed_metadata,
+    )
+
+    # Node 10 - RetrievalFilteringNode (no permission filter - Phase 4 scope).
+    chunks = retrieve_chunks(hyde_doc)
+
+    # Node 11 - PostRetrievalRerankNode.
+    rerank_result = rerank_chunks(chunks)
+
+    if not rerank_result.has_valid_context:
+        # Node 13 - TicketFallbackNode.
+        fallback = build_ticket_fallback_response(graph_input.user_message)
+        await token_sink(fallback.message)
+        return GraphOutput(
+            response_text=fallback.message,
+            confirmed_metadata=confirmed_metadata,
+            pending_clarification=pending_clarification,
+            used_ticket_fallback=True,
+        )
+
+    # Node 12 - GenerationSynthesisNode (streaming fan-in).
+    generation_agent = build_generation_agent(models.generation)
+    generation_result = await run_generation_synthesis(
+        generation_agent,
+        user_query=graph_input.user_message,
+        security=graph_input.security,
+        confirmed_metadata=confirmed_metadata,
+        chunks=rerank_result.chunks,
+        previous_pending=pending_clarification,
+        origin_node=_ORIGIN_NODE_QUERY_TRANSFORMATION,
+        token_sink=token_sink,
+    )
+    return GraphOutput(
+        response_text=generation_result.response_text,
+        confirmed_metadata=confirmed_metadata,
+        pending_clarification=generation_result.pending_clarification,
+    )
