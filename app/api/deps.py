@@ -18,6 +18,7 @@ from app.database.session import async_session_factory, get_db_session
 from app.graph.deps import ChatDeps
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
+from app.rag.retrieval.service import RetrievalService
 
 _DOCUMENT_WRITE_PERMISSIONS = {"DOCUMENT_ALL", "DOCUMENT_CREATE"}
 
@@ -77,6 +78,7 @@ def get_graph_models() -> GraphModels:
         direct_llm=model,
         query_transformation=model,
         generation=model,
+        retrieval=RetrievalService(),
     )
 
 

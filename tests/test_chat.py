@@ -1,8 +1,21 @@
+import pytest
 from fastapi.testclient import TestClient
 
+import app.graph.nodes.retrieve as retrieve_node
+from app.schemas.retrieval import RetrievedChunk
+from tests.llm_mocks import FakeRetrievalService
 
-def test_chat_endpoint(client: TestClient) -> None:
+
+def test_chat_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test chat returns a grounded response, citations, and trace ID."""
+
+    monkeypatch.setattr(
+        retrieve_node,
+        "retrieval_service",
+        FakeRetrievalService(
+            [RetrievedChunk(chunk_id="c1", content="nội dung mẫu", source="s", score=0.9)]
+        ),
+    )
 
     payload = {
         "query": "Hạn đăng ký môn học học kỳ này là khi nào?",

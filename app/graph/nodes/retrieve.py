@@ -9,9 +9,5 @@ def retrieve_context(state: ChatState, deps: ChatDeps) -> None:
     """Populate graph state through the RAG retrieval service."""
 
     del deps
-    chunks = retrieval_service.retrieve(
-        state.query,
-        user_faculty=state.user_faculty,
-        user_level=state.user_level,
-    )
+    chunks = retrieval_service.retrieve(state.query)
     state.retrieved_chunks = [chunk.model_dump() for chunk in chunks]

@@ -17,6 +17,8 @@ from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
+from app.schemas.retrieval import RetrievedChunk
+from tests.llm_mocks import FakeRetrievalService
 
 
 class _JavaBackend:
@@ -75,6 +77,13 @@ def mock_graph_models(
         direct_llm=mock_streaming_llm_model(["42"]),
         query_transformation=mock_sync_llm_model("hyde doc"),
         generation=mock_streaming_llm_model(["Câu trả lời cuối cùng."]),
+        retrieval=FakeRetrievalService(
+            [
+                RetrievedChunk(
+                    chunk_id="c1", content="dummy retrieved content", source="s", score=0.9
+                )
+            ]
+        ),
     )
 
 

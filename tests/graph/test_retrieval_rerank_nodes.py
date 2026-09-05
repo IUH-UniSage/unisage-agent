@@ -4,14 +4,17 @@ from app.core.config import settings
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.schemas.retrieval import RetrievedChunk
+from tests.llm_mocks import FakeRetrievalService
 
 
-def test_retrieve_chunks_respects_max_chunks_setting(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "RETRIEVAL_MAX_CHUNKS", 1)
+def test_retrieve_chunks_delegates_to_the_injected_retrieval_service() -> None:
+    service = FakeRetrievalService(
+        [RetrievedChunk(chunk_id="a", content="x", source="s", score=0.9)]
+    )
 
-    chunks = retrieve_chunks("quy chế đào tạo", user_faculty="GLOBAL", user_level=1)
+    chunks = retrieve_chunks("quy chế đào tạo", service)
 
-    assert len(chunks) <= 1
+    assert [c.chunk_id for c in chunks] == ["a"]
 
 
 def test_rerank_chunks_filters_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:

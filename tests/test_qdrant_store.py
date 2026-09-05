@@ -1,7 +1,14 @@
 from unittest.mock import MagicMock
 
+from qdrant_client.http.models import QueryResponse, ScoredPoint
+
 from app.core.config import settings
-from app.rag.vectorstore.qdrant_store import ChunkPoint, ensure_collection, upsert_chunk
+from app.rag.vectorstore.qdrant_store import (
+    ChunkPoint,
+    ensure_collection,
+    search_chunks,
+    upsert_chunk,
+)
 
 
 def test_ensure_collection_creates_when_absent() -> None:
@@ -70,3 +77,30 @@ def test_upsert_chunk_builds_expected_payload_and_vector_shape() -> None:
         "access_level": 2,
         "region_type": "text",
     }
+
+
+def test_search_chunks_returns_empty_list_when_collection_missing() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = False
+
+    points = search_chunks(client, query_vector=[0.1, 0.2], limit=5)
+
+    assert points == []
+    client.query_points.assert_not_called()
+
+
+def test_search_chunks_queries_named_content_vector_with_payload_attached() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    scored_point = ScoredPoint(id="c1", version=0, score=0.9, payload={"chunk_id": "c1"})
+    client.query_points.return_value = QueryResponse(points=[scored_point])
+
+    points = search_chunks(client, query_vector=[0.1, 0.2], limit=5)
+
+    assert points == [scored_point]
+    _, kwargs = client.query_points.call_args
+    assert kwargs["collection_name"] == settings.QDRANT_COLLECTION
+    assert kwargs["query"] == [0.1, 0.2]
+    assert kwargs["using"] == "content_vector"
+    assert kwargs["limit"] == 5
+    assert kwargs["with_payload"] is True

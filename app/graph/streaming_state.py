@@ -4,20 +4,24 @@ from dataclasses import dataclass, field
 
 from pydantic_ai.models import Model
 
+from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.clarification import PendingClarification
 from app.schemas.security import AcademicSecurityContext
 
 
 @dataclass(frozen=True)
 class GraphModels:
-    """The 4 LLM-backed nodes' models, injected so tests can pass
-    `pydantic_ai.models.function.FunctionModel` doubles (see tests/llm_mocks.py)
-    instead of hitting a real provider."""
+    """The graph's injected dependencies: the 4 LLM-backed nodes' models
+    (so tests can pass `pydantic_ai.models.function.FunctionModel` doubles,
+    see tests/llm_mocks.py, instead of hitting a real provider) plus the
+    retrieval service (so tests can inject a fake Qdrant client/embedder
+    instead of hitting the network)."""
 
     classification: Model | str
     direct_llm: Model | str
     query_transformation: Model | str
     generation: Model | str
+    retrieval: RetrievalServiceProtocol
 
 
 @dataclass

@@ -1,19 +1,16 @@
 """Node 10: `RetrievalFilteringNode` (T1.9).
 
 Deliberately does NOT filter by `department_access`/permission - that is
-Phase 4 scope (see tasks/plan.md). Thin wrapper over the existing
-`RetrievalService` (demo corpus for now, not live Qdrant - see that
-module's docstring), reading `RETRIEVAL_MAX_CHUNKS` from settings instead
-of a hardcoded default.
+Phase 4 scope (see tasks/plan.md). Thin wrapper over `RetrievalService`
+(real Qdrant search), reading `RETRIEVAL_MAX_CHUNKS` from settings via the
+service itself instead of a hardcoded default.
 """
 
-from app.rag.retrieval.service import RetrievalService
+from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.retrieval import RetrievedChunk
-
-_retrieval_service = RetrievalService()
 
 
 def retrieve_chunks(
-    query: str, *, user_faculty: str = "GLOBAL", user_level: int = 1
+    query: str, retrieval_service: RetrievalServiceProtocol
 ) -> list[RetrievedChunk]:
-    return _retrieval_service.retrieve(query, user_faculty=user_faculty, user_level=user_level)
+    return retrieval_service.retrieve(query)

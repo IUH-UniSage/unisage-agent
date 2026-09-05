@@ -1,8 +1,22 @@
 import pytest
 
+import app.graph.nodes.retrieve as retrieve_node
 from app.graph.deps import ChatDeps
 from app.graph.graph import chat_graph
 from app.graph.state import ChatState
+from app.schemas.retrieval import RetrievedChunk
+from tests.llm_mocks import FakeRetrievalService
+
+
+@pytest.fixture(autouse=True)
+def _fake_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        retrieve_node,
+        "retrieval_service",
+        FakeRetrievalService(
+            [RetrievedChunk(chunk_id="c1", content="nội dung mẫu", source="s", score=0.9)]
+        ),
+    )
 
 
 @pytest.mark.asyncio

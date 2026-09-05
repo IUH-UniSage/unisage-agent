@@ -52,6 +52,32 @@ class ChunkPoint:
     questions_vector: list[float]
 
 
+def search_chunks(
+    client: QdrantClient,
+    *,
+    query_vector: list[float],
+    limit: int,
+    vector_name: str = "content_vector",
+) -> list[models.ScoredPoint]:
+    """Nearest-neighbor search on one named vector, with payload attached.
+
+    Returns an empty list (not an error) when the collection doesn't exist
+    yet - a fresh environment with nothing ingested is a normal state, not
+    a failure, for the retrieval node calling this.
+    """
+
+    if not client.collection_exists(settings.QDRANT_COLLECTION):
+        return []
+    response = client.query_points(
+        collection_name=settings.QDRANT_COLLECTION,
+        query=query_vector,
+        using=vector_name,
+        limit=limit,
+        with_payload=True,
+    )
+    return response.points
+
+
 def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:
     """Upsert one chunk's point, with its named vectors and resolved payload."""
 

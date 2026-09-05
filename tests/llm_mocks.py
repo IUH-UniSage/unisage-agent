@@ -16,9 +16,12 @@ stubbing the graph node itself.
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+from app.schemas.retrieval import RetrievedChunk
 
 
 def make_streaming_llm_model(tokens: Sequence[str]) -> FunctionModel:
@@ -64,3 +67,15 @@ def make_sync_llm_model(text: str) -> FunctionModel:
         return ModelResponse(parts=[TextPart(content=text)])
 
     return FunctionModel(function=function)
+
+
+@dataclass(frozen=True)
+class FakeRetrievalService:
+    """`GraphModels.retrieval` test double - returns a fixed list of chunks,
+    no Qdrant/OpenAI call. Satisfies `RetrievalServiceProtocol` structurally."""
+
+    chunks: list[RetrievedChunk] = field(default_factory=list)
+
+    def retrieve(self, query: str, *, limit: int | None = None) -> list[RetrievedChunk]:
+        del query
+        return self.chunks if limit is None else self.chunks[:limit]

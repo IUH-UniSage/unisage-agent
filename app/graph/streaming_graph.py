@@ -147,7 +147,7 @@ async def _run_advisory_flow(
 
     # Node 10 - RetrievalFilteringNode (no permission filter - Phase 4 scope).
     trace.node("10_RetrievalFilteringNode")
-    chunks = retrieve_chunks(hyde_doc)
+    chunks = retrieve_chunks(hyde_doc, models.retrieval)
 
     # Node 11 - PostRetrievalRerankNode.
     trace.node("11_PostRetrievalRerankNode")

@@ -53,6 +53,7 @@ from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
+from tests.llm_mocks import FakeRetrievalService
 
 
 class _JavaBackend:
@@ -166,6 +167,7 @@ async def test_client_disconnect_mid_stream_still_patches_completed(
         direct_llm=mock_gated_streaming_llm_model(["token-1 ", "token-2 ", "token-3"], gate),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_gated_streaming_llm_model(["unused"], asyncio.Event()),
+        retrieval=FakeRetrievalService(),
     )
     app.dependency_overrides[get_graph_models] = lambda: models
 

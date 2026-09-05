@@ -5,16 +5,16 @@ trường cho phép" - no live Java/environment is reachable in this session,
 so this is entirely mock-based, which is also the CI-safe required suite).
 
 **Scope deviation, disclosed up front**: plan.md's T1.14 asks for "E2E test
-với Qdrant thật" - there is no live Qdrant in this environment either, and
-retrieval in this codebase (`app.rag.retrieval.service.RetrievalService`)
-is still the pre-existing demo in-memory corpus, not a real Qdrant client
-(see that module's docstring - wiring real Qdrant search is a pre-existing
-gap, not something introduced or fixed in this session). What IS exercised
-here for real: the full HTTP endpoint, the graph orchestrator's branching,
-the Clarification Guard's 2-turn round trip (the flow plan.md and the
-design doc's worked example in section 8 care about most), and the
-cancellation-safe persistence lifecycle - all through the real
-`TestClient`, not by calling internal functions directly.
+với Qdrant thật" - there is no live Qdrant reachable in this test
+environment, so retrieval here uses `tests.llm_mocks.FakeRetrievalService`
+(a canned chunk list) rather than a live `RetrievalService` (which does
+query real Qdrant + OpenAI embeddings now - see
+`app/rag/retrieval/service.py`). What IS exercised here for real: the full
+HTTP endpoint, the graph orchestrator's branching, the Clarification
+Guard's 2-turn round trip (the flow plan.md and the design doc's worked
+example in section 8 care about most), and the cancellation-safe
+persistence lifecycle - all through the real `TestClient`, not by calling
+internal functions directly.
 
 Not implemented in this file (documented, matches todo.md's scope notes):
 - JWT invalid -> 401: enforced by api-gateway (T0.5, a separate repo/service
@@ -44,6 +44,12 @@ from app.database.repositories.clarification_state import ClarificationStateRepo
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
+from app.schemas.retrieval import RetrievedChunk
+from tests.llm_mocks import FakeRetrievalService
+
+_DUMMY_CHUNK = RetrievedChunk(
+    chunk_id="c1", content="dummy retrieved content", source="s", score=0.9
+)
 
 _TRAINING_TYPE_ASK_FORM = (
     "Về việc miễn học phần Giáo dục Quốc phòng, quy định miễn giảm hiện khác nhau "
@@ -142,6 +148,7 @@ async def test_clarification_two_turn_round_trip_via_real_endpoint(
         direct_llm=mock_streaming_llm_model(["unused"]),
         query_transformation=mock_sync_llm_model("HyDE: quy định miễn giảm GDQP"),
         generation=mock_streaming_llm_model([_TRAINING_TYPE_ASK_FORM]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
     )
 
     with client.stream(
@@ -172,6 +179,7 @@ async def test_clarification_two_turn_round_trip_via_real_endpoint(
         direct_llm=mock_streaming_llm_model(["unused"]),
         query_transformation=mock_sync_llm_model("HyDE: GDQP hệ chính quy"),
         generation=mock_streaming_llm_model(["Sinh viên hệ chính quy được miễn GDQP [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
     )
 
     with client.stream(
@@ -207,6 +215,7 @@ async def test_ticket_fallback_when_no_valid_context(
         direct_llm=mock_streaming_llm_model(["unused"]),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["unused"]),
+        retrieval=FakeRetrievalService(),
     )
 
     with client.stream(
@@ -235,6 +244,7 @@ async def test_guest_without_authorization_header_completes_full_round_trip(
         direct_llm=mock_streaming_llm_model(["42"]),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["unused"]),
+        retrieval=FakeRetrievalService(),
     )
 
     with client.stream(

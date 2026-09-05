@@ -12,6 +12,7 @@ from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.schemas.security import AcademicSecurityContext
+from tests.llm_mocks import FakeRetrievalService
 
 
 def _models(
@@ -23,6 +24,7 @@ def _models(
         direct_llm=mock_streaming_llm_model(["4"]),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["ans"]),
+        retrieval=FakeRetrievalService(),
     )
 
 

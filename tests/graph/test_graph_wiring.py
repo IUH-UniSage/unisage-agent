@@ -12,9 +12,14 @@ from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.schemas.clarification import PendingClarification
+from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+from tests.llm_mocks import FakeRetrievalService
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
+_DUMMY_CHUNK = RetrievedChunk(
+    chunk_id="c1", content="dummy retrieved content", source="s", score=0.9
+)
 
 
 def _models(
@@ -28,6 +33,7 @@ def _models(
         direct_llm=mock_streaming_llm_model(["42"]),
         query_transformation=mock_sync_llm_model("HyDE doc giả định"),
         generation=mock_streaming_llm_model(["Câu trả lời cuối cùng [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
     )
 
 
