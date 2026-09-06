@@ -49,10 +49,12 @@ def test_retrieve_embeds_query_and_maps_qdrant_points_to_retrieved_chunks() -> N
     assert chunks[0].content == "nội dung"
     assert chunks[0].source == "docs/handbook.pdf"
     assert chunks[0].score == 0.83
-    fake_qdrant.query_points.assert_called_once()
-    _, kwargs = fake_qdrant.query_points.call_args
-    assert kwargs["query"] == [0.1, 0.2]
-    assert kwargs["using"] == "content_vector"
+    # Fans out across all 3 named vectors (content/summary/questions).
+    assert fake_qdrant.query_points.call_count == 3
+    used_vectors = {call.kwargs["using"] for call in fake_qdrant.query_points.call_args_list}
+    assert used_vectors == {"content_vector", "summary_vector", "questions_vector"}
+    for call in fake_qdrant.query_points.call_args_list:
+        assert call.kwargs["query"] == [0.1, 0.2]
 
 
 def test_retrieve_returns_empty_list_when_collection_does_not_exist() -> None:

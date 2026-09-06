@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 from qdrant_client import QdrantClient, models
 
@@ -57,9 +58,19 @@ def search_chunks(
     *,
     query_vector: list[float],
     limit: int,
-    vector_name: str = "content_vector",
 ) -> list[models.ScoredPoint]:
-    """Nearest-neighbor search on one named vector, with payload attached.
+    """Nearest-neighbor search across all 3 named vectors (content/summary/
+    questions - see app/rag/enrichment/multi_representation.py), keeping the
+    best-scoring representation per chunk.
+
+    A single-vector search on `content_vector` alone misses chunks whose raw
+    text embeds poorly against a short factual query even though the same
+    chunk's `summary` or one of its precomputed `questions` is a near-exact
+    match - fanning out to all 3 and keeping the max score per chunk finds
+    those. Uses plain per-vector queries + client-side max, not Qdrant's
+    native RRF fusion: RRF scores are rank-based (~0.01-0.03), not cosine
+    similarity, and would be meaningless against `RERANK_SCORE_THRESHOLD`
+    (a cosine-similarity cutoff).
 
     Returns an empty list (not an error) when the collection doesn't exist
     yet - a fresh environment with nothing ingested is a normal state, not
@@ -68,14 +79,23 @@ def search_chunks(
 
     if not client.collection_exists(settings.QDRANT_COLLECTION):
         return []
-    response = client.query_points(
-        collection_name=settings.QDRANT_COLLECTION,
-        query=query_vector,
-        using=vector_name,
-        limit=limit,
-        with_payload=True,
-    )
-    return response.points
+
+    best_by_id: dict[str | int | UUID, models.ScoredPoint] = {}
+    for vector_name in _VECTOR_NAMES:
+        response = client.query_points(
+            collection_name=settings.QDRANT_COLLECTION,
+            query=query_vector,
+            using=vector_name,
+            limit=limit,
+            with_payload=True,
+        )
+        for point in response.points:
+            existing = best_by_id.get(point.id)
+            if existing is None or point.score > existing.score:
+                best_by_id[point.id] = point
+
+    ranked = sorted(best_by_id.values(), key=lambda point: point.score, reverse=True)
+    return ranked[:limit]
 
 
 def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:

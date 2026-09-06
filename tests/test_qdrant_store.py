@@ -89,7 +89,7 @@ def test_search_chunks_returns_empty_list_when_collection_missing() -> None:
     client.query_points.assert_not_called()
 
 
-def test_search_chunks_queries_named_content_vector_with_payload_attached() -> None:
+def test_search_chunks_queries_all_three_named_vectors_with_payload_attached() -> None:
     client = MagicMock()
     client.collection_exists.return_value = True
     scored_point = ScoredPoint(id="c1", version=0, score=0.9, payload={"chunk_id": "c1"})
@@ -98,9 +98,55 @@ def test_search_chunks_queries_named_content_vector_with_payload_attached() -> N
     points = search_chunks(client, query_vector=[0.1, 0.2], limit=5)
 
     assert points == [scored_point]
-    _, kwargs = client.query_points.call_args
-    assert kwargs["collection_name"] == settings.QDRANT_COLLECTION
-    assert kwargs["query"] == [0.1, 0.2]
-    assert kwargs["using"] == "content_vector"
-    assert kwargs["limit"] == 5
-    assert kwargs["with_payload"] is True
+    assert client.query_points.call_count == 3
+    used_vectors = {call.kwargs["using"] for call in client.query_points.call_args_list}
+    assert used_vectors == {"content_vector", "summary_vector", "questions_vector"}
+    for call in client.query_points.call_args_list:
+        assert call.kwargs["collection_name"] == settings.QDRANT_COLLECTION
+        assert call.kwargs["query"] == [0.1, 0.2]
+        assert call.kwargs["with_payload"] is True
+
+
+def test_search_chunks_keeps_the_best_score_per_chunk_across_vectors() -> None:
+    """A chunk that scores low on content_vector but high on questions_vector
+    (its precomputed questions closely match the user's query) must surface
+    with the HIGHER score, not be lost or duplicated."""
+
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    low_score = ScoredPoint(id="c1", version=0, score=0.4, payload={"chunk_id": "c1"})
+    high_score = ScoredPoint(id="c1", version=0, score=0.85, payload={"chunk_id": "c1"})
+    other_chunk = ScoredPoint(id="c2", version=0, score=0.5, payload={"chunk_id": "c2"})
+
+    client.query_points.side_effect = [
+        QueryResponse(points=[low_score]),  # content_vector
+        QueryResponse(points=[other_chunk]),  # summary_vector
+        QueryResponse(points=[high_score]),  # questions_vector
+    ]
+
+    points = search_chunks(client, query_vector=[0.1, 0.2], limit=5)
+
+    assert len(points) == 2
+    assert points[0].id == "c1"
+    assert points[0].score == 0.85  # kept the higher of the two c1 scores
+    assert points[1].id == "c2"
+
+
+def test_search_chunks_respects_limit_after_merging() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    client.query_points.side_effect = [
+        QueryResponse(
+            points=[
+                ScoredPoint(id=f"c{i}", version=0, score=1.0 - i * 0.1, payload={})
+                for i in range(3)
+            ]
+        ),
+        QueryResponse(points=[]),
+        QueryResponse(points=[]),
+    ]
+
+    points = search_chunks(client, query_vector=[0.1], limit=2)
+
+    assert len(points) == 2
+    assert [p.id for p in points] == ["c0", "c1"]
