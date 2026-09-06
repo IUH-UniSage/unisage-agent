@@ -36,6 +36,26 @@ def make_streaming_llm_model(tokens: Sequence[str]) -> FunctionModel:
     return FunctionModel(stream_function=stream_function)
 
 
+def make_sequential_streaming_llm_model(responses: Sequence[Sequence[str]]) -> FunctionModel:
+    """Build a `FunctionModel` whose `run_stream()` yields `responses[0]` on the
+    first call, `responses[1]` on the second, etc. (staying on the last entry
+    for any call beyond the list) - for a node that calls the same `agent`
+    more than once per turn (e.g. GenerationSynthesisNode's JSON-repair
+    follow-up call), where each call needs a different scripted response."""
+
+    call_index = {"value": 0}
+
+    async def stream_function(
+        _messages: list[ModelMessage], _agent_info: AgentInfo
+    ) -> AsyncIterator[str]:
+        index = min(call_index["value"], len(responses) - 1)
+        call_index["value"] += 1
+        for token in responses[index]:
+            yield token
+
+    return FunctionModel(stream_function=stream_function)
+
+
 def make_gated_streaming_llm_model(tokens: Sequence[str], gate: asyncio.Event) -> FunctionModel:
     """Like `make_streaming_llm_model`, but pauses after yielding the FIRST
     token until `gate` is set, before yielding the rest.

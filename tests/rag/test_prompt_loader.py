@@ -1,4 +1,9 @@
-from app.rag.prompting import build_direct_llm_prompt, build_system_prompt, get_templates
+from app.rag.prompting import (
+    build_direct_llm_prompt,
+    build_json_repair_prompt,
+    build_system_prompt,
+    get_templates,
+)
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
@@ -77,6 +82,28 @@ def test_prepared_context_renders_chunks_with_citation_index() -> None:
     )
 
     assert "[1] (Quy chế A) Nội dung 1" in prompt
+
+
+def test_json_repair_prompt_includes_academic_context_for_verbatim_options() -> None:
+    """Without the source chunks, ask_user_form_guide's "copy the branch label
+    verbatim" rule has nothing to copy from - the repair prompt must carry
+    the same <academic_context> the main prompt saw."""
+
+    prompt = build_json_repair_prompt(
+        "Bạn vui lòng cho biết ngành học của bạn nhé!",
+        [
+            RetrievedChunk(
+                chunk_id="c1",
+                content="Ngành đào tạo: Công nghệ Thông tin, Logistics, Kế toán.",
+                source="Biểu học phí",
+                score=0.9,
+            )
+        ],
+    )
+
+    assert "Bạn vui lòng cho biết ngành học của bạn nhé!" in prompt
+    assert "[1] (Biểu học phí) Ngành đào tạo: Công nghệ Thông tin" in prompt
+    assert "ASK_USER_FORM_GUIDE" in prompt
 
 
 def test_pending_clarification_renders_as_ask_user_form_json() -> None:

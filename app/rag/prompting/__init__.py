@@ -18,6 +18,7 @@ from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
 from .builder import (
+    build_json_repair_prompt,
     build_metadata_section,
     build_missing_metadata_block,
     build_prepared_context_section,
@@ -29,6 +30,7 @@ from .schema import PromptTemplates
 __all__ = [
     "PromptTemplates",
     "build_direct_llm_prompt",
+    "build_json_repair_prompt",
     "build_missing_metadata_block",
     "build_system_prompt",
     "get_templates",

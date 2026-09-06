@@ -126,6 +126,81 @@ def test_collect_pending_clarification_resets_retry_count_for_new_field() -> Non
     assert result.options == [None]
 
 
+@pytest.mark.asyncio
+async def test_repairs_missing_ask_form_when_prose_asks_for_missing_attribute(
+    mock_sequential_streaming_llm_model: Callable[[Sequence[Sequence[str]]], FunctionModel],
+) -> None:
+    """Known model failure mode: a clarification request in prose, without the
+    mandatory JSON block. The repair follow-up call (second scripted response)
+    should supply it, and it should reach the caller both in `response_text`
+    and via `token_sink`."""
+
+    prose_without_json = "Bạn vui lòng cho biết ngành học của bạn để mình tra học phí nhé!"
+    repair_json = (
+        '```json\n{"type": "ask_user_form", "fields": [{"field": "nganh", '
+        '"options": [{"id": "cntt"}, {"id": "logistics"}]}]}\n```'
+    )
+    agent = build_generation_agent(
+        mock_sequential_streaming_llm_model([[prose_without_json], [repair_json]])
+    )
+    received: list[str] = []
+
+    async def sink(token: str) -> None:
+        received.append(token)
+
+    result = await run_generation_synthesis(
+        agent,
+        user_query="học phí ngành tôi học là bao nhiêu?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        previous_pending=None,
+        origin_node="QueryTransformationNode",
+        token_sink=sink,
+        trace=_TRACE,
+    )
+
+    assert result.pending_clarification is not None
+    assert result.pending_clarification.missing_fields == ["nganh"]
+    assert result.pending_clarification.options == [["cntt", "logistics"]]
+    assert prose_without_json in result.response_text
+    assert '"type": "ask_user_form"' in result.response_text
+    # The repaired JSON block must have reached the client via token_sink too,
+    # not just the returned response_text.
+    assert '"type": "ask_user_form"' in "".join(received)
+
+
+@pytest.mark.asyncio
+async def test_does_not_repair_when_prose_is_not_a_clarification_request(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    """A normal answer that happens to contain no JSON block must NOT trigger
+    the repair call - only text that heuristically reads like a clarification
+    request does."""
+
+    agent = build_generation_agent(
+        mock_streaming_llm_model(["Hạn nộp học phí học kỳ này là 15/03 [1]."])
+    )
+
+    async def sink(_token: str) -> None:
+        return None
+
+    result = await run_generation_synthesis(
+        agent,
+        user_query="hạn nộp học phí học kỳ này là khi nào?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        previous_pending=None,
+        origin_node="QueryTransformationNode",
+        token_sink=sink,
+        trace=_TRACE,
+    )
+
+    assert result.pending_clarification is None
+    assert result.response_text == "Hạn nộp học phí học kỳ này là 15/03 [1]."
+
+
 def test_collect_pending_clarification_none_when_no_json_block() -> None:
     result = collect_pending_clarification(
         "Câu trả lời bình thường, không hỏi lại.",

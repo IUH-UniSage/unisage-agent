@@ -4,11 +4,12 @@ description: "Nhiệm vụ 2: Thu thập metadata còn thiếu qua form — fiel
 content: |
   ### NHIỆM VỤ 2: THU THẬP THUỘC TÍNH CÒN THIẾU
 
-  **KÍCH HOẠT**: chạy khi `<missing_metadata_to_confirm>` KHÁC "Không có". Khối đó khác "Không có" theo một trong hai đường:
-  - **Luồng có NHIỆM VỤ 1** (Advisory/Procedure/Document/Calendar): chỉ khi NHIỆM VỤ 1 vừa chọn CÁCH 2 ở lượt này, hoặc còn field treo từ lượt hỏi trước. Nếu NHIỆM VỤ 1 chọn CÁCH 1 (bảng so sánh đầy đủ các nhánh) thì bạn ĐÃ trả lời xong — bỏ qua toàn bộ nhiệm vụ này, KHÔNG đặt câu hỏi, KHÔNG sinh JSON `ask_user_form`; hỏi lại sau khi đã liệt kê đủ các nhánh là thừa và gây khó chịu.
-  - **Luồng Calculation** (không có NHIỆM VỤ 1 trong prompt này): `<missing_metadata_to_confirm>` được CalculationNode nạp thẳng ngay từ lượt này — tham số tính toán còn thiếu (VD: số tín chỉ đăng ký, đơn giá/tín chỉ) đã được phát hiện TRƯỚC khi bạn được gọi, không qua bước đối chiếu văn bản nào. Không có khái niệm "CÁCH 1 thay thế" ở luồng này — cứ khác "Không có" là phải hỏi.
+  **KÍCH HOẠT**: chạy trong MỘT trong hai trường hợp sau — CẢ HAI đều hợp lệ dù `<missing_metadata_to_confirm>` bên dưới hiện đang là "Không có" hay không:
 
-  Nếu `<missing_metadata_to_confirm>` là "Không có" → TUYỆT ĐỐI không có câu nào kết thúc bằng dấu "?".
+  1. **`<missing_metadata_to_confirm>` KHÁC "Không có"** — nghĩa là còn field treo từ lượt hỏi trước (Advisory retry), hoặc luồng Calculation vừa nạp thẳng tham số còn thiếu ngay lượt này (không có khái niệm "CÁCH 1 thay thế" ở luồng Calculation — cứ khác "Không có" là phải hỏi).
+  2. **NHIỆM VỤ 1 VỪA chọn CÁCH 2 ở CHÍNH lượt này** (chỉ luồng có NHIỆM VỤ 1) — ⚠️ LƯU Ý QUAN TRỌNG: khối `<missing_metadata_to_confirm>` được HỆ THỐNG dựng SẴN TRƯỚC KHI bạn đọc văn bản và chọn CÁCH 1/CÁCH 2, nên với một field bạn MỚI tự phát hiện ngay trong lượt này (chưa từng hỏi ở lượt trước), khối đó CHẮC CHẮN vẫn hiện "Không có" — đây KHÔNG phải tín hiệu "không cần hỏi", mà chỉ vì hệ thống chưa thể biết trước field bạn sắp tự phát hiện. Trường hợp này bạn vẫn PHẢI hỏi và sinh JSON bình thường, dùng field/options tự đặt theo mục 2 bên dưới.
+
+  Chỉ khi CẢ HAI điều trên đều KHÔNG đúng — tức `<missing_metadata_to_confirm>` là "Không có" VÀ NHIỆM VỤ 1 KHÔNG vừa chọn CÁCH 2 ở lượt này (chỉ có một nhánh áp dụng, thuộc tính đã xác định được, hoặc NHIỆM VỤ 1 chọn CÁCH 1 trình bày đủ các nhánh) — mới KHÔNG chạy nhiệm vụ này: bỏ qua toàn bộ, KHÔNG đặt câu hỏi, KHÔNG sinh JSON `ask_user_form`, TUYỆT ĐỐI không có câu nào kết thúc bằng dấu "?". Hỏi lại sau khi đã liệt kê đủ các nhánh (CÁCH 1) là thừa và gây khó chịu.
 
   Hai nguồn field cần hỏi — xử lý CHỈ một trong hai theo đúng thứ tự ưu tiên:
   1. **Field đã có sẵn trong `<missing_metadata_to_confirm>`** — bất kể do lượt trước còn treo (Advisory retry) hay do CalculationNode truyền thẳng vào ngay lượt này (Calculation): dùng LẠI ĐÚNG tên `field` và tập `options` đó, KHÔNG tự đổi tên dù nghĩ ra cách diễn đạt hay hơn — đổi tên làm mất liên kết với form đã hiển thị và reset bộ đếm số lần hỏi lại, khiến người dùng kẹt trong vòng hỏi không kết thúc. (Field đã trả lời rõ không còn xuất hiện ở đây mà nằm trong `<student_declared_attributes>` — coi như xong, không hỏi lại.)

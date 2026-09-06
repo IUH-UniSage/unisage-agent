@@ -59,6 +59,7 @@ def _load_all_templates() -> PromptTemplates:
     return PromptTemplates(
         chat_academic_advisory=_load_yaml_template(main / "chat_academic_advisory.yaml"),
         chat_direct_llm=_load_yaml_template(main / "chat_direct_llm.yaml"),
+        json_repair=_load_yaml_template(main / "json_repair.yaml"),
         header=_load_yaml_template(common / "header.yaml"),
         academic_metadata=_load_yaml_template(common / "academic_metadata.yaml"),
         security_access_control=_load_yaml_template(common / "security_access_control.yaml"),

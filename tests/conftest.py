@@ -20,6 +20,7 @@ from app.database.session import get_db_session
 from app.main import app
 from tests.llm_mocks import (
     make_gated_streaming_llm_model,
+    make_sequential_streaming_llm_model,
     make_streaming_llm_model,
     make_sync_llm_model,
 )
@@ -120,6 +121,17 @@ def mock_streaming_llm_model() -> Callable[[Sequence[str]], FunctionModel]:
     """
 
     return make_streaming_llm_model
+
+
+@pytest.fixture
+def mock_sequential_streaming_llm_model() -> Callable[[Sequence[Sequence[str]]], FunctionModel]:
+    """Factory fixture: `mock_sequential_streaming_llm_model([["a"], ["b"]])` builds
+    a model double whose `Agent.run_stream()` yields `["a"]` on the first call
+    and `["b"]` on the second - for a node that calls the same agent more than
+    once per turn (see GenerationSynthesisNode's JSON-repair follow-up call).
+    """
+
+    return make_sequential_streaming_llm_model
 
 
 @pytest.fixture

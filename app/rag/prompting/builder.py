@@ -78,6 +78,25 @@ def build_missing_metadata_block(pending: PendingClarification | None) -> str:
     return json.dumps({"type": "ask_user_form", "fields": fields}, ensure_ascii=False)
 
 
+def build_json_repair_prompt(previous_response: str, chunks: Sequence[RetrievedChunk]) -> str:
+    """Build the standalone prompt for GenerationSynthesisNode's JSON-repair
+    follow-up call (see `_repair_missing_ask_form` there) - no header/security
+    needed, but `chunks` (the same `<academic_context>` the main prompt saw)
+    IS needed: without it, `ask_user_form_guide`'s "copy the branch label
+    verbatim from the text" rule has no text to copy from, and the repaired
+    field falls back to `options: null` (free-text) even when the source
+    document actually lists a finite set of options. Reuses
+    `build_prepared_context_section` so the two `<academic_context>` blocks
+    (main prompt and repair prompt) are built identically."""
+
+    templates = get_templates()
+    return templates.json_repair.format(
+        previous_response=previous_response,
+        academic_context=build_prepared_context_section(chunks),
+        ask_user_form_guide=templates.ask_user_form_guide,
+    )
+
+
 def build_task_2_section(pending: PendingClarification | None) -> str:
     """Build `{task_2}` - nested format: `task_2.yaml` embeds the static
     `ask_user_form_guide.yaml`/`confirmed_metadata_guide.yaml` plus the

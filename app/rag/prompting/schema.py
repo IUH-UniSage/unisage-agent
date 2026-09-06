@@ -12,6 +12,7 @@ class PromptTemplates:
     # Main (per-node system prompts)
     chat_academic_advisory: str
     chat_direct_llm: str
+    json_repair: str
 
     # Common components
     header: str

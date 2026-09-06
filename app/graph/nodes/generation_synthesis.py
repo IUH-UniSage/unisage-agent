@@ -19,6 +19,17 @@ call) step scans every ```json fenced block in the response for two shapes:
   here. Only fields the model was actually asked about (i.e. present in the
   turn's pending clarification) are accepted - anything else is dropped, so
   a model that misreads the instruction can't inject arbitrary metadata.
+
+Known model failure mode this node also guards against: sometimes the model
+asks for a missing attribute in prose (any phrasing, any punctuation) but
+forgets the mandatory ```json ask_user_form``` block the prompt requires.
+`_repair_missing_ask_form` is a second, small follow-up LLM call - fired only
+when a cheap regex heuristic thinks the response reads like a clarification
+request AND no JSON block is present at all - that asks the model to look at
+its own just-written response and emit only the JSON block it forgot. This
+keeps the primary response streaming in true real time (the heuristic/repair
+only run after the main stream is done) at the cost of one extra call in the
+rare case a violation is actually detected.
 """
 
 import json
@@ -31,16 +42,70 @@ from pydantic_ai.models import Model
 
 from app.core.graph_trace import GraphTrace
 from app.graph.streaming import TokenSink, stream_agent_text
-from app.rag.prompting import build_system_prompt
+from app.rag.prompting import build_json_repair_prompt, build_system_prompt
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
 _JSON_BLOCK_PATTERN = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
+# Heuristic-only (no LLM call): does the response READ like it's asking the
+# user to supply a missing attribute, in prose, regardless of punctuation?
+# Cheap to evaluate on every turn - only turns that both match this AND have
+# no JSON block at all pay for the repair call below.
+_CLARIFICATION_PHRASE_PATTERN = re.compile(
+    r"cho\s+(t[oô]i|m[ìi]nh)?\s*bi[eế]t\b"
+    r"|vui\s+l[oò]ng\s+cho\s+bi[eế]t\b"
+    r"|cung\s+c[aấ]p\s+(th[eê]m\s+)?th[oô]ng\s+tin\b"
+    r"|xin\s+(h[aã]y\s+)?cho\s+bi[eế]t\b",
+    re.IGNORECASE,
+)
+
 
 def build_generation_agent(model: Model | str) -> Agent[None, str]:
     return Agent(model=model)
+
+
+async def _repair_missing_ask_form(
+    agent: Agent[None, str],
+    full_text: str,
+    *,
+    chunks: list[RetrievedChunk],
+    token_sink: TokenSink,
+    trace: GraphTrace,
+) -> str:
+    """Second-chance fixup for a known model failure mode: the response reads
+    like a clarification request in prose but the mandatory
+    ```json ask_user_form``` block never showed up (see chat_academic_advisory.yaml
+    / task_2.yaml's own instructions - the model sometimes just doesn't
+    follow them). Only fires when heuristically worth the extra LLM call;
+    a false negative here just means the old prose-only behavior, so the
+    heuristic is fine erring toward "didn't detect it".
+
+    Streams nothing to `token_sink` until the repair call itself has
+    produced a valid JSON block - a partial/garbage repair attempt (or a
+    literal "NONE") never reaches the client mid-stream.
+    """
+
+    if _extract_json_blocks(full_text):
+        return full_text
+    if not _CLARIFICATION_PHRASE_PATTERN.search(full_text):
+        return full_text
+
+    repair_prompt = build_json_repair_prompt(full_text, chunks)
+    trace.prompt("12b_GenerationSynthesisNode_JsonRepair", repair_prompt)
+
+    async def _capture_sink(_token: str) -> None:
+        return None
+
+    repaired = await stream_agent_text(agent, repair_prompt, _capture_sink)
+    match = _JSON_BLOCK_PATTERN.search(repaired)
+    if match is None:
+        return full_text
+
+    appended = f"\n\n```json\n{match.group(1)}\n```"
+    await token_sink(appended)
+    return full_text + appended
 
 
 @dataclass(frozen=True)
@@ -71,6 +136,9 @@ async def run_generation_synthesis(
     )
     trace.prompt("12_GenerationSynthesisNode", full_prompt)
     full_text = await stream_agent_text(agent, full_prompt, token_sink)
+    full_text = await _repair_missing_ask_form(
+        agent, full_text, chunks=chunks, token_sink=token_sink, trace=trace
+    )
     new_pending = collect_pending_clarification(
         full_text, origin_node=origin_node, previous=previous_pending
     )
