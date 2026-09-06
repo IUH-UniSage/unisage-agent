@@ -11,6 +11,7 @@ two graph nodes:
 """
 
 import json
+import re
 import unicodedata
 from dataclasses import dataclass
 
@@ -20,18 +21,32 @@ from app.core.exceptions import InvalidTrustedContextException
 from app.schemas.clarification import PendingClarification
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
 
+_PUNCTUATION_PATTERN = re.compile(r"[,;:.!?]")
+# U+0111/U+0110 ("đ"/"Đ") are standalone Unicode code points, not a base
+# letter + combining mark - NFD does NOT decompose them, so the diacritic
+# strip below leaves "đ" untouched (e.g. "đại" -> "đai", not "dai") unless
+# handled explicitly here first.
+_DJ_STROKE_PATTERN = re.compile(r"[đĐ]")
+
 
 def _normalize_for_match(text: str) -> str:
-    """Diacritic/case/underscore-insensitive normal form for hand-typed replies.
+    """Diacritic/case/underscore/punctuation-insensitive normal form for
+    hand-typed replies.
 
     "Chính quy ạ" and "chinh_quy" both normalize to "chinh quy a"/"chinh quy"
     (word boundaries collapse to single spaces) so a typed reply can match
     an option id without requiring the user to type the id verbatim.
+    Punctuation is stripped (not just collapsed to a boundary) so a reply
+    answering several fields at once, e.g. "Chính quy, K21, Cử nhân", isn't
+    broken into "k21," and "cu nhan" fragments that fail the surrounding-
+    space substring check below.
     """
 
-    normalized = unicodedata.normalize("NFD", text)
+    without_dj_stroke = _DJ_STROKE_PATTERN.sub("d", text)
+    normalized = unicodedata.normalize("NFD", without_dj_stroke)
     without_diacritics = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
-    return " ".join(without_diacritics.replace("_", " ").lower().split())
+    without_punctuation = _PUNCTUATION_PATTERN.sub(" ", without_diacritics)
+    return " ".join(without_punctuation.replace("_", " ").lower().split())
 
 
 async def parse_security_headers(
@@ -120,16 +135,23 @@ def resolve_clarification_guard(
     confirmed_metadata: dict[str, str],
     max_retry: int,
 ) -> ClarificationGuardResult:
-    """Deterministic match/no-match/discard.
+    """Deterministic match/partial-match/no-match/discard.
 
     - No pending clarification: pass through unchanged, normal flow.
-    - Reply matches one of `pending.options` (id, or diacritic/case-insensitive
-      label match): write into `confirmed_metadata`, clear pending, route back
-      to `pending.origin_node`, skip message classification.
-    - No match, `retry_count + 1 < max_retry`: bump `retry_count`, keep
-      asking (stay at the same origin — caller re-renders the same question).
-    - No match, retry limit reached: discard pending, fall through to the
-      normal flow (generation must pick a safe answer covering all branches).
+    - Reply resolves EVERY field still in `pending.missing_fields`: write
+      them all into `confirmed_metadata`, clear pending, route back to
+      `pending.origin_node`, skip message classification.
+    - Reply resolves SOME but not all fields (a multi-field form's reply
+      can answer several at once, e.g. "Chính quy, K21, Cử nhân" for a
+      3-field form): write the resolved ones into `confirmed_metadata`,
+      keep asking for the rest only (`retry_count` reset to 0 - partial
+      progress isn't a failed attempt).
+    - No field resolved, `retry_count + 1 < max_retry`: bump `retry_count`,
+      keep asking (stay at the same origin - caller re-renders the same
+      question).
+    - No field resolved, retry limit reached: discard pending, fall through
+      to the normal flow (generation must pick a safe answer covering all
+      branches).
     """
 
     if pending is None:
@@ -142,16 +164,36 @@ def resolve_clarification_guard(
             skip_classification=False,
         )
 
-    matched_field, matched_value = _match_reply(user_message, pending)
-    if matched_field is not None and matched_value is not None:
+    resolved = _match_reply(user_message, pending)
+    if resolved:
         new_confirmed = dict(confirmed_metadata)
-        new_confirmed[matched_field] = matched_value
+        new_confirmed.update(resolved)
+        remaining = [
+            (field, options)
+            for field, options in zip(pending.missing_fields, pending.options, strict=True)
+            if field not in resolved
+        ]
+        if not remaining:
+            return ClarificationGuardResult(
+                matched=True,
+                route_to_origin=True,
+                origin_node=pending.origin_node,
+                confirmed_metadata=new_confirmed,
+                pending_clarification=None,
+                skip_classification=True,
+            )
         return ClarificationGuardResult(
             matched=True,
             route_to_origin=True,
             origin_node=pending.origin_node,
             confirmed_metadata=new_confirmed,
-            pending_clarification=None,
+            pending_clarification=pending.model_copy(
+                update={
+                    "missing_fields": [field for field, _options in remaining],
+                    "options": [options for _field, options in remaining],
+                    "retry_count": 0,
+                }
+            ),
             skip_classification=True,
         )
 
@@ -176,16 +218,20 @@ def resolve_clarification_guard(
     )
 
 
-def _match_reply(user_message: str, pending: PendingClarification) -> tuple[str | None, str | None]:
-    """Try to match `user_message` against any field's options.
+def _match_reply(user_message: str, pending: PendingClarification) -> dict[str, str]:
+    """Match `user_message` against every field still pending, returning ALL
+    fields resolved by this one reply - a multi-field form's reply may
+    answer several at once (e.g. "Chính quy, K21, Cử nhân" for a 3-field
+    form), not just the first field checked.
 
-    Only single-field forms (the common case) are matched by free text; a
-    field with `options=None` (free-text field) is not resolved here —
-    deterministic matching only covers option chips, free-text extraction is
-    out of scope for this guard.
+    A field with `options=None` (free-text field, e.g. a score) is not
+    resolved here - deterministic matching only covers option chips,
+    free-text extraction is out of scope for this guard.
     """
 
     normalized_reply = _normalize_for_match(user_message)
+    padded_reply = f" {normalized_reply} "
+    resolved: dict[str, str] = {}
     for field, options in zip(pending.missing_fields, pending.options, strict=True):
         if options is None:
             continue
@@ -196,8 +242,7 @@ def _match_reply(user_message: str, pending: PendingClarification) -> tuple[str 
             # Exact match (UI chip click sends the id verbatim) or the
             # option's words all appear as a contiguous phrase in the reply
             # (hand-typed reply, possibly with extra words like "... ạ").
-            if normalized_reply == normalized_option or f" {normalized_option} " in (
-                f" {normalized_reply} "
-            ):
-                return field, option_id
-    return None, None
+            if normalized_reply == normalized_option or f" {normalized_option} " in padded_reply:
+                resolved[field] = option_id
+                break
+    return resolved

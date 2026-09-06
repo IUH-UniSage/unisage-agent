@@ -92,6 +92,92 @@ def test_guard_no_match_below_retry_limit_bumps_retry_count() -> None:
     assert result.pending_clarification.retry_count == 1
 
 
+def test_guard_matches_option_containing_the_dj_stroke_letter() -> None:
+    """Regression: "đ" (U+0111) is a standalone Unicode code point, not a
+    base letter + combining mark - NFD normalization alone leaves it
+    untouched ("đại" -> "đai", not "dai"), so it silently failed to match
+    "chinh_quy_dai_tra" until handled explicitly."""
+
+    pending = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["he_dao_tao"],
+        options=[["chinh_quy_dai_tra", "chinh_quy_clc", "lien_thong", "vlvh"]],
+        retry_count=0,
+    )
+
+    result = resolve_clarification_guard(
+        user_message="Chính quy đại trà, khoá K21",
+        pending=pending,
+        confirmed_metadata={},
+        max_retry=2,
+    )
+
+    assert result.matched is True
+    assert result.confirmed_metadata == {"he_dao_tao": "chinh_quy_dai_tra"}
+    assert result.pending_clarification is None
+
+
+def test_guard_matches_all_fields_at_once_from_one_comma_separated_reply() -> None:
+    """Regression: a reply answering every field of a multi-field form in one
+    go ("Chính quy, K21, Cử nhân") used to only ever save the LAST field -
+    both because the matcher returned on its first hit, and because commas
+    broke the surrounding-space substring check for the middle field."""
+
+    pending = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["he_dao_tao", "khoa_nhap_hoc", "chuong_trinh_dao_tao"],
+        options=[
+            ["chinh_quy", "lien_thong", "vlvh"],
+            ["k21", "k22", "k23"],
+            ["cu_nhan", "ky_su"],
+        ],
+        retry_count=0,
+    )
+
+    result = resolve_clarification_guard(
+        user_message="Chính quy, K21, Cử nhân",
+        pending=pending,
+        confirmed_metadata={},
+        max_retry=2,
+    )
+
+    assert result.matched is True
+    assert result.route_to_origin is True
+    assert result.confirmed_metadata == {
+        "he_dao_tao": "chinh_quy",
+        "khoa_nhap_hoc": "k21",
+        "chuong_trinh_dao_tao": "cu_nhan",
+    }
+    assert result.pending_clarification is None
+    assert result.skip_classification is True
+
+
+def test_guard_partial_match_keeps_only_unresolved_fields_pending() -> None:
+    pending = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["he_dao_tao", "khoa_nhap_hoc"],
+        options=[["chinh_quy", "lien_thong"], ["k21", "k22"]],
+        retry_count=1,
+    )
+
+    result = resolve_clarification_guard(
+        user_message="Chính quy ạ",
+        pending=pending,
+        confirmed_metadata={"existing": "value"},
+        max_retry=3,
+    )
+
+    assert result.matched is True
+    assert result.route_to_origin is True
+    assert result.confirmed_metadata == {"existing": "value", "he_dao_tao": "chinh_quy"}
+    assert result.pending_clarification is not None
+    assert result.pending_clarification.missing_fields == ["khoa_nhap_hoc"]
+    assert result.pending_clarification.options == [["k21", "k22"]]
+    # Partial progress resets retry_count - it isn't a failed attempt.
+    assert result.pending_clarification.retry_count == 0
+    assert result.skip_classification is True
+
+
 def test_guard_no_match_at_retry_limit_discards_pending() -> None:
     pending = PendingClarification(
         origin_node="QueryTransformationNode",
