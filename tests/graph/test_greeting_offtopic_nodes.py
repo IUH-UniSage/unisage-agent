@@ -18,6 +18,20 @@ def test_is_pure_greeting_rejects_real_question() -> None:
     assert is_pure_greeting("Điều kiện học bổng loại giỏi là gì?") is False
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Cho mình hỏi điều kiện tốt nghiệp",
+        "Hello, cho mình hỏi GPA",
+        "Xin chào, học phí học kỳ này bao nhiêu?",
+        "Chào, điều kiện tốt nghiệp là gì?",
+        "Alo, học phí bao nhiêu?",
+    ],
+)
+def test_is_pure_greeting_rejects_greeting_glued_to_a_real_question(message: str) -> None:
+    assert is_pure_greeting(message) is False
+
+
 def test_detect_greeting_only_activates_on_first_turn() -> None:
     assert detect_greeting("Chào bạn", first_turn=True) is True
     assert detect_greeting("Chào bạn", first_turn=False) is False

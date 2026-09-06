@@ -16,15 +16,28 @@ GREETING_TEMPLATE = (
     "Bạn cần hỏi gì hôm nay?"
 )
 
-_GREETING_PATTERN = re.compile(
-    r"^\s*(xin\s+ch[àa]o|ch[àa]o|hello|hi|hey|alo)\b|"
-    r"\b(bot\s+[oơ]i|tr[oợơ]\s*l[yý]\s+[oơ]i|cho\s+m[iì]nh\s+h[oỏ]i)\b",
+# Greeting/lead-in phrases the whole message may consist of. Matched with
+# \b boundaries and stripped out (possibly more than once, e.g. "Bot ơi cho
+# mình hỏi") - whatever's left over must be nothing but short filler/
+# punctuation for the message to count as a PURE greeting. This is what
+# tells "Hello" and "Bot ơi cho mình hỏi" (no question attached yet) apart
+# from "Hello, cho mình hỏi GPA" or "Cho mình hỏi điều kiện tốt nghiệp" -
+# a real question glued onto a greeting must fall through to the normal
+# flow, not be swallowed by the static template.
+_GREETING_TOKENS = re.compile(
+    r"\b(xin\s+ch[àa]o|ch[àa]o|hello|hi|hey|alo|"
+    r"bot\s+[oơ]i|tr[oợơ]\s*l[yý]\s+[oơ]i|cho\s+m[iì]nh\s+h[oỏ]i)\b",
+    re.IGNORECASE,
+)
+_FILLER_ONLY_PATTERN = re.compile(
+    r"^[\s,.!?~]*(bạn|there|nhé|ơi)?[\s,.!?~]*$",
     re.IGNORECASE,
 )
 
 
 def is_pure_greeting(message: str) -> bool:
-    return bool(_GREETING_PATTERN.search(message.strip()))
+    remainder = _GREETING_TOKENS.sub("", message.strip())
+    return bool(_FILLER_ONLY_PATTERN.fullmatch(remainder))
 
 
 async def is_first_turn(
