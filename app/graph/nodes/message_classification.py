@@ -1,12 +1,8 @@
-"""Node 03: `MessageClassificationNode` (T1.5).
+"""Message classification node - labels an incoming message with one intent.
 
-Simplified relative to the reference design's full 9-intent classifier
-prompt (`agents/message_classification.yaml`, with confidence score and
-`routing_mode` SINGLE/MULTI) - documented deviation: the LLM is asked to
-output exactly one intent label as plain text, not a structured
-confidence-scored object. This is enough for IntentRoutingNode (T1.6) to
-route correctly; a follow-up task can port the richer prompt + structured
-output + MULTI routing_mode without changing this function's signature.
+The LLM is asked to output exactly one intent label as plain text, not a
+structured confidence-scored object; this is enough for the routing node to
+pick the right next step.
 """
 
 from pydantic_ai import Agent

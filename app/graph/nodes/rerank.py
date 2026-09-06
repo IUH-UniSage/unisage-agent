@@ -6,12 +6,12 @@ from app.schemas.retrieval import RetrievedChunk
 def rerank_context(state: ChatState) -> None:
     """Apply the reranking boundary before generation.
 
-    This is the pre-Phase-1 prototype's `/chat` endpoint, being superseded by
-    the streaming graph (T1.13a-e) - kept working as-is in the meantime with
+    Used by the older non-streaming `/chat` prototype endpoint, which is
+    being superseded by the streaming graph. Kept working as-is with
     `score_threshold=0.0` (no filtering) so it doesn't regress against the
-    demo corpus's scores, which sit below the new T1.10 default threshold.
-    The real graph's `PostRetrievalRerankNode` (app/graph/nodes/post_retrieval_rerank.py)
-    uses the real `settings.RERANK_SCORE_THRESHOLD` default instead.
+    demo corpus's scores, which sit below the streaming graph's
+    `PostRetrievalRerankNode` default threshold
+    (app/graph/nodes/post_retrieval_rerank.py, `settings.RERANK_SCORE_THRESHOLD`).
     """
 
     chunks = [RetrievedChunk.model_validate(chunk) for chunk in state.retrieved_chunks]

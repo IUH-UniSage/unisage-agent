@@ -1,4 +1,4 @@
-"""T1.13b/e: full round-trip through `POST /chat/stream` via TestClient,
+"""Full round-trip through `POST /chat/stream` via TestClient,
 with backend-java mocked (httpx.MockTransport) and the LLM mocked
 (FunctionModel) - no live network call anywhere in this file.
 """

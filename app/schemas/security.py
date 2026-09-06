@@ -1,9 +1,7 @@
-"""`AcademicSecurityContext` (T1.2) — caller identity for the graph.
+"""`AcademicSecurityContext` — caller identity for the graph.
 
-Shape matches the real JWT/gateway contract (`department_access:
-list[{department_id, access_level}]`), not the reference design's
-`organization_scopes`/`max_access_level` — see tasks/plan.md, which already
-settled this in an earlier review round.
+Shape matches the real JWT/gateway contract:
+`department_access: list[{department_id, access_level}]`.
 """
 
 from pydantic import BaseModel

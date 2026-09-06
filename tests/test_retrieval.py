@@ -1,4 +1,4 @@
-"""RetrievalService (T1.9) - embeds the query and searches Qdrant's
+"""RetrievalService - embeds the query and searches Qdrant's
 `content_vector` for ingested chunks. Mocked Qdrant client + embedder, no
 live network anywhere in this file (matches the project's convention for
 `BackendJavaClient`/`httpx.MockTransport`)."""

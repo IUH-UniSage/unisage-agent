@@ -1,9 +1,8 @@
-"""Node 05A: `DirectLLMNode` (T1.7) — streaming, no RAG.
+"""Streaming direct-LLM node - answers general-knowledge questions without RAG.
 
 Activates for `general_knowledge` (simple, non-academic-specific questions).
-No `<academic_context>` block, per the reference design's
-`main/chat_direct_llm.yaml` (not ported - see app/rag/prompting/loader.py's
-scope-deviation note; this uses a plain instruction string instead).
+Uses a plain instruction string with no `<academic_context>` block, since
+there's no retrieved context to inject for this intent.
 """
 
 from pydantic_ai import Agent

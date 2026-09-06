@@ -1,9 +1,9 @@
-"""Node 01: `GreetingDetectionNode` (T1.4).
+"""Greeting detection node - fast path for pure greetings.
 
-Fast Path — a first-turn pure greeting gets a static template, zero LLM
-tokens. "First turn" is answered by Java's own message history
+A first-turn pure greeting gets a static template, zero LLM tokens.
+"First turn" is answered by Java's own message history
 (`GET /messages/conversation/{id}` returning `[]`), never a Python-side
-counter — Python does not own conversation history (see tasks/plan.md).
+counter — Python does not own conversation history.
 """
 
 import re

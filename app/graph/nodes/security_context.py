@@ -1,14 +1,13 @@
-"""Node 02: `SecurityContextExtractionNode` (T1.2).
+"""Security context extraction and clarification-guard matching.
 
-Two responsibilities, kept as two separate functions per plan.md's mitigation
-for this task being oversized (rather than splitting into two graph nodes):
+Two responsibilities, kept as two separate functions rather than split into
+two graph nodes:
 
 - `parse_security_headers` — turn the 5 gateway-injected trusted headers into
   an `AcademicSecurityContext`, or a guest context if the gateway sent none
   of them (no token on the request).
 - `resolve_clarification_guard` — deterministic (no LLM) match of the
-  current message against a `PendingClarification`'s `options`, per
-  missing_metadata_clarification_design.md section 5.
+  current message against a `PendingClarification`'s `options`.
 """
 
 import json
@@ -46,10 +45,10 @@ async def parse_security_headers(
 
     Absent `X-User-Id` (the gateway injects nothing when the request had no
     token) means guest — NOT a 401; that distinction is enforced by the
-    gateway itself (T0.5), which returns 401 before this service is ever
-    reached for an invalid/expired token. A present-but-malformed header is
-    a 400 (input error), never a 401, since a present header means the
-    gateway already validated the token.
+    gateway itself, which returns 401 before this service is ever reached
+    for an invalid/expired token. A present-but-malformed header is a 400
+    (input error), never a 401, since a present header means the gateway
+    already validated the token.
     """
 
     if x_user_id is None:
@@ -121,16 +120,16 @@ def resolve_clarification_guard(
     confirmed_metadata: dict[str, str],
     max_retry: int,
 ) -> ClarificationGuardResult:
-    """Deterministic match/no-match/discard, per design doc section 5.
+    """Deterministic match/no-match/discard.
 
     - No pending clarification: pass through unchanged, normal flow.
     - Reply matches one of `pending.options` (id, or diacritic/case-insensitive
       label match): write into `confirmed_metadata`, clear pending, route back
-      to `pending.origin_node`, skip MessageClassificationNode (03).
+      to `pending.origin_node`, skip message classification.
     - No match, `retry_count + 1 < max_retry`: bump `retry_count`, keep
       asking (stay at the same origin — caller re-renders the same question).
     - No match, retry limit reached: discard pending, fall through to the
-      normal flow (node 12 must pick a safe answer covering all branches).
+      normal flow (generation must pick a safe answer covering all branches).
     """
 
     if pending is None:
@@ -180,10 +179,10 @@ def resolve_clarification_guard(
 def _match_reply(user_message: str, pending: PendingClarification) -> tuple[str | None, str | None]:
     """Try to match `user_message` against any field's options.
 
-    Only single-field forms (the common case for Phase 1) are matched by
-    free text; a field with `options=None` (free-text field) is not
-    resolved here — plan.md scopes deterministic matching to option chips,
-    free-text extraction is out of scope for Phase 1's guard.
+    Only single-field forms (the common case) are matched by free text; a
+    field with `options=None` (free-text field) is not resolved here —
+    deterministic matching only covers option chips, free-text extraction is
+    out of scope for this guard.
     """
 
     normalized_reply = _normalize_for_match(user_message)

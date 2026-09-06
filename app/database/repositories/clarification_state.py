@@ -29,11 +29,11 @@ def _insert_builder(session: AsyncSession) -> Any:
 
 
 class ClarificationStateRepository:
-    """Persistence boundary for `ConversationClarificationState` (T1.1).
+    """Persistence boundary for `ConversationClarificationState`.
 
     Keyed by `conversation_id` (Java's id, no FK - see the model's
-    docstring). One row per conversation; `get_or_default` never raises for
-    a conversation with no state yet, since "nothing pending, nothing
+    docstring). One row per conversation; reads never raise for a
+    conversation with no state yet, since "nothing pending, nothing
     confirmed" is the normal starting state, not an error.
     """
 
@@ -69,10 +69,9 @@ class ClarificationStateRepository:
     ) -> ConversationClarificationState:
         """Replace both fields for `conversation_id` in one write.
 
-        Callers (the Clarification Guard, node 12's post-processing step)
-        always compute the full next value of each field themselves - this
-        repository does not merge partial updates, to keep "who decided the
-        next state" unambiguous (single-writer, per tasks/plan.md).
+        Callers always compute the full next value of each field themselves -
+        this repository does not merge partial updates, to keep "who decided
+        the next state" unambiguous (single writer per conversation).
 
         Concurrency: two concurrent `upsert()` calls for the same
         `conversation_id` used to race a SELECT-then-INSERT (both could read

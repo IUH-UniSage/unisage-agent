@@ -1,11 +1,9 @@
-"""Node 04: `IntentRoutingNode` (T1.6) — deterministic, no LLM.
+"""Intent routing node - deterministic, no LLM.
 
-Deviation from the reference routing table (documented, matches todo.md's
-Phase 1 scope): `academic_comparison` (node 07, Phase 2) and
-`academic_calculation` (node 08, Phase 3) are not implemented yet, so both
-fall back to the unified advisory flow (`QueryTransformationNode`) instead
-of a dedicated node - a degraded but functional answer instead of a dead
-end. Swap these two entries to the real nodes once Phase 2/3 land.
+`academic_comparison` and `academic_calculation` have no dedicated node yet,
+so both fall back to the unified advisory flow (`QueryTransformationNode`)
+instead of a dedicated node - a degraded but functional answer instead of a
+dead end. Swap these two entries to real nodes once those are implemented.
 """
 
 from typing import Literal
@@ -25,7 +23,7 @@ _ROUTING_MAP: dict[str, NextNode] = {
     "academic_procedure": "QueryTransformationNode",
     "academic_calendar": "QueryTransformationNode",
     "academic_document": "QueryTransformationNode",
-    # Phase 2/3 not implemented yet - degrade to the advisory flow.
+    # Not implemented yet - degrade to the advisory flow.
     "academic_comparison": "QueryTransformationNode",
     "academic_calculation": "QueryTransformationNode",
     # Should never route here post-greeting-node, but a safe fallback beats a KeyError.

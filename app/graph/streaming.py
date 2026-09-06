@@ -1,9 +1,9 @@
-"""Shared token-streaming helper for LLM-driving graph nodes (T1.7/T1.11).
+"""Shared token-streaming helper for LLM-driving graph nodes.
 
 `TokenSink` is deliberately just "an async callable that accepts one token
 string" - in production it is `asyncio.Queue.put`, wired up by
-`app/graph/streaming_session.py` (T1.13c/d); tests can pass any async
-callable, e.g. one that appends to a list.
+`app/graph/streaming_session.py`; tests can pass any async callable, e.g.
+one that appends to a list.
 """
 
 from collections.abc import Awaitable, Callable

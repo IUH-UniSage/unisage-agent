@@ -67,7 +67,7 @@ def client() -> Generator[TestClient, None, None]:
             yield session
 
     app.dependency_overrides[get_db_session] = override_get_db_session
-    # run_and_persist (T1.13c/d) opens its OWN session via this factory,
+    # run_and_persist opens its OWN session via this factory,
     # independent of the request's db_session - point it at the same
     # in-memory SQLite engine so a streaming test can see what it wrote.
     app.dependency_overrides[get_session_factory] = lambda: session_factory
@@ -114,9 +114,9 @@ async def db_session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession
 
 @pytest.fixture
 def mock_streaming_llm_model() -> Callable[[Sequence[str]], FunctionModel]:
-    """Factory fixture (T0.3): `mock_streaming_llm_model(["Xin ", "chào"])` builds a
+    """Factory fixture: `mock_streaming_llm_model(["Xin ", "chào"])` builds a
     `pydantic_ai` model double whose `Agent.run_stream()` yields those tokens in
-    order. For nodes that stream (DirectLLMNode/05A, GenerationSynthesisNode/12).
+    order. For nodes that stream (DirectLLMNode, GenerationSynthesisNode).
     """
 
     return make_streaming_llm_model
@@ -134,7 +134,7 @@ def mock_gated_streaming_llm_model() -> Callable[[Sequence[str], asyncio.Event],
 
 @pytest.fixture
 def mock_sync_llm_model() -> Callable[[str], FunctionModel]:
-    """Factory fixture (T0.3): `mock_sync_llm_model("some text")` builds a
+    """Factory fixture: `mock_sync_llm_model("some text")` builds a
     `pydantic_ai` model double whose `Agent.run()`/`run_sync()` returns that text
     as one response. For non-streaming nodes (message classification, query
     transformation, comparison/calculation).

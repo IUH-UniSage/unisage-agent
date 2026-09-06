@@ -1,16 +1,14 @@
-"""Node 12: `GenerationSynthesisNode` (T1.11) — streaming fan-in + JSON
-`pending_clarification` extraction.
+"""Generation synthesis node - streams the final response and extracts any
+`pending_clarification` request embedded in it.
 
 After the full response text has streamed, a deterministic (no extra LLM
 call) step extracts the LAST ```json fenced block in the response and, if
 it has shape `{"type": "ask_user_form", "fields": [...]}`, rebuilds it into
 a `PendingClarification` — keeping `retry_count` if the field set is
 unchanged from the previous turn's pending clarification, resetting to 0 if
-it's a new field set. This matches
-missing_metadata_clarification_design.md section 5's "điểm phát hiện != điểm
-quay lại": `origin_node` is passed in by the caller (always
-`QueryTransformationNode` for the Type B flow this phase implements), not
-derived from where the JSON was found.
+it's a new field set. `origin_node` (where the clarification should resume)
+is passed in by the caller rather than derived from where the JSON was
+found, since the detection point and the resume point can differ.
 """
 
 import json

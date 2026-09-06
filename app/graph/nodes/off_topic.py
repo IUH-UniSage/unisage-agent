@@ -1,4 +1,4 @@
-"""Node 05B: `OffTopicRejectNode` (T1.4) — deterministic, static template."""
+"""Off-topic rejection node - deterministic, static template."""
 
 OFF_TOPIC_TEMPLATE = (
     "Xin lỗi, mình chỉ có thể hỗ trợ các câu hỏi liên quan đến học vụ của Nhà trường.\n"

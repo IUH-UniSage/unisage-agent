@@ -127,9 +127,9 @@ async def _sse_token_generator(queue: "asyncio.Queue[str | None]") -> AsyncGener
     """Reads tokens from `queue` until the end-of-stream sentinel (`None`).
 
     Deliberately does nothing else - no graph execution, no Java calls. This
-    is the piece Starlette cancels on client disconnect; `run_and_persist`
-    (T1.13c/d), which does the real work, runs in an independent
-    `asyncio.create_task()` and is never awaited here.
+    is the piece Starlette cancels on client disconnect; `run_and_persist`,
+    which does the real work, runs in an independent `asyncio.create_task()`
+    and is never awaited here.
     """
 
     while True:
@@ -152,11 +152,11 @@ async def chat_stream_endpoint(
     models: GraphModels = Depends(get_graph_models),
     session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> StreamingResponse:
-    """T1.13b/c/d/e — SSE streaming chat endpoint.
+    """SSE streaming chat endpoint.
 
-    Ordering matters and is the whole point of this endpoint (see
-    tasks/plan.md's conversation_id ownership invariant and cancellation-safe
-    persistence requirement):
+    Ordering matters and is the whole point of this endpoint (conversation_id
+    ownership must be verified before any state is created, and persistence
+    must survive a client disconnect):
 
     1. Ask Java for this conversation's message count (first-turn detection).
     2. Call Java `POST /messages` (role=USER) FIRST, synchronously, still
@@ -169,10 +169,10 @@ async def chat_stream_endpoint(
        request, so Java can run its guest-conversation `ipAddress` ownership
        check even though it's us calling, not the browser directly.
     3. Only once that succeeds: create the ASSISTANT `STREAMING` placeholder.
-    4. Load this conversation's clarification state (T1.1).
-    5. Schedule `run_and_persist` as an independent `asyncio.create_task()`
-       (T1.13c/d) - NOT awaited here - and return a `StreamingResponse`
-       whose generator only reads the queue that task writes to.
+    4. Load this conversation's clarification state.
+    5. Schedule `run_and_persist` as an independent `asyncio.create_task()` -
+       NOT awaited here - and return a `StreamingResponse` whose generator
+       only reads the queue that task writes to.
     """
 
     clean_message = sanitize_input_text(request.message)

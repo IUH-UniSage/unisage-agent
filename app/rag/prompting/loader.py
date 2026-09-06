@@ -1,18 +1,12 @@
-"""T1.3 — prompt assembly for `GenerationSynthesisNode`/`DirectLLMNode`.
+"""Prompt assembly for `GenerationSynthesisNode`/`DirectLLMNode`.
 
-**Scope deviation, disclosed up front**: `detail_prompt_template_loader.md`
-describes a full 2-phase YAML template engine (`prompt_template/**` copied
-from the KLTN reference repo, cached `PromptTemplates` dataclass, nested
-`.format()` interpolation of `task_1`/`task_2`/`ask_user_form_guide`/
-`academic_domain_rules`/etc.). Given this session's time budget, this module
-implements the two invariants plan.md calls non-negotiable — the two
-separate, never-merged XML tags, and the `ask_user_form`/`missing_metadata`
-block feeding the Clarification flow — as plain Python string assembly,
-**not** a YAML-file loader. The actual system-prompt copywriting (the
-detailed task_1/task_2 instructions) is a placeholder block, not the
-reference project's tuned prompt text. A follow-up task should port the real
-`prompt_template/**` tree and switch this module to load from it, keeping
-the same function signatures.
+Builds the system prompt as plain Python string assembly rather than a
+YAML-file template loader. Enforces two invariants: the two identity tags
+(`academic_user_context` vs `student_declared_attributes`) are always
+separate and never merged, and the `ask_user_form`/`missing_metadata` block
+feeds the clarification flow. The system-prompt copywriting here is a
+placeholder, not tuned prompt text; a follow-up could load it from an
+external template tree instead, keeping the same function signatures.
 """
 
 import json
@@ -29,9 +23,8 @@ _NO_PENDING_CLARIFICATION = "Không có"
 def render_academic_user_context(security: AcademicSecurityContext) -> str:
     """`<academic_user_context>` — JWT-derived, verified identity.
 
-    Never receives data from `confirmed_metadata` — that is a hard boundary
-    (see tasks/plan.md security note): this tag is the only one an
-    authorization decision may ever be based on.
+    Never receives data from `confirmed_metadata` — that is a hard boundary:
+    this tag is the only one an authorization decision may ever be based on.
     """
 
     department_lines = (
@@ -56,7 +49,7 @@ def render_student_declared_attributes(confirmed_metadata: dict[str, str]) -> st
 
     Deliberately named and rendered separately from
     `render_academic_user_context` so an LLM (or a future refactor) cannot
-    conflate "trusted" with "self-declared" — see tasks/plan.md.
+    conflate "trusted" with "self-declared".
     """
 
     body = (
@@ -78,8 +71,7 @@ def render_prepared_context(chunks: Sequence[RetrievedChunk]) -> str:
 def render_missing_metadata_block(pending: PendingClarification | None) -> str:
     """`{missing_metadata_to_confirm}` — JSON `ask_user_form` shape, or "Không có".
 
-    Source is always `pending_clarification` (see loader design doc section
-    6-7) - never re-derived here.
+    Source is always `pending_clarification` — never re-derived here.
     """
 
     if pending is None:

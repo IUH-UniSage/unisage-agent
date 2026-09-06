@@ -1,5 +1,5 @@
-"""T0.3: prove the mock-LLM test harness actually drives `pydantic_ai.Agent`
-the way graph nodes will (`run_stream()` for streaming nodes, `run()` for
+"""Prove the mock-LLM test harness actually drives `pydantic_ai.Agent`
+the way graph nodes do (`run_stream()` for streaming nodes, `run()` for
 non-streaming ones) — not just that the raw `FunctionModel` objects exist.
 """
 

@@ -1,16 +1,15 @@
-"""T1.13c/d — cancellation-safe graph execution + Java persistence.
+"""Cancellation-safe graph execution + Java persistence.
 
-Non-negotiable requirement from tasks/plan.md: `run_and_persist` MUST be
-scheduled with `asyncio.create_task()` by its caller and never awaited
-inline inside the SSE response cycle - `app/api/v1/chat.py`'s endpoint
-creates the task and returns a `StreamingResponse` whose generator only
-reads `queue.get()`. If the client disconnects, Starlette cancels the SSE
-generator (and stops iterating the queue) but this task, running
-independently, keeps going to completion and still PATCHes Java in
-`finally`. This is why streaming must NOT be implemented as
-`async for token in graph: yield token` directly inside the response
-generator (see plan.md) - that would tie graph execution to the response's
-own cancel scope.
+`run_and_persist` MUST be scheduled with `asyncio.create_task()` by its
+caller and never awaited inline inside the SSE response cycle -
+`app/api/v1/chat.py`'s endpoint creates the task and returns a
+`StreamingResponse` whose generator only reads `queue.get()`. If the client
+disconnects, Starlette cancels the SSE generator (and stops iterating the
+queue) but this task, running independently, keeps going to completion and
+still PATCHes Java in `finally`. This is why streaming must NOT be
+implemented as `async for token in graph: yield token` directly inside the
+response generator - that would tie graph execution to the response's own
+cancel scope.
 
 Every finalization step below (the Java PATCH, the clarification-state
 write) is wrapped in its own `except Exception` so that a bug in one of

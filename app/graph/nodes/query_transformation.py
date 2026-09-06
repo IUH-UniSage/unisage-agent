@@ -1,19 +1,14 @@
-"""Node 06: `QueryTransformationNode` (T1.8) — entry point of the unified
+"""Query transformation node - entry point of the unified
 Advisory/Procedure/Document/Calendar flow.
 
-Simplified relative to the reference design's 4 modes (HyDE/Multi-query/
-Procedure/Document) - documented deviation: this implements HyDE-only
-(single query, no sub-query fan-out). Multi-query/Procedure/Document mode
-selection can be added later without changing `transform_query`'s signature
-(a `mode` parameter is threaded through, currently only affecting the
-instruction text).
+Implements HyDE-only query rewriting (single query, no sub-query fan-out);
+other modes can be added later without changing `transform_query`'s
+signature.
 
-Resume behavior (the part plan.md calls out specifically): when the
-Clarification Guard routes back here with a newly confirmed field, that
-value is folded into the query passed to the LLM so retrieval benefits from
-it immediately - per missing_metadata_clarification_design.md section 8's
-worked example (student confirms "chinh_quy" -> query mentions it before
-node 10 retrieval runs again).
+Resume behavior: when the clarification flow routes back here with a newly
+confirmed field, that value is folded into the query passed to the LLM so
+retrieval benefits from it immediately (e.g. student confirms "chinh_quy" ->
+the query mentions it before retrieval runs again).
 """
 
 from pydantic_ai import Agent
@@ -43,7 +38,7 @@ async def transform_query(
     *,
     confirmed_metadata: dict[str, str] | None = None,
 ) -> str:
-    """Returns the HyDE document text to use for retrieval (node 10)."""
+    """Returns the HyDE document text to use for retrieval."""
 
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
     result = await agent.run(enriched_query)

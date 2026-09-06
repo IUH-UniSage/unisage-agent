@@ -1,12 +1,12 @@
-"""Reusable `pydantic_ai` model doubles for tests (T0.3).
+"""Reusable `pydantic_ai` model doubles for tests.
 
-Two flavors, matching how the graph nodes will call the LLM:
+Two flavors, matching how the graph nodes call the LLM:
 - `make_streaming_llm_model` — for nodes using `Agent.run_stream()`
-  (DirectLLMNode/05A, GenerationSynthesisNode/12): yields a fixed sequence of
+  (DirectLLMNode, GenerationSynthesisNode): yields a fixed sequence of
   text token deltas.
 - `make_sync_llm_model` — for nodes using `Agent.run()`/`run_sync()`
-  (MessageClassificationNode/03, QueryTransformationNode/06, and the
-  Phase 2/3 nodes): returns one fixed text response, no streaming.
+  (MessageClassificationNode, QueryTransformationNode, and any future
+  non-streaming node): returns one fixed text response, no streaming.
 
 Both are built on `pydantic_ai.models.function.FunctionModel`, which is the
 project's LLM double of choice — no network access, no API key needed, and

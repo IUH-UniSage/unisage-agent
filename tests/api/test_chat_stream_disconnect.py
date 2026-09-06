@@ -1,4 +1,4 @@
-"""T1.13d: client disconnect mid-stream must NOT stop `run_and_persist`.
+"""Client disconnect mid-stream must NOT stop `run_and_persist`.
 
 The previous version of this test used `starlette.testclient.TestClient`,
 which runs the ENTIRE ASGI app call (including any `asyncio.create_task()`

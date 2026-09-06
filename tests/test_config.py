@@ -3,9 +3,9 @@ import pytest
 from app.core.config import Settings
 
 
-def test_new_phase1_settings_have_sane_defaults() -> None:
-    """T0.2: env-driven settings for Java integration, clarification, and
-    retrieval/rerank load with the plan's documented defaults."""
+def test_new_settings_have_sane_defaults() -> None:
+    """Env-driven settings for Java integration, clarification, and
+    retrieval/rerank load with sane defaults."""
 
     fresh = Settings()
 

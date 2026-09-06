@@ -1,10 +1,10 @@
-"""HTTP client for `backend-java`'s Conversation/Message API (T0.4).
+"""HTTP client for `backend-java`'s Conversation/Message API.
 
 `unisage-agent` does not own conversation/message persistence — `backend-java`
-does (see tasks/plan.md). Every call here forwards the caller's original
-`Authorization` header verbatim (or omits it for a guest/`KHACH` caller) so
-Java's `GatewayHeaderFilter` can re-verify the JWT and enforce ownership
-itself; this client never sends a separate service secret.
+does. Every call here forwards the caller's original `Authorization` header
+verbatim (or omits it for a guest/`KHACH` caller) so Java's
+`GatewayHeaderFilter` can re-verify the JWT and enforce ownership itself;
+this client never sends a separate service secret.
 
 This client bypasses the API Gateway and talks to `backend-java` directly
 (`settings.BACKEND_JAVA_BASE_URL`), so it also always sends
@@ -16,11 +16,8 @@ guest-conversation `ipAddress` ownership check, since Python is the one
 calling Java here instead of the browser directly (see `client_ip` on
 `create_message`/`update_message`).
 
-`PATCH /messages/{id}` and the `limit` param on
-`GET /messages/conversation/{id}` are being added to `backend-java` in
-parallel (see tasks/plan.md checkpoint notes) — this client is written
-against the contract plan.md describes and is tested entirely with
-`httpx.MockTransport`, never a live Java instance.
+This client is tested entirely with `httpx.MockTransport`, never a live
+Java instance.
 """
 
 from typing import Any, Literal
@@ -41,8 +38,9 @@ class BackendJavaHTTPError(BackendJavaError):
     """Java responded with a non-2xx status.
 
     Carries the raw status code and parsed (or raw text) body so callers can
-    make routing decisions on it — e.g. T1.13c must treat 404/403 from
-    `POST /messages` as "do not run the graph", not as a generic 500.
+    make routing decisions on it — e.g. the streaming endpoint must treat
+    404/403 from `POST /messages` as "do not run the graph", not as a
+    generic 500.
     """
 
     def __init__(self, method: str, url: str, status_code: int, body: Any) -> None:
@@ -69,7 +67,7 @@ def _auth_headers(authorization: str | None, client_ip: str | None = None) -> di
     Absent/empty `authorization` means the caller is a guest (`KHACH`) —
     deliberately sends no `Authorization` header at all rather than an empty
     one, matching how the gateway itself behaves for unauthenticated
-    requests (see tasks/plan.md "Auth" section).
+    requests.
 
     `X-Internal-Secret` is always sent (this client talks to backend-java
     directly, bypassing the API Gateway). `X-Forwarded-For` is sent only
@@ -177,10 +175,9 @@ class BackendJavaClient:
     ) -> dict[str, Any]:
         """`POST /messages`.
 
-        Java validates `conversation_id` ownership on this call (see
-        tasks/plan.md invariant) — a 404/403 here means "do not run the
-        graph, do not create a placeholder", which callers detect via
-        `BackendJavaHTTPError.status_code`.
+        Java validates `conversation_id` ownership on this call — a 404/403
+        here means "do not run the graph, do not create a placeholder",
+        which callers detect via `BackendJavaHTTPError.status_code`.
 
         `client_ip`, when given, is forwarded as `X-Forwarded-For` - this is
         how Java's guest-conversation ownership check (matching the
@@ -216,10 +213,10 @@ class BackendJavaClient:
     ) -> dict[str, Any]:
         """`PATCH /messages/{id}` — finalizes a `STREAMING` assistant message.
 
-        Contract (see tasks/plan.md): only the message's own
-        `conversation_id`, only `role=ASSISTANT`, only
-        `STREAMING -> COMPLETED|ERROR`, idempotent on identical payload.
-        Enforced entirely by Java; this client just shapes the request.
+        Contract: only the message's own `conversation_id`, only
+        `role=ASSISTANT`, only `STREAMING -> COMPLETED|ERROR`, idempotent on
+        identical payload. Enforced entirely by Java; this client just
+        shapes the request.
 
         Java requires `X-Internal-Secret` on this call (`_request` always
         sends it). An idempotent no-op PATCH (identical payload to the
@@ -261,8 +258,8 @@ class BackendJavaClient:
     ) -> list[dict[str, Any]]:
         """`GET /messages/conversation/{id}?limit=N`.
 
-        `limit` is optional and, per plan.md, always capped server-side by
-        Java's own `MAX_MESSAGE_HISTORY` regardless of what's requested here.
+        `limit` is optional and always capped server-side by Java's own
+        `MAX_MESSAGE_HISTORY` regardless of what's requested here.
         """
 
         params = {"limit": limit} if limit is not None else None

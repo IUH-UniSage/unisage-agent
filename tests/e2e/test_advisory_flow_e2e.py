@@ -1,29 +1,21 @@
-"""T1.14 — end-to-end flow tests through the real `POST /chat/stream`
-endpoint, backend-java mocked via `httpx.MockTransport` and the LLM mocked
-via `FunctionModel` (per plan.md: "mock Java client hoặc Java thật nếu môi
-trường cho phép" - no live Java/environment is reachable in this session,
-so this is entirely mock-based, which is also the CI-safe required suite).
+"""End-to-end flow tests through the real `POST /chat/stream` endpoint,
+backend-java mocked via `httpx.MockTransport` and the LLM mocked via
+`FunctionModel` - no live Java or Qdrant is reachable in the test
+environment, so this is entirely mock-based (retrieval uses
+`tests.llm_mocks.FakeRetrievalService`, a canned chunk list, rather than a
+live `RetrievalService`). What IS exercised here for real: the full HTTP
+endpoint, the graph orchestrator's branching, the clarification guard's
+2-turn round trip, and the cancellation-safe persistence lifecycle - all
+through the real `TestClient`, not by calling internal functions directly.
 
-**Scope deviation, disclosed up front**: plan.md's T1.14 asks for "E2E test
-với Qdrant thật" - there is no live Qdrant reachable in this test
-environment, so retrieval here uses `tests.llm_mocks.FakeRetrievalService`
-(a canned chunk list) rather than a live `RetrievalService` (which does
-query real Qdrant + OpenAI embeddings now - see
-`app/rag/retrieval/service.py`). What IS exercised here for real: the full
-HTTP endpoint, the graph orchestrator's branching, the Clarification
-Guard's 2-turn round trip (the flow plan.md and the design doc's worked
-example in section 8 care about most), and the cancellation-safe
-persistence lifecycle - all through the real `TestClient`, not by calling
-internal functions directly.
-
-Not implemented in this file (documented, matches todo.md's scope notes):
-- JWT invalid -> 401: enforced by api-gateway (T0.5, a separate repo/service
-  not reachable from this test process) - this service only ever sees
-  "header absent" (guest) or "header present and well-formed" (gateway
-  already validated it), per T1.2's contract. Malformed-header -> 400 IS
-  covered (see tests/api/test_chat_stream_endpoint.py).
+Not implemented in this file:
+- JWT invalid -> 401: enforced by api-gateway (a separate repo/service not
+  reachable from this test process) - this service only ever sees "header
+  absent" (guest) or "header present and well-formed" (gateway already
+  validated it). Malformed-header -> 400 IS covered (see
+  tests/api/test_chat_stream_endpoint.py).
 - retry-limit-reached scenario: covered at the unit level in
-  tests/graph/test_security_context_node.py (the Guard's own retry-count
+  tests/graph/test_security_context_node.py (the guard's own retry-count
   logic) - not duplicated here as a third HTTP round trip.
 """
 

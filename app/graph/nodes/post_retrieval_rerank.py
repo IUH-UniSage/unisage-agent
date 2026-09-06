@@ -1,8 +1,8 @@
-"""Node 11: `PostRetrievalRerankNode` (T1.10).
+"""Post-retrieval rerank node.
 
 Thin wrapper over `app.rag.reranking.cross_encoder.rerank`, using
-`settings.RERANK_SCORE_THRESHOLD` (default 0.70) — not a hardcoded
-constant, per plan.md.
+`settings.RERANK_SCORE_THRESHOLD` (default 0.70) rather than a hardcoded
+constant, so it stays configurable.
 """
 
 from collections.abc import Sequence

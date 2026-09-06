@@ -1,19 +1,10 @@
-"""T1.13a — the streaming graph orchestrator.
+"""The streaming graph orchestrator.
 
-**Scope deviation, disclosed up front**: plan.md asks for this to be wired
-with `pydantic_graph`'s branching primitives. This implementation is a plain
-async function instead - documented trade-off, made under this session's
-time budget with the coordinator's explicit permission to simplify
-individual pieces in order to land a coherent, working, end-to-end streaming
-slice. `pydantic_graph.Graph.run()`/`iter()` return a single final output,
-not a token stream, so making it carry per-token streaming would have meant
-either fighting the library's grain or wrapping every node in extra
-scaffolding just to satisfy the letter of "uses pydantic_graph" - not worth
-it against the two invariants plan.md actually calls non-negotiable
-(cancellation-safe persistence, Java-owns-conversation-ownership), neither
-of which this module touches (that's `streaming_session.py`, T1.13c/d).
-A follow-up task can port this function's branching onto real
-`pydantic_graph.BaseNode` subclasses without changing its signature -
+Implemented as a plain async function rather than a `pydantic_graph` graph:
+`pydantic_graph.Graph.run()`/`iter()` return a single final output, not a
+token stream, so wiring per-token streaming through it would mean fighting
+the library's grain. A follow-up could port this function's branching onto
+real `pydantic_graph.BaseNode` subclasses without changing its signature -
 `run_graph(input, models, token_sink) -> GraphOutput` is the seam to keep.
 
 Deliberately HTTP-agnostic: `GraphInput.is_first_turn` is computed by the
@@ -145,7 +136,7 @@ async def _run_advisory_flow(
         confirmed_metadata=confirmed_metadata,
     )
 
-    # Node 10 - RetrievalFilteringNode (no permission filter - Phase 4 scope).
+    # Node 10 - RetrievalFilteringNode (no permission filter yet).
     trace.node("10_RetrievalFilteringNode")
     chunks = retrieve_chunks(hyde_doc, models.retrieval)
 

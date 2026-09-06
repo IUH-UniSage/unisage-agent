@@ -1,4 +1,4 @@
-"""Structured per-request tracing for the streaming graph (T6.1).
+"""Structured per-request tracing for the streaming graph.
 
 Two separate concerns, both requested to replace the raw httpx/openai/
 sqlalchemy DEBUG firehose that used to be the only way to see what a

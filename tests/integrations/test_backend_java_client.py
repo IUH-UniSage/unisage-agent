@@ -1,4 +1,4 @@
-"""T0.4: `BackendJavaClient` against `httpx.MockTransport` — no live Java, no
+"""`BackendJavaClient` against `httpx.MockTransport` — no live Java, no
 real network call anywhere in this file."""
 
 from typing import Any

@@ -1,6 +1,6 @@
-"""Node 13: `TicketFallbackNode` (T1.12) — zero-hallucination fallback.
+"""Ticket fallback node - zero-hallucination fallback.
 
-Activates when node 11 reports `has_valid_context = False`. Deterministic,
+Activates when retrieval reports `has_valid_context = False`. Deterministic,
 no LLM: never lets a model guess at a regulation it has no source for.
 """
 

@@ -1,4 +1,4 @@
-"""Input/output/deps shapes for the streaming graph orchestrator (T1.13a)."""
+"""Input/output/deps shapes for the streaming graph orchestrator."""
 
 from dataclasses import dataclass, field
 

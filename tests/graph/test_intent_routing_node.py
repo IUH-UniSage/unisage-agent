@@ -24,7 +24,7 @@ def test_academic_intents_route_to_query_transformation() -> None:
 
 
 def test_comparison_and_calculation_degrade_to_query_transformation() -> None:
-    # Phase 2/3 nodes not implemented yet - documented fallback.
+    # Not implemented yet - documented fallback.
     assert route_intent("academic_comparison") == "QueryTransformationNode"
     assert route_intent("academic_calculation") == "QueryTransformationNode"
 

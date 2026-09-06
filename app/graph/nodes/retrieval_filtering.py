@@ -1,9 +1,9 @@
-"""Node 10: `RetrievalFilteringNode` (T1.9).
+"""Retrieval filtering node.
 
-Deliberately does NOT filter by `department_access`/permission - that is
-Phase 4 scope (see tasks/plan.md). Thin wrapper over `RetrievalService`
-(real Qdrant search), reading `RETRIEVAL_MAX_CHUNKS` from settings via the
-service itself instead of a hardcoded default.
+Deliberately does NOT filter by `department_access`/permission yet. Thin
+wrapper over `RetrievalService` (real Qdrant search), reading
+`RETRIEVAL_MAX_CHUNKS` from settings via the service itself instead of a
+hardcoded default.
 """
 
 from app.rag.retrieval.service import RetrievalServiceProtocol

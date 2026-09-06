@@ -23,8 +23,7 @@ class RetrievalService:
     """Embeds the query, then nearest-neighbor searches Qdrant's `content_vector`
     for ingested chunks (see app/rag/vectorstore/qdrant_store.py).
 
-    Deliberately does not filter by `department_access`/permission - that is
-    Phase 4 scope, not this phase (see tasks/plan.md).
+    Deliberately does not filter by `department_access`/permission yet.
 
     `client`/`embedder` are built lazily on first use, not at construction
     time, so constructing a `RetrievalService()` never requires a reachable
