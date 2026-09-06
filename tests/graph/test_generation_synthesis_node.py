@@ -6,6 +6,7 @@ from pydantic_ai.models.function import FunctionModel
 from app.core.graph_trace import GraphTrace
 from app.graph.nodes.generation_synthesis import (
     build_generation_agent,
+    collect_confirmed_metadata_updates,
     collect_pending_clarification,
     run_generation_synthesis,
 )
@@ -133,3 +134,90 @@ def test_collect_pending_clarification_none_when_no_json_block() -> None:
     )
 
     assert result is None
+
+
+def test_collect_confirmed_metadata_updates_accepts_fields_that_were_asked_about() -> None:
+    previous = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["he_dao_tao", "khoa_nhap_hoc"],
+        options=[["chinh_quy", "lien_thong"], ["k21", "k22"]],
+        retry_count=0,
+    )
+    text = (
+        "Bạn học chính quy khóa 21 nhé.\n\n"
+        "```json\n"
+        '{"type": "confirmed_metadata", "fields": {"he_dao_tao": "chinh_quy", '
+        '"khoa_nhap_hoc": "k21"}}\n'
+        "```"
+    )
+
+    result = collect_confirmed_metadata_updates(text, previous=previous)
+
+    assert result == {"he_dao_tao": "chinh_quy", "khoa_nhap_hoc": "k21"}
+
+
+def test_collect_confirmed_metadata_updates_drops_fields_not_asked_about() -> None:
+    """A model that misreads the instruction and confirms something outside
+    this turn's pending fields must not be able to inject arbitrary metadata."""
+
+    previous = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["he_dao_tao"],
+        options=[["chinh_quy", "lien_thong"]],
+        retry_count=0,
+    )
+    text = (
+        "```json\n"
+        '{"type": "confirmed_metadata", "fields": {"he_dao_tao": "chinh_quy", '
+        '"some_other_field": "hacked"}}\n'
+        "```"
+    )
+
+    result = collect_confirmed_metadata_updates(text, previous=previous)
+
+    assert result == {"he_dao_tao": "chinh_quy"}
+
+
+def test_collect_confirmed_metadata_updates_empty_when_no_pending() -> None:
+    text = '```json\n{"type": "confirmed_metadata", "fields": {"he_dao_tao": "chinh_quy"}}\n```'
+
+    result = collect_confirmed_metadata_updates(text, previous=None)
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_run_generation_synthesis_merges_confirmed_metadata_fallback(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    previous_pending = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["he_dao_tao"],
+        options=[["chinh_quy", "lien_thong"]],
+        retry_count=0,
+    )
+    response_with_confirmation = (
+        "Bạn học hệ chính quy nên được áp dụng quy định X [1].\n\n"
+        "```json\n"
+        '{"type": "confirmed_metadata", "fields": {"he_dao_tao": "chinh_quy"}}\n'
+        "```"
+    )
+    agent = build_generation_agent(mock_streaming_llm_model([response_with_confirmation]))
+
+    async def sink(_token: str) -> None:
+        return None
+
+    result = await run_generation_synthesis(
+        agent,
+        user_query="tôi học chính quy á",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={"existing": "value"},
+        chunks=[],
+        previous_pending=previous_pending,
+        origin_node="QueryTransformationNode",
+        token_sink=sink,
+        trace=_TRACE,
+    )
+
+    assert result.confirmed_metadata == {"existing": "value", "he_dao_tao": "chinh_quy"}
+    assert result.pending_clarification is None

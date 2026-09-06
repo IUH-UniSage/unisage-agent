@@ -30,4 +30,6 @@ content: |
   - KHÔNG tự suy hoặc tự chốt field cần hỏi từ tiêu đề môn học, mã ngành, ví dụ hay nhánh không liên quan trong tài liệu.
   - Xưng hô nhất quán với văn phong toàn phản hồi (VD: "Bạn/Sinh viên...").
 
+  {confirmed_metadata_guide}
+
   {ask_user_form_guide}

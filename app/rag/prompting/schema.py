@@ -24,3 +24,4 @@ class PromptTemplates:
     task_1: str
     task_2: str
     ask_user_form_guide: str
+    confirmed_metadata_guide: str

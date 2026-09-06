@@ -178,6 +178,6 @@ async def _run_advisory_flow(
     )
     return GraphOutput(
         response_text=generation_result.response_text,
-        confirmed_metadata=confirmed_metadata,
+        confirmed_metadata=generation_result.confirmed_metadata,
         pending_clarification=generation_result.pending_clarification,
     )

@@ -80,10 +80,12 @@ def build_missing_metadata_block(pending: PendingClarification | None) -> str:
 
 def build_task_2_section(pending: PendingClarification | None) -> str:
     """Build `{task_2}` - nested format: `task_2.yaml` embeds the static
-    `ask_user_form_guide.yaml` plus the dynamic missing-metadata block."""
+    `ask_user_form_guide.yaml`/`confirmed_metadata_guide.yaml` plus the
+    dynamic missing-metadata block."""
 
     templates = get_templates()
     return templates.task_2.format(
         missing_metadata_to_confirm=build_missing_metadata_block(pending),
         ask_user_form_guide=templates.ask_user_form_guide,
+        confirmed_metadata_guide=templates.confirmed_metadata_guide,
     )

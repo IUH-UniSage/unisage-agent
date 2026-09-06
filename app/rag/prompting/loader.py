@@ -69,4 +69,5 @@ def _load_all_templates() -> PromptTemplates:
         task_1=_load_yaml_template(common / "task_1.yaml"),
         task_2=_load_yaml_template(common / "task_2.yaml"),
         ask_user_form_guide=_load_yaml_template(common / "ask_user_form_guide.yaml"),
+        confirmed_metadata_guide=_load_yaml_template(common / "confirmed_metadata_guide.yaml"),
     )
