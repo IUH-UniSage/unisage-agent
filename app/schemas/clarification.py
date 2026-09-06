@@ -22,4 +22,26 @@ class PendingClarification(BaseModel):
     options: list[list[str] | None] = Field(
         description="Parallel to missing_fields; None means a free-text field (e.g. a score)."
     )
+    option_labels: list[list[str] | None] | None = Field(
+        default=None,
+        description=(
+            "Parallel to `options`, the human-readable label shown for each option id "
+            "(e.g. id 'cntt' -> label 'Công nghệ Thông tin'). Kept so the deterministic "
+            "Clarification Guard can match a reply typed as the LABEL - which is what "
+            "the user actually sees on the form chip - not just the internal id. `None` "
+            "for rows persisted before this field existed; matching then falls back to "
+            "ids only, exactly as before."
+        ),
+    )
     retry_count: int = 0
+    original_query: str = Field(
+        default="",
+        description=(
+            "The user's question that triggered this clarification round (NOT the "
+            "reply that answers it) - retrieval on resume must search for this, not "
+            "the reply text, or the topic (e.g. 'học phí') is lost entirely once the "
+            "student starts answering the form. Defaults to '' for backward "
+            "compatibility with rows persisted before this field existed; an empty "
+            "value means resume falls back to the reply text, same as before."
+        ),
+    )

@@ -112,7 +112,8 @@ def test_collect_pending_clarification_resets_retry_count_for_new_field() -> Non
     )
     text = (
         "```json\n"
-        '{"type": "ask_user_form", "fields": [{"field": "khoa_nhap_hoc", "options": null}]}\n'
+        '{"type": "ask_user_form", "fields": [{"field": "khoa_nhap_hoc", '
+        '"options": [{"id": "k21"}, {"id": "k22"}]}]}\n'
         "```"
     )
 
@@ -123,7 +124,7 @@ def test_collect_pending_clarification_resets_retry_count_for_new_field() -> Non
     assert result is not None
     assert result.retry_count == 0
     assert result.missing_fields == ["khoa_nhap_hoc"]
-    assert result.options == [None]
+    assert result.options == [["k21", "k22"]]
 
 
 @pytest.mark.asyncio
@@ -171,6 +172,47 @@ async def test_repairs_missing_ask_form_when_prose_asks_for_missing_attribute(
 
 
 @pytest.mark.asyncio
+async def test_repairs_missing_ask_form_with_words_wedged_between_anchor_phrase(
+    mock_sequential_streaming_llm_model: Callable[[Sequence[Sequence[str]]], FunctionModel],
+) -> None:
+    """Regression test for a real live miss: the heuristic's first version
+    required "cung cấp" to be immediately followed by "thông tin", but the
+    actual model output was "cung cấp CHO MÌNH thông tin" - words wedged in
+    between made the fixed-phrase regex miss it entirely, so no repair fired
+    and the turn genuinely lost the clarification request (see
+    tasks/report.md)."""
+
+    prose_without_json = (
+        "Về mức học phí, xin vui lòng cung cấp cho mình thông tin về ngành học của bạn."
+    )
+    repair_json = (
+        '```json\n{"type": "ask_user_form", "fields": [{"field": "nganh_hoc", '
+        '"options": [{"id": "cntt", "label": "Công nghệ Thông tin"}]}]}\n```'
+    )
+    agent = build_generation_agent(
+        mock_sequential_streaming_llm_model([[prose_without_json], [repair_json]])
+    )
+
+    async def sink(_token: str) -> None:
+        return None
+
+    result = await run_generation_synthesis(
+        agent,
+        user_query="học phí của ngành tôi học",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        previous_pending=None,
+        origin_node="QueryTransformationNode",
+        token_sink=sink,
+        trace=_TRACE,
+    )
+
+    assert result.pending_clarification is not None
+    assert result.pending_clarification.missing_fields == ["nganh_hoc"]
+
+
+@pytest.mark.asyncio
 async def test_does_not_repair_when_prose_is_not_a_clarification_request(
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
 ) -> None:
@@ -204,6 +246,21 @@ async def test_does_not_repair_when_prose_is_not_a_clarification_request(
 def test_collect_pending_clarification_none_when_no_json_block() -> None:
     result = collect_pending_clarification(
         "Câu trả lời bình thường, không hỏi lại.",
+        origin_node="QueryTransformationNode",
+        previous=None,
+    )
+
+    assert result is None
+
+
+def test_collect_pending_clarification_none_when_fields_array_is_empty() -> None:
+    """Known model slip: appending `{"type": "ask_user_form", "fields": []}`
+    after a complete answer (often triggered by an innocuous closing courtesy
+    line). An empty `fields` array must be treated like no block at all -
+    never persisted as a hollow PendingClarification."""
+
+    result = collect_pending_clarification(
+        'Câu trả lời đầy đủ.\n\n```json\n{"type": "ask_user_form", "fields": []}\n```',
         origin_node="QueryTransformationNode",
         previous=None,
     )

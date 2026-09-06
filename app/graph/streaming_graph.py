@@ -23,7 +23,10 @@ from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.query_transformation import build_query_transformation_agent, transform_query
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
-from app.graph.nodes.security_context import resolve_clarification_guard
+from app.graph.nodes.security_context import (
+    ClarificationGuardResult,
+    resolve_clarification_guard,
+)
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_response
 from app.graph.streaming import TokenSink
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
@@ -58,9 +61,7 @@ async def run_graph(
     confirmed_metadata = guard_result.confirmed_metadata
     pending_clarification = guard_result.pending_clarification
 
-    if guard_result.route_to_origin:
-        # Matched an option: skip node 03 classification entirely, resume
-        # straight at QueryTransformationNode with the newly confirmed value.
+    if guard_result.route_to_origin or pending_clarification is not None:
         return await _run_advisory_flow(
             graph_input,
             models,
@@ -68,6 +69,7 @@ async def run_graph(
             trace,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
+            resume_original_query=_resume_retrieval_query(graph_input, guard_result),
         )
 
     # Node 03 - MessageClassificationNode.
@@ -121,7 +123,32 @@ async def run_graph(
         trace,
         confirmed_metadata=confirmed_metadata,
         pending_clarification=pending_clarification,
+        resume_original_query=guard_result.original_query,
     )
+
+
+def _resume_retrieval_query(
+    graph_input: GraphInput,
+    guard_result: ClarificationGuardResult,
+) -> str | None:
+    """What to retrieve on while a clarification round is open.
+
+    Matched reply: the reply is pure data (already folded in via
+    `confirmed_metadata`), so the original question alone is the topic.
+
+    Unmatched reply: ambiguous - it may be an answer the deterministic guard
+    couldn't parse, or the student abandoning the form to ask something new.
+    Searching on the original question alone would ignore a genuinely new
+    question; searching on the reply alone loses the topic (the bug this
+    whole mechanism exists to fix). Keeping both covers either case.
+    """
+
+    original_query = guard_result.original_query
+    if not original_query:
+        return None
+    if guard_result.route_to_origin:
+        return original_query
+    return f"{original_query} {graph_input.user_message}"
 
 
 async def _run_advisory_flow(
@@ -132,13 +159,27 @@ async def _run_advisory_flow(
     *,
     confirmed_metadata: dict[str, str],
     pending_clarification: PendingClarification | None,
+    resume_original_query: str | None,
 ) -> GraphOutput:
     # Node 06 - QueryTransformationNode (HyDE).
     trace.node("06_QueryTransformationNode")
     query_transformation_agent = build_query_transformation_agent(models.query_transformation)
+    # Resuming a clarification round: `graph_input.user_message` this turn is
+    # just the reply that answers the form (e.g. "Công nghệ Thông tin, chính
+    # quy, K21"), not a question - retrieving on that text alone loses the
+    # original topic (e.g. "học phí") entirely. `resume_original_query` comes
+    # from the Clarification Guard (ultimately `PendingClarification.
+    # original_query`, recorded when the round started - see
+    # generation_synthesis.py::collect_pending_clarification) and is read from
+    # the Guard's result rather than `pending_clarification.original_query`
+    # directly, because a fully-resolved reply clears `pending_clarification`
+    # to `None` on exactly the turn this is needed most. A fresh, non-resumed
+    # question has no active round, so `resume_original_query` is `None` and
+    # `graph_input.user_message` IS the question.
+    retrieval_query = resume_original_query or graph_input.user_message
     hyde_doc = await transform_query(
         query_transformation_agent,
-        graph_input.user_message,
+        retrieval_query,
         confirmed_metadata=confirmed_metadata,
     )
 

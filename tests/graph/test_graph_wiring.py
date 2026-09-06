@@ -1,7 +1,9 @@
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 
 import pytest
-from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.core.config import settings
 from app.core.graph_trace import GraphTrace
@@ -42,6 +44,37 @@ def _sink(target: list[str]) -> TokenSink:
         target.append(token)
 
     return sink
+
+
+def _echo_query_transformation_model() -> FunctionModel:
+    """A query-transformation model double that returns its input VERBATIM
+    (instead of a fixed string) - lets a test assert exactly which text was
+    used to build the retrieval query, without depending on pydantic_ai's
+    internal message shape beyond reading the last part's `.content`."""
+
+    def echo(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        text = ""
+        for part in messages[-1].parts:
+            content = getattr(part, "content", None)
+            if isinstance(content, str):
+                text = content
+        return ModelResponse(parts=[TextPart(content=text)])
+
+    return FunctionModel(function=echo)
+
+
+@dataclass
+class _RecordingRetrievalService:
+    """Like `FakeRetrievalService`, but remembers every query it was asked to
+    retrieve for - so a test can assert which text actually reached
+    retrieval, not just what the graph returned."""
+
+    chunks: list[RetrievedChunk] = field(default_factory=list)
+    queries: list[str] = field(default_factory=list)
+
+    def retrieve(self, query: str, *, limit: int | None = None) -> list[RetrievedChunk]:
+        self.queries.append(query)
+        return self.chunks if limit is None else self.chunks[:limit]
 
 
 @pytest.mark.asyncio
@@ -221,3 +254,56 @@ async def test_clarification_guard_match_skips_classification_and_resumes_adviso
 
     assert result.response_text == "Câu trả lời cuối cùng [1]."
     assert result.confirmed_metadata == {"training_type": "chinh_quy"}
+
+
+@pytest.mark.asyncio
+async def test_resuming_clarification_retrieves_using_original_query_not_the_reply(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for a real bug found via live E2E testing: turn 1 asks
+    "học phí của ngành tôi học" -> gets an ask_user_form; turn 2 replies
+    "Chính quy ạ" (just data, not a question). Retrieval on turn 2 must still
+    search for the ORIGINAL question ("học phí..."), not the reply text -
+    otherwise the topic is lost and the model answers nothing relevant (see
+    the tasks/report.md write-up of this bug)."""
+
+    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 0.0)
+    pending = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["training_type"],
+        options=[["chinh_quy", "lien_thong"]],
+        retry_count=0,
+        original_query="học phí của ngành tôi học",
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message="Chính quy ạ",  # answers the form - NOT a question itself
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+        pending_clarification=pending,
+    )
+    retrieval = _RecordingRetrievalService([_DUMMY_CHUNK])
+    models = GraphModels(
+        classification=mock_sync_llm_model("off_topic"),  # must never be reached
+        direct_llm=mock_streaming_llm_model(["42"]),
+        query_transformation=_echo_query_transformation_model(),
+        generation=mock_streaming_llm_model(["Câu trả lời cuối cùng [1]."]),
+        retrieval=retrieval,
+    )
+
+    result = await run_graph(graph_input, models, _sink([]), _TRACE)
+
+    # `transform_query` folds `confirmed_metadata` onto the query before
+    # retrieval (see `_fold_confirmed_metadata_into_query`), so assert on
+    # what matters here: the original topic is the base, and the reply text
+    # never appears anywhere in it.
+    assert len(retrieval.queries) == 1
+    assert retrieval.queries[0].startswith("học phí của ngành tôi học")
+    assert "Chính quy ạ" not in retrieval.queries[0]
+    assert result.confirmed_metadata == {"training_type": "chinh_quy"}
+    # This field was the last one pending, so the round is now fully
+    # resolved - exactly the turn `original_query` is easiest to lose (see
+    # ClarificationGuardResult.original_query's docstring).
+    assert result.pending_clarification is None

@@ -12,8 +12,13 @@ content: |
   Với MỖI field bạn xác định CHẮC CHẮN đã được trả lời:
   - Map giá trị đó về ĐÚNG một trong các `id` liệt kê trong `options` của
     field đó - không tự bịa giá trị ngoài danh sách.
-  - Field có `options: null` (tự do): chỉ xác nhận khi người dùng nêu một
-    giá trị cụ thể, rõ ràng (VD: điểm số).
+  - Mọi field trong khối đó đều có `options` (form không có ô nhập tự do),
+    nên value bạn ghi ra LUÔN phải là một `id` trong danh sách - không bao
+    giờ là một chuỗi tự do, và không lấy từ ví dụ nào trong hướng dẫn này.
+    Với loại field này Clarification Guard không so khớp được gì, nên khối
+    JSON này là ĐƯỜNG DUY NHẤT để giá trị được ghi nhận: bỏ sót đồng nghĩa
+    câu trả lời của người dùng bị mất trắng và họ bị hỏi lại y hệt ở lượt
+    sau. Chỉ bỏ qua khi câu trả lời thật sự mơ hồ, không nêu giá trị nào.
 
   Nếu xác nhận được ÍT NHẤT MỘT field: thêm CHÍNH XÁC MỘT khối ```json
   riêng (KHÁC khối `ask_user_form` - có thể có cả hai trong cùng câu trả

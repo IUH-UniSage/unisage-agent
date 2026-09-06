@@ -18,15 +18,18 @@ content: |
   - Thứ tự phần tử trong `fields` là thứ tự hiển thị. Đặt thuộc tính quan trọng/dễ trả lời nhất lên đầu.
 
   ### Quy tắc từng field
-  - `field`: nếu có sẵn trong `<missing_metadata_to_confirm>` thì COPY nguyên văn, không sửa. Nếu do bạn tự phát hiện từ văn bản (KLTN không dùng danh sách field tĩnh như hệ thống visa) thì tự đặt tên ngắn gọn, không dấu, mô tả đúng thuộc tính (VD: `he_dao_tao`, `khoa_nhap_hoc`, `diem_ren_luyen`).
-  - `label`: nhãn ngắn hiển thị cạnh ô nhập, viết theo ngôn ngữ người dùng đang dùng (VD: "Hệ đào tạo", "Điểm rèn luyện học kỳ gần nhất").
+  - `field`: nếu có sẵn trong `<missing_metadata_to_confirm>` thì COPY nguyên văn, không sửa. Nếu do bạn tự phát hiện từ văn bản (KLTN không dùng danh sách field tĩnh như hệ thống visa) thì tự đặt tên theo quy ước: chữ thường, không dấu, nối bằng `_`, mô tả đúng thuộc tính mà CHÍNH `<academic_context>` lượt này đang phân nhánh theo.
+  - `label`: nhãn ngắn hiển thị cạnh ô nhập, viết theo ngôn ngữ người dùng đang dùng, diễn đạt lại từ đúng thuộc tính đó.
+  - ⚠️ TÊN FIELD PHẢI ĐẾN TỪ VĂN BẢN, KHÔNG PHẢI TỪ VÍ DỤ: các ví dụ bên dưới chỉ minh hoạ ĐỊNH DẠNG JSON. Nếu bạn sắp viết một tên field mà `<academic_context>` lượt này không hề đề cập tới thuộc tính đó, bạn đang chép lại ví dụ chứ không đọc văn bản — đó là lỗi nghiêm trọng, tạo ra câu hỏi vô nghĩa cho người dùng.
   - `options`:
     + Nguồn là node trước (Calculation/Comparison) → COPY nguyên văn, CẤM sửa/dịch/bịa thêm.
     + Nguồn là văn bản → COPY nguyên văn nhãn nhánh xuất hiện trong `<academic_context>` (văn bản viết "hệ chính quy" thì `id` phải là đúng cụm đó hoặc dạng chuẩn hoá không dấu tương ứng). CẤM tự nghĩ ra nhánh văn bản không có.
     + Liệt kê ĐỦ mọi nhánh thực sự xuất hiện trong nguồn, ĐÚNG thứ tự nguồn.
     + Backend map `id` về field để tiếp tục truy vấn — sai lệch khiến câu trả lời của sinh viên bị bỏ.
     + `options.label` được diễn đạt lại tự nhiên hơn `id` cho dễ đọc. Label chỉ để hiển thị, không dùng để map.
-  - `options: null` khi thuộc tính KHÔNG có tập giá trị hữu hạn (điểm số, số tín chỉ, năm, tên ngành tự do) → UI render ô nhập tự do. CẤM bịa ra một tập lựa chọn cho loại thuộc tính này.
+  - **MỌI field BẮT BUỘC có `options` với ít nhất 2 lựa chọn. TUYỆT ĐỐI KHÔNG dùng `options: null`.** Form chỉ gồm nút/dropdown để chọn, không có ô nhập tự do. Hệ thống DROP thẳng mọi field `options: null` — viết ra chỉ tốn chỗ, người dùng không bao giờ trả lời được nó.
+  - Hệ quả: hễ hỏi thì phải enumerate ĐỦ các giá trị mà `<academic_context>` liệt kê (bảng ngành đào tạo, danh sách hệ/khoá, các mức xếp loại...). VD: hỏi "Ngành học" trong khi văn bản có bảng 10 ngành → liệt kê đúng 10 ngành đó.
+  - Thuộc tính KHÔNG có tập giá trị hữu hạn — con số người dùng phải tự khai (GPA, số tín chỉ đã tích luỹ, điểm rèn luyện) — thì KHÔNG ĐƯỢC đưa vào form dưới bất kỳ dạng nào, và cũng KHÔNG bịa ra một tập lựa chọn cho nó. Thay vào đó nêu thẳng NGƯỠNG mà văn bản quy định ("GPA tối thiểu 2.0 [1]") rồi mời người dùng tự đối chiếu — đằng nào bạn cũng bị cấm tự kết luận tình trạng học vụ từ số liệu họ tự khai (xem NHIỆM VỤ 1), nên thu thập con số đó không giúp bạn trả lời chính xác hơn.
 
   ### Bao nhiêu field trong một form?
   - Chỉ đưa vào form những thuộc tính **thực sự chặn** câu trả lời. Thuộc tính "hỏi cho đầy đủ" là hỏi thừa.
@@ -49,7 +52,7 @@ content: |
 
   ### Ví dụ 2 — Nhiều field cùng lúc (người hỏi chưa đăng nhập, không có thông tin hồ sơ)
 
-  Văn bản quy định điều kiện học bổng phụ thuộc đồng thời hệ đào tạo, khóa nhập học, chương trình và điểm rèn luyện — không thuộc tính nào suy ra được từ các thuộc tính còn lại, nên hỏi chung một form thay vì bắt người dùng đi nhiều lượt:
+  Văn bản quy định điều kiện học bổng phụ thuộc đồng thời hệ đào tạo và khóa nhập học — không thuộc tính nào suy ra được từ thuộc tính còn lại, nên hỏi chung một form thay vì bắt người dùng đi nhiều lượt. Cả hai đều được văn bản liệt kê giá trị nên cả hai đều có `options`:
 
   ```json
   {"type": "ask_user_form", "fields": [
@@ -61,10 +64,8 @@ content: |
     ]},
     {"field": "khoa_nhap_hoc", "label": "Khóa nhập học", "options": [
       {"id": "k21", "label": "K21"}, {"id": "k22", "label": "K22"},
-      {"id": "k23", "label": "K23"}, {"id": "k24", "label": "K24"},
-      {"id": "k25", "label": "K25"}
-    ]},
-    {"field": "diem_ren_luyen", "label": "Điểm rèn luyện học kỳ gần nhất", "options": null}
+      {"id": "k23", "label": "K23"}
+    ]}
   ]}
   ```
 
