@@ -1,5 +1,4 @@
 import json
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
@@ -14,25 +13,12 @@ from app.core.exceptions import (
     InvalidTrustedContextException,
     MissingTrustedContextException,
 )
-from app.database.session import async_session_factory, get_db_session
-from app.graph.deps import ChatDeps
+from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.retrieval.service import RetrievalService
 
 _DOCUMENT_WRITE_PERMISSIONS = {"DOCUMENT_ALL", "DOCUMENT_CREATE"}
-
-
-async def get_chat_deps(
-    db_session: AsyncSession = Depends(get_db_session),
-) -> AsyncGenerator[ChatDeps, None]:
-    """Build graph dependencies from the request-scoped database session."""
-
-    yield ChatDeps(
-        db_session=db_session,
-        openai_api_key=settings.OPENAI_API_KEY,
-        model_name=settings.OPENAI_MODEL,
-    )
 
 
 def get_backend_java_client() -> BackendJavaClient:

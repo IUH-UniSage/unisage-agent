@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import (
     get_backend_java_client,
-    get_chat_deps,
     get_graph_models,
     get_session_factory,
 )
@@ -21,14 +20,10 @@ from app.core.exceptions import (
 )
 from app.core.sanitizer import sanitize_input_text
 from app.core.security import verify_internal_secret
-from app.core.trace import TraceLogger
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import get_db_session
-from app.graph.deps import ChatDeps
-from app.graph.graph import chat_graph
 from app.graph.nodes.greeting import is_first_turn
 from app.graph.nodes.security_context import parse_security_headers
-from app.graph.state import ChatState
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import (
@@ -36,15 +31,12 @@ from app.integrations.backend_java_client import (
     BackendJavaConnectionError,
     BackendJavaHTTPError,
 )
-from app.rag.generation.suggestions import SuggestionService
-from app.schemas.chat import ChatRequest, ChatResponse, ChatStreamRequest, Citation
-from app.schemas.common import ApiResponse
+from app.schemas.chat import ChatStreamRequest
 from app.schemas.security import AcademicSecurityContext
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)])
-suggestion_service = SuggestionService()
 
 # asyncio.create_task() only holds a WEAK reference to the task it schedules
 # per the stdlib's own docs - without keeping a strong reference somewhere,
@@ -52,46 +44,6 @@ suggestion_service = SuggestionService()
 # done-callback discards it once the task (run_and_persist) finishes, so the
 # set doesn't grow unbounded.
 _background_tasks: set[asyncio.Task[None]] = set()
-
-
-@router.post("/chat", response_model=ApiResponse[ChatResponse])
-async def chat_endpoint(
-    request: ChatRequest,
-    deps: ChatDeps = Depends(get_chat_deps),
-) -> ApiResponse[ChatResponse]:
-    clean_query = sanitize_input_text(request.query)
-    if not clean_query:
-        raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")
-
-    trace_logger = TraceLogger(query=clean_query, user_faculty=request.user_faculty)
-    state = ChatState(
-        query=clean_query,
-        user_faculty=request.user_faculty,
-        user_level=request.user_level,
-        trace_id=trace_logger.trace.trace_id,
-    )
-
-    response_text = await chat_graph.run(inputs=clean_query, state=state, deps=deps)
-    trace_logger.finalize(
-        final_response=state.final_response or response_text,
-        retrieved_chunk_ids=[
-            str(chunk["chunk_id"]) for chunk in state.retrieved_chunks if "chunk_id" in chunk
-        ],
-    )
-
-    return ApiResponse.success(
-        ChatResponse(
-            trace_id=trace_logger.trace.trace_id,
-            query=state.query,
-            response=state.final_response or response_text,
-            intent=state.intent,
-            citations=[Citation.model_validate(citation) for citation in state.citations],
-            suggestions=suggestion_service.generate_suggestions(
-                query=clean_query,
-                intent=state.intent,
-            ),
-        )
-    )
 
 
 def _resolve_client_ip(http_request: Request, x_forwarded_for: str | None) -> str | None:
