@@ -64,10 +64,6 @@ content: |
       {"id": "k23", "label": "K23"}, {"id": "k24", "label": "K24"},
       {"id": "k25", "label": "K25"}
     ]},
-    {"field": "chuong_trinh_dao_tao", "label": "Chương trình đào tạo", "options": [
-      {"id": "cu_nhan", "label": "Cử nhân"},
-      {"id": "ky_su", "label": "Kỹ sư"}
-    ]},
     {"field": "diem_ren_luyen", "label": "Điểm rèn luyện học kỳ gần nhất", "options": null}
   ]}
   ```
