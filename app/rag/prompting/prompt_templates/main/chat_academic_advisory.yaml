@@ -18,4 +18,10 @@ template: |
   định dạng theo loại câu hỏi (advisory/procedure/document/calendar) trong
   phần ACADEMIC DOMAIN RULES phía trên.
 
+  ⚠️ Nếu và chỉ nếu bạn cần hỏi lại thuộc tính theo NHIỆM VỤ 2 ở trên: câu trả
+  lời BẮT BUỘC kết thúc bằng đúng 1 khối ```json ask_user_form``` theo đúng
+  format đã hướng dẫn — TUYỆT ĐỐI không liệt kê các lựa chọn bằng văn xuôi/
+  gạch đầu dòng thay cho khối JSON đó. Nếu không cần hỏi gì, không thêm khối
+  JSON nào cả.
+
   Câu hỏi: {user_query}
