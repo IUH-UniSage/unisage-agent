@@ -1,0 +1,21 @@
+# MAIN_CHAT_ACADEMIC_ADVISORY_PROMPT
+# Thay thế chat_single_intent.yaml + chat_procedure_steps.yaml (Calendar không có template/DB riêng — luôn là văn bản chung trong VectorDB, dùng thẳng template này)
+description: "System prompt hợp nhất cho GenerationSynthesisNode ở flow Advisory (advisory/procedure/document/calendar) — 1 template duy nhất, định dạng theo loại câu hỏi nằm ở academic_domain_rules"
+template: |
+  {header}
+  {academic_metadata}
+  {security_access_control}
+  {academic_domain_rules}
+  {response_style}
+  {citation_rules}
+  {prepared_context}
+  {task_1}
+  {task_2}
+
+  ## Hướng Dẫn Xử Lý
+  Dựa vào bối cảnh trích xuất ở trên (`<academic_context>`), hãy trả lời trực
+  diện, đầy đủ và chính xác câu hỏi của người dùng bên dưới. Áp đúng quy tắc
+  định dạng theo loại câu hỏi (advisory/procedure/document/calendar) trong
+  phần ACADEMIC DOMAIN RULES phía trên.
+
+  Câu hỏi: {user_query}

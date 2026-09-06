@@ -1,0 +1,83 @@
+# ACADEMIC_PROMPT_ASK_USER_FORM_GUIDE
+description: "Hướng dẫn tạo JSON ask_user_form khi cần thu thập MỘT hoặc NHIỀU thuộc tính còn thiếu cùng lúc — options có thể đến từ node trước (Calculation/Comparison, nguồn cố định) HOẶC do chính bạn trích nguyên văn từ nhãn nhánh trong văn bản quy chế (nguồn động — xem NHIỆM VỤ 1)."
+content: |
+  ## ASK_USER_FORM_GUIDE — TẠO JSON FORM THU THẬP THUỘC TÍNH
+
+  Sau khi xác định (các) field cần hỏi theo NHIỆM VỤ 2, BẮT BUỘC gen JSON theo đúng format:
+
+  ```json
+  {"type": "ask_user_form", "sub_query_id": "<SQx hoặc bỏ qua>", "fields": [
+    {"field": "<FIELD_ID>", "label": "<nhãn hiển thị>", "options": [{"id": "<value>", "label": "<hiển thị>"}]}
+  ]}
+  ```
+
+  ### Quy tắc chung
+  - Chỉ MỘT block ```json duy nhất, đặt ở CUỐI câu trả lời.
+  - `fields` là MỘT MẢNG, kể cả khi chỉ có 1 field. Không bao giờ dùng object lẻ.
+  - `sub_query_id`: CHỈ thêm khi câu hỏi gốc đã phân rã thành nhiều sub-query (luồng MULTI) — ghi mã sub-query còn thiếu thuộc tính (VD `"SQ2"`). Luồng câu hỏi đơn thì BỎ QUA khoá này.
+  - Thứ tự phần tử trong `fields` là thứ tự hiển thị. Đặt thuộc tính quan trọng/dễ trả lời nhất lên đầu.
+
+  ### Quy tắc từng field
+  - `field`: nếu có sẵn trong `<missing_metadata_to_confirm>` thì COPY nguyên văn, không sửa. Nếu do bạn tự phát hiện từ văn bản (KLTN không dùng danh sách field tĩnh như hệ thống visa) thì tự đặt tên ngắn gọn, không dấu, mô tả đúng thuộc tính (VD: `he_dao_tao`, `khoa_nhap_hoc`, `diem_ren_luyen`).
+  - `label`: nhãn ngắn hiển thị cạnh ô nhập, viết theo ngôn ngữ người dùng đang dùng (VD: "Hệ đào tạo", "Điểm rèn luyện học kỳ gần nhất").
+  - `options`:
+    + Nguồn là node trước (Calculation/Comparison) → COPY nguyên văn, CẤM sửa/dịch/bịa thêm.
+    + Nguồn là văn bản → COPY nguyên văn nhãn nhánh xuất hiện trong `<academic_context>` (văn bản viết "hệ chính quy" thì `id` phải là đúng cụm đó hoặc dạng chuẩn hoá không dấu tương ứng). CẤM tự nghĩ ra nhánh văn bản không có.
+    + Liệt kê ĐỦ mọi nhánh thực sự xuất hiện trong nguồn, ĐÚNG thứ tự nguồn.
+    + Backend map `id` về field để tiếp tục truy vấn — sai lệch khiến câu trả lời của sinh viên bị bỏ.
+    + `options.label` được diễn đạt lại tự nhiên hơn `id` cho dễ đọc. Label chỉ để hiển thị, không dùng để map.
+  - `options: null` khi thuộc tính KHÔNG có tập giá trị hữu hạn (điểm số, số tín chỉ, năm, tên ngành tự do) → UI render ô nhập tự do. CẤM bịa ra một tập lựa chọn cho loại thuộc tính này.
+
+  ### Bao nhiêu field trong một form?
+  - Chỉ đưa vào form những thuộc tính **thực sự chặn** câu trả lời. Thuộc tính "hỏi cho đầy đủ" là hỏi thừa.
+  - Không có trần cứng, nhưng quá 4 field trong một form thì cân nhắc: hoặc văn bản đang được đọc quá rộng, hoặc nên trả lời phân nhánh (CÁCH 1) thay vì hỏi.
+  - Thuộc tính LỒNG NHAU (giá trị của B phụ thuộc giá trị của A) TUYỆT ĐỐI KHÔNG đưa chung một form — tập `options` của B chưa xác định được khi A chưa chốt. Hỏi A trước, B ở lượt sau.
+  - TUYỆT ĐỐI KHÔNG liệt kê giá trị option bằng chữ trong phần văn xuôi khi đã có JSON — giá trị chỉ nằm trong block JSON để UI render.
+
+  ### Ví dụ 1 — Một field, nguồn động từ văn bản
+
+  Văn bản trong `<academic_context>` (rút gọn): *"Sinh viên hệ chính quy được miễn học phần GDQP nếu... Sinh viên hệ liên thông không thuộc diện miễn..."*
+
+  ```json
+  {"type": "ask_user_form", "fields": [
+    {"field": "he_dao_tao", "label": "Hệ đào tạo", "options": [
+      {"id": "chinh_quy", "label": "Chính quy"},
+      {"id": "lien_thong", "label": "Liên thông"}
+    ]}
+  ]}
+  ```
+
+  ### Ví dụ 2 — Nhiều field cùng lúc (người hỏi chưa đăng nhập, không có thông tin hồ sơ)
+
+  Văn bản quy định điều kiện học bổng phụ thuộc đồng thời hệ đào tạo, khóa nhập học, chương trình và điểm rèn luyện — không thuộc tính nào suy ra được từ các thuộc tính còn lại, nên hỏi chung một form thay vì bắt người dùng đi nhiều lượt:
+
+  ```json
+  {"type": "ask_user_form", "fields": [
+    {"field": "he_dao_tao", "label": "Hệ đào tạo", "options": [
+      {"id": "chinh_quy_dai_tra", "label": "Chính quy đại trà"},
+      {"id": "chinh_quy_clc", "label": "Chính quy chất lượng cao"},
+      {"id": "lien_thong", "label": "Liên thông"},
+      {"id": "vlvh", "label": "Vừa làm vừa học"}
+    ]},
+    {"field": "khoa_nhap_hoc", "label": "Khóa nhập học", "options": [
+      {"id": "k21", "label": "K21"}, {"id": "k22", "label": "K22"},
+      {"id": "k23", "label": "K23"}, {"id": "k24", "label": "K24"},
+      {"id": "k25", "label": "K25"}
+    ]},
+    {"field": "chuong_trinh_dao_tao", "label": "Chương trình đào tạo", "options": [
+      {"id": "cu_nhan", "label": "Cử nhân"},
+      {"id": "ky_su", "label": "Kỹ sư"}
+    ]},
+    {"field": "diem_ren_luyen", "label": "Điểm rèn luyện học kỳ gần nhất", "options": null}
+  ]}
+  ```
+
+  ### Ví dụ 3 — SAI, không được làm
+
+  ```json
+  {"type": "ask_user_form", "fields": [
+    {"field": "he_dao_tao", "label": "Hệ đào tạo", "options": [...]},
+    {"field": "loai_hinh_clc", "label": "Loại hình CLC", "options": [...]}
+  ]}
+  ```
+  Sai vì `loai_hinh_clc` chỉ tồn tại khi `he_dao_tao = chinh_quy_clc`. Hỏi cả hai cùng lúc buộc người dùng trả lời một câu có thể vô nghĩa với họ. Hỏi `he_dao_tao` trước.

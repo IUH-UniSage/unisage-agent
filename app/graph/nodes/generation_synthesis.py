@@ -21,7 +21,7 @@ from pydantic_ai.models import Model
 
 from app.core.graph_trace import GraphTrace
 from app.graph.streaming import TokenSink, stream_agent_text
-from app.rag.prompting.loader import build_system_prompt
+from app.rag.prompting import build_system_prompt
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
@@ -51,13 +51,13 @@ async def run_generation_synthesis(
     token_sink: TokenSink,
     trace: GraphTrace,
 ) -> GenerationResult:
-    system_prompt = build_system_prompt(
+    full_prompt = build_system_prompt(
+        user_query=user_query,
         security=security,
         confirmed_metadata=confirmed_metadata,
         chunks=chunks,
         pending_clarification=previous_pending,
     )
-    full_prompt = f"{system_prompt}\n\nCâu hỏi của sinh viên: {user_query}"
     trace.prompt("12_GenerationSynthesisNode", full_prompt)
     full_text = await stream_agent_text(agent, full_prompt, token_sink)
     new_pending = collect_pending_clarification(

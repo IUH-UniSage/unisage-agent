@@ -100,7 +100,13 @@ async def run_graph(
     if route == "DirectLLMNode":
         trace.node("05A_DirectLLMNode")
         direct_llm_agent = build_direct_llm_agent(models.direct_llm)
-        text = await run_direct_llm(direct_llm_agent, graph_input.user_message, token_sink)
+        text = await run_direct_llm(
+            direct_llm_agent,
+            user_query=graph_input.user_message,
+            security=graph_input.security,
+            confirmed_metadata=confirmed_metadata,
+            token_sink=token_sink,
+        )
         return GraphOutput(
             response_text=text,
             confirmed_metadata=confirmed_metadata,

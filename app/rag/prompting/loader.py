@@ -1,118 +1,72 @@
-"""Prompt assembly for `GenerationSynthesisNode`/`DirectLLMNode`.
+"""YAML template loader for prompt templates."""
 
-Builds the system prompt as plain Python string assembly rather than a
-YAML-file template loader. Enforces two invariants: the two identity tags
-(`academic_user_context` vs `student_declared_attributes`) are always
-separate and never merged, and the `ask_user_form`/`missing_metadata` block
-feeds the clarification flow. The system-prompt copywriting here is a
-placeholder, not tuned prompt text; a follow-up could load it from an
-external template tree instead, keeping the same function signatures.
-"""
+from __future__ import annotations
 
-import json
-from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
 
-from app.schemas.clarification import PendingClarification
-from app.schemas.retrieval import RetrievedChunk
-from app.schemas.security import AcademicSecurityContext
+import yaml  # type: ignore[import-untyped]
 
-_NO_DECLARED_ATTRIBUTES = "Chưa có thuộc tính nào được sinh viên xác nhận."
-_NO_PENDING_CLARIFICATION = "Không có"
+from .schema import PromptTemplates
+
+_templates_dir: Path | None = None
+_templates_cache: PromptTemplates | None = None
 
 
-def render_academic_user_context(security: AcademicSecurityContext) -> str:
-    """`<academic_user_context>` — JWT-derived, verified identity.
-
-    Never receives data from `confirmed_metadata` — that is a hard boundary:
-    this tag is the only one an authorization decision may ever be based on.
-    """
-
-    department_lines = (
-        "\n".join(
-            f"    - {entry.department_id} (access_level={entry.access_level})"
-            for entry in security.department_access
-        )
-        or "    - (không có phòng ban nào được cấp quyền)"
-    )
-    return (
-        "<academic_user_context>\n"
-        f"  user_id: {security.user_id or '(khách vãng lai)'}\n"
-        f"  role: {security.role}\n"
-        "  department_access:\n"
-        f"{department_lines}\n"
-        "</academic_user_context>"
-    )
+def reset_templates_cache() -> None:
+    """Reset the templates cache (useful for testing)."""
+    global _templates_cache
+    _templates_cache = None
 
 
-def render_student_declared_attributes(confirmed_metadata: dict[str, str]) -> str:
-    """`<student_declared_attributes>` — self-declared, UNVERIFIED.
-
-    Deliberately named and rendered separately from
-    `render_academic_user_context` so an LLM (or a future refactor) cannot
-    conflate "trusted" with "self-declared".
-    """
-
-    body = (
-        "\n".join(f"    - {field}: {value}" for field, value in confirmed_metadata.items())
-        or f"    {_NO_DECLARED_ATTRIBUTES}"
-    )
-    return f"<student_declared_attributes>\n{body}\n</student_declared_attributes>"
+def get_templates() -> PromptTemplates:
+    """Get loaded templates (lazy load with caching)."""
+    global _templates_cache
+    if _templates_cache is None:
+        _templates_cache = _load_all_templates()
+    return _templates_cache
 
 
-def render_prepared_context(chunks: Sequence[RetrievedChunk]) -> str:
-    if not chunks:
-        return "<academic_context>\n  (không có tài liệu liên quan)\n</academic_context>"
-    lines = [
-        f"  [{index}] ({chunk.source}) {chunk.content}" for index, chunk in enumerate(chunks, 1)
-    ]
-    return "<academic_context>\n" + "\n".join(lines) + "\n</academic_context>"
+def _get_templates_dir() -> Path:
+    global _templates_dir
+    if _templates_dir is None:
+        _templates_dir = Path(__file__).parent / "prompt_templates"
+    return _templates_dir
 
 
-def render_missing_metadata_block(pending: PendingClarification | None) -> str:
-    """`{missing_metadata_to_confirm}` — JSON `ask_user_form` shape, or "Không có".
-
-    Source is always `pending_clarification` — never re-derived here.
-    """
-
-    if pending is None:
-        return _NO_PENDING_CLARIFICATION
-    fields = [
-        {
-            "field": field,
-            "options": [{"id": option_id, "label": option_id} for option_id in options]
-            if options is not None
-            else None,
-        }
-        for field, options in zip(pending.missing_fields, pending.options, strict=True)
-    ]
-    return json.dumps({"type": "ask_user_form", "fields": fields}, ensure_ascii=False)
+def _load_yaml_file(file_path: Path) -> Any:
+    content = file_path.read_text(encoding="utf-8")
+    return yaml.safe_load(content)
 
 
-def build_system_prompt(
-    *,
-    security: AcademicSecurityContext,
-    confirmed_metadata: dict[str, str],
-    chunks: Sequence[RetrievedChunk],
-    pending_clarification: PendingClarification | None,
-) -> str:
-    """Assemble the full system prompt handed to `GenerationSynthesisNode`'s Agent.
+def _load_yaml_template(file_path: Path) -> str:
+    """Read a template YAML, taking its `template`/`content` field."""
 
-    Order matters only for readability; the two identity tags are always
-    both present and always separate blocks.
-    """
+    data = _load_yaml_file(file_path)
+    if not isinstance(data, dict):
+        raise ValueError(f"Template YAML không phải dict: {file_path.name}")
+    value = data.get("template") or data.get("content")
+    if not isinstance(value, str):
+        raise ValueError(f"Template YAML thiếu key 'template'/'content': {file_path.name}")
+    return "\n".join(line.rstrip() for line in value.split("\n")).strip()
 
-    return "\n\n".join(
-        [
-            "Bạn là Trợ Lý AI Học Vụ của trường Đại học. Chỉ trả lời dựa trên "
-            "<academic_context> bên dưới, luôn gắn trích dẫn [1][2] cho mỗi khẳng định.",
-            render_academic_user_context(security),
-            render_student_declared_attributes(confirmed_metadata),
-            render_prepared_context(chunks),
-            "Nếu văn bản chia nhánh theo một thuộc tính sinh viên chưa biết (không có trong "
-            "academic_user_context lẫn student_declared_attributes), hỏi lại đúng MỘT lần bằng "
-            "cách kết thúc câu trả lời với một khối ```json ask_user_form``` duy nhất, ví dụ:\n"
-            '{"type": "ask_user_form", "fields": [{"field": "...", "options": [...]}]}',
-            f"missing_metadata_to_confirm (lượt trước, nếu có): "
-            f"{render_missing_metadata_block(pending_clarification)}",
-        ]
+
+def _load_all_templates() -> PromptTemplates:
+    templates_dir = _get_templates_dir()
+    common = templates_dir / "common"
+    main = templates_dir / "main"
+
+    return PromptTemplates(
+        chat_academic_advisory=_load_yaml_template(main / "chat_academic_advisory.yaml"),
+        chat_direct_llm=_load_yaml_template(main / "chat_direct_llm.yaml"),
+        header=_load_yaml_template(common / "header.yaml"),
+        academic_metadata=_load_yaml_template(common / "academic_metadata.yaml"),
+        security_access_control=_load_yaml_template(common / "security_access_control.yaml"),
+        academic_domain_rules=_load_yaml_template(common / "academic_domain_rules.yaml"),
+        response_style=_load_yaml_template(common / "response_style.yaml"),
+        citation_rules=_load_yaml_template(common / "citation_rules.yaml"),
+        prepared_context=_load_yaml_template(common / "prepared_context.yaml"),
+        task_1=_load_yaml_template(common / "task_1.yaml"),
+        task_2=_load_yaml_template(common / "task_2.yaml"),
+        ask_user_form_guide=_load_yaml_template(common / "ask_user_form_guide.yaml"),
     )

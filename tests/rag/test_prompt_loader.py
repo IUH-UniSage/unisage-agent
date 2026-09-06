@@ -1,7 +1,15 @@
-from app.rag.prompting.loader import build_system_prompt
+from app.rag.prompting import build_direct_llm_prompt, build_system_prompt, get_templates
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
+
+
+def test_templates_load_without_error() -> None:
+    templates = get_templates()
+
+    assert templates.chat_academic_advisory
+    assert templates.chat_direct_llm
+    assert "{academic_metadata}" not in templates.header  # loader returns raw text, not re-parsed
 
 
 def test_prompt_renders_two_separate_tags_never_merged() -> None:
@@ -13,6 +21,7 @@ def test_prompt_renders_two_separate_tags_never_merged() -> None:
     confirmed_metadata = {"training_type": "chinh_quy"}
 
     prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
         security=security,
         confirmed_metadata=confirmed_metadata,
         chunks=[],
@@ -44,6 +53,7 @@ def test_prompt_never_puts_confirmed_metadata_in_qdrant_filter_shape() -> None:
     never as anything resembling a retrieval filter object."""
 
     prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
         security=AcademicSecurityContext(),
         confirmed_metadata={"training_type": "chinh_quy"},
         chunks=[],
@@ -55,6 +65,7 @@ def test_prompt_never_puts_confirmed_metadata_in_qdrant_filter_shape() -> None:
 
 def test_prepared_context_renders_chunks_with_citation_index() -> None:
     prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[
@@ -77,6 +88,7 @@ def test_pending_clarification_renders_as_ask_user_form_json() -> None:
     )
 
     prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
@@ -89,6 +101,7 @@ def test_pending_clarification_renders_as_ask_user_form_json() -> None:
 
 def test_no_pending_clarification_renders_khong_co() -> None:
     prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
@@ -96,3 +109,43 @@ def test_no_pending_clarification_renders_khong_co() -> None:
     )
 
     assert "Không có" in prompt
+
+
+def test_prompt_embeds_the_user_query() -> None:
+    prompt = build_system_prompt(
+        user_query="Điều kiện học bổng loại giỏi là gì?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+
+    assert "Điều kiện học bổng loại giỏi là gì?" in prompt
+
+
+def test_direct_llm_prompt_has_no_academic_context_or_task_sections() -> None:
+    prompt = build_direct_llm_prompt(
+        user_query="1 + 1 bằng mấy?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+    )
+
+    assert "1 + 1 bằng mấy?" in prompt
+    assert "<academic_user_context>" in prompt  # still identity-aware
+    assert "<academic_context>" not in prompt  # no retrieved context in this flow
+    # response_style.yaml (shared) legitimately references "NHIỆM VỤ 1" in one
+    # of its formatting rules - task_1/task_2's own headings are the real signal.
+    assert "NHIỆM VỤ 1: XÁC NHẬN" not in prompt
+    assert "NHIỆM VỤ 2: THU THẬP" not in prompt
+
+
+def test_guest_security_context_renders_khach_role_and_no_department_access() -> None:
+    prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
+        security=AcademicSecurityContext(),  # default: role=KHACH, no department_access
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+
+    assert "Vai trò (Role): KHACH" in prompt

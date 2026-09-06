@@ -1,0 +1,9 @@
+# PREPARED_ACADEMIC_CONTEXT
+description: "Khung XML chứa toàn bộ các chunk bối cảnh trích xuất từ VectorDB & Re-ranker"
+content: |
+  ## Tri Thức Học Vụ Trích Xuất Được
+  Dưới đây là các đoạn văn bản quy chế chính thức đã qua bộ lọc phân quyền và re-rank:
+
+  <academic_context>
+    {context_chunks}
+  </academic_context>
