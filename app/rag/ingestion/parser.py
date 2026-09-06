@@ -1,6 +1,7 @@
 from pathlib import PurePosixPath
 
 import pymupdf
+from bs4 import BeautifulSoup
 
 from app.core.exceptions import UnsupportedFileTypeException
 
@@ -24,6 +25,12 @@ def extract_raw_text(content: bytes, filename: str) -> str:
     extension = get_extension(filename)
     if extension == "txt":
         return content.decode("utf-8")
+    if extension in ("html", "htm"):
+        soup = BeautifulSoup(content, "lxml")
+        for tag_name in ("script", "style", "nav", "footer", "header"):
+            for tag in soup.find_all(tag_name):
+                tag.decompose()
+        return (soup.body or soup).get_text("\n", strip=True)
     if extension in _FITZ_SUPPORTED_EXTENSIONS:
         document = pymupdf.open(stream=content, filetype=extension)
         try:

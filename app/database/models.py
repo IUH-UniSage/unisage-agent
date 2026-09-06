@@ -95,3 +95,35 @@ class DocumentChunk(Base):
     region_type: Mapped[str] = mapped_column(String, nullable=False)
 
     process_log: Mapped[DocumentProcessLog] = relationship(back_populates="chunks")
+
+
+class ConversationClarificationState(Base):
+    """Missing-metadata clarification state for one conversation, keyed by
+    Java's conversation_id.
+
+    Same pattern as `DocumentProcessLog`: a plain, unconstrained
+    `conversation_id` column (no FK into Java's `conversations` table) — this
+    is Python's own internal processing state, not chat history, and lives
+    in Python's own schema/database by design (see tasks/plan.md).
+
+    `pending_clarification` holds a `PendingClarification`-shaped JSON object
+    (see `app/schemas/clarification.py`) or `None` when nothing is pending.
+    `confirmed_metadata` accumulates self-declared student attributes across
+    the whole conversation and never expires on its own - it is only ever
+    read to pick which answer branch to render, never as a Qdrant filter
+    (see tasks/plan.md security boundary note).
+    """
+
+    __tablename__ = "conversation_clarification_states"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    pending_clarification: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
+    confirmed_metadata: Mapped[dict[str, str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

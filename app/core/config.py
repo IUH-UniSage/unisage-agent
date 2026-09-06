@@ -48,5 +48,26 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "unisage_chunks"
 
+    # backend-java integration (see tasks/plan.md "Auth" section): Python
+    # forwards the caller's original `Authorization` header as-is on every
+    # call - Java's GatewayHeaderFilter re-verifies it. Every call also
+    # carries `X-Internal-Secret` (INTERNAL_SECRET_KEY below), which Java's
+    # InternalSecretFilter requires on its Python-only endpoints (e.g.
+    # PATCH /messages/{id}) and uses to decide whether to trust a forwarded
+    # X-Forwarded-For for guest ownership checks. Must include Java's
+    # `server.servlet.context-path` (`/api/v1` by default in backend-java's
+    # application.properties) since this client's paths are context-relative.
+    BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
+
+    # Missing-metadata clarification guard (node 02) - see
+    # missing_metadata_clarification_design.md section 5. Number of mismatched
+    # replies tolerated before the pending clarification is discarded and the
+    # flow falls back to a safe, branch-covering answer.
+    CLARIFICATION_MAX_RETRY: int = 2
+
+    # Retrieval / rerank (nodes 10/11).
+    RETRIEVAL_MAX_CHUNKS: int = 8
+    RERANK_SCORE_THRESHOLD: float = 0.70
+
 
 settings = Settings()

@@ -1,0 +1,27 @@
+# MAIN_JSON_REPAIR_PROMPT
+description: "Lệnh sửa lỗi độc lập cho GenerationSynthesisNode - không cần header/security, nhưng VẪN cần lại {academic_context} để có thể COPY nguyên văn nhãn nhánh (không có thì ask_user_form_guide buộc phải trả về options: null, ô nhập tự do, dù văn bản gốc có tập giá trị hữu hạn). Chỉ đọc lại 1 câu trả lời đã sinh và bù khối JSON ask_user_form bị thiếu (xem generation_synthesis.py::_repair_missing_ask_form). Tái dùng {ask_user_form_guide} y hệt format chính thay vì định nghĩa lại."
+template: |
+  Đây là một câu trả lời em vừa sinh ra cho sinh viên. Đọc kỹ: câu trả lời có
+  đang đề nghị/mời người dùng cung cấp một thuộc tính còn thiếu (hệ đào tạo,
+  khóa, ngành, điểm số...) hay không?
+
+  <câu_trả_lời>
+  {previous_response}
+  </câu_trả_lời>
+
+  Văn bản gốc đã dùng để sinh câu trả lời trên, để bạn đối chiếu và COPY
+  nguyên văn nhãn nhánh (nếu thuộc tính có tập giá trị hữu hạn):
+
+  {academic_context}
+
+  Nếu ĐÚNG câu trả lời trên đang hỏi lại thuộc tính nào đó: xuất DUY NHẤT một
+  khối ```json ask_user_form``` khớp với (các) thuộc tính vừa được đề cập ở
+  trên, theo đúng format sau.
+
+  {ask_user_form_guide}
+
+  KHÔNG viết lại văn xuôi, KHÔNG lặp lại câu trả lời trên, KHÔNG giải thích gì
+  thêm ngoài khối JSON đó.
+
+  Nếu SAI (câu trả lời trên không thực sự đang hỏi lại thuộc tính nào), chỉ
+  xuất đúng chữ NONE, không thêm gì khác.

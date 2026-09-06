@@ -1,52 +1,58 @@
-from app.rag.retrieval.hybrid import hybrid_score
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import ScoredPoint
+
+from app.core.config import settings
+from app.rag.embeddings.openai_embedder import OpenAIEmbedder
+from app.rag.vectorstore.qdrant_store import get_client, search_chunks
 from app.schemas.retrieval import RetrievedChunk
 
 
+class RetrievalServiceProtocol(Protocol):
+    """What `GraphModels.retrieval` needs to provide - satisfied by the real
+    `RetrievalService` below, and by test doubles that skip Qdrant/OpenAI
+    entirely (see tests/llm_mocks.py's `FakeRetrievalService`)."""
+
+    def retrieve(self, query: str, *, limit: int | None = None) -> list[RetrievedChunk]: ...
+
+
+@dataclass(frozen=True)
 class RetrievalService:
-    """Retrieve academic context with a metadata-filtered fallback corpus."""
+    """Embeds the query, then nearest-neighbor searches Qdrant's `content_vector`
+    for ingested chunks (see app/rag/vectorstore/qdrant_store.py).
 
-    _CORPUS = (
-        RetrievedChunk(
-            chunk_id="demo-001",
-            content="Sinh viên tra cứu quy chế đào tạo theo chương trình và khóa học của mình.",
-            source="Quy chế đào tạo mẫu",
-            faculty="GLOBAL",
-            score=0.0,
-            metadata={"min_user_level": 1},
-        ),
-        RetrievedChunk(
-            chunk_id="demo-002",
-            content="Thông tin học vụ cần được đối chiếu với thông báo chính thức của nhà trường.",
-            source="Sổ tay học vụ mẫu",
-            faculty="GLOBAL",
-            score=0.0,
-            metadata={"min_user_level": 1},
-        ),
-        RetrievedChunk(
-            chunk_id="demo-003",
-            content="Tai lieu noi bo chi danh cho can bo quan ly hoc vu.",
-            source="Huong dan quan tri mau",
-            faculty="FIT",
-            score=0.0,
-            metadata={"min_user_level": 2},
-        ),
+    Deliberately does not filter by `department_access`/permission yet.
+
+    `client`/`embedder` are built lazily on first use, not at construction
+    time, so constructing a `RetrievalService()` never requires a reachable
+    Qdrant or `OPENAI_API_KEY` - only actually calling `retrieve` does. This
+    is what lets tests inject fakes for both without touching the network.
+    """
+
+    client: QdrantClient | None = None
+    embedder: OpenAIEmbedder = field(default_factory=OpenAIEmbedder)
+
+    def retrieve(self, query: str, *, limit: int | None = None) -> list[RetrievedChunk]:
+        effective_limit = limit if limit is not None else settings.RETRIEVAL_MAX_CHUNKS
+        (query_vector,) = self.embedder.embed([query])
+        client = self.client or get_client()
+        points = search_chunks(client, query_vector=query_vector, limit=effective_limit)
+        return [_to_retrieved_chunk(point) for point in points]
+
+
+def _to_retrieved_chunk(point: ScoredPoint) -> RetrievedChunk:
+    payload: dict[str, Any] = point.payload or {}
+    return RetrievedChunk(
+        chunk_id=str(payload.get("chunk_id", point.id)),
+        content=str(payload.get("content", "")),
+        source=str(payload.get("object_key") or payload.get("document_id") or ""),
+        score=max(0.0, min(1.0, point.score)),
+        metadata={
+            "document_id": payload.get("document_id"),
+            "department": payload.get("department"),
+            "access_level": payload.get("access_level"),
+            "region_type": payload.get("region_type"),
+        },
     )
-
-    def retrieve(
-        self,
-        query: str,
-        *,
-        user_faculty: str,
-        user_level: int,
-        limit: int = 5,
-    ) -> list[RetrievedChunk]:
-        """Apply faculty visibility before ranking and returning context."""
-
-        visible = [
-            chunk.model_copy(update={"score": hybrid_score(query, chunk.content)})
-            for chunk in self._CORPUS
-            if chunk.faculty in {"GLOBAL", user_faculty}
-            and int(chunk.metadata.get("min_user_level", 1)) <= user_level
-        ]
-        ranked = sorted(visible, key=lambda chunk: chunk.score, reverse=True)
-        return ranked[:limit]

@@ -1,0 +1,12 @@
+# CITATION_RULES
+description: "Quy tắc trích dẫn nguồn văn bản quy chế"
+content: |
+  ## Quy Tắc Trích Dẫn Nguồn Văn Bản (Citation Engine Rules)
+  1. Mỗi ý kiến, quy định hoặc con số được đưa ra trong câu trả lời phải được gắn chỉ số trích dẫn tương ứng `[1]`, `[2]` tham chiếu đến tài liệu trong `<academic_context>`.
+  2. Ở cuối câu trả lời, tạo một phần riêng biệt ghi rõ:
+     ```markdown
+     ---
+     📌 **Văn bản tham chiếu chính thức:**
+     - [1] <Tên văn bản> (<Số Quyết định/Phiên bản>) - <Điều/Khoản/Mục>
+     ```
+  3. Tuyệt đối KHÔNG trích dẫn các tài liệu không tồn tại trong `<academic_context>`.

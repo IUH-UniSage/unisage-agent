@@ -38,12 +38,21 @@ class ErrorCode(Enum):
     OBJECT_NOT_FOUND = (404, 4041, "Không tìm thấy file gốc của tài liệu này.")
     DOCUMENT_CHUNKS_NOT_FOUND = (404, 4042, "Tài liệu này chưa được chia đoạn.")
     INGESTION_JOB_NOT_FOUND = (404, 4043, "Không tìm thấy bản nháp nạp liệu cho tài liệu này.")
+    CONVERSATION_NOT_FOUND = (404, 4044, "Không tìm thấy cuộc hội thoại này.")
+
+    # 403x Forbidden (chat-specific; distinct code from FORBIDDEN_DEPARTMENT_ACCESS)
+    CONVERSATION_ACCESS_DENIED = (403, 4031, "Bạn không có quyền truy cập cuộc hội thoại này.")
 
     # 500x Server & LLM Errors
     INTERNAL_ERROR = (500, 5000, "Có lỗi xảy ra, bạn thử lại sau nhé.")
     LLM_TIMEOUT = (504, 5001, "Hệ thống AI phản hồi quá lâu, thử lại sau nhé.")
     LLM_PROVIDER_ERROR = (502, 5002, "Hệ thống AI đang gặp sự cố, thử lại sau nhé.")
     DATABASE_ERROR = (500, 5003, "Có lỗi xảy ra, bạn thử lại sau nhé.")
+    BACKEND_JAVA_UNAVAILABLE = (
+        502,
+        5004,
+        "Không kết nối được hệ thống quản lý hội thoại, thử lại sau nhé.",
+    )
 
     def __init__(self, http_status: int, code: int, message: str) -> None:
         self.http_status = http_status

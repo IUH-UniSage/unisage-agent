@@ -1,9 +1,10 @@
 import json
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.exceptions import (
@@ -12,21 +13,58 @@ from app.core.exceptions import (
     InvalidTrustedContextException,
     MissingTrustedContextException,
 )
-from app.database.session import get_db_session
-from app.graph.deps import ChatDeps
+from app.database.session import async_session_factory
+from app.graph.streaming_state import GraphModels
+from app.integrations.backend_java_client import BackendJavaClient
+from app.rag.retrieval.service import RetrievalService
 
 _DOCUMENT_WRITE_PERMISSIONS = {"DOCUMENT_ALL", "DOCUMENT_CREATE"}
 
 
-async def get_chat_deps(
-    db_session: AsyncSession = Depends(get_db_session),
-) -> AsyncGenerator[ChatDeps, None]:
-    """Build graph dependencies from the request-scoped database session."""
+def get_backend_java_client() -> BackendJavaClient:
+    """FastAPI dependency: one `BackendJavaClient` per request.
 
-    yield ChatDeps(
-        db_session=db_session,
-        openai_api_key=settings.OPENAI_API_KEY,
-        model_name=settings.OPENAI_MODEL,
+    Overridden in tests (see tests/api/test_chat_stream_endpoint.py) with a
+    client built on `httpx.MockTransport` - never hits a live Java instance
+    in the default test run.
+    """
+
+    return BackendJavaClient()
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """FastAPI dependency: the session factory `run_and_persist` uses for its
+    OWN database session (independent of the request's `db_session`, since
+    that background task must keep running after the request scope ends).
+
+    Overridden in tests so `run_and_persist`'s clarification-state write
+    lands in the same in-memory SQLite engine the rest of the test uses,
+    instead of the real (unreachable in CI) Postgres `DATABASE_URL`.
+    """
+
+    return async_session_factory
+
+
+def get_graph_models() -> GraphModels:
+    """FastAPI dependency: the 4 LLM-backed nodes' models for the streaming graph.
+
+    Overridden in tests with `pydantic_ai.models.function.FunctionModel`
+    doubles (see tests/llm_mocks.py). Production builds a real `OpenAIChatModel`
+    with `settings.OPENAI_API_KEY` passed explicitly - a bare `"openai:<name>"`
+    string instead relies on pydantic_ai reading `OPENAI_API_KEY` from the OS
+    environment, which `.env` alone does not set.
+    """
+
+    model = OpenAIChatModel(
+        settings.OPENAI_MODEL,
+        provider=OpenAIProvider(api_key=settings.OPENAI_API_KEY),
+    )
+    return GraphModels(
+        classification=model,
+        direct_llm=model,
+        query_transformation=model,
+        generation=model,
+        retrieval=RetrievalService(),
     )
 
 

@@ -27,6 +27,29 @@ def test_extract_raw_text_from_docx() -> None:
     assert "Hello from DOCX fixture." in text
 
 
+def test_extract_raw_text_from_html_strips_tags_and_noise() -> None:
+    content = (
+        b"<html><body>"
+        b"<nav>Menu</nav><script>doEvilThings()</script>"
+        b"<h1>Tieu de</h1><p>Hello from HTML fixture.</p>"
+        b"<footer>Copyright</footer>"
+        b"</body></html>"
+    )
+
+    text = extract_raw_text(content, "handbook.html")
+
+    assert "Hello from HTML fixture." in text
+    assert "Menu" not in text
+    assert "doEvilThings" not in text
+    assert "Copyright" not in text
+
+
+def test_extract_raw_text_from_htm_extension() -> None:
+    text = extract_raw_text(b"<p>Hello from HTM fixture.</p>", "handbook.htm")
+
+    assert "Hello from HTM fixture." in text
+
+
 def test_extract_raw_text_rejects_unsupported_extension() -> None:
     with pytest.raises(UnsupportedFileTypeException):
         extract_raw_text(b"whatever", "handbook.doc")
