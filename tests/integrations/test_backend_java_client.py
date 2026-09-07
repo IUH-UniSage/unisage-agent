@@ -177,16 +177,35 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_message_forwards_client_ip_as_x_forwarded_for() -> None:
-    """Bug 1: Java trusts a forwarded client IP for the guest-ownership
-    `claim()` check only on calls that also carry `X-Internal-Secret` -
-    forward the browser's real IP here since Java can't see it directly
-    when Python is the one calling `POST /messages`."""
+async def test_create_message_never_sends_x_forwarded_for() -> None:
+    """Guest-conversation ownership moved from IP-matching to
+    `X-Guest-Session-Token` - this client no longer accepts or forwards a
+    client IP to Java at all."""
 
     seen: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["x_forwarded_for"] = request.headers.get("x-forwarded-for")
+        seen["has_header"] = "x-forwarded-for" in request.headers
+        return httpx.Response(201, json={"id": "msg-1"})
+
+    client = _client_with(handler)
+
+    await client.create_message(conversation_id="conv-1", role="USER", content="hello")
+
+    assert seen["has_header"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_message_forwards_guest_session_token_as_header() -> None:
+    """Java's guest-conversation ownership check is keyed on `guest_session_id`
+    now (not IP) - forward the raw cookie value this service was given as
+    `X-Guest-Session-Token` when it's the one calling `POST /messages`
+    instead of the browser."""
+
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["x_guest_session_token"] = request.headers.get("x-guest-session-token")
         return httpx.Response(201, json={"id": "msg-1", "status": "COMPLETED"})
 
     client = _client_with(handler)
@@ -196,18 +215,18 @@ async def test_create_message_forwards_client_ip_as_x_forwarded_for() -> None:
         role="USER",
         content="hello",
         authorization=None,
-        client_ip="203.0.113.7",
+        guest_session_token="raw-guest-token",
     )
 
-    assert seen["x_forwarded_for"] == "203.0.113.7"
+    assert seen["x_guest_session_token"] == "raw-guest-token"
 
 
 @pytest.mark.asyncio
-async def test_create_message_omits_x_forwarded_for_when_no_client_ip_given() -> None:
+async def test_create_message_omits_guest_session_header_when_no_token_given() -> None:
     seen: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["has_header"] = "x-forwarded-for" in request.headers
+        seen["has_header"] = "x-guest-session-token" in request.headers
         return httpx.Response(201, json={"id": "msg-1"})
 
     client = _client_with(handler)

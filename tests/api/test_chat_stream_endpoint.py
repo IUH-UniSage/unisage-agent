@@ -11,14 +11,23 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic_ai.models.function import FunctionModel
+from starlette.requests import Request
 
 from app.api.deps import get_backend_java_client, get_graph_models
+from app.api.v1.chat import _resolve_client_ip
 from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
 from app.schemas.retrieval import RetrievedChunk
 from tests.llm_mocks import FakeRetrievalService
+
+
+def _fake_request(client_host: str | None) -> Request:
+    scope: dict[str, object] = {"type": "http", "headers": []}
+    if client_host is not None:
+        scope["client"] = (client_host, 12345)
+    return Request(scope)
 
 
 class _JavaBackend:
@@ -40,6 +49,7 @@ class _JavaBackend:
                 "authorization": request.headers.get("authorization"),
                 "x_internal_secret": request.headers.get("x-internal-secret"),
                 "x_forwarded_for": request.headers.get("x-forwarded-for"),
+                "x_guest_session_token": request.headers.get("x-guest-session-token"),
             }
         )
 
@@ -221,14 +231,26 @@ def test_every_java_call_carries_x_internal_secret(
     assert all(call["x_internal_secret"] == settings.INTERNAL_SECRET_KEY for call in java.calls)
 
 
-def test_incoming_x_forwarded_for_is_forwarded_to_java(
+def test_resolve_client_ip_prefers_x_forwarded_for_first_hop() -> None:
+    assert _resolve_client_ip(_fake_request("10.0.0.1"), "203.0.113.7, 10.0.0.1") == "203.0.113.7"
+
+
+def test_resolve_client_ip_falls_back_to_request_client_host() -> None:
+    assert _resolve_client_ip(_fake_request("198.51.100.5"), None) == "198.51.100.5"
+
+
+def test_resolve_client_ip_returns_none_when_nothing_available() -> None:
+    assert _resolve_client_ip(_fake_request(None), None) is None
+
+
+def test_x_forwarded_for_is_never_sent_to_java(
     client: TestClient, mock_graph_models: GraphModels
 ) -> None:
-    """Bug 1: prefer an `X-Forwarded-For` already set on the inbound request
-    (e.g. by the API Gateway) over `request.client.host`, and forward its
-    first IP to Java as our own outgoing `X-Forwarded-For` - this is how
-    Java's guest-conversation ownership `claim()` check can see the real
-    browser IP even though Python is the one calling `POST /messages`."""
+    """Guest-conversation ownership moved from IP-matching to
+    `X-Guest-Session-Token` (see `test_guest_session_cookie_is_forwarded_to_java_as_header`
+    below) - an inbound `X-Forwarded-For` must not be forwarded to Java at
+    all any more. `_resolve_client_ip` still exists, but only feeds
+    `GraphTrace` for log correlation now, not `BackendJavaClient` calls."""
 
     java = _JavaBackend()
     _override_java(java)
@@ -243,20 +265,44 @@ def test_incoming_x_forwarded_for_is_forwarded_to_java(
         assert response.status_code == 200
         list(response.iter_text())
 
-    message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
-    assert len(message_posts) == 2
-    assert all(c["x_forwarded_for"] == "203.0.113.7" for c in message_posts)
-
-    patches = [c for c in java.calls if c["method"] == "PATCH"]
-    assert len(patches) == 1
-    assert patches[0]["x_forwarded_for"] == "203.0.113.7"
+    assert len(java.calls) >= 3  # POST user, POST assistant, PATCH
+    assert all(c["x_forwarded_for"] is None for c in java.calls)
 
 
-def test_falls_back_to_request_client_host_without_x_forwarded_for(
+def test_guest_session_cookie_is_forwarded_to_java_as_header(
     client: TestClient, mock_graph_models: GraphModels
 ) -> None:
-    """No inbound `X-Forwarded-For` -> fall back to the request's own peer
-    address (`request.client.host`) rather than sending nothing."""
+    """The browser's `guest_session_id` httpOnly cookie reaches this service
+    (same-site request via the gateway) but not backend-java (a fresh outgoing
+    request, no cookie jar) - so it must be read off our own inbound request
+    and forwarded explicitly as `X-Guest-Session-Token` on every `POST
+    /messages` call, or Java's guest-conversation ownership check would 401
+    every message this service persists on a guest's behalf."""
+
+    java = _JavaBackend()
+    _override_java(java)
+    _override_models(mock_graph_models)
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "Điều kiện học bổng là gì?"},
+        cookies={"guest_session_id": "raw-guest-token"},
+    ) as response:
+        assert response.status_code == 200
+        list(response.iter_text())
+
+    message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
+    assert len(message_posts) == 2
+    assert all(c["x_guest_session_token"] == "raw-guest-token" for c in message_posts)
+
+
+def test_no_guest_session_cookie_omits_the_header(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    """An authenticated caller (or a guest whose session hasn't been minted
+    yet) sends no `guest_session_id` cookie - the header must simply be
+    absent, not sent as an empty/garbage value."""
 
     java = _JavaBackend()
     _override_java(java)
@@ -272,5 +318,4 @@ def test_falls_back_to_request_client_host_without_x_forwarded_for(
 
     message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
     assert len(message_posts) == 2
-    # Starlette's TestClient sets the synthetic peer address to "testclient".
-    assert all(c["x_forwarded_for"] == "testclient" for c in message_posts)
+    assert all(c["x_guest_session_token"] is None for c in message_posts)

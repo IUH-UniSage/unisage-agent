@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # carries `X-Internal-Secret` (INTERNAL_SECRET_KEY below), which Java's
     # InternalSecretFilter requires on its Python-only endpoints (e.g.
     # PATCH /messages/{id}) and uses to decide whether to trust a forwarded
-    # X-Forwarded-For for guest ownership checks. Must include Java's
+    # X-Guest-Session-Token for guest ownership checks. Must include Java's
     # `server.servlet.context-path` (`/api/v1` by default in backend-java's
     # application.properties) since this client's paths are context-relative.
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"

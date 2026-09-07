@@ -47,13 +47,13 @@ _background_tasks: set[asyncio.Task[None]] = set()
 
 
 def _resolve_client_ip(http_request: Request, x_forwarded_for: str | None) -> str | None:
-    """Best client IP available for this request, to forward to backend-java.
+    """Best client IP available for this request, for trace/log correlation only.
 
-    Java trusts an `X-Forwarded-For` header from us only together with a
-    valid `X-Internal-Secret` (see `BackendJavaClient`) - this is how the
-    guest-conversation ownership check (matching a guest conversation's
-    stored `ipAddress` for the `claim()` flow) works when this service is
-    the one calling Java instead of the browser directly.
+    Threaded into `GraphTrace` (see `app/core/graph_trace.py`) so each log
+    line can be tied back to a caller - it is NOT sent to backend-java.
+    Guest-conversation ownership there is now checked via
+    `X-Guest-Session-Token` (see `_resolve_guest_session_token` below), not
+    IP matching.
 
     Prefers an `X-Forwarded-For` the API Gateway may already have set on
     this inbound request (first IP in the list is the original client, per
@@ -73,6 +73,25 @@ def _resolve_client_ip(http_request: Request, x_forwarded_for: str | None) -> st
     if http_request.client is not None:
         return http_request.client.host
     return None
+
+
+GUEST_SESSION_COOKIE_NAME = "guest_session_id"
+
+
+def _resolve_guest_session_token(http_request: Request) -> str | None:
+    """The guest's `guest_session_id` httpOnly cookie, read off our own inbound request.
+
+    Java trusts an `X-Guest-Session-Token` header from us only together with
+    a valid `X-Internal-Secret` (see `BackendJavaClient._auth_headers`) -
+    this is how the guest-conversation ownership check works when this
+    service calls Java directly instead of the browser doing it. We have no
+    cookie jar of our own to forward the cookie as-is, so we read it off the
+    request we received (the frontend calls this endpoint with
+    `credentials: include`, same as it does for backend-java, so the cookie
+    reaches us intact) and pass the raw value through explicitly.
+    """
+
+    return http_request.cookies.get(GUEST_SESSION_COOKIE_NAME)
 
 
 async def _sse_token_generator(queue: "asyncio.Queue[str | None]") -> AsyncGenerator[str, None]:
@@ -115,11 +134,12 @@ async def chat_stream_endpoint(
        inside this request/response cycle. If Java rejects it (404/403 -
        conversation doesn't exist or belongs to someone else), this raises
        straight back to the client as an HTTP error - no graph run, no
-       assistant placeholder, ever. Forwards the best client IP we have
-       (`_resolve_client_ip`) as `X-Forwarded-For` alongside our
-       `X-Internal-Secret` on every `BackendJavaClient` call in this
-       request, so Java can run its guest-conversation `ipAddress` ownership
-       check even though it's us calling, not the browser directly.
+       assistant placeholder, ever. Forwards the guest's `guest_session_id`
+       cookie value we read off our own inbound request
+       (`_resolve_guest_session_token`) as `X-Guest-Session-Token` alongside
+       our `X-Internal-Secret` on every `BackendJavaClient` call in this
+       request, so Java can run its guest-conversation ownership check even
+       though it's us calling, not the browser directly.
     3. Only once that succeeds: create the ASSISTANT `STREAMING` placeholder.
     4. Load this conversation's clarification state.
     5. Schedule `run_and_persist` as an independent `asyncio.create_task()` -
@@ -132,6 +152,7 @@ async def chat_stream_endpoint(
         raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")
 
     client_ip = _resolve_client_ip(http_request, x_forwarded_for)
+    guest_session_token = _resolve_guest_session_token(http_request)
 
     first_turn = await is_first_turn(
         java_client, conversation_id=request.conversation_id, authorization=authorization
@@ -144,7 +165,7 @@ async def chat_stream_endpoint(
             content=clean_message,
             status="COMPLETED",
             authorization=authorization,
-            client_ip=client_ip,
+            guest_session_token=guest_session_token,
         )
     except BackendJavaHTTPError as exc:
         raise ConversationRejectedException(exc.status_code) from exc
@@ -158,7 +179,7 @@ async def chat_stream_endpoint(
             content="",
             status="STREAMING",
             authorization=authorization,
-            client_ip=client_ip,
+            guest_session_token=guest_session_token,
         )
     except (BackendJavaHTTPError, BackendJavaConnectionError) as exc:
         raise BackendJavaUnavailableException() from exc
