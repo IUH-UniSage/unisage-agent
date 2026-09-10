@@ -47,6 +47,7 @@ class ChunkPoint:
     questions: list[str]
     department: str
     access_level: int
+    category: str
     region_type: str
     content_vector: list[float]
     summary_vector: list[float]
@@ -120,6 +121,7 @@ def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:
                     "questions": point.questions,
                     "department": point.department,
                     "access_level": point.access_level,
+                    "category": point.category,
                     "region_type": point.region_type,
                 },
             )

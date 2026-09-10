@@ -27,6 +27,9 @@ wheels/
 # Environment variables
 .env
 
+# Private ingestion corpus (academic PDFs) - data, not code; keep out of the repo
+storage/private/
+
 # IDEs
 .vscode/
 .idea/

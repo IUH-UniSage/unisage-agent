@@ -11,10 +11,10 @@ This client bypasses the API Gateway and talks to `backend-java` directly
 `X-Internal-Secret` (the same shared-secret gate this service itself
 enforces on its own inbound endpoints via `app/core/security.py`) - Java
 uses this to (a) authenticate the caller as `unisage-agent` itself, and (b)
-decide whether to trust an accompanying `X-Forwarded-For` header for the
-guest-conversation `ipAddress` ownership check, since Python is the one
-calling Java here instead of the browser directly (see `client_ip` on
-`create_message`/`update_message`).
+decide whether to trust an accompanying `X-Guest-Session-Token` header for
+the guest-conversation ownership check, since Python is the one calling
+Java here instead of the browser directly (see `guest_session_token` on
+`create_message`).
 
 This client is tested entirely with `httpx.MockTransport`, never a live
 Java instance.
@@ -61,7 +61,10 @@ class BackendJavaConnectionError(BackendJavaError):
         super().__init__(f"backend-java {method} {url} -> network error: {cause}")
 
 
-def _auth_headers(authorization: str | None, client_ip: str | None = None) -> dict[str, str]:
+def _auth_headers(
+    authorization: str | None,
+    guest_session_token: str | None = None,
+) -> dict[str, str]:
     """Build the header dict to forward for one call.
 
     Absent/empty `authorization` means the caller is a guest (`KHACH`) —
@@ -70,17 +73,22 @@ def _auth_headers(authorization: str | None, client_ip: str | None = None) -> di
     requests.
 
     `X-Internal-Secret` is always sent (this client talks to backend-java
-    directly, bypassing the API Gateway). `X-Forwarded-For` is sent only
-    when `client_ip` is given - Java only honors it when
-    `X-Internal-Secret` is also present and valid, so it's safe to always
-    include once we're already sending the secret.
+    directly, bypassing the API Gateway). `X-Guest-Session-Token` is sent
+    only when `guest_session_token` is given - this is how Java's
+    guest-conversation ownership check works when this Python service is the
+    caller instead of the browser directly: the browser's `guest_session_id`
+    httpOnly cookie never reaches us as a forwardable cookie jar entry, so
+    the caller reads it off the inbound request and passes it through
+    explicitly (see `_resolve_guest_session_token` in `app/api/v1/chat.py`).
+    Only honored by Java together with a valid `X-Internal-Secret`, so it's
+    safe to always include once we're already sending the secret.
     """
 
     headers: dict[str, str] = {"X-Internal-Secret": settings.INTERNAL_SECRET_KEY}
     if authorization:
         headers["Authorization"] = authorization
-    if client_ip:
-        headers["X-Forwarded-For"] = client_ip
+    if guest_session_token:
+        headers["X-Guest-Session-Token"] = guest_session_token
     return headers
 
 
@@ -115,9 +123,9 @@ class BackendJavaClient:
         authorization: str | None,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
-        client_ip: str | None = None,
+        guest_session_token: str | None = None,
     ) -> Any:
-        headers = _auth_headers(authorization, client_ip)
+        headers = _auth_headers(authorization, guest_session_token)
         try:
             async with self._client() as client:
                 response = await client.request(
@@ -171,7 +179,7 @@ class BackendJavaClient:
         content: str,
         status: MessageStatus = "COMPLETED",
         authorization: str | None = None,
-        client_ip: str | None = None,
+        guest_session_token: str | None = None,
     ) -> dict[str, Any]:
         """`POST /messages`.
 
@@ -179,12 +187,12 @@ class BackendJavaClient:
         here means "do not run the graph, do not create a placeholder",
         which callers detect via `BackendJavaHTTPError.status_code`.
 
-        `client_ip`, when given, is forwarded as `X-Forwarded-For` - this is
-        how Java's guest-conversation ownership check (matching the
-        conversation's stored `ipAddress` for the `claim()` flow) works when
-        this Python service is the caller instead of the browser directly.
-        Only meaningful together with a valid `X-Internal-Secret`, which
-        `_request` always sends.
+        `guest_session_token`, when given, is forwarded as
+        `X-Guest-Session-Token` - this is how Java's guest-conversation
+        ownership check works when this Python service is the caller instead
+        of the browser directly (see `_auth_headers`). Only meaningful
+        together with a valid `X-Internal-Secret`, which `_request` always
+        sends.
         """
 
         body = {
@@ -194,7 +202,11 @@ class BackendJavaClient:
             "status": status,
         }
         result = await self._request(
-            "POST", "/messages", authorization=authorization, json_body=body, client_ip=client_ip
+            "POST",
+            "/messages",
+            authorization=authorization,
+            json_body=body,
+            guest_session_token=guest_session_token,
         )
         return dict(result) if result is not None else {}
 
@@ -209,7 +221,6 @@ class BackendJavaClient:
         retrieval_score: float | None = None,
         metadata: dict[str, Any] | None = None,
         authorization: str | None = None,
-        client_ip: str | None = None,
     ) -> dict[str, Any]:
         """`PATCH /messages/{id}` — finalizes a `STREAMING` assistant message.
 
@@ -245,7 +256,6 @@ class BackendJavaClient:
             f"/messages/{message_id}",
             authorization=authorization,
             json_body=body,
-            client_ip=client_ip,
         )
         return dict(result) if result is not None else {}
 

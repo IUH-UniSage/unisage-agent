@@ -1,0 +1,93 @@
+{
+  "_comment": "Từ vựng field metadata phổ biến — KHÔNG phải whitelist đóng (task_1.yaml vẫn cho phép field hoàn toàn mới cho khái niệm chưa liệt kê ở đây). Mục đích duy nhất: khi khái niệm cần hỏi TRÙNG một dòng dưới đây, model phải dùng đúng field name đã liệt kê thay vì tự nghĩ tên khác cho cùng một khái niệm — tránh phân mảnh confirmed_metadata (bug quan sát được: 'nganh_hoc' và 'nganh_dao_tao' cùng nghĩa 'ngành' nhưng khác tên, khiến giá trị cũ bị bỏ quên). Nạp bởi app/rag/prompting/loader.py::get_known_metadata_fields(), render vào ask_user_form_guide.yaml qua builder.py::build_known_metadata_fields_section().",
+  "fields": [
+    {
+      "field": "he_dao_tao",
+      "concept": "Hệ đào tạo",
+      "aliases": ["hệ đào tạo", "loại hình đào tạo", "hệ"],
+      "example_options": ["Chính quy", "Liên thông", "Vừa làm vừa học"],
+      "priority": "high",
+      "description": "Thuộc tính phân nhánh quy chế phổ biến nhất — hầu hết văn bản học phí/miễn giảm/điều kiện đều tách theo hệ. Sinh viên luôn tự biết mình học hệ nào."
+    },
+    {
+      "field": "bac_dao_tao",
+      "concept": "Bậc đào tạo",
+      "aliases": ["bậc đào tạo", "trình độ đào tạo"],
+      "example_options": ["Đại học", "Cao đẳng", "Sau đại học"],
+      "priority": "medium",
+      "description": "KHÁC với he_dao_tao — bậc là cấp học (đại học/cao đẳng...), hệ là hình thức đào tạo (chính quy/liên thông...). Không gộp chung hai khái niệm này vào một field dù có vẻ liên quan, vì văn bản thường chỉ chia nhánh theo MỘT trong hai, không phải cả hai cùng lúc."
+    },
+    {
+      "field": "nganh_hoc",
+      "concept": "Ngành học / ngành đào tạo",
+      "aliases": ["ngành học", "ngành đào tạo", "chuyên ngành", "chương trình đào tạo", "program"],
+      "example_options": ["Công nghệ Thông tin", "Kỹ thuật Phần mềm", "Quản trị Kinh doanh"],
+      "priority": "high",
+      "description": "Học phí, mã ngành, chuẩn đầu ra... hầu như luôn tách theo ngành. Options PHẢI copy nguyên văn danh sách ngành trong <academic_context> lượt này, không tự bịa danh sách ngành của trường."
+    },
+    {
+      "field": "khoa_nhap_hoc",
+      "concept": "Khóa nhập học / khóa tuyển sinh / năm nhập học",
+      "aliases": ["khóa nhập học", "khóa tuyển sinh", "năm nhập học", "academic_year", "khóa"],
+      "example_options": ["K21", "K22", "K23"],
+      "priority": "high",
+      "description": "Nhiều quy định (mức học phí, chương trình đào tạo áp dụng) chỉ có hiệu lực từ một khóa tuyển sinh trở về sau — khóa nhập học quyết định văn bản nào áp dụng. Không nhầm với current_year (năm học hiện tại đang theo, khác khái niệm)."
+    },
+    {
+      "field": "dieu_kien_hoc_bong",
+      "concept": "Điều kiện / diện xét học bổng",
+      "aliases": ["điều kiện học bổng", "diện học bổng", "loại học bổng"],
+      "example_options": [],
+      "priority": "medium",
+      "description": "Options phụ thuộc hoàn toàn vào văn bản học bổng đang đọc lượt này — không có tập giá trị cố định, PHẢI lấy nguyên văn nhãn nhánh từ <academic_context>."
+    },
+    {
+      "field": "khoa_quan_ly",
+      "concept": "Khoa / đơn vị đào tạo quản lý ngành",
+      "aliases": ["khoa quản lý", "đơn vị đào tạo", "department"],
+      "example_options": [],
+      "priority": "low",
+      "description": "Hiếm khi văn bản quy chế phân nhánh trực tiếp theo khoa quản lý (thường phân theo ngành/hệ là đủ) — chỉ hỏi khi CHÍNH văn bản đang đọc lượt này thực sự chia nhánh theo khoa, không suy đoán từ tên ngành."
+    },
+    {
+      "field": "lop",
+      "concept": "Lớp sinh hoạt",
+      "aliases": ["lớp", "class"],
+      "example_options": [],
+      "priority": "low",
+      "description": "Gần như không bao giờ là thuộc tính phân nhánh của văn bản quy chế cấp trường (lớp chỉ dùng nội bộ quản lý giảng dạy) — chỉ đặt field này nếu văn bản đang đọc thực sự nêu rõ theo lớp, trường hợp cực hiếm."
+    },
+    {
+      "field": "co_so_hoc",
+      "concept": "Cơ sở học / campus",
+      "aliases": ["cơ sở", "campus", "cơ sở đào tạo"],
+      "example_options": [],
+      "priority": "low",
+      "description": "Chỉ hỏi khi trường có nhiều cơ sở VÀ văn bản đang đọc thực sự quy định khác nhau theo cơ sở (VD mức phí ký túc xá theo từng cơ sở) — không mặc định hỏi cho mọi câu hỏi."
+    },
+    {
+      "field": "nam_thu_may",
+      "concept": "Năm học hiện tại của sinh viên (năm 1/2/3/4...)",
+      "aliases": ["năm mấy", "sinh viên năm thứ", "current_year"],
+      "example_options": ["Năm 1", "Năm 2", "Năm 3", "Năm 4"],
+      "priority": "medium",
+      "description": "KHÁC khoa_nhap_hoc (khóa tuyển sinh là mốc cố định, VD K21; năm học hiện tại thay đổi theo thời gian). Dùng khi văn bản chia nhánh theo tiến độ học (VD điều kiện xét tốt nghiệp chỉ áp dụng sinh viên năm cuối)."
+    },
+    {
+      "field": "ma_so_sinh_vien",
+      "concept": "Mã số sinh viên",
+      "aliases": ["mã sinh viên", "MSSV", "student_id"],
+      "example_options": [],
+      "priority": "low",
+      "description": "KHÔNG có tập giá trị hữu hạn (số tự khai) — theo ask_user_form_guide, thuộc tính dạng này KHÔNG được đưa vào form (options: null bị hệ thống drop). Gần như không bao giờ là thuộc tính phân nhánh của một QUY ĐỊNH (mã số không quyết định quy định nào áp dụng) — nếu cần xác minh danh tính thật, đó là việc của đăng nhập/JWT (academic_user_context), không phải confirmed_metadata tự khai."
+    },
+    {
+      "field": "ho_ten",
+      "concept": "Họ tên người dùng",
+      "aliases": ["tên", "họ tên", "name"],
+      "example_options": [],
+      "priority": "low",
+      "description": "KHÔNG có tập giá trị hữu hạn và KHÔNG phải thuộc tính quy chế bao giờ phân nhánh theo — không tạo ask_user_form cho field này. Chỉ liệt kê ở đây để nếu model vô tình định hỏi tên, biết rằng đây không phải một thuộc tính hợp lệ cho NHIỆM VỤ 2."
+    }
+  ]
+}

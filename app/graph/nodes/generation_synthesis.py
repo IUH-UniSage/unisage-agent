@@ -34,6 +34,7 @@ rare case a violation is actually detected.
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,6 +44,7 @@ from pydantic_ai.models import Model
 from app.core.graph_trace import GraphTrace
 from app.graph.streaming import TokenSink, stream_agent_text
 from app.rag.prompting import build_json_repair_prompt, build_system_prompt
+from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
@@ -58,6 +60,20 @@ _JSON_BLOCK_PATTERN = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 # CHO MÌNH thông tin" or "cho tôi biết THÊM MỘT CHÚT thông tin" - a plain
 # fixed-word regex misses these and was the actual cause of at least one
 # live miss (see tasks/report.md).
+#
+# On its own this phrase match is NOT enough: it also matches a generic
+# CONDITIONAL closing offer ("Nếu bạn cần thêm thông tin..., vui lòng cho
+# biết thêm thông tin.") that isn't a real question at all - observed live
+# triggering a hallucinated `ask_user_form` for a topic (học bổng) the user
+# never asked about this turn. Ending punctuation (`?` vs `.`) turned out to
+# NOT be a reliable signal here: chat_academic_advisory.yaml lines 27-31
+# explicitly require JSON even for a real question disguised as a
+# declarative sentence specifically to dodge `?` - so a real question can
+# legitimately lack `?` too (that's the exact failure mode this repair path
+# exists to catch). The signal that actually distinguishes the two is
+# CONDITIONAL FRAMING: "Nếu bạn cần/muốn X, (vui lòng) Y" is an open-ended
+# offer to help with something not yet asked, never a real request for
+# something needed to answer THIS turn - see `_LEADING_OFFER_PATTERN`.
 _CLARIFICATION_PHRASE_PATTERN = re.compile(
     r"cho\s+.{0,15}?bi[eế]t\b"
     r"|cung\s+c[aấ]p\b.{0,25}?th[oô]ng\s+tin\b"
@@ -65,9 +81,52 @@ _CLARIFICATION_PHRASE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# A sentence opening with this is an offer ("if you need X, just say"), not
+# a real request the assistant needs answered to proceed - see the comment
+# on `_CLARIFICATION_PHRASE_PATTERN` above for the live case that motivated
+# this. Matched against the sentence that CONTAINS the phrase match (see
+# `_is_conditional_offer`), not the whole response, so a genuine question
+# elsewhere in a longer reply isn't discarded because an unrelated earlier
+# sentence happened to use this framing.
+_LEADING_OFFER_PATTERN = re.compile(
+    r"^\s*n[eế]u\s+(b[aạ]n|em)?\s*(c[aầ]n|mu[oố]n|c[oó]\s+nhu\s+c[aầ]u)\b", re.IGNORECASE
+)
+
+# Splits on sentence-ending punctuation followed by whitespace - good enough
+# for finding "which sentence contains this match", not a general-purpose
+# sentence tokenizer.
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
+
 
 def build_generation_agent(model: Model | str) -> Agent[None, str]:
     return Agent(model=model)
+
+
+def _is_conditional_offer(full_text: str) -> bool:
+    """True if the sentence containing `_CLARIFICATION_PHRASE_PATTERN`'s
+    match - OR the sentence immediately before it - opens with
+    `_LEADING_OFFER_PATTERN`.
+
+    Checking only the matching sentence itself is NOT enough: Vietnamese
+    routinely splits a conditional offer across two sentences - "Nếu bạn
+    cần thêm thông tin cụ thể hơn (...), mình có thể giúp bạn tìm kiếm
+    thông tin đó. Hãy cho mình biết nhé!" - where the `_CLARIFICATION_PHRASE
+    _PATTERN` match ("cho mình biết") lands in the SECOND sentence, which on
+    its own starts with "Hãy", not "Nếu". Observed live (twice): a
+    single-sentence-only version of this check missed exactly this split and
+    let a hallucinated `ask_user_form` for an unrelated topic through. Only
+    looking one sentence back keeps this from also swallowing a genuine
+    question that happens to follow an unrelated "Nếu..." sentence earlier
+    in a longer reply."""
+
+    without_json = _JSON_BLOCK_PATTERN.sub("", full_text)
+    sentences = _SENTENCE_SPLIT_PATTERN.split(without_json)
+    for index, sentence in enumerate(sentences):
+        if not _CLARIFICATION_PHRASE_PATTERN.search(sentence):
+            continue
+        window = sentences[max(0, index - 1) : index + 1]
+        return any(_LEADING_OFFER_PATTERN.match(candidate) for candidate in window)
+    return False
 
 
 async def _repair_missing_ask_form(
@@ -75,6 +134,8 @@ async def _repair_missing_ask_form(
     full_text: str,
     *,
     chunks: list[RetrievedChunk],
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
     token_sink: TokenSink,
     trace: GraphTrace,
 ) -> str:
@@ -86,6 +147,15 @@ async def _repair_missing_ask_form(
     a false negative here just means the old prose-only behavior, so the
     heuristic is fine erring toward "didn't detect it".
 
+    Requires `_CLARIFICATION_PHRASE_PATTERN` to match AND that match's
+    sentence to NOT be a conditional offer (`_is_conditional_offer`) - the
+    phrase alone also matches a conditional closing offer ("Nếu bạn cần
+    thêm thông tin..., vui lòng cho biết thêm thông tin."), which is exactly
+    what produced a hallucinated `ask_user_form` for an unrelated topic in a
+    live observation. `security`/`confirmed_metadata` are threaded through
+    to the repair prompt so it can see `<student_declared_attributes>` and
+    skip re-asking a field already answered in an earlier turn.
+
     Streams nothing to `token_sink` until the repair call itself has
     produced a valid JSON block - a partial/garbage repair attempt (or a
     literal "NONE") never reaches the client mid-stream.
@@ -95,8 +165,12 @@ async def _repair_missing_ask_form(
         return full_text
     if not _CLARIFICATION_PHRASE_PATTERN.search(full_text):
         return full_text
+    if _is_conditional_offer(full_text):
+        return full_text
 
-    repair_prompt = build_json_repair_prompt(full_text, chunks)
+    repair_prompt = build_json_repair_prompt(
+        full_text, chunks, security=security, confirmed_metadata=confirmed_metadata
+    )
     trace.prompt("12b_GenerationSynthesisNode_JsonRepair", repair_prompt)
 
     async def _capture_sink(_token: str) -> None:
@@ -130,6 +204,7 @@ async def run_generation_synthesis(
     origin_node: str,
     token_sink: TokenSink,
     trace: GraphTrace,
+    history: Sequence[HistoryMessage] = (),
 ) -> GenerationResult:
     full_prompt = build_system_prompt(
         user_query=user_query,
@@ -137,11 +212,18 @@ async def run_generation_synthesis(
         confirmed_metadata=confirmed_metadata,
         chunks=chunks,
         pending_clarification=previous_pending,
+        history=history,
     )
     trace.prompt("12_GenerationSynthesisNode", full_prompt)
     full_text = await stream_agent_text(agent, full_prompt, token_sink)
     full_text = await _repair_missing_ask_form(
-        agent, full_text, chunks=chunks, token_sink=token_sink, trace=trace
+        agent,
+        full_text,
+        chunks=chunks,
+        security=security,
+        confirmed_metadata=confirmed_metadata,
+        token_sink=token_sink,
+        trace=trace,
     )
     confirmed_updates = collect_confirmed_metadata_updates(full_text, previous=previous_pending)
     updated_confirmed_metadata = (
@@ -272,11 +354,22 @@ def collect_pending_clarification(
       KẾT LUẬN TÌNH TRẠNG HỌC VỤ"), so they are stated as thresholds in
       prose for the student to check themselves - never collected as form
       state.
+
+    A third case is dropped at the very top, before any of the above: the
+    whole block is discarded if its lead-in sentence is a conditional offer
+    (`_is_conditional_offer`) - same check `_repair_missing_ask_form` uses,
+    but needed here too because this function also runs when the model
+    attaches `ask_user_form` directly in its PRIMARY response (no repair
+    call involved at all) - observed live: a fully-answered, unrelated
+    question followed by "Nếu bạn có nhu cầu tìm hiểu thêm..., vui lòng cho
+    biết nhé!" plus a populated (hallucinated) form, all in one pass.
     """
     ask_form_blocks = [
         block for block in _extract_json_blocks(full_text) if block.get("type") == "ask_user_form"
     ]
     if not ask_form_blocks:
+        return None
+    if _is_conditional_offer(full_text):
         return None
     parsed = ask_form_blocks[-1]
 

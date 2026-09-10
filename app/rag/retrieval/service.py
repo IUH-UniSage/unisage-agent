@@ -53,6 +53,7 @@ def _to_retrieved_chunk(point: ScoredPoint) -> RetrievedChunk:
             "document_id": payload.get("document_id"),
             "department": payload.get("department"),
             "access_level": payload.get("access_level"),
+            "category": payload.get("category"),
             "region_type": payload.get("region_type"),
         },
     )

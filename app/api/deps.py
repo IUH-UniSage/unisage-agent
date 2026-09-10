@@ -75,6 +75,8 @@ class DepartmentAccessEntry:
     department_id: str
     access_level: int
 
+WILDCARD_DEPARTMENT_ID = "*"
+
 
 @dataclass(frozen=True)
 class TrustedContext:
@@ -82,6 +84,23 @@ class TrustedContext:
 
     department_access: list[DepartmentAccessEntry]
     permissions: list[str]
+
+    @property
+    def has_wildcard_department_access(self) -> bool:
+        return any(e.department_id == WILDCARD_DEPARTMENT_ID for e in self.department_access)
+
+    def granted_access_level(self, department_id: str) -> int | None:
+        """Highest access_level the caller holds for `department_id`, or None if not granted.
+
+        A wildcard ("*") grant covers every department at its own level.
+        """
+
+        levels = [
+            e.access_level
+            for e in self.department_access
+            if e.department_id in (department_id, WILDCARD_DEPARTMENT_ID)
+        ]
+        return max(levels) if levels else None
 
 
 async def get_trusted_context(
@@ -155,5 +174,5 @@ def require_department_membership(department_id: str, context: TrustedContext) -
     `app/api/v1/ingestion.py` instead of this helper.
     """
 
-    if not any(entry.department_id == department_id for entry in context.department_access):
+    if context.granted_access_level(department_id) is None:
         raise DepartmentAccessDeniedException(department_id)

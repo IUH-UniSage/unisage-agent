@@ -31,6 +31,7 @@ def embed_chunks(
     chunks: list[dict[str, Any]],
     department_id: str,
     access_level: int,
+    category: str = "HOC_VU",
 ) -> dict[str, Any]:
     """Enrich, embed, and upsert a client-approved chunk list into Qdrant.
 
@@ -87,6 +88,7 @@ def embed_chunks(
                     questions=enriched.questions,
                     department=department_id,
                     access_level=access_level,
+                    category=category,
                     region_type=chunk.region_type.value,
                     content_vector=content_vector,
                     summary_vector=summary_vector,

@@ -243,6 +243,45 @@ async def test_does_not_repair_when_prose_is_not_a_clarification_request(
     assert result.response_text == "Hạn nộp học phí học kỳ này là 15/03 [1]."
 
 
+@pytest.mark.asyncio
+async def test_does_not_repair_a_conditional_offer_about_an_unrelated_topic(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    """Live-observed bug: after fully answering an unrelated question, the
+    model appended a generic conditional offer naming a DIFFERENT topic
+    ('điều kiện học bổng') the user never asked about this turn. This reads
+    like a clarification request to `_CLARIFICATION_PHRASE_PATTERN` alone
+    (it contains "cho biết thêm thông tin"), but must NOT trigger repair -
+    only ONE response is scripted below, so if repair fired it would run out
+    of scripted turns and the test would fail with a mock exhaustion error."""
+
+    prose = (
+        "Chương trình đào tạo ngành Logistics gồm 141 tín chỉ, 4 năm [1]. "
+        "Nếu bạn cần thêm thông tin chi tiết về điều kiện học bổng hoặc các "
+        "thủ tục hành chính cụ thể cho ngành này, vui lòng cho biết thêm "
+        "thông tin."
+    )
+    agent = build_generation_agent(mock_streaming_llm_model([prose]))
+
+    async def sink(_token: str) -> None:
+        return None
+
+    result = await run_generation_synthesis(
+        agent,
+        user_query="chương trình đào tạo ngành Logistics như thế nào?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        previous_pending=None,
+        origin_node="QueryTransformationNode",
+        token_sink=sink,
+        trace=_TRACE,
+    )
+
+    assert result.pending_clarification is None
+    assert result.response_text == prose
+
+
 def test_collect_pending_clarification_none_when_no_json_block() -> None:
     result = collect_pending_clarification(
         "Câu trả lời bình thường, không hỏi lại.",
@@ -263,6 +302,67 @@ def test_collect_pending_clarification_none_when_fields_array_is_empty() -> None
         'Câu trả lời đầy đủ.\n\n```json\n{"type": "ask_user_form", "fields": []}\n```',
         origin_node="QueryTransformationNode",
         previous=None,
+    )
+
+    assert result is None
+
+
+def test_collect_pending_clarification_none_when_lead_in_is_a_conditional_offer() -> None:
+    """Live-observed bug via the PRIMARY generation call (no repair
+    involved): the model attached a populated, hallucinated `ask_user_form`
+    directly after a conditional offer ("Nếu bạn có nhu cầu tìm hiểu thêm...,
+    vui lòng cho biết nhé!") for a topic the user never asked about. Must be
+    dropped even though the JSON block itself is well-formed."""
+
+    full_text = (
+        "Chương trình đào tạo ngành Logistics gồm 141 tín chỉ [1]. "
+        "Nếu bạn có nhu cầu tìm hiểu thêm chi tiết khác về ngành học, "
+        "vui lòng cho biết nhé!\n\n"
+        '```json\n{"type": "ask_user_form", "fields": [\n'
+        '  {"field": "he_dao_tao", "label": "Hệ đào tạo", "options": ['
+        '{"id": "chinh_quy", "label": "Chính quy"}, '
+        '{"id": "lien_thong", "label": "Liên thông"}]}\n'
+        "]}\n```"
+    )
+
+    result = collect_pending_clarification(
+        full_text,
+        origin_node="QueryTransformationNode",
+        previous=None,
+        user_query="chương trình đào tạo ngành Logistics như thế nào?",
+    )
+
+    assert result is None
+
+
+def test_collect_pending_clarification_none_when_offer_split_across_two_sentences() -> None:
+    """Live-observed bug (second occurrence, after the single-sentence-only
+    guard already fixed the first one): "Nếu bạn cần X (...), Y." is its own
+    sentence, and "Hãy cho mình biết nhé!" - the one that actually matches
+    `_CLARIFICATION_PHRASE_PATTERN` - is a SEPARATE sentence right after it.
+    Must still be dropped by looking one sentence back, not just at the
+    matching sentence itself."""
+
+    full_text = (
+        "Hiện tại, mình chưa xác nhận được lịch thi cho kỳ này. "
+        "Để có thông tin chính xác, bạn nên kiểm tra trang thông báo của trường. "
+        "Nếu bạn cần thêm thông tin cụ thể hơn (ví dụ: năm học, kỳ thi cụ thể), "
+        "mình có thể giúp bạn tìm kiếm thông tin đó. "
+        "Hãy cho mình biết nhé!\n\n"
+        '```json\n{"type": "ask_user_form", "fields": [\n'
+        '  {"field": "khoa_nhap_hoc", "label": "Khóa nhập học", "options": ['
+        '{"id": "k21", "label": "K21"}, {"id": "k22", "label": "K22"}]},\n'
+        '  {"field": "he_dao_tao", "label": "Hệ đào tạo", "options": ['
+        '{"id": "chinh_quy", "label": "Chính quy"}, '
+        '{"id": "lien_thong", "label": "Liên thông"}]}\n'
+        "]}\n```"
+    )
+
+    result = collect_pending_clarification(
+        full_text,
+        origin_node="QueryTransformationNode",
+        previous=None,
+        user_query="có lịch thi kì này chưa",
     )
 
     assert result is None

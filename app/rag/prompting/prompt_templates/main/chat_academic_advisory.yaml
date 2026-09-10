@@ -4,6 +4,7 @@ description: "System prompt hợp nhất cho GenerationSynthesisNode ở flow Ad
 template: |
   {header}
   {academic_metadata}
+  {history_message}
   {security_access_control}
   {academic_domain_rules}
   {response_style}

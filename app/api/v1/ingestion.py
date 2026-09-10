@@ -151,14 +151,7 @@ def _require_department_access_within_grant(
 ) -> None:
     """Raise 403 unless the caller's granted access_level for the department covers the request."""
 
-    granted_level = next(
-        (
-            entry.access_level
-            for entry in context.department_access
-            if entry.department_id == request.department_id
-        ),
-        None,
-    )
+    granted_level = context.granted_access_level(request.department_id)
     if granted_level is None or request.access_level > granted_level:
         raise DepartmentAccessDeniedException(request.department_id)
 
@@ -209,11 +202,12 @@ async def ingestion_events(
         return
 
     allowed_departments = {entry.department_id for entry in context.department_access}
+    forward_all = context.has_wildcard_department_access
 
     await websocket.accept()
     try:
         async for frame in ingestion_event_stream():
-            if frame.get("department_id") in allowed_departments:
+            if forward_all or frame.get("department_id") in allowed_departments:
                 await websocket.send_json(frame)
     except WebSocketDisconnect:
         return

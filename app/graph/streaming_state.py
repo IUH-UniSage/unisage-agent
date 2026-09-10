@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pydantic_ai.models import Model
 
 from app.rag.retrieval.service import RetrievalServiceProtocol
+from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.security import AcademicSecurityContext
 
@@ -33,6 +34,7 @@ class GraphInput:
     confirmed_metadata: dict[str, str] = field(default_factory=dict)
     pending_clarification: PendingClarification | None = None
     clarification_max_retry: int = 2
+    history: list[HistoryMessage] = field(default_factory=list)
 
 
 @dataclass

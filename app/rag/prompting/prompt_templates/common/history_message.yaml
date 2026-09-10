@@ -1,0 +1,12 @@
+# HISTORY_MESSAGE_TEMPLATE
+description: "Khối <history_message> - tối đa 15 tin nhắn gần nhất của cuộc trò chuyện (trước lượt này), để mô hình có ngữ cảnh hội thoại thô, độc lập với confirmed_metadata (bộ nhớ có cấu trúc, không hết hạn)."
+content: |
+  Lịch sử hội thoại gần đây (tối đa 15 tin nhắn gần nhất, KHÔNG bao gồm câu hỏi ở lượt này):
+  <history_message>
+  {history_lines}
+  </history_message>
+
+  Cách dùng: chỉ để hiểu MẠCH cuộc trò chuyện (người dùng đang nói tiếp về gì, đã hỏi gì trước
+  đó) — KHÔNG dùng để suy ra thuộc tính sinh viên (việc đó đã có `<student_declared_attributes>`
+  ở trên, đáng tin hơn vì đã qua bước xác nhận). Nếu lịch sử và `<student_declared_attributes>`
+  mâu thuẫn nhau, LUÔN tin `<student_declared_attributes>`.

@@ -106,7 +106,6 @@ async def run_and_persist(
                 content=response_text,
                 status=status,
                 authorization=authorization,
-                client_ip=client_ip,
             )
         except Exception:
             # Catches `BackendJavaError` (Java rejected/couldn't be reached)
