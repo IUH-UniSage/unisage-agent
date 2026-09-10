@@ -4,6 +4,7 @@ from app.rag.prompting import (
     build_system_prompt,
     get_templates,
 )
+from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
@@ -99,6 +100,8 @@ def test_json_repair_prompt_includes_academic_context_for_verbatim_options() -> 
                 score=0.9,
             )
         ],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
     )
 
     assert "Bạn vui lòng cho biết ngành học của bạn nhé!" in prompt
@@ -176,3 +179,68 @@ def test_guest_security_context_renders_khach_role_and_no_department_access() ->
     )
 
     assert "Vai trò (Role): KHACH" in prompt
+
+
+def test_known_metadata_fields_vocabulary_is_embedded() -> None:
+    """The common-concept-to-canonical-field-name table (known_metadata_fields.json)
+    must reach the model in every system prompt (via ask_user_form_guide, always
+    embedded regardless of whether a clarification round is active this turn) -
+    this is what stops the model inventing a second field name for a concept
+    already covered (observed live: 'nganh_hoc' vs 'nganh_dao_tao')."""
+
+    prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+
+    assert "he_dao_tao" in prompt
+    assert "nganh_hoc" in prompt
+
+
+def test_history_message_renders_prior_turns_with_role_labels() -> None:
+    prompt = build_system_prompt(
+        user_query="Còn học phí thì sao?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+        history=[
+            HistoryMessage(role="USER", content="Tôi học ngành CNTT"),
+            HistoryMessage(role="ASSISTANT", content="Ngành CNTT có mã 7480201."),
+        ],
+    )
+
+    assert "<history_message>" in prompt
+    assert "Người dùng: Tôi học ngành CNTT" in prompt
+    assert "Trợ lý: Ngành CNTT có mã 7480201." in prompt
+
+
+def test_history_message_empty_renders_sentinel_not_a_crash() -> None:
+    prompt = build_system_prompt(
+        user_query="hello",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+
+    assert "<history_message>" in prompt
+    assert "chưa có lịch sử" in prompt
+
+
+def test_json_repair_prompt_includes_student_declared_attributes() -> None:
+    """Regression guard for the live bug: repair must see confirmed_metadata
+    so it doesn't re-ask a field the student already answered."""
+
+    prompt = build_json_repair_prompt(
+        "Bạn cho mình biết hệ đào tạo nhé!",
+        [],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={"he_dao_tao": "chinh_quy"},
+    )
+
+    assert "<student_declared_attributes>" in prompt
+    assert "he_dao_tao: chinh_quy" in prompt

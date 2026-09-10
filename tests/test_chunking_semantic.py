@@ -53,3 +53,59 @@ def test_split_skips_regions_with_no_sentences() -> None:
     chunks = chunker.split([ParsedRegion(RegionType.TEXT, "   ")])
 
     assert chunks == []
+
+
+def test_no_chunk_exceeds_the_derived_hard_cap() -> None:
+    chunker = SemanticChunker(
+        target_tokens=100,
+        overlap_ratio=0.2,
+        similarity_threshold=-1.0,
+        embedder=_DeterministicEmbedder(),
+    )
+    # One un-splittable "sentence" (no . ! ?) far larger than the cap.
+    giant = " ".join(f"tok_{j}" for j in range(600))
+
+    chunks = chunker.split([ParsedRegion(RegionType.TEXT, giant)])
+
+    assert chunks
+    assert all(len(_ENCODING.encode(chunk.content)) <= chunker.max_tokens for chunk in chunks)
+
+
+def test_tiny_trailing_region_is_merged_not_emitted_alone() -> None:
+    chunker = SemanticChunker(
+        target_tokens=100,
+        min_tokens=48,
+        similarity_threshold=-1.0,
+        embedder=_DeterministicEmbedder(),
+    )
+    body = _fixture_text(sentence_count=6, words_per_sentence=10)
+
+    chunks = chunker.split(
+        [
+            ParsedRegion(RegionType.TEXT, body),
+            ParsedRegion(RegionType.TEXT, "a. Den ngay co."),
+        ]
+    )
+
+    assert chunks
+    assert all(
+        len(_ENCODING.encode(chunk.content)) >= chunker.min_tokens for chunk in chunks
+    )
+    assert any("Den ngay co" in chunk.content for chunk in chunks)
+
+
+def test_lone_list_marker_is_not_split_into_its_own_sentence() -> None:
+    chunker = SemanticChunker(
+        target_tokens=100,
+        min_tokens=1,
+        similarity_threshold=-1.0,
+        embedder=_DeterministicEmbedder(),
+    )
+
+    chunks = chunker.split(
+        [ParsedRegion(RegionType.TEXT, "Nguoi lao dong can lam gi? a. Den ngay co so y te.")]
+    )
+
+    assert chunks
+    joined = " ".join(chunk.content for chunk in chunks)
+    assert "a. Den ngay co so y te." in joined

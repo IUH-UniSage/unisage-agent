@@ -48,6 +48,7 @@ def test_upsert_chunk_builds_expected_payload_and_vector_shape() -> None:
         questions=["Q1?", "Q2?"],
         department="CNTT",
         access_level=2,
+        category="HOC_VU",
         region_type="text",
         content_vector=[0.1, 0.2],
         summary_vector=[0.3, 0.4],
@@ -75,6 +76,7 @@ def test_upsert_chunk_builds_expected_payload_and_vector_shape() -> None:
         "questions": ["Q1?", "Q2?"],
         "department": "CNTT",
         "access_level": 2,
+        "category": "HOC_VU",
         "region_type": "text",
     }
 

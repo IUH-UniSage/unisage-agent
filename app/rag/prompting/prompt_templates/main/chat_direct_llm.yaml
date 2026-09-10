@@ -3,6 +3,7 @@ description: "System prompt cho DirectLLMNode — câu hỏi kiến thức phổ
 template: |
   {header}
   {academic_metadata}
+  {history_message}
   {security_access_control}
   {response_style}
   

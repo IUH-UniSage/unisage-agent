@@ -17,6 +17,7 @@ class PromptTemplates:
     # Common components
     header: str
     academic_metadata: str
+    history_message: str
     security_access_control: str
     academic_domain_rules: str
     response_style: str

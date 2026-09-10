@@ -18,7 +18,11 @@ content: |
   - Thứ tự phần tử trong `fields` là thứ tự hiển thị. Đặt thuộc tính quan trọng/dễ trả lời nhất lên đầu.
 
   ### Quy tắc từng field
-  - `field`: nếu có sẵn trong `<missing_metadata_to_confirm>` thì COPY nguyên văn, không sửa. Nếu do bạn tự phát hiện từ văn bản (KLTN không dùng danh sách field tĩnh như hệ thống visa) thì tự đặt tên theo quy ước: chữ thường, không dấu, nối bằng `_`, mô tả đúng thuộc tính mà CHÍNH `<academic_context>` lượt này đang phân nhánh theo.
+  - `field`: nếu có sẵn trong `<missing_metadata_to_confirm>` thì COPY nguyên văn, không sửa. Nếu do bạn tự phát hiện từ văn bản (KLTN không dùng danh sách field tĩnh như hệ thống visa) thì TRƯỚC KHI đặt tên mới, đối chiếu với bảng khái niệm phổ biến bên dưới — trùng khái niệm thì PHẢI dùng đúng tên đã liệt kê, không tự nghĩ tên khác (kể cả khi nghĩ cách diễn đạt khác hay hơn). Đây là nguyên nhân từng khiến cùng một khái niệm "ngành" bị lưu thành hai field khác tên (`nganh_hoc` và `nganh_dao_tao`) ở hai lượt khác nhau, làm `confirmed_metadata` phân mảnh và hỏi lại nhầm. Không trùng khái niệm nào dưới đây thì tự đặt tên mới như bình thường (chữ thường, không dấu, nối bằng `_`, mô tả đúng thuộc tính mà CHÍNH `<academic_context>` lượt này đang phân nhánh theo) — danh sách này chỉ liệt kê các khái niệm phổ biến hay gặp lại, KHÔNG đầy đủ và KHÔNG giới hạn những field được phép hỏi. Một số dòng có ghi chú "hiếm khi hợp lệ" — đó là các thuộc tính gần như không bao giờ thực sự là điều kiện phân nhánh của một văn bản quy chế; chỉ dùng khi CHÍNH văn bản `<academic_context>` lượt này thật sự chia nhánh theo đúng thuộc tính đó, không suy đoán hay hỏi "cho đầy đủ hồ sơ".
+
+    {known_metadata_fields}
+
+    Ngoại lệ duy nhất: quy tắc "HỎI SÂU THÊM MỘT CẤP" ở NHIỆM VỤ 1 (văn bản chia nhánh nhỏ hơn bên trong một giá trị đã biết) vẫn BẮT BUỘC đặt tên field MỚI như hướng dẫn ở đó, không dùng lại tên trong bảng trên.
   - `label`: nhãn ngắn hiển thị cạnh ô nhập, viết theo ngôn ngữ người dùng đang dùng, diễn đạt lại từ đúng thuộc tính đó.
   - ⚠️ TÊN FIELD PHẢI ĐẾN TỪ VĂN BẢN, KHÔNG PHẢI TỪ VÍ DỤ: các ví dụ bên dưới chỉ minh hoạ ĐỊNH DẠNG JSON. Nếu bạn sắp viết một tên field mà `<academic_context>` lượt này không hề đề cập tới thuộc tính đó, bạn đang chép lại ví dụ chứ không đọc văn bản — đó là lỗi nghiêm trọng, tạo ra câu hỏi vô nghĩa cho người dùng.
   - `options`:

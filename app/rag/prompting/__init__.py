@@ -13,12 +13,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
 from .builder import (
+    build_ask_user_form_guide,
+    build_history_section,
     build_json_repair_prompt,
+    build_known_metadata_fields_section,
     build_metadata_section,
     build_missing_metadata_block,
     build_prepared_context_section,
@@ -29,8 +33,11 @@ from .schema import PromptTemplates
 
 __all__ = [
     "PromptTemplates",
+    "build_ask_user_form_guide",
     "build_direct_llm_prompt",
+    "build_history_section",
     "build_json_repair_prompt",
+    "build_known_metadata_fields_section",
     "build_missing_metadata_block",
     "build_system_prompt",
     "get_templates",
@@ -53,6 +60,7 @@ def build_system_prompt(
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
     pending_clarification: PendingClarification | None,
+    history: Sequence[HistoryMessage] = (),
 ) -> str:
     """Assemble the full prompt for `GenerationSynthesisNode`'s unified advisory
     flow (advisory/procedure/document/calendar - one frame, `academic_domain_rules`
@@ -62,6 +70,7 @@ def build_system_prompt(
     return templates.chat_academic_advisory.format(
         header=templates.header,
         academic_metadata=build_metadata_section(security, confirmed_metadata),
+        history_message=build_history_section(history),
         security_access_control=_SECURITY_ACCESS_CONTROL_DEFERRED,
         academic_domain_rules=templates.academic_domain_rules,
         response_style=templates.response_style,
@@ -78,6 +87,7 @@ def build_direct_llm_prompt(
     user_query: str,
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
+    history: Sequence[HistoryMessage] = (),
 ) -> str:
     """Assemble the full prompt for `DirectLLMNode` (general-knowledge questions,
     no `<academic_context>` - no `task_1`/`task_2`, no retrieved chunks)."""
@@ -86,6 +96,7 @@ def build_direct_llm_prompt(
     return templates.chat_direct_llm.format(
         header=templates.header,
         academic_metadata=build_metadata_section(security, confirmed_metadata),
+        history_message=build_history_section(history),
         security_access_control=_SECURITY_ACCESS_CONTROL_DEFERRED,
         response_style=templates.response_style,
         user_query=user_query,

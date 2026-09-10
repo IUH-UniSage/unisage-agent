@@ -32,11 +32,43 @@ from app.integrations.backend_java_client import (
     BackendJavaHTTPError,
 )
 from app.schemas.chat import ChatStreamRequest
+from app.schemas.chat_history import HistoryMessage
 from app.schemas.security import AcademicSecurityContext
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)])
+
+# Capped independently of backend-java's own app.message.max-history (default
+# 20, used by GET /messages/conversation/{id} for the frontend's history
+# list) - this is specifically how many prior turns get folded into the
+# generation prompt as raw <history_message> context, not how many the UI
+# shows. Configurable via HISTORY_MESSAGE_LIMIT (see app/core/config.py).
+_HISTORY_MESSAGE_LIMIT = settings.HISTORY_MESSAGE_LIMIT
+
+
+async def _load_history(
+    java_client: BackendJavaClient,
+    *,
+    conversation_id: str,
+    authorization: str | None,
+) -> list[HistoryMessage]:
+    """The last `_HISTORY_MESSAGE_LIMIT` messages BEFORE this turn (called
+    prior to persisting this turn's own USER message, so the list never
+    includes it - `user_query` already carries that separately). Drops any
+    row that isn't a real, finished message (e.g. a STREAMING placeholder
+    left behind by a previous turn's error) - raw conversational context is
+    only useful if it reads as something the student or the assistant
+    actually said."""
+
+    raw_messages = await java_client.get_conversation_messages(
+        conversation_id=conversation_id, limit=_HISTORY_MESSAGE_LIMIT, authorization=authorization
+    )
+    return [
+        HistoryMessage(role=message["role"], content=message["content"])
+        for message in raw_messages
+        if message.get("status") == "COMPLETED" and message.get("content")
+    ]
 
 # asyncio.create_task() only holds a WEAK reference to the task it schedules
 # per the stdlib's own docs - without keeping a strong reference somewhere,
@@ -129,7 +161,10 @@ async def chat_stream_endpoint(
     ownership must be verified before any state is created, and persistence
     must survive a client disconnect):
 
-    1. Ask Java for this conversation's message count (first-turn detection).
+    1. Ask Java for this conversation's message count (first-turn detection)
+       and its last `_HISTORY_MESSAGE_LIMIT` messages (raw `<history_message>`
+       context for the prompt - see `_load_history`), both BEFORE this turn's
+       own USER message exists.
     2. Call Java `POST /messages` (role=USER) FIRST, synchronously, still
        inside this request/response cycle. If Java rejects it (404/403 -
        conversation doesn't exist or belongs to someone else), this raises
@@ -155,6 +190,11 @@ async def chat_stream_endpoint(
     guest_session_token = _resolve_guest_session_token(http_request)
 
     first_turn = await is_first_turn(
+        java_client, conversation_id=request.conversation_id, authorization=authorization
+    )
+    # Fetched BEFORE this turn's own USER message is persisted below, so it
+    # never includes it (see `_load_history`).
+    history = await _load_history(
         java_client, conversation_id=request.conversation_id, authorization=authorization
     )
 
@@ -200,6 +240,7 @@ async def chat_stream_endpoint(
         confirmed_metadata=confirmed_metadata,
         pending_clarification=pending_clarification,
         clarification_max_retry=settings.CLARIFICATION_MAX_RETRY,
+        history=history,
     )
 
     queue: asyncio.Queue[str | None] = asyncio.Queue()

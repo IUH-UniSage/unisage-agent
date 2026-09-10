@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,29 @@ from .schema import PromptTemplates
 
 _templates_dir: Path | None = None
 _templates_cache: PromptTemplates | None = None
+_known_metadata_fields_cache: list[dict[str, Any]] | None = None
 
 
 def reset_templates_cache() -> None:
     """Reset the templates cache (useful for testing)."""
-    global _templates_cache
+    global _templates_cache, _known_metadata_fields_cache
     _templates_cache = None
+    _known_metadata_fields_cache = None
+
+
+def get_known_metadata_fields() -> list[dict[str, Any]]:
+    """Load `known_metadata_fields.json` (lazy load with caching) - the
+    common-concept-to-canonical-field-name vocabulary rendered into
+    `ask_user_form_guide.yaml` (see `builder.build_known_metadata_fields_section`).
+    Not part of `PromptTemplates`: it's structured data, not a format-string
+    template."""
+
+    global _known_metadata_fields_cache
+    if _known_metadata_fields_cache is None:
+        path = Path(__file__).parent / "known_metadata_fields.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        _known_metadata_fields_cache = data["fields"]
+    return _known_metadata_fields_cache
 
 
 def get_templates() -> PromptTemplates:
@@ -62,6 +80,7 @@ def _load_all_templates() -> PromptTemplates:
         json_repair=_load_yaml_template(main / "json_repair.yaml"),
         header=_load_yaml_template(common / "header.yaml"),
         academic_metadata=_load_yaml_template(common / "academic_metadata.yaml"),
+        history_message=_load_yaml_template(common / "history_message.yaml"),
         security_access_control=_load_yaml_template(common / "security_access_control.yaml"),
         academic_domain_rules=_load_yaml_template(common / "academic_domain_rules.yaml"),
         response_style=_load_yaml_template(common / "response_style.yaml"),

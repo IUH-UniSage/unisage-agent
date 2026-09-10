@@ -1,5 +1,5 @@
 # MAIN_JSON_REPAIR_PROMPT
-description: "Lệnh sửa lỗi độc lập cho GenerationSynthesisNode - không cần header/security, nhưng VẪN cần lại {academic_context} để có thể COPY nguyên văn nhãn nhánh (không có thì ask_user_form_guide buộc phải trả về options: null, ô nhập tự do, dù văn bản gốc có tập giá trị hữu hạn). Chỉ đọc lại 1 câu trả lời đã sinh và bù khối JSON ask_user_form bị thiếu (xem generation_synthesis.py::_repair_missing_ask_form). Tái dùng {ask_user_form_guide} y hệt format chính thay vì định nghĩa lại."
+description: "Lệnh sửa lỗi độc lập cho GenerationSynthesisNode - không cần header/security, nhưng VẪN cần lại {academic_context} để có thể COPY nguyên văn nhãn nhánh (không có thì ask_user_form_guide buộc phải trả về options: null, ô nhập tự do, dù văn bản gốc có tập giá trị hữu hạn) VÀ {academic_metadata} để không tái tạo form cho một thuộc tính đã có trong <student_declared_attributes> (lệnh này không thấy được state đó nếu không truyền lại - đây từng là nguyên nhân khiến repair hỏi lại một thuộc tính người dùng đã trả lời). Chỉ đọc lại 1 câu trả lời đã sinh và bù khối JSON ask_user_form bị thiếu (xem generation_synthesis.py::_repair_missing_ask_form). Tái dùng {ask_user_form_guide} y hệt format chính thay vì định nghĩa lại."
 template: |
   Đây là một câu trả lời em vừa sinh ra cho sinh viên. Đọc kỹ: câu trả lời có
   đang đề nghị/mời người dùng cung cấp một thuộc tính còn thiếu (hệ đào tạo,
@@ -9,19 +9,40 @@ template: |
   {previous_response}
   </câu_trả_lời>
 
+  {academic_metadata}
+
+  ⚠️ Nếu câu trả lời trên nêu tên một thuộc tính ĐÃ có giá trị trong
+  `<student_declared_attributes>` ở trên, thuộc tính đó COI NHƯ ĐÃ TRẢ LỜI —
+  KHÔNG đưa vào JSON dù câu trả lời có nhắc lại tên nó. Chỉ còn thuộc tính nào
+  thật sự chưa có trong `<student_declared_attributes>` mới được đưa vào JSON;
+  không còn thuộc tính nào như vậy thì coi là trường hợp SAI ở cuối hướng dẫn
+  này (xuất NONE).
+
   Văn bản gốc đã dùng để sinh câu trả lời trên, để bạn đối chiếu và COPY
   nguyên văn nhãn nhánh (nếu thuộc tính có tập giá trị hữu hạn):
 
   {academic_context}
 
-  Nếu ĐÚNG câu trả lời trên đang hỏi lại thuộc tính nào đó: xuất DUY NHẤT một
-  khối ```json ask_user_form``` khớp với (các) thuộc tính vừa được đề cập ở
-  trên, theo đúng format sau.
+  Nếu ĐÚNG câu trả lời trên đang hỏi lại thuộc tính nào đó (và thuộc tính đó
+  chưa có trong `<student_declared_attributes>`): xuất DUY NHẤT một khối
+  ```json ask_user_form``` khớp với (các) thuộc tính vừa được đề cập ở trên,
+  theo đúng format sau.
 
   {ask_user_form_guide}
 
   KHÔNG viết lại văn xuôi, KHÔNG lặp lại câu trả lời trên, KHÔNG giải thích gì
   thêm ngoài khối JSON đó.
 
-  Nếu SAI (câu trả lời trên không thực sự đang hỏi lại thuộc tính nào), chỉ
-  xuất đúng chữ NONE, không thêm gì khác.
+  Nếu SAI — chỉ xuất đúng chữ NONE, không thêm gì khác. Các trường hợp tính
+  là SAI:
+  - Câu trả lời không thực sự đang hỏi lại thuộc tính nào.
+  - Câu trả lời là LỜI MỜI CHUNG CHUNG, CÓ ĐIỀU KIỆN kiểu "Nếu bạn cần thêm
+    thông tin về X hoặc Y, vui lòng cho biết thêm thông tin." — câu này chỉ
+    ngỏ ý sẵn sàng giúp về những chủ đề người dùng CHƯA hỏi, không phải yêu
+    cầu cụ thể cần thiết để tiếp tục trả lời câu hỏi VỪA RỒI. Dấu hiệu nhận
+    biết: mở đầu bằng "Nếu bạn cần...\"/"Nếu muốn biết thêm..." và/hoặc nêu
+    từ hai chủ đề trở lên nối bằng "hoặc" thay vì MỘT thuộc tính cụ thể. Câu
+    hỏi thật luôn là yêu cầu trực tiếp cho MỘT thuộc tính rõ ràng (VD: "Bạn
+    cho mình biết ngành học để tra học phí nhé" — dù không có dấu `?`, đây
+    VẪN là câu hỏi thật vì nêu đích danh một thuộc tính cần thiết).
+  - Thuộc tính được nhắc tới đã có trong `<student_declared_attributes>`.

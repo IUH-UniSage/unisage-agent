@@ -6,11 +6,14 @@ Uses `chat_direct_llm.yaml` - identity-aware (still renders the two
 since there's no retrieved context to reason about for this intent.
 """
 
+from collections.abc import Sequence
+
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from app.graph.streaming import TokenSink, stream_agent_text
 from app.rag.prompting import build_direct_llm_prompt
+from app.schemas.chat_history import HistoryMessage
 from app.schemas.security import AcademicSecurityContext
 
 
@@ -25,10 +28,12 @@ async def run_direct_llm(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     token_sink: TokenSink,
+    history: Sequence[HistoryMessage] = (),
 ) -> str:
     prompt = build_direct_llm_prompt(
         user_query=user_query,
         security=security,
         confirmed_metadata=confirmed_metadata,
+        history=history,
     )
     return await stream_agent_text(agent, prompt, token_sink)

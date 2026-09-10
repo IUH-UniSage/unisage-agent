@@ -107,6 +107,7 @@ async def run_graph(
             user_query=graph_input.user_message,
             security=graph_input.security,
             confirmed_metadata=confirmed_metadata,
+            history=graph_input.history,
             token_sink=token_sink,
         )
         return GraphOutput(
@@ -214,6 +215,7 @@ async def _run_advisory_flow(
         chunks=rerank_result.chunks,
         previous_pending=pending_clarification,
         origin_node=_ORIGIN_NODE_QUERY_TRANSFORMATION,
+        history=graph_input.history,
         token_sink=token_sink,
         trace=trace,
     )
