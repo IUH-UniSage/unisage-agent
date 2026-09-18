@@ -5,10 +5,11 @@ from app.rag.chunking.excel_rows import ExcelRowChunker
 from app.rag.chunking.markdown_aware import MarkdownAwareChunker
 from app.rag.chunking.recursive import RecursiveChunker
 from app.rag.chunking.semantic import SemanticChunker
+from app.rag.chunking.table_row import TableRowChunker
 from app.rag.chunking.token_based import TokenBasedChunker
 from app.rag.ingestion.parser import get_extension
 from app.rag.ingestion.table_aware_parser import ParsedRegion, split_regions
-from app.schemas.ingestion import Chunk, ChunkingStrategyName
+from app.schemas.ingestion import Chunk, ChunkingStrategyName, RegionType
 
 
 class _RegionChunker(Protocol):
@@ -21,7 +22,18 @@ def dispatch(
     content: bytes,
     filename: str,
 ) -> list[Chunk]:
-    """Route a chunking request to the selected strategy, validating file-type fit."""
+    """Route a chunking request to the selected strategy, validating file-type fit.
+
+    TABLE regions ALWAYS go through `TableRowChunker`, regardless of the
+    requested text strategy - a table is never handed to
+    `RecursiveChunker`/`TokenBasedChunker`/`SemanticChunker`/
+    `MarkdownAwareChunker`, all of which only know about paragraph/token
+    boundaries and would happily cut a table mid-row. `table_chunks` and
+    `text_chunks` are then merged back together ordered by each chunk's
+    `block_index` (the position of its originating region in the document),
+    then `chunk_index` is renumbered 0..n-1 over the merged, ordered list -
+    `block_index` itself is left untouched by the renumbering.
+    """
 
     extension = get_extension(filename)
 
@@ -35,8 +47,20 @@ def dispatch(
         raise StrategyFileTypeMismatchException(strategy, filename)
 
     regions = split_regions(content, filename, extension)
+    table_regions = [region for region in regions if region.region_type == RegionType.TABLE]
+    text_regions = [region for region in regions if region.region_type != RegionType.TABLE]
+
+    table_max_tokens = int(params.get("table_max_tokens", 400))
+    table_chunks = TableRowChunker(max_tokens=table_max_tokens).split(table_regions)
+
     chunker: _RegionChunker = _build_text_chunker(strategy, params)
-    return chunker.split(regions)
+    text_chunks = chunker.split(text_regions)
+
+    merged = sorted(
+        [*table_chunks, *text_chunks],
+        key=lambda chunk: (chunk.block_index is None, chunk.block_index or 0),
+    )
+    return [chunk.model_copy(update={"chunk_index": i}) for i, chunk in enumerate(merged)]
 
 
 def _build_text_chunker(strategy: ChunkingStrategyName, params: dict[str, Any]) -> _RegionChunker:

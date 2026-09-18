@@ -85,6 +85,72 @@ def test_prepared_context_renders_chunks_with_citation_index() -> None:
     assert "[1] (Quy chế A) Nội dung 1" in prompt
 
 
+def test_prepared_context_shows_page_suffix_for_pdf_chunks_with_a_single_page() -> None:
+    prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[
+            RetrievedChunk(
+                chunk_id="c1",
+                content="Nội dung 1",
+                source="Quy chế A",
+                score=1.0,
+                page_start=5,
+            )
+        ],
+        pending_clarification=None,
+    )
+
+    assert "[1] (Quy chế A, tr. 5) Nội dung 1" in prompt
+
+
+def test_prepared_context_shows_page_range_suffix_when_start_and_end_differ() -> None:
+    prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[
+            RetrievedChunk(
+                chunk_id="c1",
+                content="Nội dung 1",
+                source="Quy chế A",
+                score=1.0,
+                page_start=5,
+                page_end=6,
+            )
+        ],
+        pending_clarification=None,
+    )
+
+    assert "[1] (Quy chế A, tr. 5-6) Nội dung 1" in prompt
+
+
+def test_prepared_context_has_no_page_suffix_for_non_pdf_chunks() -> None:
+    prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[
+            RetrievedChunk(
+                chunk_id="c1",
+                content="Nội dung 1",
+                source="Quy chế A",
+                score=1.0,
+            )
+        ],
+        pending_clarification=None,
+    )
+
+    assert "[1] (Quy chế A) Nội dung 1" in prompt
+    assert "tr. None" not in prompt
+    # The chunk citation line itself must have no page suffix - this is a
+    # narrower check than searching the whole prompt for ", tr." (that
+    # substring legitimately appears in citation_rules.yaml's own
+    # instructions to the LLM about how to use a page suffix WHEN present).
+    assert "[1] (Quy chế A, tr." not in prompt
+
+
 def test_json_repair_prompt_includes_academic_context_for_verbatim_options() -> None:
     """Without the source chunks, ask_user_form_guide's "copy the branch label
     verbatim" rule has nothing to copy from - the repair prompt must carry

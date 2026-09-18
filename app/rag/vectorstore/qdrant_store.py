@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 from uuid import UUID
 
 from qdrant_client import QdrantClient, models
@@ -36,7 +37,15 @@ def ensure_collection(client: QdrantClient) -> None:
 
 @dataclass(frozen=True)
 class ChunkPoint:
-    """One Qdrant point: a chunk's three named vectors plus its retrieval payload."""
+    """One Qdrant point: a chunk's three named vectors plus its retrieval payload.
+
+    The structural-metadata fields below (`source_type` through
+    `chunking_version`) all default to `None`/`"legacy"` so a caller
+    upserting a point for a legacy chunk (missing these fields entirely)
+    doesn't have to fabricate values - see `RetrievedChunk`/
+    `_to_retrieved_chunk` (Phase 6) for how a point missing them degrades
+    gracefully at read time instead of erroring.
+    """
 
     point_id: str
     document_id: str
@@ -52,6 +61,16 @@ class ChunkPoint:
     content_vector: list[float]
     summary_vector: list[float]
     questions_vector: list[float]
+    source_type: str | None = None
+    block_index: int | None = None
+    heading_path: list[str] = field(default_factory=list)
+    page_start: int | None = None
+    page_end: int | None = None
+    source_locator: dict[str, Any] | None = None
+    column_names: list[str] | None = None
+    has_header: bool = False
+    header_source: str | None = None
+    chunking_version: str = "legacy"
 
 
 def search_chunks(
@@ -123,6 +142,16 @@ def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:
                     "access_level": point.access_level,
                     "category": point.category,
                     "region_type": point.region_type,
+                    "source_type": point.source_type,
+                    "block_index": point.block_index,
+                    "heading_path": point.heading_path,
+                    "page_start": point.page_start,
+                    "page_end": point.page_end,
+                    "source_locator": point.source_locator,
+                    "column_names": point.column_names,
+                    "has_header": point.has_header,
+                    "header_source": point.header_source,
+                    "chunking_version": point.chunking_version,
                 },
             )
         ],

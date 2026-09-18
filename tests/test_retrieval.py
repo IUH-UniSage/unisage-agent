@@ -82,6 +82,63 @@ def test_retrieve_clamps_score_into_the_0_1_range_the_schema_requires() -> None:
     assert chunks[0].score == 1.0
 
 
+def test_retrieve_maps_structural_metadata_including_source_locator() -> None:
+    fake_qdrant = MagicMock()
+    fake_qdrant.collection_exists.return_value = True
+    point = ScoredPoint(
+        id="c1",
+        version=0,
+        score=0.9,
+        payload={
+            "chunk_id": "c1",
+            "content": "Điều 5...",
+            "object_key": "docs/handbook.pdf",
+            "document_id": "doc-1",
+            "department": "CNTT",
+            "access_level": 1,
+            "region_type": "table",
+            "source_type": "pdf",
+            "heading_path": ["Chương 1", "Điều 5"],
+            "page_start": 5,
+            "page_end": 6,
+            "source_locator": {
+                "table_id": "table-2",
+                "row_start": 1,
+                "row_end": 3,
+                "row_count": 3,
+            },
+        },
+    )
+    fake_qdrant.query_points.return_value = QueryResponse(points=[point])
+    service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1]))
+
+    chunks = service.retrieve("nội dung điều 5")
+
+    assert chunks[0].source_type == "pdf"
+    assert chunks[0].heading_path == ["Chương 1", "Điều 5"]
+    assert chunks[0].page_start == 5
+    assert chunks[0].page_end == 6
+    assert chunks[0].source_locator is not None
+    assert chunks[0].source_locator.table_id == "table-2"
+    assert chunks[0].source_locator.row_count == 3
+
+
+def test_retrieve_defaults_structural_metadata_for_a_pre_phase5_point() -> None:
+    """A point upserted before Phase 5 has none of the new payload keys -
+    must still parse into a valid RetrievedChunk, not raise."""
+
+    fake_qdrant = MagicMock()
+    fake_qdrant.collection_exists.return_value = True
+    fake_qdrant.query_points.return_value = QueryResponse(points=[_scored_point("c1", 0.5)])
+    service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1]))
+
+    chunks = service.retrieve("câu hỏi")
+
+    assert chunks[0].heading_path == []
+    assert chunks[0].page_start is None
+    assert chunks[0].source_locator is None
+
+
 def test_retrieve_passes_explicit_limit_through_to_qdrant() -> None:
     fake_qdrant = MagicMock()
     fake_qdrant.collection_exists.return_value = True

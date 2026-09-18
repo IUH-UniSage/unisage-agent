@@ -22,6 +22,9 @@ from app.core.config import settings
 from app.core.events import ingestion_event_stream
 from app.core.exceptions import (
     DepartmentAccessDeniedException,
+    EmbeddingChunkSetMismatchException,
+    EmbeddingDraftLegacyException,
+    EmbeddingDraftMismatchException,
     IngestionJobNotFoundException,
     UniSageException,
 )
@@ -35,10 +38,12 @@ from app.database.repositories.ingestion_job import (
 )
 from app.database.session import get_db_session
 from app.rag.chunking import strategy
+from app.rag.chunking.validation import validate_chunks
 from app.rag.ingestion import minio_client
 from app.rag.ingestion.parser import extract_raw_text
 from app.schemas.common import ApiResponse
 from app.schemas.ingestion import (
+    Chunk,
     ChunkingRequest,
     ChunkingResponse,
     EmbeddingAcceptedResponse,
@@ -79,6 +84,7 @@ async def chunk_document(
     require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
     chunks = strategy.dispatch(request.strategy, request.params, content, request.object_key)
+    validate_chunks(chunks)
     await upsert_chunking_draft(
         db_session,
         document_id=request.document_id,
@@ -131,19 +137,90 @@ async def embed_document(
     context: TrustedContext = Depends(require_document_permission),
     db_session: AsyncSession = Depends(get_db_session),
 ) -> ApiResponse[EmbeddingAcceptedResponse]:
-    """Dispatch the client-approved chunk list for background enrichment + embedding."""
+    """Dispatch a chunk list for background enrichment + embedding.
+
+    Execution order (deliberately NOT task-number order - see plan.md v5
+    Task 4.4's note): Task 4.5's canonical-metadata-from-draft merge runs
+    FIRST, then Task 4.4's `validate_chunks()` runs on the MERGED result,
+    right before dispatching Celery. `request.chunks` is never trusted for
+    anything but `content` - every other field (heading_path, page_start,
+    source_locator, column_names, ...) is taken from the stored draft, so a
+    client (or a script bypassing the UI wizard) cannot forge structural
+    metadata.
+    """
 
     _require_department_access_within_grant(request, context)
+
+    draft = await get_draft(db_session, request.document_id)
+    merged_chunks = _merge_canonical_chunks(request, draft)
+    validate_chunks(merged_chunks)
 
     task = embed_chunks.delay(
         request.document_id,
         request.object_key,
-        [chunk.model_dump(mode="json") for chunk in request.chunks],
+        [chunk.model_dump(mode="json") for chunk in merged_chunks],
         request.department_id,
         request.access_level,
     )
     await mark_embedding(db_session, document_id=request.document_id, celery_task_id=task.id)
     return ApiResponse.success(EmbeddingAcceptedResponse(task_id=task.id))
+
+
+def _merge_canonical_chunks(request: EmbeddingRequest, draft: DraftDTO | None) -> list[Chunk]:
+    """Task 4.5: build the chunk list actually sent for embedding, trusting
+    ONLY `content` from `request.chunks` - every other field comes from the
+    stored chunking draft (the canonical source of truth), never the client.
+
+    Raises (see plan.md v5, Task 4.5's acceptance criteria):
+    - `IngestionJobNotFoundException` - no draft at all for `document_id`.
+    - `EmbeddingDraftMismatchException` - draft exists but its
+      `department_id`/`object_key` doesn't match this request (never use a
+      draft belonging to a different context, even if `document_id` matches).
+    - `EmbeddingDraftLegacyException` (HTTP 409) - the draft (or any of its
+      chunks) predates structural metadata (`chunking_version == "legacy"`,
+      or `source_type`/`block_index` still `None`) - cannot be embedded
+      safely; the document must be re-chunked.
+    - `EmbeddingChunkSetMismatchException` - `request.chunks` doesn't line
+      up 1:1 by `chunk_index` with the canonical draft (wrong count,
+      duplicate index, or a mismatched index set). Never merges partially.
+    """
+
+    if draft is None:
+        raise IngestionJobNotFoundException(request.document_id)
+
+    if draft.department_id != request.department_id or draft.object_key != request.object_key:
+        raise EmbeddingDraftMismatchException(request.document_id)
+
+    canonical_chunks = draft.chunks
+    is_legacy_draft = any(
+        chunk.chunking_version == "legacy" or chunk.source_type is None or chunk.block_index is None
+        for chunk in canonical_chunks
+    )
+    if is_legacy_draft:
+        raise EmbeddingDraftLegacyException(request.document_id)
+
+    canonical_by_index = {chunk.chunk_index: chunk for chunk in canonical_chunks}
+
+    request_indexes = [chunk.chunk_index for chunk in request.chunks]
+    if len(request.chunks) != len(canonical_chunks):
+        raise EmbeddingChunkSetMismatchException(
+            request.document_id,
+            f"số lượng chunk gửi lên ({len(request.chunks)}) khác bản nháp "
+            f"({len(canonical_chunks)})",
+        )
+    if len(set(request_indexes)) != len(request_indexes):
+        raise EmbeddingChunkSetMismatchException(
+            request.document_id, "chunk_index bị trùng lặp trong yêu cầu"
+        )
+    if set(request_indexes) != set(canonical_by_index.keys()):
+        raise EmbeddingChunkSetMismatchException(
+            request.document_id, "tập chunk_index không khớp CHÍNH XÁC với bản nháp"
+        )
+
+    return [
+        canonical_by_index[chunk.chunk_index].model_copy(update={"content": chunk.content})
+        for chunk in sorted(request.chunks, key=lambda chunk: chunk.chunk_index)
+    ]
 
 
 def _require_department_access_within_grant(

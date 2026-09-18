@@ -99,13 +99,32 @@ def build_history_section(history: Sequence[HistoryMessage]) -> str:
     return get_templates().history_message.format(history_lines=history_lines)
 
 
+def _page_suffix(chunk: RetrievedChunk) -> str:
+    """`", tr. X"` / `", tr. X-Y"` when the chunk carries a real page number
+    (PDF only - `page_start` stays `None` for HTML/DOCX/TXT/XLSX), else `""`.
+    `content` already carries its own heading prefix (chunker-side, Phase 3),
+    so this is the only structural metadata the builder itself needs to add."""
+
+    if chunk.page_start is None:
+        return ""
+    if chunk.page_end is not None and chunk.page_end != chunk.page_start:
+        return f", tr. {chunk.page_start}-{chunk.page_end}"
+    return f", tr. {chunk.page_start}"
+
+
 def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
     """Build `{prepared_context}` - the `<academic_context>` block, chunks numbered
-    to match the `[1][2]` citation indices the generation prompt asks the model to use."""
+    to match the `[1][2]` citation indices the generation prompt asks the model to use.
+
+    Each chunk's source is suffixed with its page number(s) when available
+    (`_page_suffix`) - this is the mechanism that finally gets `page_start`/
+    `page_end` in front of the LLM (Phase 6's main goal); `citation_rules.yaml`
+    (Task 6.5) is what then instructs the LLM to copy it into its answer."""
 
     context_chunks = (
         "\n".join(
-            f"  [{index}] ({chunk.source}) {chunk.content}" for index, chunk in enumerate(chunks, 1)
+            f"  [{index}] ({chunk.source}{_page_suffix(chunk)}) {chunk.content}"
+            for index, chunk in enumerate(chunks, 1)
         )
         or _NO_RETRIEVED_CONTEXT
     )

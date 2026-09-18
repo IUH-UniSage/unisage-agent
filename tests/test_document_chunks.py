@@ -23,7 +23,7 @@ def _chunk_a_document(client: TestClient, document_id: str, *, department_id: st
                 "department_id": department_id,
                 "object_key": "docs/handbook.pdf",
                 "strategy": "recursive",
-                "params": {"chunk_size": 10, "overlap": 0},
+                "params": {"chunk_size": 40, "overlap": 0},
             },
             headers={
                 "X-User-Department-Access": json.dumps(

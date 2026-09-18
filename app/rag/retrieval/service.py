@@ -7,6 +7,7 @@ from qdrant_client.http.models import ScoredPoint
 from app.core.config import settings
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.vectorstore.qdrant_store import get_client, search_chunks
+from app.schemas.ingestion import SourceLocator
 from app.schemas.retrieval import RetrievedChunk
 
 
@@ -44,11 +45,18 @@ class RetrievalService:
 
 def _to_retrieved_chunk(point: ScoredPoint) -> RetrievedChunk:
     payload: dict[str, Any] = point.payload or {}
+    raw_locator = payload.get("source_locator")
+    source_locator = SourceLocator.model_validate(raw_locator) if raw_locator else None
     return RetrievedChunk(
         chunk_id=str(payload.get("chunk_id", point.id)),
         content=str(payload.get("content", "")),
         source=str(payload.get("object_key") or payload.get("document_id") or ""),
         score=max(0.0, min(1.0, point.score)),
+        heading_path=list(payload.get("heading_path") or []),
+        page_start=payload.get("page_start"),
+        page_end=payload.get("page_end"),
+        source_type=payload.get("source_type"),
+        source_locator=source_locator,
         metadata={
             "document_id": payload.get("document_id"),
             "department": payload.get("department"),

@@ -35,6 +35,11 @@ class Settings(BaseSettings):
 
     SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
 
+    # Bumped whenever chunking logic changes in a way that would make old
+    # and new chunks structurally incomparable (see `Chunk.chunking_version`
+    # default of "legacy" for data that predates this field entirely).
+    CHUNKING_VERSION: str = "2026-09-structural-v1"
+
     # MinIO
     MINIO_ENDPOINT: str = "localhost:9000"
     MINIO_ACCESS_KEY: str = ""

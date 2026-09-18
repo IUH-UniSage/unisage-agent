@@ -93,6 +93,19 @@ class DocumentChunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     region_type: Mapped[str] = mapped_column(String, nullable=False)
+    # Every `Chunk` field other than chunk_index/content/region_type
+    # (heading_path, source_type, block_index, source_locator, ...),
+    # serialized as-is via `Chunk.model_dump()`. `default={}` (not just
+    # server-side) so a row inserted before this column existed, or by code
+    # that forgets to set it, reads back as an empty dict rather than NULL -
+    # `Chunk(**{})` then falls back to every field's own Pydantic default,
+    # including `chunking_version="legacy"`.
+    chunk_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+        default=dict,
+    )
 
     process_log: Mapped[DocumentProcessLog] = relationship(back_populates="chunks")
 

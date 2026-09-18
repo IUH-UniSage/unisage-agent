@@ -78,7 +78,61 @@ def test_upsert_chunk_builds_expected_payload_and_vector_shape() -> None:
         "access_level": 2,
         "category": "HOC_VU",
         "region_type": "text",
+        "source_type": None,
+        "block_index": None,
+        "heading_path": [],
+        "page_start": None,
+        "page_end": None,
+        "source_locator": None,
+        "column_names": None,
+        "has_header": False,
+        "header_source": None,
+        "chunking_version": "legacy",
     }
+
+
+def test_upsert_chunk_carries_structural_metadata_fields_when_set() -> None:
+    client = MagicMock()
+    point = ChunkPoint(
+        point_id="doc-1:0",
+        document_id="doc-1",
+        object_key="docs/handbook.pdf",
+        chunk_id="doc-1:0",
+        content="chunk text",
+        summary="a summary",
+        questions=["Q1?", "Q2?"],
+        department="CNTT",
+        access_level=2,
+        category="HOC_VU",
+        region_type="table",
+        content_vector=[0.1],
+        summary_vector=[0.3],
+        questions_vector=[0.5],
+        source_type="pdf",
+        block_index=2,
+        heading_path=["Chương 1", "Điều 5"],
+        page_start=5,
+        page_end=6,
+        source_locator={"table_id": "table-2", "row_start": 1, "row_end": 3, "row_count": 3},
+        column_names=["Tên", "Điểm"],
+        has_header=True,
+        header_source="inferred",
+        chunking_version="2026-09-structural-v1",
+    )
+
+    upsert_chunk(client, point)
+
+    (upserted_point,) = client.upsert.call_args.kwargs["points"]
+    assert upserted_point.payload["source_type"] == "pdf"
+    assert upserted_point.payload["block_index"] == 2
+    assert upserted_point.payload["heading_path"] == ["Chương 1", "Điều 5"]
+    assert upserted_point.payload["page_start"] == 5
+    assert upserted_point.payload["page_end"] == 6
+    assert upserted_point.payload["source_locator"]["table_id"] == "table-2"
+    assert upserted_point.payload["column_names"] == ["Tên", "Điểm"]
+    assert upserted_point.payload["has_header"] is True
+    assert upserted_point.payload["header_source"] == "inferred"
+    assert upserted_point.payload["chunking_version"] == "2026-09-structural-v1"
 
 
 def test_search_chunks_returns_empty_list_when_collection_missing() -> None:

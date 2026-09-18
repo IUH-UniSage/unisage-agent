@@ -1,5 +1,7 @@
+import pytest
 import tiktoken
 
+from app.core.exceptions import ChunkingConfigException
 from app.rag.chunking.token_based import TokenBasedChunker
 from app.rag.ingestion.table_aware_parser import ParsedRegion
 from app.schemas.ingestion import RegionType
@@ -35,3 +37,25 @@ def test_split_carries_region_type_through_to_chunks() -> None:
     chunks = chunker.split([ParsedRegion(RegionType.TABLE, "|a|b|")])
 
     assert all(chunk.region_type == RegionType.TABLE for chunk in chunks)
+
+
+def test_every_sub_chunk_carries_heading_prefix_and_stays_within_budget() -> None:
+    chunker = TokenBasedChunker(chunk_size=30, overlap=2)
+    long_text = " ".join(f"word{i}" for i in range(100))
+    region = ParsedRegion(RegionType.TEXT, long_text, heading_path=["Section A"])
+
+    chunks = chunker.split([region])
+
+    assert len(chunks) >= 3
+    for chunk in chunks:
+        assert chunk.content.startswith("Section A\n\n")
+        assert len(_ENCODING.encode(chunk.content)) <= 30
+
+
+def test_heading_prefix_too_long_raises_config_exception() -> None:
+    chunker = TokenBasedChunker(chunk_size=5, overlap=1)
+    heading = " ".join(f"heading_word_{i}" for i in range(20))
+    region = ParsedRegion(RegionType.TEXT, "body text", heading_path=[heading])
+
+    with pytest.raises(ChunkingConfigException):
+        chunker.split([region])

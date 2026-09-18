@@ -93,6 +93,20 @@ def embed_chunks(
                     content_vector=content_vector,
                     summary_vector=summary_vector,
                     questions_vector=questions_vector,
+                    source_type=chunk.source_type.value if chunk.source_type else None,
+                    block_index=chunk.block_index,
+                    heading_path=list(chunk.heading_path),
+                    page_start=chunk.page_start,
+                    page_end=chunk.page_end,
+                    source_locator=(
+                        chunk.source_locator.model_dump(mode="json")
+                        if chunk.source_locator is not None
+                        else None
+                    ),
+                    column_names=chunk.column_names,
+                    has_header=chunk.has_header,
+                    header_source=chunk.header_source.value,
+                    chunking_version=chunk.chunking_version,
                 ),
             )
             results.append({"chunk_index": chunk.chunk_index, "status": "SUCCESS"})

@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.error_codes import ErrorCode
 from app.core.exceptions import UniSageException
 from app.core.middleware import request_logging_middleware
+from app.rag.chunking.table_row import TableStructureError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -82,6 +83,50 @@ async def unisage_exception_handler(request: Request, exc: UniSageException) -> 
     return JSONResponse(
         status_code=exc.error_code.http_status,
         content=_error_content(exc.error_code.code, exc.message, exc.errors),
+    )
+
+
+@app.exception_handler(TableStructureError)
+async def table_structure_error_handler(request: Request, exc: TableStructureError) -> JSONResponse:
+    """`TableStructureError` is an internal chunker BUG/invariant failure
+    (a row's structure doesn't match its table's expectations) - never a
+    user input/config problem, unlike `ChunkValidationException`/
+    `ChunkingConfigException`, which get their own `UniSageException` 4xx
+    handling above. Per plan.md's Open Questions (made explicit by an
+    additional requirement): log this at CRITICAL with full structured
+    context (document_id, block_index, table_id, row_index, expected vs
+    actual cell count, a non-reversible digest of the offending row) so an
+    on-call engineer can actually debug it - but the row's raw/untruncated
+    text (which may hold PII pulled straight from an uploaded document) is
+    only ever logged when `settings.DEBUG` is on (local/test runs), never
+    in a production log line. The client still only sees a generic 500.
+    """
+
+    document_id = "unknown"
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            document_id = str(body.get("document_id", "unknown"))
+    except Exception:  # pragma: no cover - defensive only, body may be unreadable/non-JSON
+        pass
+
+    context: dict[str, Any] = {
+        "document_id": document_id,
+        "block_index": exc.block_index,
+        "table_id": exc.table_id,
+        "row_index": exc.row_index,
+        "expected_cell_count": exc.expected_cell_count,
+        "actual_cell_count": exc.actual_cell_count,
+        "row_sample_digest": exc.row_sample_digest,
+    }
+    if settings.DEBUG:
+        # Debug/test only - never reached in production, where DEBUG=False.
+        context["raw_row"] = exc.raw_row
+    logger.critical("TableStructureError: internal chunker invariant violated: %s", context)
+
+    return JSONResponse(
+        status_code=ErrorCode.INTERNAL_ERROR.http_status,
+        content=_error_content(ErrorCode.INTERNAL_ERROR.code, ErrorCode.INTERNAL_ERROR.message),
     )
 
 

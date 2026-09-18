@@ -27,6 +27,54 @@ class RegionType(StrEnum):
     EXCEL_ROW = "excel_row"
 
 
+class HeaderSource(StrEnum):
+    """Where a table's header row information came from."""
+
+    EXPLICIT = "explicit"  # real structural header signal from the source: HTML <th>,
+    # DOCX <w:tblHeader>, XLSX header row (product contract, see table_aware_parser)
+    INFERRED = "inferred"  # no structural signal - the first row is assumed to be the
+    # header (PDF always lands here: pymupdf4llm gives no such signal)
+    MISSING = "missing"  # could not be determined -> column_names = None
+
+
+class SourceType(StrEnum):
+    """The file format a chunk's originating region was parsed from."""
+
+    PDF = "pdf"
+    DOCX = "docx"
+    HTML = "html"
+    TXT = "txt"
+    XLSX = "xlsx"
+
+
+class SourceLocator(BaseModel):
+    """Fine-grained location of a chunk within its source document.
+
+    All fields are optional/`None` by default because most fields only make
+    sense for a subset of `region_type`/`source_type` combinations (e.g.
+    `sheet_name` only for XLSX, `row_start`/`row_end`/`row_count` only for
+    TABLE/EXCEL_ROW chunks) - see `validate_chunks` (Phase 4) for which
+    fields become mandatory for which chunk kind.
+    """
+
+    section: str | None = None  # DOCX/HTML/TXT: heading_path joined with " > ",
+    # None when there is no heading
+    sheet_name: str | None = None  # XLSX
+    row_start: int | None = None  # XLSX or TABLE chunk: first data row (1-indexed,
+    # header not counted)
+    row_end: int | None = None  # XLSX or TABLE chunk: last data row
+    row_count: int | None = None  # number of real data rows in this chunk - an
+    # independent figure the validator (Phase 4) cross-checks against
+    # `row_end - row_start + 1` (a round-trip consistency check, NOT a
+    # re-verification of the actual cell content - see Task 2.2/4.2)
+    table_id: str | None = None  # "table-{block_index}" - distinguishes two tables
+    # sharing the same page/heading
+    row_part: int | None = None  # 1-indexed, only set when one row had to be split
+    # across multiple chunks (oversized-row fallback)
+    row_part_count: int | None = None
+    is_partial_row: bool = False
+
+
 class PreviewRequest(BaseModel):
     """Request to fetch and preview the raw text of a stored object."""
 
@@ -51,11 +99,37 @@ class ChunkingRequest(BaseModel):
 
 
 class Chunk(BaseModel):
-    """One chunk produced by a chunking strategy."""
+    """One chunk produced by a chunking strategy.
+
+    `source_type`/`block_index` default to `None` rather than being
+    required so that every existing `Chunk(chunk_index=.., content=..,
+    region_type=..)` call (tests, older chunkers before Phase 3) keeps
+    constructing successfully - the chunkers wired through
+    `strategy.dispatch()` (Phase 3) always set them explicitly, and
+    `validate_chunks` (Phase 4) is the place that enforces they are set,
+    not the Pydantic model itself. `block_index=None` is distinct from
+    `block_index=0` (a valid region index) - `None` means "no chunker has
+    assigned this yet".
+    """
 
     chunk_index: int = Field(ge=0)
     content: str
     region_type: RegionType
+    source_type: SourceType | None = None
+    block_index: int | None = None
+    heading_path: list[str] = Field(default_factory=list)
+    page_start: int | None = None
+    page_end: int | None = None
+    source_locator: SourceLocator | None = None
+    column_names: list[str] | None = None
+    has_header: bool = False
+    header_source: HeaderSource = HeaderSource.MISSING
+    header_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Deliberately NOT `settings.CHUNKING_VERSION` - that default would also
+    # apply when deserializing an old row that never had this field at all,
+    # mislabeling legacy data as produced by the current chunking logic.
+    # Every new chunker (Phase 2/3) sets this explicitly at construction.
+    chunking_version: str = "legacy"
 
 
 class ChunkingResponse(BaseModel):

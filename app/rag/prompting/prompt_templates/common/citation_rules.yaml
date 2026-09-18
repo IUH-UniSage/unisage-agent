@@ -7,6 +7,12 @@ content: |
      ```markdown
      ---
      📌 **Văn bản tham chiếu chính thức:**
-     - [1] <Tên văn bản> (<Số Quyết định/Phiên bản>) - <Điều/Khoản/Mục>
+     - [1] <Tên văn bản> (<Số Quyết định/Phiên bản>) - <Điều/Khoản/Mục>[, Trang <X> hoặc <X>-<Y> nếu
+       `<academic_context>` có ghi kèm "tr. X" cho chunk đó; bỏ qua phần này nếu chunk không có số
+       trang (HTML/DOCX/TXT/XLSX)]
      ```
   3. Tuyệt đối KHÔNG trích dẫn các tài liệu không tồn tại trong `<academic_context>`.
+  4. Nếu `<academic_context>` ghi kèm số trang cho một nguồn theo dạng `(nguồn, tr. X)` hoặc
+     `(nguồn, tr. X-Y)`, PHẢI copy đúng số trang đó vào phần "📌 Văn bản tham chiếu chính thức"
+     (ghi là "Trang X" hoặc "Trang X-Y"). TUYỆT ĐỐI KHÔNG tự suy đoán/làm tròn số trang khi
+     `<academic_context>` không ghi kèm số trang cho chunk đó.
