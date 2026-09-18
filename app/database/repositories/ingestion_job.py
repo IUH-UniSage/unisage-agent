@@ -82,6 +82,9 @@ async def upsert_chunking_draft(
             chunk_index=chunk.chunk_index,
             content=chunk.content,
             region_type=chunk.region_type.value,
+            chunk_metadata=chunk.model_dump(
+                mode="json", exclude={"chunk_index", "content", "region_type"}
+            ),
         )
         for chunk in chunks
     )
@@ -124,6 +127,7 @@ async def get_draft(session: AsyncSession, document_id: str) -> DraftDTO | None:
                 chunk_index=chunk.chunk_index,
                 content=chunk.content,
                 region_type=RegionType(chunk.region_type),
+                **chunk.chunk_metadata,
             )
             for chunk in sorted(log.chunks, key=lambda chunk: chunk.chunk_index)
         ],

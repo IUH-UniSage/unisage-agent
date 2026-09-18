@@ -154,6 +154,25 @@ class BackendJavaUnavailableException(UniSageException):
         super().__init__(ErrorCode.BACKEND_JAVA_UNAVAILABLE)
 
 
+class ChunkingConfigException(UniSageException):
+    """Raised when a chunking configuration cannot produce a valid chunk at
+    all - e.g. `heading_path`/table header text alone consumes (or exceeds)
+    the entire `max_tokens`/`chunk_size` budget, leaving no room (or a
+    negative one) for any real content.
+
+    Deliberately fail-fast instead of any of the alternatives considered:
+    silently shrinking `overlap`, or silently letting a chunk exceed the
+    configured hard cap - both would hide a real configuration problem
+    rather than surface it. Defined here (Task 2.2, Phase 2) rather than
+    alongside `ChunkValidationException` (Task 4.1, Phase 4) because
+    `TableRowChunker`/`RecursiveChunker`/`TokenBasedChunker`/
+    `SemanticChunker` (Phase 2-3) need to raise it before Phase 4 exists.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(ErrorCode.CHUNKING_CONFIG_INVALID, message=message)
+
+
 class IngestionJobNotFoundException(UniSageException):
     """Exception raised when no process-log/draft row exists for a document."""
 
@@ -161,4 +180,86 @@ class IngestionJobNotFoundException(UniSageException):
         super().__init__(
             ErrorCode.INGESTION_JOB_NOT_FOUND,
             message=f"Không tìm thấy bản nháp nạp liệu cho tài liệu '{document_id}'.",
+        )
+
+
+class ChunkValidationException(UniSageException):
+    """Raised by `validate_chunks` (Phase 4) when one or more `Chunk`s have
+    internally inconsistent fields - e.g. a TABLE chunk missing
+    `source_locator.row_count`, or a PDF TEXT chunk missing `page_start`.
+
+    Distinct from `ChunkingConfigException`: this is for a chunk that has
+    ALREADY been built but whose fields don't add up (a bug in a chunker, a
+    round-trip/mapping problem in DB or Qdrant, or a client tampering with
+    chunk fields before `POST /ingestion/embedding`) - not a configuration
+    problem detected before any chunk exists. `errors` carries one entry per
+    offending chunk (keyed by `str(chunk_index)`) so the response is
+    debuggable without needing a stack trace.
+    """
+
+    def __init__(self, errors: dict[str, str]):
+        super().__init__(
+            ErrorCode.CHUNK_VALIDATION_FAILED,
+            errors=errors,
+        )
+
+
+class EmbeddingDraftMismatchException(UniSageException):
+    """Raised when `POST /ingestion/embedding`'s `department_id`/`object_key`
+    doesn't match the stored chunking draft for `document_id`.
+
+    Deliberately distinct from `IngestionJobNotFoundException` (no draft
+    exists at all): here a draft exists, but trusting it for this request
+    would silently apply another department/object's canonical metadata -
+    so this is a mismatch, not a "not found".
+    """
+
+    def __init__(self, document_id: str) -> None:
+        super().__init__(
+            ErrorCode.EMBEDDING_DRAFT_MISMATCH,
+            message=(
+                f"Bản nháp của tài liệu '{document_id}' không khớp department_id/object_key "
+                "trong yêu cầu này."
+            ),
+        )
+
+
+class EmbeddingChunkSetMismatchException(UniSageException):
+    """Raised when `POST /ingestion/embedding`'s `chunks` don't line up 1:1
+    (by `chunk_index`) with the canonical draft: a different count, a
+    duplicate `chunk_index`, or a `chunk_index` set that doesn't exactly
+    match the draft's. Any of these makes a partial/best-effort merge
+    unsafe, so this always rejects the whole request rather than merging
+    what it can.
+    """
+
+    def __init__(self, document_id: str, reason: str) -> None:
+        super().__init__(
+            ErrorCode.EMBEDDING_CHUNK_SET_MISMATCH,
+            message=(
+                f"Danh sách chunk gửi lên cho tài liệu '{document_id}' không khớp bản nháp "
+                f"đã lưu: {reason}"
+            ),
+        )
+
+
+class EmbeddingDraftLegacyException(UniSageException):
+    """Raised when `POST /ingestion/embedding`'s canonical draft predates
+    structural chunking metadata (`chunking_version == "legacy"`, or any
+    canonical chunk with `source_type`/`block_index` still `None`).
+
+    Deliberate product decision (plan v5): reject with 409 rather than
+    attempting to embed with missing/guessed metadata - heading/page/table
+    info cannot be reconstructed accurately from old data. Does not touch
+    points already embedded in Qdrant from before this change; it only
+    blocks creating NEW embeddings from an old draft.
+    """
+
+    def __init__(self, document_id: str) -> None:
+        super().__init__(
+            ErrorCode.EMBEDDING_DRAFT_LEGACY,
+            message=(
+                f"Bản nháp của tài liệu '{document_id}' được tạo trước khi hệ thống hỗ trợ "
+                "metadata cấu trúc. Vui lòng chia đoạn (chunk) lại tài liệu trước khi embed."
+            ),
         )

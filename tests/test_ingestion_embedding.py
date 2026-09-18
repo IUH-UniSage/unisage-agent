@@ -33,6 +33,36 @@ _TRUSTED_HEADERS = {
 }
 
 
+def _create_chunking_draft(
+    client: TestClient,
+    document_id: str,
+    *,
+    department_id: str = "CNTT",
+    object_key: str = "docs/handbook.pdf",
+    text: str = "A paragraph for chunking.",
+) -> list[dict[str, Any]]:
+    """Chunk a tiny document (real `dispatch()`, real `validate_chunks()`)
+    through the actual endpoint so the resulting draft has genuine,
+    non-legacy structural metadata - exactly what Task 4.5's canonical
+    merge reads back. Returns the chunk list from the response."""
+
+    with patch("app.api.v1.ingestion.minio_client.get_object_bytes") as mock_get_object_bytes:
+        mock_get_object_bytes.return_value = make_pdf_bytes(text)
+        response = client.post(
+            "/api/v1/ingestion/chunking",
+            json={
+                "document_id": document_id,
+                "department_id": department_id,
+                "object_key": object_key,
+                "strategy": "recursive",
+            },
+            headers=_TRUSTED_HEADERS,
+        )
+    assert response.status_code == 200, response.text
+    chunks: list[dict[str, Any]] = response.json()["data"]["chunks"]
+    return chunks
+
+
 def test_embedding_returns_400_when_trusted_headers_missing(client: TestClient) -> None:
     response = client.post("/api/v1/ingestion/embedding", json=_EMBEDDING_PAYLOAD)
 
@@ -71,6 +101,20 @@ def test_embedding_returns_403_when_access_level_exceeds_grant(client: TestClien
     assert response.status_code == 403
 
 
+def test_embedding_returns_404_when_no_draft_exists_for_the_document(client: TestClient) -> None:
+    """Task 4.5: `/ingestion/embedding` reads the stored draft as canonical
+    metadata - there is nothing to merge from if the document was never
+    chunked (or the draft was never created)."""
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": "doc-never-chunked"},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 404
+
+
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
 @patch("app.worker.celery_app.OpenAIEmbedder")
@@ -85,10 +129,15 @@ def test_embedding_returns_202_and_task_id_for_valid_request(
         summary="a summary", questions=["Q1?", "Q2?"]
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
+    draft_chunks = _create_chunking_draft(client, "doc-embed-202")
 
     response = client.post(
         "/api/v1/ingestion/embedding",
-        json=_EMBEDDING_PAYLOAD,
+        json={
+            **_EMBEDDING_PAYLOAD,
+            "document_id": "doc-embed-202",
+            "chunks": draft_chunks,
+        },
         headers=_TRUSTED_HEADERS,
     )
 
@@ -110,10 +159,15 @@ def test_valid_request_dispatches_task_with_request_department_and_level(
         summary="a summary", questions=["Q1?", "Q2?"]
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
+    draft_chunks = _create_chunking_draft(client, "doc-embed-level")
 
     client.post(
         "/api/v1/ingestion/embedding",
-        json=_EMBEDDING_PAYLOAD,
+        json={
+            **_EMBEDDING_PAYLOAD,
+            "document_id": "doc-embed-level",
+            "chunks": draft_chunks,
+        },
         headers=_TRUSTED_HEADERS,
     )
 
@@ -137,22 +191,11 @@ def test_successful_embedding_dispatch_marks_draft_as_embedding(
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
 
-    with patch("app.api.v1.ingestion.minio_client.get_object_bytes") as mock_get_object_bytes:
-        mock_get_object_bytes.return_value = make_pdf_bytes("A paragraph for chunking.")
-        client.post(
-            "/api/v1/ingestion/chunking",
-            json={
-                "document_id": "doc-embed-1",
-                "department_id": "CNTT",
-                "object_key": "docs/handbook.pdf",
-                "strategy": "recursive",
-            },
-            headers=_TRUSTED_HEADERS,
-        )
+    draft_chunks = _create_chunking_draft(client, "doc-embed-1")
     job_before = client.get("/api/v1/ingestion/jobs/doc-embed-1", headers=_TRUSTED_HEADERS)
     assert job_before.status_code == 200
 
-    payload = {**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-1"}
+    payload = {**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-1", "chunks": draft_chunks}
     response = client.post(
         "/api/v1/ingestion/embedding",
         json=payload,
@@ -171,6 +214,183 @@ def test_successful_embedding_dispatch_marks_draft_as_embedding(
     # reconciliation sweep needs only this one authorized call.
     assert body["task_state"] == "SUCCESS"
     assert body["task_percent"] == 100
+
+
+@patch("app.worker.celery_app.qdrant_store")
+@patch("app.worker.celery_app.MultiRepresentationEnricher")
+@patch("app.worker.celery_app.OpenAIEmbedder")
+def test_embedding_uses_canonical_metadata_and_only_client_content(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    client: TestClient,
+) -> None:
+    """Task 4.5 acceptance criteria: a client tampering with structural
+    fields (page_start/source_locator/...) must be ignored - only `content`
+    from the request payload is applied, everything else comes from the
+    stored draft."""
+
+    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
+    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
+        summary="a summary", questions=["Q1?", "Q2?"]
+    )
+    mock_qdrant_store.get_client.return_value = MagicMock()
+
+    draft_chunks = _create_chunking_draft(client, "doc-embed-tamper")
+    tampered_chunks = [
+        {
+            **chunk,
+            "content": "EDITED BY USER",
+            "page_start": 9999,
+            "source_locator": {"table_id": "forged-table"},
+            "block_index": 9999,
+        }
+        for chunk in draft_chunks
+    ]
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={
+            **_EMBEDDING_PAYLOAD,
+            "document_id": "doc-embed-tamper",
+            "chunks": tampered_chunks,
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 202
+    embed_call_chunks = mock_embedder_cls.return_value.embed.call_args_list
+    # The content actually embedded must reflect the client's edit...
+    assert any("EDITED BY USER" in call.args[0][0] for call in embed_call_chunks)
+    # ...but the structural metadata sent to Qdrant must be the canonical
+    # one, not the client's forged values.
+    point_kwargs = mock_qdrant_store.ChunkPoint.call_args.kwargs
+    assert point_kwargs["block_index"] != 9999
+    assert point_kwargs["source_locator"] != {"table_id": "forged-table"}
+
+
+def test_embedding_rejects_department_id_mismatch_with_draft(client: TestClient) -> None:
+    _create_chunking_draft(client, "doc-embed-mismatch-dept")
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={
+            **_EMBEDDING_PAYLOAD,
+            "document_id": "doc-embed-mismatch-dept",
+            "department_id": "KHOA_KINH_TE",
+        },
+        headers={
+            **_TRUSTED_HEADERS,
+            "X-User-Department-Access": json.dumps(
+                [
+                    {"department_id": "CNTT", "access_level": 3},
+                    {"department_id": "KHOA_KINH_TE", "access_level": 3},
+                ]
+            ),
+        },
+    )
+
+    assert response.status_code == 400
+
+
+def test_embedding_rejects_object_key_mismatch_with_draft(client: TestClient) -> None:
+    draft_chunks = _create_chunking_draft(client, "doc-embed-mismatch-key")
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={
+            **_EMBEDDING_PAYLOAD,
+            "document_id": "doc-embed-mismatch-key",
+            "object_key": "docs/some-other-file.pdf",
+            "chunks": draft_chunks,
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 400
+
+
+def test_embedding_rejects_chunk_count_mismatch(client: TestClient) -> None:
+    draft_chunks = _create_chunking_draft(client, "doc-embed-count-mismatch")
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={
+            **_EMBEDDING_PAYLOAD,
+            "document_id": "doc-embed-count-mismatch",
+            "chunks": [*draft_chunks, {"chunk_index": 999, "content": "x", "region_type": "text"}],
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 400
+
+
+def test_embedding_rejects_duplicate_chunk_index(client: TestClient) -> None:
+    draft_chunks = _create_chunking_draft(client, "doc-embed-dup-index")
+    duplicated = [draft_chunks[0], draft_chunks[0]]
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={
+            **_EMBEDDING_PAYLOAD,
+            "document_id": "doc-embed-dup-index",
+            "chunks": duplicated,
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 400
+
+
+def test_embedding_rejects_chunk_index_set_mismatch(client: TestClient) -> None:
+    draft_chunks = _create_chunking_draft(client, "doc-embed-index-mismatch")
+    swapped = [{**chunk, "chunk_index": chunk["chunk_index"] + 100} for chunk in draft_chunks]
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={
+            **_EMBEDDING_PAYLOAD,
+            "document_id": "doc-embed-index-mismatch",
+            "chunks": swapped,
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 400
+
+
+def test_embedding_rejects_legacy_draft_with_409(client: TestClient) -> None:
+    """[v5] A draft created before structural metadata existed
+    (`chunking_version == "legacy"`) can never be embedded - it must be
+    re-chunked first. `/ingestion/chunking` always produces non-legacy
+    chunks now, so a legacy draft is simulated here by stubbing `get_draft`
+    to return one directly - this is exactly the shape a pre-migration
+    Postgres row deserializes into (see Task 0.2's `chunking_version`
+    default)."""
+
+    from app.database.models import DocumentProcessStep
+    from app.database.repositories.ingestion_job import DraftDTO
+    from app.schemas.ingestion import Chunk, RegionType
+
+    legacy_draft = DraftDTO(
+        object_key="docs/handbook.pdf",
+        department_id="CNTT",
+        current_step=DocumentProcessStep.CHUNKED,
+        chunking_strategy="recursive",
+        chunking_params={},
+        chunks=[Chunk(chunk_index=0, content="legacy content", region_type=RegionType.TEXT)],
+        celery_task_id=None,
+    )
+
+    with patch("app.api.v1.ingestion.get_draft", return_value=legacy_draft):
+        response = client.post(
+            "/api/v1/ingestion/embedding",
+            json={**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-legacy"},
+            headers=_TRUSTED_HEADERS,
+        )
+
+    assert response.status_code == 409
 
 
 def _canned_stream(

@@ -65,6 +65,37 @@ def make_docx_bytes(text: str) -> bytes:
     return buffer.getvalue()
 
 
+def make_pdf_bytes_with_heading_across_pages(
+    heading: str, page1_text: str, page2_text: str
+) -> bytes:
+    """Build a 2-page PDF: a large-font heading + body text on page 1, then
+    more body text on page 2 with no heading of its own - the heading is
+    expected to still apply on page 2 (heading stack persists across
+    pages)."""
+
+    document = pymupdf.open()
+    page1 = document.new_page()
+    page1.insert_text((72, 72), heading, fontsize=24)
+    page1.insert_text((72, 110), page1_text, fontsize=11)
+    page2 = document.new_page()
+    page2.insert_text((72, 72), page2_text, fontsize=11)
+    data: bytes = document.tobytes()
+    document.close()
+    return data
+
+
+def make_docx_bytes_with_heading(heading: str, body_text: str) -> bytes:
+    """Build a `.docx` with one "Heading 1"-styled paragraph, then a normal
+    body paragraph."""
+
+    document = Document()
+    document.add_heading(heading, level=1)
+    document.add_paragraph(body_text)
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
 def make_docx_bytes_with_table(intro_text: str, outro_text: str) -> bytes:
     """Build a `.docx` with an intro paragraph, a real Word table, then an outro paragraph."""
 

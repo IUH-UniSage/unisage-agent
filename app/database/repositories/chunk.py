@@ -62,6 +62,7 @@ class ChunkRepository:
                 chunk_index=row.chunk_index,
                 content=row.content,
                 region_type=RegionType(row.region_type),
+                **row.chunk_metadata,
             )
             for row in chunks_result.scalars()
         ]

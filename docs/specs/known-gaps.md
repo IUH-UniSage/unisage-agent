@@ -39,6 +39,157 @@ rather than resolving. See `SPEC-ingestion-resume.md`'s "Extension:
 resuming into an in-flight embed" section for the full design and why a
 worker-side or scheduled-sweep fix was left out of scope.
 
+## Structural chunking metadata (2026-09) - known limitations
+
+See `SPEC-ingestion.md`'s "Structural Chunking Metadata" section and
+`changes/13-09-2026-Chunking-Structural-Metadata/plan.md` for the full design.
+Deliberate, reviewed-and-accepted limitations, not bugs to silently patch:
+
+- **DOCX heading detection** only recognizes Word's built-in `"Heading N"`
+  paragraph styles (`paragraph.style.name` matching `^Heading (\d)$`). A
+  document that uses a custom style name for its headings (e.g. a renamed or
+  organization-specific style) will not have that heading picked up into
+  `heading_path`.
+- **PDF heading detection is font-size-based first, with a narrow ordinal-line
+  fallback** (`pymupdf4llm`'s `IdentifyHeaders`: any font size larger than the
+  document's most common ("body") font size becomes a `#`..`######` markdown
+  heading; bold/underline/italic alone, at body font size, is never treated
+  as a heading by `pymupdf4llm` itself). `_regions_from_pdf_pages` (2026-09-15,
+  extended 2026-09-16) adds one narrow, document-pattern-specific fallback on
+  top of that for a Roman-numeral (`I.`/`II.`/`III.`) or Arabic-numeral
+  (`1.`/`2.`/`3.`) line at body font size - optionally wrapped in `**` (a
+  fully-bold line) - that `pymupdf4llm` never marks up (`_looks_like_pdf_heading`):
+  it is promoted to a heading ONLY if it carries an underline span
+  (`<u>...</u>`), OR is entirely upper-case once its ordinal prefix is
+  stripped (`_is_all_caps_title` - catches a bold-but-not-larger Roman-numeral
+  section title), OR the very next non-blank line starts a table (`|`) or a
+  BULLET list item (`-`) - deliberately NOT a numbered-list item, which would
+  otherwise promote every item of an ordinary numbered list into its own
+  heading. A plain numbered clause followed by more prose (e.g.
+  `"1. Họ tên sinh viên: ..."`) matches none of these signals and stays
+  ordinary text - this is NOT a general "every ordinal line is a heading"
+  rule - see `_looks_like_pdf_heading`'s docstring.
+  **Numbering-scheme-based level override** (`_heading_level_for_title`,
+  2026-09-16): Vietnamese business documents commonly mix Roman-numeral
+  top-level sections with Arabic-numeral subsections that `pymupdf4llm`
+  renders at the EXACT SAME raw markdown heading level (it only looks at
+  font size, with no notion of semantic nesting) - naively trusting that raw
+  level let an Arabic subsection (`"1. Module..."`) pop a Roman section
+  (`"II. Phân tích..."`) off `heading_stack` as if they were siblings,
+  permanently losing the Roman section from every subsequent chunk's
+  `heading_path` (confirmed as a real bug against `BAS.pdf`). Every heading -
+  both `#`-detected and promoted - now has its nesting level overridden by
+  its own numbering scheme (Roman title -> shallower, Arabic title -> one
+  level deeper), independent of the raw markdown level, so Roman sections
+  stay on the stack while Arabic subsections correctly nest under them. Known
+  false-positive risk of the Roman-numeral regex (`^[IVXLCDM]+\.`): a single
+  capital letter that is also a valid Roman numeral (I, V, X, L, C, D, M) as
+  a *lettered* list marker (`"A. ... B. ... C. ..."`) would be misread as a
+  Roman-numeral heading if it also matches one of the 2 promotion signals -
+  not yet seen in a real document, but a known theoretical gap.
+  **`_heading_level_for_title` is 2 hardcoded numbering buckets (Roman -> 2,
+  Arabic -> 3), not a general N-level numbering-scheme detector** - it was
+  designed and validated against the 2 real PDFs on hand, both of which mix
+  exactly 2 numbering tiers (Roman sections, Arabic subsections). A document
+  with a 3rd numbering tier - e.g. `Tiêu đề > A./B./C./D. > I./II./III. >
+  1./2./3.` (lettered top sections, Roman sub-sections, Arabic sub-
+  subsections) - would break the same way the original bug did, one tier up:
+  a lettered heading (`"A."`, `"B."`) matches neither the Roman nor the
+  Arabic regex, so it falls through to `fallback_level` (pymupdf4llm's raw
+  `#`-count, or the flat promoted-heading constant) instead of getting its
+  own dedicated level - if that raw level collides with the Roman tier's
+  raw level (plausible, since `pymupdf4llm` only looks at font size), the
+  lettered section gets popped off `heading_stack` by a Roman sub-heading
+  exactly like "II." was popped by "1." before this fix. It gets worse for
+  `"C."`/`"D."` specifically: single-letter Roman numerals (I, V, X, L, C, D,
+  M) mean a *lettered* heading using one of those letters is itself
+  misclassified as level-2 Roman by the regex, colliding directly with real
+  Roman sub-headings at the same level. Fixing this properly needs a
+  different design - assigning each heading's level dynamically based on
+  the order distinct numbering styles are first encountered in the document
+  (not a fixed lookup table) - which has NOT been built, since no real
+  document with a 3rd numbering tier has been seen yet; building it against
+  a hypothetical case risks the same "invented structure that isn't
+  evidenced" problem this heuristic work has otherwise avoided. If such a
+  document turns up, this is the first place to revisit.
+  `heading_path` entries also have markdown emphasis markers (`**`/`__`) and
+  HTML tags stripped (`_clean_heading_title`), and a plain-text line repeated
+  verbatim across 2+ pages (a running header/footer) is dropped before
+  heading/region processing (`_find_pdf_page_boilerplate`) so it can't become
+  its own tiny chunk once a heading right after it gets promoted. Confirmed
+  against 2 real PDFs: `DuongHoangHuy_DeCuongTTDN.pdf` (2026-09-15: an
+  underlined, table-introducing numbered line correctly promoted; genuinely
+  plain numbered clauses correctly left alone; repeated letterhead lines
+  correctly dropped) and `BAS.pdf` (2026-09-15: a table row with a genuinely
+  empty leading/trailing cell - see the `_markdown_row_cells` fix below;
+  2026-09-16: 2 Roman-numeral top sections were vanishing from
+  `heading_path` due to the level-collision bug above, and 3 bold-but-
+  not-larger section titles - one Arabic sibling subsection, two Roman-
+  numeral all-caps titles - were staying unpromoted as plain text). This
+  remains a heuristic, not a structural guarantee: an ordinal line followed
+  by ordinary mixed-case prose that a human would still consider a heading
+  (no underline, not all-caps, no table/bullet-list right after it) is still
+  missed - a known, accepted residual gap, not a bug to keep chasing further.
+- **`_markdown_row_cells` (PDF pipe-table parsing) fix (2026-09-15)**: the
+  original implementation used `line.strip("|")`, which strips an
+  *unbounded run* of `|` characters from each end - a row with a genuinely
+  empty leading or trailing cell renders as a double pipe at that edge
+  (`"||content||"`: empty cell + delimiter), which `strip("|")` collapsed
+  into one, silently dropping that cell and desyncing the row's cell count
+  from the header's. This tripped `TableRowChunker`'s `TableStructureError`
+  self-check (correctly - it caught the corruption, but did so by crashing
+  the whole request instead of parsing the table) on a real PDF
+  (`BAS.pdf`). Fixed to strip exactly the single leading/trailing delimiter
+  pipe, preserving any inner empty cells.
+- **PDF `header_confidence = 0.6`** for every table PDF's chunker infers a
+  header row for is a fixed constant, not calibrated against any real data
+  (`pymupdf4llm` gives no structural header signal for PDF tables, unlike
+  HTML `<th>`/DOCX `<w:tblHeader>`). Calibrating this against real
+  labeled data is future work.
+- **The "don't cut mid-sentence" check remains a weak heuristic** (a
+  warning log, not a hard validation rule) for `RecursiveChunker`/
+  `TokenBasedChunker`/`SemanticChunker` - only the table row-atomicity
+  guarantee (`TableRowChunker`) is a hard invariant.
+- **Citation stays LLM-generated free text**, not a structured
+  `citation_index -> {chunk_id, source, page}` mapping. Confirmed by reading
+  `app/api/v1/chat.py` (2026-09-14): `POST /chat/stream` streams raw LLM
+  tokens over SSE and stores the response verbatim in Java - there is no
+  code path anywhere that parses `[1]`/`[2]` into a structured object. This
+  was a deliberate scope decision (a structured citation API would be a
+  cross-repo change touching Java + this service + `unisage-web`'s SSE
+  consumer), not a gap discovered after the fact. Consequence: whether a
+  page number actually appears correctly in a given answer depends entirely
+  on the LLM following `citation_rules.yaml` - there is no server-side
+  guarantee or validation of citation accuracy.
+- **XLSX `header_source = EXPLICIT`/`confidence = 1.0`** encodes a
+  pre-existing PRODUCT CONTRACT ("the first row of an uploaded spreadsheet is
+  always its header"), not a verified structural signal the way HTML `<th>`
+  or DOCX `<w:tblHeader>` are. If a user uploads an `.xlsx` file whose first
+  row is not actually a header, the system will still treat it as one -
+  this is unchanged prior behavior, not a new limitation introduced here.
+- **A PDF table spanning multiple pages gets a different `table_id` per
+  page** (`table_id = f"table-{block_index}"`, and `block_index` changes
+  across a page boundary), even though it is logically one table. Merging
+  those into a single citable table would need a `table_group_id`
+  distinct from `block_index` - left for a future phase, does not block
+  citation-by-page (the primary goal here).
+- **Draft re-chunk race condition**: if a user re-chunks the same document
+  (overwriting its draft, `upsert_chunking_draft` is "last write wins", no
+  locking) while another tab/request is mid-`POST /ingestion/embedding` for
+  the same `document_id` (past the canonical-draft read, not yet dispatched
+  to Celery), the two requests can observe two different draft versions with
+  no defined "winner". Accepted for this phase deliberately (no
+  `draft_version`/optimistic-lock check was added, to avoid scope creep
+  beyond structural metadata) - if this becomes a real problem with multiple
+  concurrent editors per document, add draft versioning as a follow-up.
+- **`POST /ingestion/embedding` now rejects (`HTTP 409`) any draft whose
+  `chunking_version == "legacy"`**, or where any canonical chunk still has
+  `source_type`/`block_index` as `None` (pre-migration data). This only
+  blocks creating NEW embeddings from an old draft - chunks already upserted
+  into Qdrant from before this change are untouched; no backfill/migration
+  of existing Qdrant points was done or is planned (confirmed acceptable:
+  existing Qdrant data is not a concern for this project).
+
 ## `.doc` (legacy binary Word format) is not parsed
 
 `extract_raw_text` (`app/rag/ingestion/parser.py`) and `split_regions`

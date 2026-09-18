@@ -33,6 +33,32 @@ class ErrorCode(Enum):
         "Bạn không có quyền truy cập phòng ban của tài liệu này.",
     )
     VALIDATION_ERROR = (400, 4009, "Thông tin nhập chưa hợp lệ, kiểm tra lại giúp mình.")
+    CHUNKING_CONFIG_INVALID = (
+        422,
+        4010,
+        "Cấu hình chia đoạn không hợp lệ với tài liệu này, thử tăng kích thước đoạn.",
+    )
+    CHUNK_VALIDATION_FAILED = (
+        400,
+        4011,
+        "Dữ liệu chia đoạn không hợp lệ, vui lòng chia đoạn lại.",
+    )
+    EMBEDDING_DRAFT_MISMATCH = (
+        400,
+        4012,
+        "Bản nháp nạp liệu không khớp với yêu cầu này, vui lòng chia đoạn lại.",
+    )
+    EMBEDDING_CHUNK_SET_MISMATCH = (
+        400,
+        4013,
+        "Danh sách chunk gửi lên không khớp với bản nháp đã lưu, vui lòng chia đoạn lại.",
+    )
+    EMBEDDING_DRAFT_LEGACY = (
+        409,
+        4014,
+        "Bản nháp này được tạo trước khi hệ thống hỗ trợ metadata cấu trúc, "
+        "vui lòng chia đoạn lại trước khi embed.",
+    )
 
     # 404x Not Found Errors
     OBJECT_NOT_FOUND = (404, 4041, "Không tìm thấy file gốc của tài liệu này.")

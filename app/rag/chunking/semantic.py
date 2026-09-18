@@ -5,10 +5,11 @@ from dataclasses import dataclass, field
 import tiktoken
 
 from app.core.config import settings
+from app.core.exceptions import ChunkingConfigException
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.embeddings.provider import EmbeddingProvider
 from app.rag.ingestion.table_aware_parser import ParsedRegion
-from app.schemas.ingestion import Chunk
+from app.schemas.ingestion import Chunk, SourceLocator
 
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
@@ -70,6 +71,16 @@ def _split_oversized(sentence: str, max_tokens: int, overlap_tokens: int) -> lis
     return pieces or [sentence]
 
 
+def _heading_prefix(heading_path: list[str]) -> str:
+    joined = " > ".join(heading_path)
+    return f"{joined}\n\n" if joined else ""
+
+
+def _section(heading_path: list[str]) -> str | None:
+    joined = " > ".join(heading_path)
+    return joined or None
+
+
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = sum(x * x for x in a) ** 0.5
@@ -111,32 +122,77 @@ class SemanticChunker:
         return int(self.target_tokens * self.overlap_ratio)
 
     def split(self, regions: list[ParsedRegion]) -> list[Chunk]:
-        chunks: list[Chunk] = []
+        """Group each region's sentences toward `target_tokens`, then merge
+        tiny trailing chunks. `region.heading_path` is prepended into EVERY
+        final chunk's content (not just the region's first), with its token
+        cost subtracted from `max_tokens` BEFORE grouping/splitting -
+        `usable_max_tokens` - so a chunk's final prefixed content never
+        exceeds `max_tokens`. Small-chunk merging (`_merge_small_chunks`) is
+        restricted to chunks from the SAME region (`block_index`) so two
+        different regions' headings/pages are never silently glued
+        together.
+        """
+
+        raw_chunks: list[Chunk] = []
+        prefixes: dict[int | None, str] = {}
+        usable_max_tokens_by_block: dict[int | None, int] = {}
         for region in regions:
-            sentences = self._prepare_sentences(region.content)
+            prefix = _heading_prefix(region.heading_path)
+            prefix_tokens = _token_len(prefix) if prefix else 0
+            usable_max_tokens = self.max_tokens - prefix_tokens
+            if usable_max_tokens <= 0:
+                raise ChunkingConfigException(
+                    f"heading_path prefix is {prefix_tokens} tokens, leaving "
+                    f"usable_max_tokens={usable_max_tokens} <= 0 for max_tokens={self.max_tokens}. "
+                    "Increase target_tokens or shorten heading_path."
+                )
+            prefixes[region.block_index] = prefix
+            usable_max_tokens_by_block[region.block_index] = usable_max_tokens
+
+            sentences = self._prepare_sentences(region.content, usable_max_tokens)
             if not sentences:
                 continue
             embeddings = self.embedder.embed(sentences)
-            for group in self._group_sentences(sentences, embeddings):
-                chunks.append(
+            for group in self._group_sentences(sentences, embeddings, usable_max_tokens):
+                raw_chunks.append(
                     Chunk(
                         chunk_index=0,
                         content=" ".join(group),
                         region_type=region.region_type,
+                        source_type=region.source_type,
+                        block_index=region.block_index,
+                        heading_path=list(region.heading_path),
+                        page_start=region.page_start,
+                        page_end=region.page_end,
                     )
                 )
-        return self._merge_small_chunks(chunks)
 
-    def _prepare_sentences(self, content: str) -> list[str]:
+        merged = self._merge_small_chunks(raw_chunks, usable_max_tokens_by_block)
+        final_chunks: list[Chunk] = []
+        for index, chunk in enumerate(merged):
+            prefix = prefixes.get(chunk.block_index, "")
+            final_chunks.append(
+                chunk.model_copy(
+                    update={
+                        "chunk_index": index,
+                        "content": f"{prefix}{chunk.content}",
+                        "source_locator": SourceLocator(section=_section(chunk.heading_path)),
+                        "chunking_version": settings.CHUNKING_VERSION,
+                    }
+                )
+            )
+        return final_chunks
+
+    def _prepare_sentences(self, content: str, usable_max_tokens: int) -> list[str]:
         prepared: list[str] = []
         for sentence in _split_sentences(content):
             prepared.extend(
-                _split_oversized(sentence, self.max_tokens, self._overlap_tokens)
+                _split_oversized(sentence, usable_max_tokens, self._overlap_tokens)
             )
         return prepared
 
     def _group_sentences(
-        self, sentences: list[str], embeddings: list[list[float]]
+        self, sentences: list[str], embeddings: list[list[float]], usable_max_tokens: int
     ) -> list[list[str]]:
         groups: list[list[str]] = []
         current: list[str] = []
@@ -155,7 +211,7 @@ class SemanticChunker:
             if current and (is_semantic_break or exceeds_target):
                 groups.append(current)
                 carried = self._carry_overlap(current, self._overlap_tokens)
-                if sum(_token_len(s) for s in carried) + sentence_tokens > self.max_tokens:
+                if sum(_token_len(s) for s in carried) + sentence_tokens > usable_max_tokens:
                     carried = []
                 current = carried
                 current_tokens = sum(_token_len(s) for s in current)
@@ -181,28 +237,37 @@ class SemanticChunker:
             carried_tokens += sentence_tokens
         return carried
 
-    def _merge_small_chunks(self, chunks: list[Chunk]) -> list[Chunk]:
+    def _merge_small_chunks(
+        self, chunks: list[Chunk], usable_max_tokens_by_block: dict[int | None, int]
+    ) -> list[Chunk]:
         """Fold any sub-`min_tokens` chunk into an adjacent same-type chunk.
 
         A chunk below the floor is glued onto the preceding chunk when they
-        share a region type and the result still fits `max_tokens`; a small
-        leading chunk is instead glued onto the one that follows it. Chunks
-        that cannot be merged either way (a lone small region between two
-        tables, say) are left as-is. `chunk_index` is renumbered afterward.
+        share a region type AND the same originating region (`block_index`)
+        and the result still fits `max_tokens`; a small leading chunk is
+        instead glued onto the one that follows it. Chunks that cannot be
+        merged either way (a lone small region between two tables, say) are
+        left as-is. `chunk_index` is renumbered afterward. Requiring the
+        same `block_index` (not just the same `region_type`) prevents two
+        different regions - with different `heading_path`/`page_start` -
+        from being silently glued into one chunk that could only truthfully
+        carry one of their headings.
         """
 
         merged: list[Chunk] = []
         for chunk in chunks:
             previous = merged[-1] if merged else None
+            usable_max_tokens = usable_max_tokens_by_block.get(chunk.block_index, self.max_tokens)
             can_merge_back = (
                 previous is not None
                 and previous.region_type == chunk.region_type
+                and previous.block_index == chunk.block_index
                 and (
                     _token_len(previous.content) < self.min_tokens
                     or _token_len(chunk.content) < self.min_tokens
                 )
                 and _token_len(previous.content) + _token_len(chunk.content)
-                <= self.max_tokens
+                <= usable_max_tokens
             )
             if can_merge_back and previous is not None:
                 merged[-1] = previous.model_copy(
