@@ -6,7 +6,8 @@ import tiktoken
 
 from app.core.config import settings
 from app.core.exceptions import ChunkingConfigException
-from app.rag.ingestion.table_aware_parser import ParsedRegion, TableBlock
+from app.rag.ingestion.canonical_table import TableBlock, TableRow
+from app.rag.ingestion.table_aware_parser import ParsedRegion
 from app.schemas.ingestion import Chunk, RegionType, SourceLocator
 
 _ENCODING = tiktoken.get_encoding("cl100k_base")
@@ -21,6 +22,14 @@ _HARD_CAP_FACTOR = 2
 # text is a handful of tokens) rather than an exact per-chunk calculation,
 # to keep the fallback's own budget math simple and conservative.
 _PARTIAL_ROW_MARKER_RESERVE_TOKENS = 20
+
+# A row's breadcrumb may take at most this share of the usable chunk budget;
+# a longer ancestor path is shortened from its far (root) end.
+_BREADCRUMB_MAX_SHARE = 0.4
+
+# Line opening a group of rows that have no known ancestors right after a
+# group that did - keeps them from reading as children of the previous group.
+_NO_ANCESTORS_MARK = "[-]"
 
 
 class TableStructureError(RuntimeError):
@@ -129,7 +138,9 @@ def _token_len(text: str) -> int:
 
 @dataclass(frozen=True)
 class TableRowChunker:
-    """Chunks TABLE regions row-by-row directly from `TableBlock.data_rows`,
+    """Chunks TABLE regions row-by-row directly from the canonical
+    `TableBlock` rows (see `canonical_table`), each rendered with its own full
+    ancestor breadcrumb,
     never re-parsing rendered markdown - a normal row is NEVER split across
     chunks; only a row that exceeds even the hard cap is split, and always
     with explicit `is_partial_row`/`row_part`/`row_part_count` markers (see
@@ -162,10 +173,13 @@ class TableRowChunker:
             # even a MISSING-header one) - treat as an empty table rather
             # than crashing on a malformed/hand-built region.
             return []
-        if not table.data_rows:
+        rows = table.canonical_rows()
+        if not rows:
             return []
 
-        table_id = f"table-{region.block_index}" if region.block_index is not None else "table-0"
+        table_id = table.table_id or (
+            f"table-{region.block_index}" if region.block_index is not None else "table-0"
+        )
         heading_prefix = " > ".join(region.heading_path)
         header_block = _render_header_block(table.header_row) if table.header_row else ""
 
@@ -184,97 +198,91 @@ class TableRowChunker:
                 f"max_tokens={self.max_tokens}. Increase max_tokens or shorten heading_path."
             )
         hard_cap = usable_budget * _HARD_CAP_FACTOR
+        breadcrumb_budget = max(1, int(usable_budget * _BREADCRUMB_MAX_SHARE))
 
         chunks: list[Chunk] = []
-        pending_rows: list[list[str]] = []
-        pending_start: int | None = None
+        pending: list[_Entry] = []
 
-        def flush_pending(row_end: int) -> None:
-            nonlocal pending_rows, pending_start
-            if not pending_rows:
-                return
-            chunks.append(
-                self._build_chunk(
-                    region,
-                    table,
-                    prefix_str,
-                    pending_rows,
-                    row_start=pending_start if pending_start is not None else row_end,
-                    row_end=row_end,
-                    table_id=table_id,
-                )
-            )
-            pending_rows = []
-            pending_start = None
+        def flush_pending() -> None:
+            nonlocal pending
+            if pending:
+                chunks.append(self._build_chunk(region, table, prefix_str, pending, table_id))
+                pending = []
 
-        for row_index, row in enumerate(table.data_rows, start=1):
-            if table.header_row is not None and len(row) != len(table.header_row):
+        for row in rows:
+            if table.header_row is not None and len(row.cells) != len(table.header_row):
                 raise TableStructureError(
                     table_id=table_id,
                     block_index=region.block_index,
-                    row_index=row_index,
+                    row_index=row.row_index,
                     expected_cell_count=len(table.header_row),
-                    actual_cell_count=len(row),
-                    row=row,
+                    actual_cell_count=len(row.cells),
+                    row=row.cells,
                 )
 
-            row_line = _render_row(row)
-            row_tokens = _token_len(row_line)
+            crumb, truncated = _breadcrumb_line(row.ancestors, breadcrumb_budget)
+            entry = _Entry(row, crumb, truncated)
+            alone_tokens = _token_len(_render_body([entry]))
 
-            if row_tokens > usable_budget:
-                flush_pending(row_index - 1)
-                if row_tokens <= hard_cap:
-                    chunks.append(
-                        self._build_chunk(
-                            region,
-                            table,
-                            prefix_str,
-                            [row],
-                            row_start=row_index,
-                            row_end=row_index,
-                            table_id=table_id,
-                        )
-                    )
+            if alone_tokens > usable_budget:
+                flush_pending()
+                if alone_tokens <= hard_cap:
+                    chunks.append(self._build_chunk(region, table, prefix_str, [entry], table_id))
                 else:
                     chunks.extend(
                         self._split_oversized_row(
-                            region, table, prefix_str, row, row_index, usable_budget, table_id
+                            region, table, prefix_str, entry, usable_budget, table_id
                         )
                     )
                 continue
 
-            candidate_lines = [_render_row(r) for r in (*pending_rows, row)]
-            candidate_tokens = _token_len("\n".join(candidate_lines))
-            if pending_rows and candidate_tokens > usable_budget:
-                flush_pending(row_index - 1)
+            if pending and _token_len(_render_body([*pending, entry])) > usable_budget:
+                flush_pending()
+            pending.append(entry)
 
-            if pending_start is None:
-                pending_start = row_index
-            pending_rows.append(row)
-
-        flush_pending(len(table.data_rows))
+        flush_pending()
         return chunks
+
+    def _chunk_quality(
+        self, table: TableBlock, entries: list["_Entry"]
+    ) -> tuple[float | None, list[str]]:
+        """Lowest row confidence and the de-duplicated warnings of the rows in
+        a chunk, plus the table's own warnings. Plain hand-built tables (no
+        provenance) yield `(None, [])`."""
+
+        if not table.rows:
+            return None, []
+        warnings: list[str] = []
+        for entry in entries:
+            for warning in entry.row.warnings:
+                if warning not in warnings:
+                    warnings.append(warning)
+            if entry.truncated and "breadcrumb_truncated" not in warnings:
+                warnings.append("breadcrumb_truncated")
+        for warning in table.warnings:
+            if warning not in warnings:
+                warnings.append(warning)
+        return min(entry.row.confidence for entry in entries), warnings
 
     def _build_chunk(
         self,
         region: ParsedRegion,
         table: TableBlock,
         prefix_str: str,
-        rows: list[list[str]],
-        *,
-        row_start: int,
-        row_end: int,
+        entries: list["_Entry"],
         table_id: str,
     ) -> Chunk:
-        lines = [_render_row(row) for row in rows]
-        content = prefix_str + "\n".join(lines)
+        content = prefix_str + _render_body(entries)
+        first, last = entries[0].row, entries[-1].row
         locator = SourceLocator(
             section=heading_section(region.heading_path),
             table_id=table_id,
-            row_start=row_start,
-            row_end=row_end,
-            row_count=len(rows),
+            row_start=first.row_index,
+            row_end=last.row_index,
+            row_count=len(entries),
         )
+        confidence, warnings = self._chunk_quality(table, entries)
+        page_start, page_end = _page_range(entries, region)
         return Chunk(
             chunk_index=0,
             content=content,
@@ -282,14 +290,16 @@ class TableRowChunker:
             source_type=region.source_type,
             block_index=region.block_index,
             heading_path=list(region.heading_path),
-            page_start=region.page_start,
-            page_end=region.page_end,
+            page_start=page_start,
+            page_end=page_end,
             source_locator=locator,
             column_names=list(table.header_row) if table.header_row else None,
             has_header=table.header_row is not None,
             header_source=table.header_source,
             header_confidence=table.header_confidence,
             chunking_version=settings.CHUNKING_VERSION,
+            structure_confidence=confidence,
+            parse_warnings=warnings,
         )
 
     def _split_oversized_row(
@@ -297,8 +307,7 @@ class TableRowChunker:
         region: ParsedRegion,
         table: TableBlock,
         prefix_str: str,
-        row: list[str],
-        row_index: int,
+        entry: "_Entry",
         usable_budget: int,
         table_id: str,
     ) -> list[Chunk]:
@@ -307,38 +316,43 @@ class TableRowChunker:
         module docstring): split the row's longest cell across N chunks,
         every one carrying `is_partial_row=True`/`row_part`/
         `row_part_count`/the same `table_id`/`row_start=row_end=row_index`
-        so all parts can be reassembled later.
+        and the row's full breadcrumb, so all parts can be reassembled later.
         """
 
-        longest_index = max(range(len(row)), key=lambda i: _token_len(row[i]))
-        other_cells = [("" if i == longest_index else cell) for i, cell in enumerate(row)]
-        overhead_tokens = _token_len(_render_row(other_cells))
+        row = entry.row
+        cells = row.cells
+        crumb_prefix = f"{entry.crumb}\n" if entry.crumb else ""
+        longest_index = max(range(len(cells)), key=lambda i: _token_len(cells[i]))
+        other_cells = [("" if i == longest_index else cell) for i, cell in enumerate(cells)]
+        overhead_tokens = _token_len(crumb_prefix + _render_row(other_cells))
         per_part_budget = usable_budget - overhead_tokens - _PARTIAL_ROW_MARKER_RESERVE_TOKENS
         if per_part_budget <= 0:
             raise ChunkingConfigException(
                 "Row too wide to split even with the oversized-row fallback: "
-                f"table_id={table_id} row_index={row_index}, usable_budget={usable_budget}. "
+                f"table_id={table_id} row_index={row.row_index}, usable_budget={usable_budget}. "
                 "Increase max_tokens."
             )
 
-        long_text = row[longest_index]
+        long_text = cells[longest_index]
         long_tokens = _ENCODING.encode(long_text)
         total_parts = max(1, math.ceil(len(long_tokens) / per_part_budget))
+        confidence, warnings = self._chunk_quality(table, [entry])
+        page_start, page_end = _page_range([entry], region)
 
         parts: list[Chunk] = []
         for part in range(1, total_parts + 1):
             start = (part - 1) * per_part_budget
             piece_tokens = long_tokens[start : start + per_part_budget]
             piece_text = _ENCODING.decode(piece_tokens)
-            part_row = list(row)
+            part_row = list(cells)
             part_row[longest_index] = piece_text
             marker = f"(Phần {part}/{total_parts})\n"
-            content = prefix_str + marker + _render_row(part_row)
+            content = prefix_str + marker + crumb_prefix + _render_row(part_row)
             locator = SourceLocator(
                 section=heading_section(region.heading_path),
                 table_id=table_id,
-                row_start=row_index,
-                row_end=row_index,
+                row_start=row.row_index,
+                row_end=row.row_index,
                 row_count=1,
                 row_part=part,
                 row_part_count=total_parts,
@@ -352,17 +366,74 @@ class TableRowChunker:
                     source_type=region.source_type,
                     block_index=region.block_index,
                     heading_path=list(region.heading_path),
-                    page_start=region.page_start,
-                    page_end=region.page_end,
+                    page_start=page_start,
+                    page_end=page_end,
                     source_locator=locator,
                     column_names=list(table.header_row) if table.header_row else None,
                     has_header=table.header_row is not None,
                     header_source=table.header_source,
                     header_confidence=table.header_confidence,
                     chunking_version=settings.CHUNKING_VERSION,
+                    structure_confidence=confidence,
+                    parse_warnings=warnings,
                 )
             )
         return parts
+
+
+@dataclass(frozen=True)
+class _Entry:
+    """One row queued for a chunk, with its rendered breadcrumb line."""
+
+    row: TableRow
+    crumb: str
+    truncated: bool = False
+
+
+def _breadcrumb_line(ancestors: list[str], max_tokens: int) -> tuple[str, bool]:
+    """`[A > B > C]` for a row's FULL ancestor path. Only when the path alone
+    would eat too much of the chunk budget are the farthest ancestors dropped
+    (with a leading `…`), nearest kept - and the caller flags the chunk."""
+
+    if not ancestors:
+        return "", False
+    line = "[" + " > ".join(ancestors) + "]"
+    if _token_len(line) <= max_tokens:
+        return line, False
+    remaining = list(ancestors)
+    while len(remaining) > 1:
+        remaining = remaining[1:]
+        line = "[… > " + " > ".join(remaining) + "]"
+        if _token_len(line) <= max_tokens:
+            return line, True
+    kept = _ENCODING.decode(_ENCODING.encode(remaining[0])[: max(1, max_tokens - 6)])
+    return f"[… > {kept}…]", True
+
+
+def _render_body(entries: list[_Entry]) -> str:
+    """Rows in order; every change of ancestors opens a new group headed by
+    that row's full breadcrumb (`[-]` when it has none but the previous group
+    did), so two rows with different parents can never read as siblings."""
+
+    lines: list[str] = []
+    previous: str | None = None
+    for entry in entries:
+        if entry.crumb != previous:
+            if entry.crumb:
+                lines.append(entry.crumb)
+            elif previous:
+                lines.append(_NO_ANCESTORS_MARK)
+            previous = entry.crumb
+        lines.append(_render_row(entry.row.cells))
+    return "\n".join(lines)
+
+
+def _page_range(entries: list[_Entry], region: ParsedRegion) -> tuple[int | None, int | None]:
+    starts = [e.row.page_start for e in entries if e.row.page_start is not None]
+    ends = [e.row.page_end for e in entries if e.row.page_end is not None]
+    if not starts or not ends:
+        return region.page_start, region.page_end
+    return min(starts), max(ends)
 
 
 def heading_section(heading_path: list[str]) -> str | None:

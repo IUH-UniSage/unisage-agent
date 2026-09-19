@@ -142,6 +142,8 @@ async def test_upsert_and_get_draft_round_trips_full_structural_metadata(
         header_source=HeaderSource.EXPLICIT,
         header_confidence=1.0,
         chunking_version="2026-09-structural-v1",
+        structure_confidence=0.55,
+        parse_warnings=["padded_cells", "merge_borderline"],
     )
 
     await upsert_chunking_draft(

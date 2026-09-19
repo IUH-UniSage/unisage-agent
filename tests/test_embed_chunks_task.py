@@ -163,6 +163,8 @@ def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
         "header_source": "inferred",
         "header_confidence": 0.6,
         "chunking_version": "2026-09-structural-v1",
+        "structure_confidence": 0.3,
+        "parse_warnings": ["garbled_text_raw_kept"],
     }
 
     embed_chunks.apply(
@@ -180,3 +182,5 @@ def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
     assert point_kwargs["has_header"] is True
     assert point_kwargs["header_source"] == "inferred"
     assert point_kwargs["chunking_version"] == "2026-09-structural-v1"
+    assert point_kwargs["structure_confidence"] == 0.3
+    assert point_kwargs["parse_warnings"] == ["garbled_text_raw_kept"]

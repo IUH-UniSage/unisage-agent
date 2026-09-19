@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from io import BytesIO
 
 import pymupdf
@@ -14,21 +14,20 @@ from docx.table import _Row as DocxRow
 from docx.text.paragraph import Paragraph as DocxParagraph
 
 from app.core.exceptions import UnsupportedFileTypeException
+from app.rag.ingestion.canonical_table import TableBlock, build_table_from_plain_rows
+from app.rag.ingestion.table_evidence import TableEvidence, collect_table_evidence
+from app.rag.ingestion.table_hierarchy import infer_hierarchy
+from app.rag.ingestion.table_merger import (
+    MergeCandidate,
+    decide_merge,
+    furniture_key,
+    merge_page_tables,
+)
+from app.rag.ingestion.table_normalizer import build_page_table
+from app.rag.ingestion.table_normalizer import (
+    markdown_row_cells as _markdown_row_cells,  # noqa: F401  (kept importable from here for existing callers/tests)
+)
 from app.schemas.ingestion import HeaderSource, RegionType, SourceType
-
-
-@dataclass(frozen=True)
-class TableBlock:
-    """A table parsed directly from its source format, before any markdown
-    rendering - the header row (if any) and the header's provenance are
-    determined from real structural signals (HTML `<th>`, DOCX
-    `<w:tblHeader>`), not by reading markdown back out. Internal to the
-    ingestion/chunking pipeline - never serialized as an API schema."""
-
-    header_row: list[str] | None
-    data_rows: list[list[str]]
-    header_source: HeaderSource
-    header_confidence: float
 
 
 @dataclass(frozen=True)
@@ -77,22 +76,35 @@ def split_regions(content: bytes, filename: str, extension: str) -> list[ParsedR
             )
         ]
     if extension == "docx":
-        return _regions_from_docx(content)
+        return _with_hierarchy(_regions_from_docx(content))
     if extension in ("html", "htm"):
-        return _regions_from_html(content)
+        return _with_hierarchy(_regions_from_html(content))
     if extension != "pdf":
         raise UnsupportedFileTypeException(filename)
 
     document = pymupdf.open(stream=content, filetype=extension)
     try:
         pages: list[dict[str, object]] = pymupdf4llm.to_markdown(document, page_chunks=True)
+        # Geometric evidence must be read while the document is still open;
+        # the parser only uses it for structure (see table_evidence).
+        evidence = collect_table_evidence(document)
     finally:
         document.close()
-    return _regions_from_pdf_pages(pages)
+    return _with_hierarchy(_regions_from_pdf_pages(pages, evidence))
+
+
+def _with_hierarchy(regions: list["ParsedRegion"]) -> list["ParsedRegion"]:
+    """Attach each table row's ancestors (see `table_hierarchy`)."""
+
+    return [
+        replace(region, table=infer_hierarchy(region.table))
+        if region.region_type == RegionType.TABLE and region.table is not None
+        else region
+        for region in regions
+    ]
 
 
 _MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
-_MARKDOWN_TABLE_SEPARATOR = re.compile(r"^[\s|:-]+$")
 # An ordinal line candidate for heading promotion: Roman numeral (I./II./III.)
 # or Arabic numeral (1./2./3.), optionally wrapped in `**` (pymupdf4llm
 # renders a fully-bold line as `**...**`, which would otherwise hide the
@@ -226,56 +238,23 @@ def _looks_like_pdf_heading(
     return False
 
 
-def _markdown_row_cells(line: str) -> list[str]:
-    """Split a GFM pipe-table row into cells.
+def _count_markdown_tables(page_text: str) -> int:
+    """Number of contiguous runs of `|` lines in a page's markdown."""
 
-    Strips exactly the single leading/trailing `|` delimiter a pipe-table
-    row is framed in - NOT `str.strip("|")`, which removes an unbounded run
-    of `|` characters from each end. A row with a genuinely empty first or
-    last cell renders as a *double* pipe at that edge (`"||content||"`,
-    empty cell + delimiter); `strip("|")` collapses both away and silently
-    drops that cell, desyncing the row's cell count from the header's and
-    tripping `TableRowChunker`'s `TableStructureError` self-check on
-    otherwise-valid tables (confirmed via a real PDF where a row's first/
-    last column was blank).
-    """
-
-    trimmed = line.strip()
-    if trimmed.startswith("|"):
-        trimmed = trimmed[1:]
-    if trimmed.endswith("|"):
-        trimmed = trimmed[:-1]
-    return [cell.strip() for cell in trimmed.split("|")]
+    count = 0
+    in_table = False
+    for line in page_text.splitlines():
+        starts_table = line.strip().startswith("|")
+        if starts_table and not in_table:
+            count += 1
+        in_table = starts_table
+    return count
 
 
-def _markdown_table_to_block(lines: list[str]) -> TableBlock:
-    """Parse a `pymupdf4llm`-detected markdown pipe table into a
-    `TableBlock`. PDF tables come from `pymupdf4llm`'s own page-vector-
-    graphics heuristic, which gives no structural signal about whether the
-    first row is really a header - so, unlike HTML/DOCX, this always
-    returns `INFERRED` with a fixed `0.6` confidence (a placeholder constant
-    the plan explicitly does not attempt to calibrate from real data yet -
-    see known-gaps)."""
-
-    rows = [
-        _markdown_row_cells(line)
-        for line in lines
-        if line.strip() and not _MARKDOWN_TABLE_SEPARATOR.match(line.strip())
-    ]
-    if not rows:
-        return TableBlock(
-            header_row=None, data_rows=[], header_source=HeaderSource.MISSING, header_confidence=0.0
-        )
-    header_row, *data_rows = rows
-    return TableBlock(
-        header_row=header_row,
-        data_rows=data_rows,
-        header_source=HeaderSource.INFERRED,
-        header_confidence=0.6,
-    )
-
-
-def _regions_from_pdf_pages(pages: list[dict[str, object]]) -> list[ParsedRegion]:
+def _regions_from_pdf_pages(
+    pages: list[dict[str, object]],
+    evidence: dict[int, list[TableEvidence]] | None = None,
+) -> list[ParsedRegion]:
     """Group each page's markdown into heading-aware text/table regions.
 
     `pymupdf4llm.to_markdown(document, page_chunks=True)` returns one dict
@@ -299,6 +278,24 @@ def _regions_from_pdf_pages(pages: list[dict[str, object]]) -> list[ParsedRegion
     current_type: RegionType | None = None
     block_index = 0
     region_start_page: int | None = None
+    evidence = evidence or {}
+    # Evidence is paired to a page's markdown tables by order (both read
+    # top-to-bottom), and only when the two agree on how many tables the page
+    # has - otherwise that page falls back to markdown alone.
+    page_markdown_tables = {
+        int(page["metadata"]["page_number"]): _count_markdown_tables(str(page["text"]))  # type: ignore[index]
+        for page in pages
+    }
+    page_table_cursor: dict[int, int] = {}
+    evidence_by_block: dict[int, TableEvidence | None] = {}
+
+    def evidence_for_next_table(page_number: int) -> TableEvidence | None:
+        cursor = page_table_cursor.get(page_number, 0)
+        page_table_cursor[page_number] = cursor + 1
+        page_evidence = evidence.get(page_number, [])
+        if len(page_evidence) != page_markdown_tables.get(page_number, 0):
+            return None
+        return page_evidence[cursor] if cursor < len(page_evidence) else None
 
     def flush(end_page: int) -> None:
         nonlocal current_type, block_index, region_start_page
@@ -306,11 +303,12 @@ def _regions_from_pdf_pages(pages: list[dict[str, object]]) -> list[ParsedRegion
         lines_snapshot = list(buffer)
         buffer.clear()
         if text and current_type is not None:
-            table = (
-                _markdown_table_to_block(lines_snapshot)
-                if current_type == RegionType.TABLE
-                else None
-            )
+            table_page = region_start_page or end_page
+            table = None
+            if current_type == RegionType.TABLE:
+                table_evidence = evidence_for_next_table(table_page)
+                table = build_page_table(lines_snapshot, table_page, table_evidence)
+                evidence_by_block[block_index] = table_evidence
             regions.append(
                 ParsedRegion(
                     current_type,
@@ -374,7 +372,7 @@ def _regions_from_pdf_pages(pages: list[dict[str, object]]) -> list[ParsedRegion
         # A TABLE region is always flushed at the page boundary, even with
         # no heading/type change - pymupdf4llm re-detects table structure
         # per page, so a table "continuing" onto the next page would often
-        # re-emit its own header/separator row, which `_markdown_table_to_block`
+        # re-emit its own header/separator row, which `build_page_table`
         # would misread as a data row if the two pages' lines were simply
         # concatenated. A TEXT region, in contrast, is plain prose/list
         # content with no such per-page structure, so it is allowed to run
@@ -387,7 +385,113 @@ def _regions_from_pdf_pages(pages: list[dict[str, object]]) -> list[ParsedRegion
         if is_last_line_of_page and current_type == RegionType.TABLE:
             flush(page_number)
     flush(last_page_number)
-    return regions
+    return _finalize_pdf_tables(regions, evidence_by_block, _find_pdf_furniture(pages))
+
+
+def _find_pdf_furniture(pages: list[dict[str, object]]) -> set[str]:
+    """Shapes of plain-text lines that recur across 2+ pages once digits are
+    masked (`Trang 2/4`, `Trang 3/4` -> `Trang #/#`): running page furniture.
+    Unlike `_find_pdf_page_boilerplate` this is NOT used to drop text - only to
+    let such a line sit between two tables without breaking their continuity."""
+
+    key_pages: dict[str, set[int]] = {}
+    for page in pages:
+        page_number = int(page["metadata"]["page_number"])  # type: ignore[index]
+        for line in str(page["text"]).splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("|") and not _MARKDOWN_HEADING.match(stripped):
+                key_pages.setdefault(furniture_key(stripped), set()).add(page_number)
+    return {key for key, numbers in key_pages.items() if len(numbers) >= 2}
+
+
+def _only_furniture(regions: list[ParsedRegion], furniture: set[str]) -> bool:
+    for region in regions:
+        for line in region.content.splitlines():
+            if line.strip() and furniture_key(line) not in furniture:
+                return False
+    return True
+
+
+def _finalize_pdf_tables(
+    regions: list[ParsedRegion],
+    evidence_by_block: dict[int, TableEvidence | None],
+    furniture: set[str],
+) -> list[ParsedRegion]:
+    """Merge a table that continues on the next page into one logical table,
+    then give every table its document-order `table_id` and renumber
+    `block_index` so it stays contiguous after merging.
+
+    Page furniture (a page number line) between the two tables is kept in the
+    output - nothing is dropped - it just no longer blocks the merge."""
+
+    output: list[ParsedRegion] = []
+    chain_evidence: dict[int, TableEvidence | None] = {}
+    last_table: int | None = None
+    between: list[ParsedRegion] = []
+
+    for region in regions:
+        if region.region_type != RegionType.TABLE or region.table is None:
+            output.append(region)
+            between.append(region)
+            continue
+
+        evidence = (
+            evidence_by_block.get(region.block_index) if region.block_index is not None else None
+        )
+        if last_table is not None:
+            previous = output[last_table]
+            decision = decide_merge(
+                MergeCandidate(
+                    previous.table,  # type: ignore[arg-type]
+                    previous.page_start or 0,
+                    previous.page_end or 0,
+                    previous.heading_path,
+                    chain_evidence.get(last_table),
+                ),
+                MergeCandidate(
+                    region.table,
+                    region.page_start or 0,
+                    region.page_end or 0,
+                    region.heading_path,
+                    evidence,
+                ),
+                only_furniture_between=_only_furniture(between, furniture),
+            )
+            if decision.merge:
+                output[last_table] = replace(
+                    previous,
+                    content=previous.content + chr(10) + region.content,
+                    page_end=region.page_end,
+                    table=merge_page_tables(
+                        previous.table,  # type: ignore[arg-type]
+                        region.table,
+                        header_present=decision.header_present,
+                    ),
+                )
+                chain_evidence[last_table] = evidence
+                between = []
+                continue
+            if decision.borderline:
+                region = replace(
+                    region,
+                    table=replace(
+                        region.table, warnings=[*region.table.warnings, "merge_borderline"]
+                    ),
+                )
+        output.append(region)
+        last_table = len(output) - 1
+        chain_evidence[last_table] = evidence
+        between = []
+
+    table_number = 0
+    finalized: list[ParsedRegion] = []
+    for block_index, region in enumerate(output):
+        table = region.table
+        if region.region_type == RegionType.TABLE and table is not None:
+            table = replace(table, table_id=f"table-{table_number}")
+            table_number += 1
+        finalized.append(replace(region, block_index=block_index, table=table))
+    return finalized
 
 
 def _iter_docx_block_items(document: Document) -> list[DocxParagraph | DocxTable]:
@@ -455,18 +559,8 @@ def _docx_table_to_block(table: DocxTable) -> TableBlock:
         data_rows.append(cells)
 
     if header_row is None:
-        return TableBlock(
-            header_row=None,
-            data_rows=data_rows,
-            header_source=HeaderSource.MISSING,
-            header_confidence=0.0,
-        )
-    return TableBlock(
-        header_row=header_row,
-        data_rows=data_rows,
-        header_source=HeaderSource.EXPLICIT,
-        header_confidence=1.0,
-    )
+        return build_table_from_plain_rows(None, data_rows, HeaderSource.MISSING, 0.0)
+    return build_table_from_plain_rows(header_row, data_rows, HeaderSource.EXPLICIT, 1.0)
 
 
 _DOCX_HEADING_STYLE = re.compile(r"^Heading (\d)$")
@@ -727,19 +821,10 @@ def _html_table_to_block(table_tag: Tag) -> TableBlock:
         rows.append(row_text)
 
     if not rows:
-        return TableBlock(
-            header_row=None, data_rows=[], header_source=HeaderSource.MISSING, header_confidence=0.0
-        )
+        return build_table_from_plain_rows(None, [], HeaderSource.MISSING, 0.0)
 
     if first_row_all_th:
         header_row, *data_rows = rows
-        return TableBlock(
-            header_row=header_row,
-            data_rows=data_rows,
-            header_source=HeaderSource.EXPLICIT,
-            header_confidence=1.0,
-        )
+        return build_table_from_plain_rows(header_row, data_rows, HeaderSource.EXPLICIT, 1.0)
 
-    return TableBlock(
-        header_row=None, data_rows=rows, header_source=HeaderSource.MISSING, header_confidence=0.0
-    )
+    return build_table_from_plain_rows(None, rows, HeaderSource.MISSING, 0.0)

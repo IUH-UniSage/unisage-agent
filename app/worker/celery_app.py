@@ -107,6 +107,8 @@ def embed_chunks(
                     has_header=chunk.has_header,
                     header_source=chunk.header_source.value,
                     chunking_version=chunk.chunking_version,
+                    structure_confidence=chunk.structure_confidence,
+                    parse_warnings=list(chunk.parse_warnings),
                 ),
             )
             results.append({"chunk_index": chunk.chunk_index, "status": "SUCCESS"})

@@ -2,7 +2,7 @@ import pytest
 
 from app.core.exceptions import StrategyFileTypeMismatchException
 from app.rag.chunking.strategy import dispatch
-from app.schemas.ingestion import ChunkingStrategyName
+from app.schemas.ingestion import ChunkingStrategyName, RegionType
 from tests.fixtures.documents import make_pdf_bytes, make_xlsx_bytes
 
 
@@ -60,3 +60,32 @@ def test_dispatch_rejects_non_excel_strategy_on_xlsx_file() -> None:
 
     with pytest.raises(StrategyFileTypeMismatchException):
         dispatch(ChunkingStrategyName.RECURSIVE, {}, content, "roster.xlsx")
+
+
+def test_table_chunk_budget_defaults_to_the_setting_and_ignores_text_target_tokens() -> None:
+    from pathlib import Path
+
+    import tiktoken
+
+    from app.core.config import settings
+
+    sample = (
+        Path(__file__).parent.parent
+        / "_to_delete"
+        / "Quyet dinh 1035 QD DHCN Hoc phi 2025-2026.pdf"
+    )
+    if not sample.exists():
+        pytest.skip("sample PDF not available")
+    content = sample.read_bytes()
+    encoding = tiktoken.get_encoding("cl100k_base")
+
+    def table_chunks(params: dict) -> list:
+        chunks = dispatch(ChunkingStrategyName.RECURSIVE, params, content, sample.name)
+        return [c for c in chunks if c.region_type == RegionType.TABLE]
+
+    default = table_chunks({})
+    assert settings.TABLE_CHUNK_MAX_TOKENS == 800
+    assert max(len(encoding.encode(c.content)) for c in default) <= 800
+    assert len(default) < len(table_chunks({"table_max_tokens": 400}))
+    # the text strategy's own knobs never touch table chunks
+    assert len(table_chunks({"chunk_size": 300, "overlap": 10})) == len(default)

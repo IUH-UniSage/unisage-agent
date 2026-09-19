@@ -71,6 +71,8 @@ class ChunkPoint:
     has_header: bool = False
     header_source: str | None = None
     chunking_version: str = "legacy"
+    structure_confidence: float | None = None
+    parse_warnings: list[str] = field(default_factory=list)
 
 
 def search_chunks(
@@ -152,6 +154,8 @@ def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:
                     "has_header": point.has_header,
                     "header_source": point.header_source,
                     "chunking_version": point.chunking_version,
+                    "structure_confidence": point.structure_confidence,
+                    "parse_warnings": point.parse_warnings,
                 },
             )
         ],

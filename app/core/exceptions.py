@@ -225,12 +225,12 @@ class EmbeddingDraftMismatchException(UniSageException):
 
 
 class EmbeddingChunkSetMismatchException(UniSageException):
-    """Raised when `POST /ingestion/embedding`'s `chunks` don't line up 1:1
-    (by `chunk_index`) with the canonical draft: a different count, a
-    duplicate `chunk_index`, or a `chunk_index` set that doesn't exactly
-    match the draft's. Any of these makes a partial/best-effort merge
-    unsafe, so this always rejects the whole request rather than merging
-    what it can.
+    """Raised when `POST /ingestion/embedding`'s `chunks` aren't a valid
+    subset (by `chunk_index`) of the canonical draft: a duplicate
+    `chunk_index`, or one the draft doesn't have. Sending fewer chunks than
+    the draft is allowed (the user deleted some before embedding). Any
+    other mismatch makes a partial/best-effort merge unsafe, so this
+    always rejects the whole request rather than merging what it can.
     """
 
     def __init__(self, document_id: str, reason: str) -> None:
@@ -244,9 +244,11 @@ class EmbeddingChunkSetMismatchException(UniSageException):
 
 
 class EmbeddingDraftLegacyException(UniSageException):
-    """Raised when `POST /ingestion/embedding`'s canonical draft predates
-    structural chunking metadata (`chunking_version == "legacy"`, or any
-    canonical chunk with `source_type`/`block_index` still `None`).
+    """Raised when `POST /ingestion/embedding`'s canonical draft was not
+    produced by the current chunking logic: `chunking_version` differs from
+    `settings.CHUNKING_VERSION` (this covers `"legacy"` and any older
+    version), or any canonical chunk has `source_type`/`block_index` still
+    `None`.
 
     Deliberate product decision (plan v5): reject with 409 rather than
     attempting to embed with missing/guessed metadata - heading/page/table
@@ -259,7 +261,8 @@ class EmbeddingDraftLegacyException(UniSageException):
         super().__init__(
             ErrorCode.EMBEDDING_DRAFT_LEGACY,
             message=(
-                f"Bản nháp của tài liệu '{document_id}' được tạo trước khi hệ thống hỗ trợ "
-                "metadata cấu trúc. Vui lòng chia đoạn (chunk) lại tài liệu trước khi embed."
+                f"Bản nháp của tài liệu '{document_id}' được tạo bằng phiên bản chia đoạn cũ "
+                "hoặc thiếu metadata cấu trúc. Vui lòng chia đoạn (chunk) lại tài liệu "
+                "trước khi embed."
             ),
         )
