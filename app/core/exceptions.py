@@ -55,6 +55,18 @@ class UnsupportedFileTypeException(UniSageException):
         )
 
 
+class EmptyDocumentTextException(UniSageException):
+    """Exception raised when chunking a document yields no text at all.
+
+    Typical for a scanned PDF (every page is an image, no text layer): the
+    pipeline has no OCR step, so without this the endpoint would answer 200
+    with an empty chunk list and the client could not tell why.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.EMPTY_DOCUMENT_TEXT)
+
+
 class StrategyFileTypeMismatchException(UniSageException):
     """Exception raised when a chunking strategy cannot apply to the object's file type."""
 

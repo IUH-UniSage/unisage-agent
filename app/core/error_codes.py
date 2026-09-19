@@ -33,6 +33,12 @@ class ErrorCode(Enum):
         "Bạn không có quyền truy cập phòng ban của tài liệu này.",
     )
     VALIDATION_ERROR = (400, 4009, "Thông tin nhập chưa hợp lệ, kiểm tra lại giúp mình.")
+    EMPTY_DOCUMENT_TEXT = (
+        422,
+        4221,
+        "Không trích xuất được văn bản từ tài liệu này (có thể là bản scan hoặc chỉ có ảnh). "
+        "Hãy dùng bản có thể chọn chữ hoặc chạy OCR trước khi nạp.",
+    )
     CHUNKING_CONFIG_INVALID = (
         422,
         4010,

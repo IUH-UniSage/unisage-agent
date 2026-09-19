@@ -173,3 +173,25 @@ def test_chunking_returns_403_when_department_not_granted(client: TestClient) ->
     )
 
     assert response.status_code == 403
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_chunking_scanned_pdf_without_text_returns_a_clear_error(
+    mock_get_object_bytes: MagicMock, client: TestClient
+) -> None:
+    # A scanned PDF has pages but no text layer; a blank page stands in for it.
+    mock_get_object_bytes.return_value = make_pdf_bytes("")
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/scan.pdf",
+            "strategy": "recursive",
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == 4221

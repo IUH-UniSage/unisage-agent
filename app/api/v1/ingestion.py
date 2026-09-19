@@ -25,6 +25,7 @@ from app.core.exceptions import (
     EmbeddingChunkSetMismatchException,
     EmbeddingDraftLegacyException,
     EmbeddingDraftMismatchException,
+    EmptyDocumentTextException,
     IngestionJobNotFoundException,
     UniSageException,
 )
@@ -84,6 +85,8 @@ async def chunk_document(
     require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
     chunks = strategy.dispatch(request.strategy, request.params, content, request.object_key)
+    if not chunks:
+        raise EmptyDocumentTextException()
     validate_chunks(chunks)
     await upsert_chunking_draft(
         db_session,
