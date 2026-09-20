@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.graph.streaming_session import run_and_persist
-from app.graph.streaming_state import GraphInput, GraphModels
+from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
 from app.schemas.security import AcademicSecurityContext
 from tests.llm_mocks import FakeRetrievalService
@@ -78,6 +78,7 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
     assert patched["method"] == "PATCH"
     assert patched["body"]["status"] == "COMPLETED"
     assert patched["body"]["content"] == "4"
+    assert "citations" not in patched["body"]
 
     tokens = []
     while True:
@@ -234,3 +235,51 @@ async def test_queue_sentinel_still_arrives_when_java_patch_raises_unexpected_er
     # not short-circuit it.
     repo = ClarificationStateRepository(db_session)
     assert await repo.get_confirmed_metadata("conv-1") == {}
+
+
+@pytest.mark.asyncio
+async def test_run_and_persist_sends_citations_when_graph_produced_them(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    citation = {"index": 1, "documentId": "doc-1", "title": "Quy chế A"}
+
+    async def _fake_graph(*_args: object, **_kwargs: object) -> GraphOutput:
+        return GraphOutput(response_text="Học phí là 35 triệu [1].", citations=[citation])
+
+    monkeypatch.setattr("app.graph.streaming_session.run_graph", _fake_graph)
+
+    patched: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        patched["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"id": "msg-2", "status": "COMPLETED"})
+
+    java_client = BackendJavaClient(
+        base_url="http://java.test", transport=httpx.MockTransport(handler)
+    )
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    class _SessionCtx:
+        async def __aenter__(self) -> AsyncSession:
+            return db_session
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    await run_and_persist(
+        java_client=java_client,
+        conversation_id="conv-1",
+        assistant_message_id="msg-2",
+        authorization=None,
+        graph_input=_graph_input(),
+        models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        queue=queue,
+        session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
+    )
+
+    assert patched["body"]["citations"] == [citation]

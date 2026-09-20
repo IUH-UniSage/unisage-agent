@@ -105,6 +105,7 @@ async def run_and_persist(
                 conversation_id=conversation_id,
                 content=response_text,
                 status=status,
+                citations=(graph_output.citations or None) if graph_output is not None else None,
                 authorization=authorization,
             )
         except Exception:

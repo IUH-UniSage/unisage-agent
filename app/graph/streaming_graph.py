@@ -30,6 +30,7 @@ from app.graph.nodes.security_context import (
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_response
 from app.graph.streaming import TokenSink
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
+from app.rag.prompting.citations import build_citations
 from app.schemas.clarification import PendingClarification
 
 _ORIGIN_NODE_QUERY_TRANSFORMATION = "QueryTransformationNode"
@@ -223,4 +224,5 @@ async def _run_advisory_flow(
         response_text=generation_result.response_text,
         confirmed_metadata=generation_result.confirmed_metadata,
         pending_clarification=generation_result.pending_clarification,
+        citations=build_citations(generation_result.response_text, rerank_result.chunks),
     )
