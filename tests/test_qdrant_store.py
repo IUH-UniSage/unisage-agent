@@ -88,6 +88,8 @@ def test_upsert_chunk_builds_expected_payload_and_vector_shape() -> None:
         "has_header": False,
         "header_source": None,
         "chunking_version": "legacy",
+        "structure_confidence": None,
+        "parse_warnings": [],
     }
 
 
@@ -118,6 +120,8 @@ def test_upsert_chunk_carries_structural_metadata_fields_when_set() -> None:
         has_header=True,
         header_source="inferred",
         chunking_version="2026-09-structural-v1",
+        structure_confidence=0.42,
+        parse_warnings=["padded_cells"],
     )
 
     upsert_chunk(client, point)
@@ -133,6 +137,8 @@ def test_upsert_chunk_carries_structural_metadata_fields_when_set() -> None:
     assert upserted_point.payload["has_header"] is True
     assert upserted_point.payload["header_source"] == "inferred"
     assert upserted_point.payload["chunking_version"] == "2026-09-structural-v1"
+    assert upserted_point.payload["structure_confidence"] == 0.42
+    assert upserted_point.payload["parse_warnings"] == ["padded_cells"]
 
 
 def test_search_chunks_returns_empty_list_when_collection_missing() -> None:

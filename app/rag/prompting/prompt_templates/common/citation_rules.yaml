@@ -2,17 +2,16 @@
 description: "Quy tắc trích dẫn nguồn văn bản quy chế"
 content: |
   ## Quy Tắc Trích Dẫn Nguồn Văn Bản (Citation Engine Rules)
-  1. Mỗi ý kiến, quy định hoặc con số được đưa ra trong câu trả lời phải được gắn chỉ số trích dẫn tương ứng `[1]`, `[2]` tham chiếu đến tài liệu trong `<academic_context>`.
-  2. Ở cuối câu trả lời, tạo một phần riêng biệt ghi rõ:
-     ```markdown
-     ---
-     📌 **Văn bản tham chiếu chính thức:**
-     - [1] <Tên văn bản> (<Số Quyết định/Phiên bản>) - <Điều/Khoản/Mục>[, Trang <X> hoặc <X>-<Y> nếu
-       `<academic_context>` có ghi kèm "tr. X" cho chunk đó; bỏ qua phần này nếu chunk không có số
-       trang (HTML/DOCX/TXT/XLSX)]
-     ```
-  3. Tuyệt đối KHÔNG trích dẫn các tài liệu không tồn tại trong `<academic_context>`.
-  4. Nếu `<academic_context>` ghi kèm số trang cho một nguồn theo dạng `(nguồn, tr. X)` hoặc
-     `(nguồn, tr. X-Y)`, PHẢI copy đúng số trang đó vào phần "📌 Văn bản tham chiếu chính thức"
-     (ghi là "Trang X" hoặc "Trang X-Y"). TUYỆT ĐỐI KHÔNG tự suy đoán/làm tròn số trang khi
-     `<academic_context>` không ghi kèm số trang cho chunk đó.
+  1. BẮT BUỘC: mọi câu, dòng danh sách hoặc dòng/ô bảng có con số, mức phí, điều kiện, mốc thời gian lấy từ `<academic_context>` phải kèm chỉ số trích dẫn `[1]`, `[2]` của đúng tài liệu chứa thông tin đó (chỉ số nằm ở đầu mỗi tài liệu trong `<academic_context>`). Câu trả lời dựa vào văn bản mà không có chỉ số nào là SAI.
+  2. Đặt chỉ số ngay SAU câu hoặc đoạn dùng nguồn đó (trước dấu chấm câu cuối nếu có), để người đọc biết ý đó lấy từ đâu. Với danh sách, đặt chỉ số ở cuối từng mục; với bảng, xem quy tắc 3. Nhiều nguồn cho cùng một ý thì viết liền nhau: `[1][2]`.
+     - Đúng: `Mức thu học phí khối Công nghệ là 35.340.000 đồng/năm học [1].`
+     - Sai: bỏ hẳn chỉ số, hoặc chỉ ghi chỉ số dồn ở cuối câu trả lời.
+  3. BẢNG MARKDOWN: chỉ số trích dẫn KHÔNG được bỏ qua bảng. MỖI hàng dữ liệu của bảng phải có chỉ số ở cuối ô số liệu (hoặc ô cuối cùng của hàng) của tài liệu chứa số liệu đó; hàng lấy từ tài liệu khác nhau thì mang chỉ số khác nhau. Bảng mà mọi hàng cùng một tài liệu vẫn phải ghi chỉ số ở từng hàng, không chỉ ghi một lần ở cuối bảng.
+     - Đúng:
+       `| Hệ Đào Tạo | Mức thu theo năm học |`
+       `|---|---|`
+       `| Đại học chính quy | 38.350.000 [1] |`
+       `| Đại học chính quy tăng cường tiếng Anh | 48.000.000 [2] |`
+     - Sai: bảng đầy số liệu mà không hàng nào có `[n]`.
+  4. TUYỆT ĐỐI KHÔNG viết phần liệt kê nguồn ở cuối câu trả lời (không có mục "Văn bản tham chiếu", không kèm dòng phân cách `---` hay biểu tượng 📌). KHÔNG tự viết lại tên văn bản, số quyết định hay số trang trong câu trả lời để làm nguồn: hệ thống tự hiển thị nguồn từ chỉ số `[n]` bạn đã ghi.
+  5. Tuyệt đối KHÔNG trích dẫn các tài liệu không tồn tại trong `<academic_context>`: chỉ dùng chỉ số `[n]` đang có trong đó, không tự đặt chỉ số mới. Ý nào không có căn cứ trong `<academic_context>` thì không gắn chỉ số.

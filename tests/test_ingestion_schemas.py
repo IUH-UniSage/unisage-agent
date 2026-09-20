@@ -140,6 +140,8 @@ def test_chunk_still_constructs_with_only_the_original_three_fields() -> None:
     assert chunk.header_source == HeaderSource.MISSING
     assert chunk.header_confidence == 0.0
     assert chunk.chunking_version == "legacy"
+    assert chunk.structure_confidence is None
+    assert chunk.parse_warnings == []
 
 
 def test_chunk_block_index_zero_is_distinct_from_unset() -> None:
@@ -183,6 +185,22 @@ def test_chunk_accepts_full_structural_metadata() -> None:
     assert chunk.block_index == 2
     assert chunk.source_locator is not None
     assert chunk.source_locator.table_id == "table-2"
+    assert chunk.structure_confidence is None
+
+
+def test_chunk_carries_structure_confidence_and_warnings_and_validates_the_range() -> None:
+    chunk = Chunk(
+        chunk_index=0,
+        content="x",
+        region_type=RegionType.TABLE,
+        structure_confidence=0.3,
+        parse_warnings=["garbled_text_raw_kept"],
+    )
+
+    assert chunk.structure_confidence == 0.3
+    assert chunk.parse_warnings == ["garbled_text_raw_kept"]
+    with pytest.raises(ValueError):
+        Chunk(chunk_index=0, content="x", region_type=RegionType.TABLE, structure_confidence=1.5)
 
 
 def test_embedding_request_accepts_access_level_above_five() -> None:

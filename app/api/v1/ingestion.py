@@ -180,12 +180,17 @@ def _merge_canonical_chunks(request: EmbeddingRequest, draft: DraftDTO | None) -
       `department_id`/`object_key` doesn't match this request (never use a
       draft belonging to a different context, even if `document_id` matches).
     - `EmbeddingDraftLegacyException` (HTTP 409) - the draft (or any of its
-      chunks) predates structural metadata (`chunking_version == "legacy"`,
-      or `source_type`/`block_index` still `None`) - cannot be embedded
-      safely; the document must be re-chunked.
-    - `EmbeddingChunkSetMismatchException` - `request.chunks` doesn't line
-      up 1:1 by `chunk_index` with the canonical draft (wrong count,
-      duplicate index, or a mismatched index set). Never merges partially.
+      chunks) was not produced by the current chunking logic
+      (`chunking_version != settings.CHUNKING_VERSION`, which includes
+      `"legacy"`, or `source_type`/`block_index` still `None`) - cannot be
+      embedded safely; the document must be re-chunked. Chunks already
+      embedded in Qdrant are never touched.
+    - `EmbeddingChunkSetMismatchException` - `request.chunks` isn't a valid
+      subset of the canonical draft: a duplicate `chunk_index`, or an index
+      the draft doesn't have. Never merges partially.
+
+    The client may send FEWER chunks than the draft: chunks the user deleted
+    in the wizard before embedding are simply left out and never embedded.
     """
 
     if draft is None:
@@ -195,29 +200,27 @@ def _merge_canonical_chunks(request: EmbeddingRequest, draft: DraftDTO | None) -
         raise EmbeddingDraftMismatchException(request.document_id)
 
     canonical_chunks = draft.chunks
-    is_legacy_draft = any(
-        chunk.chunking_version == "legacy" or chunk.source_type is None or chunk.block_index is None
+    is_outdated_draft = any(
+        chunk.chunking_version != settings.CHUNKING_VERSION
+        or chunk.source_type is None
+        or chunk.block_index is None
         for chunk in canonical_chunks
     )
-    if is_legacy_draft:
+    if is_outdated_draft:
         raise EmbeddingDraftLegacyException(request.document_id)
 
     canonical_by_index = {chunk.chunk_index: chunk for chunk in canonical_chunks}
 
     request_indexes = [chunk.chunk_index for chunk in request.chunks]
-    if len(request.chunks) != len(canonical_chunks):
-        raise EmbeddingChunkSetMismatchException(
-            request.document_id,
-            f"số lượng chunk gửi lên ({len(request.chunks)}) khác bản nháp "
-            f"({len(canonical_chunks)})",
-        )
     if len(set(request_indexes)) != len(request_indexes):
         raise EmbeddingChunkSetMismatchException(
             request.document_id, "chunk_index bị trùng lặp trong yêu cầu"
         )
-    if set(request_indexes) != set(canonical_by_index.keys()):
+    unknown_indexes = sorted(set(request_indexes) - canonical_by_index.keys())
+    if unknown_indexes:
         raise EmbeddingChunkSetMismatchException(
-            request.document_id, "tập chunk_index không khớp CHÍNH XÁC với bản nháp"
+            request.document_id,
+            f"chunk_index {unknown_indexes} không có trong bản nháp",
         )
 
     return [

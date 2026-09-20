@@ -1,5 +1,6 @@
 from typing import Any, Protocol
 
+from app.core.config import settings
 from app.core.exceptions import StrategyFileTypeMismatchException
 from app.rag.chunking.excel_rows import ExcelRowChunker
 from app.rag.chunking.markdown_aware import MarkdownAwareChunker
@@ -50,7 +51,7 @@ def dispatch(
     table_regions = [region for region in regions if region.region_type == RegionType.TABLE]
     text_regions = [region for region in regions if region.region_type != RegionType.TABLE]
 
-    table_max_tokens = int(params.get("table_max_tokens", 400))
+    table_max_tokens = int(params.get("table_max_tokens", settings.TABLE_CHUNK_MAX_TOKENS))
     table_chunks = TableRowChunker(max_tokens=table_max_tokens).split(table_regions)
 
     chunker: _RegionChunker = _build_text_chunker(strategy, params)

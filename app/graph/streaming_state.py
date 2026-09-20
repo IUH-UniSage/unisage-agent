@@ -1,6 +1,7 @@
 """Input/output/deps shapes for the streaming graph orchestrator."""
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic_ai.models import Model
 
@@ -43,3 +44,4 @@ class GraphOutput:
     confirmed_metadata: dict[str, str] = field(default_factory=dict)
     pending_clarification: PendingClarification | None = None
     used_ticket_fallback: bool = False
+    citations: list[dict[str, Any]] = field(default_factory=list)

@@ -310,3 +310,17 @@ def test_json_repair_prompt_includes_student_declared_attributes() -> None:
 
     assert "<student_declared_attributes>" in prompt
     assert "he_dao_tao: chinh_quy" in prompt
+
+
+def test_citation_rules_ask_for_inline_markers_without_trailing_source_block() -> None:
+    prompt = build_system_prompt(
+        user_query="Học phí là bao nhiêu?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[RetrievedChunk(chunk_id="c1", content="Nội dung 1", source="Quy chế A", score=1.0)],
+        pending_clarification=None,
+    )
+
+    assert "SAU câu hoặc đoạn dùng nguồn" in prompt
+    assert "MỖI hàng dữ liệu của bảng" in prompt
+    assert "Văn bản tham chiếu chính thức" not in prompt

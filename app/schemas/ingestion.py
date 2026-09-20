@@ -67,8 +67,9 @@ class SourceLocator(BaseModel):
     # independent figure the validator (Phase 4) cross-checks against
     # `row_end - row_start + 1` (a round-trip consistency check, NOT a
     # re-verification of the actual cell content - see Task 2.2/4.2)
-    table_id: str | None = None  # "table-{block_index}" - distinguishes two tables
-    # sharing the same page/heading
+    table_id: str | None = None  # "table-{n}" (n = order of the table in the
+    # document, a table continuing across pages is ONE table) - distinguishes
+    # two tables sharing the same page/heading
     row_part: int | None = None  # 1-indexed, only set when one row had to be split
     # across multiple chunks (oversized-row fallback)
     row_part_count: int | None = None
@@ -130,6 +131,13 @@ class Chunk(BaseModel):
     # mislabeling legacy data as produced by the current chunking logic.
     # Every new chunker (Phase 2/3) sets this explicitly at construction.
     chunking_version: str = "legacy"
+    # TABLE chunks only: the lowest structural confidence of any row in the
+    # chunk (header/hierarchy/text quality, 0..1) and the de-duplicated parse
+    # warnings of those rows (e.g. "garbled_text_raw_kept"). `None`/`[]` for
+    # chunks that never had table structure inferred, including every chunk
+    # written before these fields existed.
+    structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    parse_warnings: list[str] = Field(default_factory=list)
 
 
 class ChunkingResponse(BaseModel):

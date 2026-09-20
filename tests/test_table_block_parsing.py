@@ -102,6 +102,8 @@ def test_pdf_table_is_always_inferred_header() -> None:
 
     assert table_region.table is not None
     assert table_region.table.header_source == HeaderSource.INFERRED
-    assert table_region.table.header_confidence == 0.6
+    # 0.6 from markdown alone, 0.75 when geometric evidence lines up with it;
+    # never the 1.0 of a real structural header signal.
+    assert 0.6 <= table_region.table.header_confidence < 1.0
     assert table_region.table.header_row is not None
     assert any("Alice" in row for row in table_region.table.data_rows)

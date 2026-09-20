@@ -62,7 +62,7 @@ class ErrorCode(Enum):
     EMBEDDING_DRAFT_LEGACY = (
         409,
         4014,
-        "Bản nháp này được tạo trước khi hệ thống hỗ trợ metadata cấu trúc, "
+        "Bản nháp này được tạo bằng phiên bản chia đoạn cũ hoặc thiếu metadata cấu trúc, "
         "vui lòng chia đoạn lại trước khi embed.",
     )
 

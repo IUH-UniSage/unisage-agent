@@ -40,6 +40,7 @@ def _create_chunking_draft(
     department_id: str = "CNTT",
     object_key: str = "docs/handbook.pdf",
     text: str = "A paragraph for chunking.",
+    params: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Chunk a tiny document (real `dispatch()`, real `validate_chunks()`)
     through the actual endpoint so the resulting draft has genuine,
@@ -55,6 +56,7 @@ def _create_chunking_draft(
                 "department_id": department_id,
                 "object_key": object_key,
                 "strategy": "recursive",
+                **({"params": params} if params else {}),
             },
             headers=_TRUSTED_HEADERS,
         )
@@ -326,6 +328,37 @@ def test_embedding_rejects_chunk_count_mismatch(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+@patch("app.api.v1.ingestion.embed_chunks")
+def test_embedding_accepts_a_subset_when_the_user_deleted_chunks(
+    mock_embed_chunks: MagicMock, client: TestClient
+) -> None:
+    """The wizard lets the user delete chunks before embedding: the request
+    then carries only the kept ones, and only those are dispatched."""
+
+    mock_embed_chunks.delay.return_value = MagicMock(id="task-subset")
+    draft_chunks = _create_chunking_draft(
+        client,
+        "doc-embed-subset",
+        text=" ".join(["First paragraph here.", "Second paragraph here.", "Third paragraph here."]),
+        params={"chunk_size": 30, "overlap": 0},
+    )
+    assert len(draft_chunks) >= 3
+    kept = [draft_chunks[0], draft_chunks[-1]]
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-subset", "chunks": kept},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 202, response.text
+    dispatched = mock_embed_chunks.delay.call_args.args[2]
+    assert [chunk["chunk_index"] for chunk in dispatched] == [
+        kept[0]["chunk_index"],
+        kept[1]["chunk_index"],
+    ]
+
+
 def test_embedding_rejects_duplicate_chunk_index(client: TestClient) -> None:
     draft_chunks = _create_chunking_draft(client, "doc-embed-dup-index")
     duplicated = [draft_chunks[0], draft_chunks[0]]
@@ -391,6 +424,49 @@ def test_embedding_rejects_legacy_draft_with_409(client: TestClient) -> None:
         )
 
     assert response.status_code == 409
+
+
+def test_embedding_rejects_a_draft_chunked_under_an_older_version_with_409(
+    client: TestClient,
+) -> None:
+    """A structurally complete draft produced by the PREVIOUS chunking version
+    is refused too (not only `"legacy"`), so a table chunked before pages were
+    merged is re-chunked rather than embedded; the current version is accepted."""
+
+    from app.core.config import settings
+    from app.database.models import DocumentProcessStep
+    from app.database.repositories.ingestion_job import DraftDTO
+    from app.schemas.ingestion import Chunk, RegionType, SourceType
+
+    def draft_with(version: str) -> DraftDTO:
+        return DraftDTO(
+            object_key="docs/handbook.pdf",
+            department_id="CNTT",
+            current_step=DocumentProcessStep.CHUNKED,
+            chunking_strategy="recursive",
+            chunking_params={},
+            chunks=[
+                Chunk(
+                    chunk_index=0,
+                    content="content",
+                    region_type=RegionType.TEXT,
+                    source_type=SourceType.PDF,
+                    block_index=0,
+                    chunking_version=version,
+                )
+            ],
+            celery_task_id=None,
+        )
+
+    with patch("app.api.v1.ingestion.get_draft", return_value=draft_with("2026-09-structural-v1")):
+        outdated = client.post(
+            "/api/v1/ingestion/embedding",
+            json={**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-old"},
+            headers=_TRUSTED_HEADERS,
+        )
+
+    assert settings.CHUNKING_VERSION != "2026-09-structural-v1"
+    assert outdated.status_code == 409
 
 
 def _canned_stream(
