@@ -34,10 +34,16 @@ class _JavaBackend:
     """In-memory fake of backend-java's message store, driven by an
     httpx.MockTransport handler - captures every call for assertions."""
 
-    def __init__(self, *, reject_user_message: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        reject_user_message: int | None = None,
+        reject_body: dict[str, Any] | None = None,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self._next_id = 1
         self._reject_user_message = reject_user_message
+        self._reject_body = reject_body
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read()) if request.content else {}
@@ -59,7 +65,9 @@ class _JavaBackend:
             and body.get("role") == "USER"
             and self._reject_user_message is not None
         ):
-            return httpx.Response(self._reject_user_message, json={"message": "rejected"})
+            return httpx.Response(
+                self._reject_user_message, json=self._reject_body or {"message": "rejected"}
+            )
 
         if request.method == "GET" and request.url.path.startswith("/messages/conversation/"):
             return httpx.Response(200, json=[])
@@ -173,6 +181,69 @@ def test_java_rejects_user_message_returns_error_without_running_graph(
     # Only the (rejected) USER-message POST happened - no placeholder created.
     post_message_calls = [c for c in java.calls if c["path"] == "/messages"]
     assert len(post_message_calls) == 1
+
+
+def test_java_usage_limit_429_keeps_code_2130_status_and_reset_time(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    """Java answers 429 when the caller's token quota is used up. That must reach the web as
+    HTTP 429 + code 2130 with the window and reset time intact - not as a 403 access-denied."""
+
+    java = _JavaBackend(
+        reject_user_message=429,
+        reject_body={
+            "code": 2130,
+            "message": "Bạn đã dùng hết hạn mức sử dụng.",
+            "errors": {"window": "DAILY", "resetAt": "2026-09-22T10:00+07:00"},
+        },
+    )
+    _override_java(java)
+    _override_models(mock_graph_models)
+
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "hi"},
+    )
+
+    assert response.status_code == 429
+    body = response.json()
+    assert body["code"] == 2130
+    assert body["errors"] == {"window": "DAILY", "resetAt": "2026-09-22T10:00+07:00"}
+    # Blocked before anything else: no assistant placeholder, no graph run.
+    post_message_calls = [c for c in java.calls if c["path"] == "/messages"]
+    assert len(post_message_calls) == 1
+
+
+def test_java_usage_limit_429_without_detail_still_returns_429_2130(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    java = _JavaBackend(reject_user_message=429)
+    _override_java(java)
+    _override_models(mock_graph_models)
+
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "hi"},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["code"] == 2130
+
+
+def test_java_other_rejections_are_still_access_denied_or_not_found(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    for java_status, expected_status in ((404, 404), (403, 403), (500, 403)):
+        java = _JavaBackend(reject_user_message=java_status)
+        _override_java(java)
+        _override_models(mock_graph_models)
+
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"conversation_id": "conv-1", "message": "hi"},
+        )
+
+        assert response.status_code == expected_status, java_status
 
 
 def test_successful_stream_creates_user_then_assistant_then_patches_completed(

@@ -17,6 +17,7 @@ from app.core.exceptions import (
     BackendJavaUnavailableException,
     ConversationRejectedException,
     InvalidQueryException,
+    UsageLimitExceededException,
 )
 from app.core.sanitizer import sanitize_input_text
 from app.core.security import verify_internal_secret
@@ -126,6 +127,19 @@ def _resolve_guest_session_token(http_request: Request) -> str | None:
     return http_request.cookies.get(GUEST_SESSION_COOKIE_NAME)
 
 
+def _usage_limit_errors(body: object) -> dict[str, str]:
+    """The `window` / `resetAt` detail of Java's 429, or {} when the body has none."""
+
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not isinstance(errors, dict):
+        return {}
+    return {
+        key: value
+        for key, value in errors.items()
+        if key in ("window", "resetAt") and isinstance(value, str)
+    }
+
+
 async def _sse_token_generator(queue: "asyncio.Queue[str | None]") -> AsyncGenerator[str, None]:
     """Reads tokens from `queue` until the end-of-stream sentinel (`None`).
 
@@ -208,6 +222,8 @@ async def chat_stream_endpoint(
             guest_session_token=guest_session_token,
         )
     except BackendJavaHTTPError as exc:
+        if exc.status_code == 429:
+            raise UsageLimitExceededException(_usage_limit_errors(exc.body)) from exc
         raise ConversationRejectedException(exc.status_code) from exc
     except BackendJavaConnectionError as exc:
         raise BackendJavaUnavailableException() from exc

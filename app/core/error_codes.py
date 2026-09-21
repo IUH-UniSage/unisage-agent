@@ -75,6 +75,15 @@ class ErrorCode(Enum):
     # 403x Forbidden (chat-specific; distinct code from FORBIDDEN_DEPARTMENT_ACCESS)
     CONVERSATION_ACCESS_DENIED = (403, 4031, "Bạn không có quyền truy cập cuộc hội thoại này.")
 
+    # 429 Usage limit. The code 2130 is backend-java's own USAGE_LIMIT_EXCEEDED, passed through
+    # unchanged (this is the one 2xxx code the agent re-emits) so the web sees the same code and
+    # message whichever service answered.
+    USAGE_LIMIT_EXCEEDED = (
+        429,
+        2130,
+        "Bạn đã dùng hết hạn mức sử dụng. Vui lòng quay lại sau thời điểm được thông báo.",
+    )
+
     # 500x Server & LLM Errors
     INTERNAL_ERROR = (500, 5000, "Có lỗi xảy ra, bạn thử lại sau nhé.")
     LLM_TIMEOUT = (504, 5001, "Hệ thống AI phản hồi quá lâu, thử lại sau nhé.")
