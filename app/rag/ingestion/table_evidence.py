@@ -165,6 +165,8 @@ def _header_row_count(rows: list[EvidenceRow]) -> int:
 
 
 def _collect_page_tables(page: pymupdf.Page) -> list[TableEvidence]:
+    # Line-based detection only. Asking the layout model as well is ~5x slower and
+    # gave the same grid on the pages where the markdown did not line up.
     finder = page.find_tables(use_layout=False)  # type: ignore[no-untyped-call]
     page_text = _read_page_text(page) if finder.tables else _PageText([], [])
     evidence: list[TableEvidence] = []

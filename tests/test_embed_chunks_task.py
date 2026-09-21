@@ -167,9 +167,7 @@ def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
         "parse_warnings": ["garbled_text_raw_kept"],
     }
 
-    embed_chunks.apply(
-        args=("doc-1", "docs/handbook.pdf", [structural_chunk], "CNTT", 2)
-    ).get()
+    embed_chunks.apply(args=("doc-1", "docs/handbook.pdf", [structural_chunk], "CNTT", 2)).get()
 
     point_kwargs = mock_qdrant_store.ChunkPoint.call_args.kwargs
     assert point_kwargs["source_type"] == "pdf"

@@ -23,6 +23,7 @@ from app.rag.ingestion.canonical_table import (
     EventKind,
     NormalizationEvent,
     RowDisposition,
+    SourceRow,
     TableBlock,
     TableRow,
     normalize_for_compare,
@@ -51,6 +52,15 @@ class MergeScoring:
     position_bottom_fraction: float = 0.25
     position_top_fraction: float = 0.15
     header_confidence_when_repeated: float = 0.9
+    # A column is the "running text" column - whose tail a page break can leave at
+    # the top of the next page - when its cells average at least this many chars.
+    continuation_min_mean_length: float = 20.0
+    # Without geometry the position/boundary signals are absent; then, when the
+    # header was not repeated, how well the next page's first row fits the rows
+    # above stands in for them. Not part of the four weights that sum to 1.0.
+    weight_shape: float = 0.45
+    shape_short_max_length: int = 12
+    shape_text_max_length: int = 45
 
 
 MERGE_SCORING = MergeScoring()
@@ -119,6 +129,49 @@ def _position_ok(first: TableEvidence, second: TableEvidence, scoring: MergeScor
     )
 
 
+def _cell_kind(text: str, scoring: MergeScoring) -> int:
+    """0 empty, 1 short (a code, a number), 2 a phrase, 3 running text."""
+
+    length = len(text.strip())
+    if length == 0:
+        return 0
+    if length <= scoring.shape_short_max_length:
+        return 1
+    return 2 if length <= scoring.shape_text_max_length else 3
+
+
+def _first_row_fit(first: TableBlock, second: TableBlock, scoring: MergeScoring) -> float | None:
+    """How well the row the next page opens with (read as a header by the page
+    parse, but a data row when the header was not repeated) fits the rows above:
+    per column, the kind of cell it holds against the commonest kind in `first`
+    (1 same kind, 0.5 neighbouring kind, else 0; an empty cell says nothing).
+    A row that only carries the tail of a text cell fits by definition. None
+    when there is nothing to compare."""
+
+    header_sources = [s for s in second.source_rows if s.disposition == RowDisposition.HEADER]
+    if not header_sources or not first.rows:
+        return None
+    candidate = header_sources[0].cells
+    heavy = _text_heavy_column(first.rows, scoring)
+    if _is_cell_continuation(candidate, heavy):
+        return 1.0
+    fits: list[float] = []
+    for column, text in enumerate(candidate):
+        kind = _cell_kind(text, scoring)
+        if kind == 0:
+            continue
+        kinds = [
+            _cell_kind(row.cells[column], scoring)
+            for row in first.rows
+            if column < len(row.cells) and row.cells[column].strip()
+        ]
+        if not kinds:
+            continue
+        common = max(set(kinds), key=kinds.count)
+        fits.append(1.0 if kind == common else 0.5 if abs(kind - common) == 1 else 0.0)
+    return sum(fits) / len(fits) if fits else None
+
+
 def decide_merge(
     first: MergeCandidate,
     second: MergeCandidate,
@@ -155,6 +208,10 @@ def decide_merge(
         signals.append((scoring.weight_bounds, bounds))
     if position is not None:
         signals.append((scoring.weight_position, position))
+    if not header_present and position is None:
+        shape = _first_row_fit(first.table, second.table, scoring)
+        if shape is not None:
+            signals.append((scoring.weight_shape, shape))
 
     present = sum(weight for weight, _ in signals)
     if present < scoring.min_present_weight:
@@ -169,6 +226,39 @@ def decide_merge(
     return MergeDecision(False, score, header_present, borderline, "below_threshold")
 
 
+@dataclass
+class _Incoming:
+    """A row of the continuation page waiting to be appended, with the keys
+    that identify it in the source ledger (so ledger ids can be remapped)."""
+
+    row: TableRow
+    keys: list[tuple[str, object]]
+
+
+def _text_heavy_column(rows: list[TableRow], scoring: MergeScoring) -> int | None:
+    """The column that holds the running text (highest mean cell length), if
+    any column is text-heavy enough to be one."""
+
+    if not rows:
+        return None
+    width = len(rows[0].cells)
+    means = [
+        sum(len(row.cells[column]) for row in rows if column < len(row.cells)) / len(rows)
+        for column in range(width)
+    ]
+    best = max(range(width), key=lambda column: means[column])
+    return best if means[best] >= scoring.continuation_min_mean_length else None
+
+
+def _is_cell_continuation(cells: list[str], heavy: int | None) -> bool:
+    """A row that fills only the text-heavy column: what is left of a cell whose
+    row was cut by the page break, not a row of its own."""
+
+    if heavy is None or heavy >= len(cells) or not cells[heavy].strip():
+        return False
+    return all(not cell.strip() for column, cell in enumerate(cells) if column != heavy)
+
+
 def merge_page_tables(
     first: TableBlock,
     second: TableBlock,
@@ -178,13 +268,28 @@ def merge_page_tables(
 ) -> TableBlock:
     """Concatenate `second` under `first` as one logical table.
 
-    When `second` repeated the header, its header source rows become
-    `repeated_header` (with a `drop_repeated_header` event). When it did not,
-    the rows the page-level parse took for a header are data: they are
-    restored as data rows so no content is lost.
+    - When `second` repeated the header, its header source rows become
+      `repeated_header` (with a `drop_repeated_header` event). When it did not,
+      the rows the page-level parse took for a header are data: they are
+      restored as data rows (one per logical row) so no content is lost.
+    - Rows at the top of `second` that only carry the tail of the previous
+      row's text cell (the row was cut by the page break) are appended to that
+      row instead of standing as rows of their own.
     """
 
-    offset = len(first.rows)
+    first_rows = [
+        replace(
+            row,
+            cells=list(row.cells),
+            warnings=list(row.warnings),
+            source_row_ids=list(row.source_row_ids),
+        )
+        for row in first.rows
+    ]
+    first_sources = [
+        replace(source, canonical_row_ids=list(source.canonical_row_ids))
+        for source in first.source_rows
+    ]
     second_sources = [
         replace(source, canonical_row_ids=list(source.canonical_row_ids))
         for source in second.source_rows
@@ -192,8 +297,10 @@ def merge_page_tables(
     header_sources = [s for s in second_sources if s.disposition == RowDisposition.HEADER]
     events = [*first.normalization_events, *second.normalization_events]
     header_confidence = first.header_confidence
+    offset = len(first_rows)
 
-    lead_rows: list[TableRow] = []
+    incoming: list[_Incoming] = []
+    lead_ids: set[str] = set()
     if header_present:
         for source in header_sources:
             source.disposition = RowDisposition.REPEATED_HEADER
@@ -206,32 +313,93 @@ def merge_page_tables(
         )
         header_confidence = max(header_confidence, scoring.header_confidence_when_repeated)
     else:
-        for position, source in enumerate(header_sources, start=1):
-            source.disposition = RowDisposition.DATA
-            source.canonical_row_ids = [offset + position]
-            lead_rows.append(
-                TableRow(
-                    cells=list(source.cells),
-                    raw_text=source.raw_text,
-                    row_index=offset + position,
-                    page_start=source.page,
-                    page_end=source.page,
-                    confidence=0.8,
-                    warnings=["headerless_continuation"],
-                    source_row_ids=[source.source_row_id],
-                    source_cell_count=source.source_cell_count,
-                    canonical_cell_count=len(source.cells),
+        by_logical: dict[object, list[SourceRow]] = {}
+        for source in header_sources:
+            group_key = (
+                source.logical_row if source.logical_row is not None else source.source_row_id
+            )
+            by_logical.setdefault(group_key, []).append(source)
+        for group in by_logical.values():
+            if not any(normalize_for_compare(source.raw_text) for source in group):
+                for source in group:
+                    source.disposition = RowDisposition.DROPPED_EMPTY  # a blank "header"
+                continue
+            for source in group:
+                source.disposition = (
+                    RowDisposition.MERGED if len(group) > 1 else RowDisposition.DATA
+                )
+                lead_ids.add(source.source_row_id)
+            incoming.append(
+                _Incoming(
+                    TableRow(
+                        cells=list(group[0].cells),
+                        raw_text=" ".join(source.raw_text for source in group),
+                        row_index=0,
+                        page_start=group[0].page,
+                        page_end=group[0].page,
+                        confidence=0.8,
+                        warnings=["headerless_continuation"],
+                        source_row_ids=[source.source_row_id for source in group],
+                        source_cell_count=sum(source.source_cell_count for source in group),
+                        canonical_cell_count=len(group[0].cells),
+                    ),
+                    [("lead", source.source_row_id) for source in group],
                 )
             )
+    for row in second.rows:
+        incoming.append(
+            _Incoming(
+                replace(
+                    row,
+                    cells=list(row.cells),
+                    warnings=list(row.warnings),
+                    source_row_ids=list(row.source_row_ids),
+                ),
+                [("row", row.row_index)],
+            )
+        )
 
-    shift = offset + len(lead_rows)
-    lead_ids = {row.source_row_ids[0] for row in lead_rows}
+    key_to_index: dict[tuple[str, object], int] = {}
+    heavy = _text_heavy_column(first_rows, scoring)
+    while incoming and first_rows and _is_cell_continuation(incoming[0].row.cells, heavy):
+        item = incoming.pop(0)
+        target = first_rows[-1]
+        assert heavy is not None
+        target.cells[heavy] = f"{target.cells[heavy]} {item.row.cells[heavy]}".strip()
+        target.raw_text = f"{target.raw_text} {item.row.raw_text}"
+        target.page_end = item.row.page_end
+        target.source_cell_count += item.row.source_cell_count
+        target.confidence = min(target.confidence, 0.8)
+        if "continued_across_pages" not in target.warnings:
+            target.warnings.append("continued_across_pages")
+        events.append(
+            NormalizationEvent(
+                EventKind.MERGE_CELLS,
+                [*target.source_row_ids, *item.row.source_row_ids],
+                "text cell cut by the page break continued into the previous row",
+            )
+        )
+        target.source_row_ids.extend(item.row.source_row_ids)
+        for key in item.keys:
+            key_to_index[key] = target.row_index
+        for source in [*first_sources, *second_sources]:
+            if source.source_row_id in target.source_row_ids:
+                source.disposition = RowDisposition.MERGED
+
+    for position, item in enumerate(incoming, start=1):
+        item.row.row_index = offset + position
+        for key in item.keys:
+            key_to_index[key] = item.row.row_index
+
     for source in second_sources:
-        if source.source_row_id not in lead_ids:
-            source.canonical_row_ids = [row_id + shift for row_id in source.canonical_row_ids]
-    shifted_rows = [replace(row, row_index=row.row_index + shift) for row in second.rows]
+        if source.source_row_id in lead_ids:
+            source.canonical_row_ids = [key_to_index[("lead", source.source_row_id)]]
+        else:
+            source.canonical_row_ids = [
+                key_to_index[("row", old)] for old in source.canonical_row_ids
+            ]
 
-    rows = [*first.rows, *lead_rows, *shifted_rows]
+    rows = [*first_rows, *[item.row for item in incoming]]
     return TableBlock(
         header_row=first.header_row,
         data_rows=[row.cells for row in rows],
@@ -240,7 +408,7 @@ def merge_page_tables(
         table_id=first.table_id,
         header_levels=first.header_levels,
         rows=rows,
-        source_rows=[*first.source_rows, *second_sources],
+        source_rows=[*first_sources, *second_sources],
         normalization_events=events,
         warnings=[*first.warnings, *[w for w in second.warnings if w not in first.warnings]],
     )

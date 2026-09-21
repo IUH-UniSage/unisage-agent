@@ -24,7 +24,7 @@ around it: no guess is better than a wrong breadcrumb.
 
 import re
 import statistics
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from app.rag.ingestion.canonical_table import TableBlock, TableRow
 
@@ -54,6 +54,11 @@ class HierarchyScoring:
     ordinal_column_max_length: int = 8
     ordinal_prefix_min_share: float = 0.3
     ordinal_prefix_min_count: int = 3
+    # Group rows (a label in a column LEFT of the label column while the label
+    # cell itself is empty): how many make a hierarchy, and the most that can
+    # be groups before the table is more likely just sparse.
+    group_row_min_count: int = 2
+    group_row_max_share: float = 0.6
 
 
 HIERARCHY_SCORING = HierarchyScoring()
@@ -122,6 +127,8 @@ class _Layout:
     label_col: int
     ordinal_col: int | None
     numeric_cols: list[int]
+    # row index -> group label, for rows that name a group instead of an item
+    group_labels: dict[int, str] = field(default_factory=dict)
 
 
 def _is_numeric(text: str) -> bool:
@@ -143,8 +150,12 @@ def _detect_layout(
         return None
     label_col = max(range(column_count), key=lambda index: text_weight[index])
 
+    group_labels = _find_group_rows(rows, label_col, scoring)
+
     ordinal_col: int | None = None
-    for index in range(label_col):
+    # With group rows the running number in the first column restarts inside
+    # every group - it is an item counter, not a hierarchy.
+    for index in range(0 if group_labels else label_col):
         cells = [cell for cell in column(index) if cell]
         if len(cells) < scoring.ordinal_column_min_count:
             continue
@@ -163,7 +174,72 @@ def _detect_layout(
         cells = [cell for cell in column(index) if cell]
         if cells and sum(1 for cell in cells if _is_numeric(cell)) / len(cells) >= 0.5:
             numeric_cols.append(index)
-    return _Layout(label_col, ordinal_col, numeric_cols)
+    return _Layout(label_col, ordinal_col, numeric_cols, group_labels)
+
+
+def _find_group_rows(
+    rows: list[TableRow], label_col: int, scoring: HierarchyScoring
+) -> dict[int, str]:
+    """Rows that name a group rather than an item: the label cell is empty while
+    a column to its left holds text that is neither a number nor an ordinal
+    (`HỌC KỲ 1`, `Nhóm 2` sitting in the first column of a course list). Purely
+    positional - no word is looked for. Fewer than a couple of them, or so many
+    that the table is mostly such rows, means this is not a group layout."""
+
+    groups: dict[int, str] = {}
+    for index, row in enumerate(rows):
+        if label_col < len(row.cells) and row.cells[label_col].strip():
+            continue
+        left = [_clean(cell) for cell in row.cells[: min(label_col, len(row.cells))]]
+        texts = [text for text in left if text]
+        # the label may be spread over neighbouring cells (`Nhóm` | `2`)
+        if any(not _is_numeric(text) and _parse_ordinal(text) is None for text in texts):
+            groups[index] = " ".join(texts)
+    if len(groups) < scoring.group_row_min_count or len(groups) > scoring.group_row_max_share * len(
+        rows
+    ):
+        return {}
+    return groups
+
+
+_DIGITS = re.compile(r"\d+")
+
+
+def _group_depths(group_labels: dict[int, str], row_count: int) -> list[int | None]:
+    """Depth of each group row, from the SHAPE of its label (digits masked, so
+    `Nhóm 1` and `Nhóm 2` are one kind) and where it sits:
+
+    - a kind already open pops back to its own level (a repeat);
+    - a new kind directly after another group row is its child;
+    - a new kind after item rows is a sibling of the previous group row (both
+      head their own run of items).
+    """
+
+    stack: list[tuple[str, int]] = []
+    depths: list[int | None] = [None] * row_count
+    previous_was_group = False
+    for index in range(row_count):
+        label = group_labels.get(index)
+        if label is None:
+            previous_was_group = False
+            continue
+        kind = _DIGITS.sub("#", label.strip())
+        known = next((i for i, (seen, _d) in enumerate(stack) if seen == kind), None)
+        if known is not None:
+            del stack[known + 1 :]
+            depth = stack[known][1]
+        elif previous_was_group and stack:
+            depth = stack[-1][1] + 1
+            stack.append((kind, depth))
+        elif stack:
+            depth = stack[-1][1]
+            stack[-1] = (kind, depth)
+        else:
+            depth = 0
+            stack.append((kind, depth))
+        depths[index] = depth
+        previous_was_group = True
+    return depths
 
 
 def _ordinal_depths(parsed: list[tuple[str, str] | None]) -> list[int | None]:
@@ -241,13 +317,23 @@ def _mask_feature(
     return result
 
 
+def _label_offset(row: TableRow, label_col: int) -> float | None:
+    """How far the label text starts from the left edge of its OWN cell. Using
+    the offset rather than the absolute x keeps a column that merely sits
+    further right on part of a page from reading as a deeper level."""
+
+    signals = row.signals
+    if signals is None or label_col >= len(signals.cell_x0):
+        return None
+    x0 = signals.cell_x0[label_col]
+    if x0 is None:
+        return None
+    left = signals.cell_left[label_col] if label_col < len(signals.cell_left) else None
+    return x0 - (left or 0.0)
+
+
 def _indent_ranks(rows: list[TableRow], label_col: int, tolerance: float) -> list[int | None]:
-    x0s = [
-        row.signals.cell_x0[label_col]
-        if row.signals is not None and label_col < len(row.signals.cell_x0)
-        else None
-        for row in rows
-    ]
+    x0s = [_label_offset(row, label_col) for row in rows]
     known = sorted(value for value in x0s if value is not None)
     clusters: list[float] = []
     for value in known:
@@ -314,6 +400,45 @@ def _geometry_features(
     )
 
 
+def _numbering(
+    rows: list[TableRow], layout: _Layout, scoring: HierarchyScoring
+) -> tuple[list[tuple[str, str] | None], list[str], list[int | None]]:
+    """Per row: its ordinal (style, token), its label text, and the absolute depth
+    the numbering scheme gives it (None for rows outside the scheme).
+
+    Group rows (`layout.group_labels`) head the hierarchy exactly as numbered rows
+    would - each carries an absolute depth and every other row hangs below the last
+    one. Otherwise the scheme comes from an ordinal column or from an ordinal glued
+    to the front of the label."""
+
+    def label_of(row: TableRow) -> str:
+        return _clean(row.cells[layout.label_col]) if layout.label_col < len(row.cells) else ""
+
+    if layout.group_labels:
+        labels = [layout.group_labels.get(i) or label_of(row) for i, row in enumerate(rows)]
+        return [None] * len(rows), labels, _group_depths(layout.group_labels, len(rows))
+
+    parsed: list[tuple[str, str] | None] = []
+    labels = []
+    for row in rows:
+        if layout.ordinal_col is not None and layout.ordinal_col < len(row.cells):
+            parsed.append(_parse_ordinal(row.cells[layout.ordinal_col]))
+            labels.append(label_of(row))
+        else:
+            item, rest = _split_prefix(label_of(row))
+            parsed.append(item)
+            labels.append(rest)
+    if layout.ordinal_col is None:
+        found = sum(1 for item in parsed if item is not None)
+        if (
+            found < scoring.ordinal_prefix_min_count
+            or found / len(rows) < scoring.ordinal_prefix_min_share
+        ):
+            return [None] * len(rows), [label_of(row) for row in rows], [None] * len(rows)
+    numbered_any = any(item is not None for item in parsed)
+    return parsed, labels, _ordinal_depths(parsed) if numbered_any else [None] * len(rows)
+
+
 def infer_hierarchy(table: TableBlock, scoring: HierarchyScoring = HIERARCHY_SCORING) -> TableBlock:
     rows = table.rows
     if len(rows) < 2 or not table.header_row:
@@ -323,31 +448,8 @@ def infer_hierarchy(table: TableBlock, scoring: HierarchyScoring = HIERARCHY_SCO
     if layout is None:
         return table
 
-    # Ordinal + label text per row.
-    parsed: list[tuple[str, str] | None] = []
-    labels: list[str] = []
-    for row in rows:
-        label_cell = row.cells[layout.label_col] if layout.label_col < len(row.cells) else ""
-        if layout.ordinal_col is not None and layout.ordinal_col < len(row.cells):
-            parsed.append(_parse_ordinal(row.cells[layout.ordinal_col]))
-            labels.append(_clean(label_cell))
-        else:
-            item, rest = _split_prefix(_clean(label_cell))
-            parsed.append(item)
-            labels.append(rest)
-    if layout.ordinal_col is None:
-        share = sum(1 for item in parsed if item is not None) / len(rows)
-        if (
-            sum(1 for item in parsed if item is not None) < scoring.ordinal_prefix_min_count
-            or share < scoring.ordinal_prefix_min_share
-        ):
-            parsed = [None] * len(rows)
-            labels = [
-                _clean(row.cells[layout.label_col]) if layout.label_col < len(row.cells) else ""
-                for row in rows
-            ]
-    numbering_active = any(item is not None for item in parsed)
-    ordinal_depth = _ordinal_depths(parsed) if numbering_active else [None] * len(rows)
+    parsed, labels, ordinal_depth = _numbering(rows, layout, scoring)
+    numbering_active = any(depth is not None for depth in ordinal_depth)
     numbered = [depth is not None for depth in ordinal_depth]
 
     scope: list[int] = []
@@ -357,9 +459,17 @@ def infer_hierarchy(table: TableBlock, scoring: HierarchyScoring = HIERARCHY_SCO
             current_scope += 1
         scope.append(current_scope)
 
-    mask = _mask_feature(rows, layout, numbered, scope)
-    span, font, height = _geometry_features(rows, layout.label_col, numbered, scope, scoring)
-    ranks = _indent_ranks(rows, layout.label_col, scoring.indent_cluster_tolerance)
+    if layout.group_labels:
+        # The group rows already say where every item belongs. The signals that
+        # INFER parents (fill pattern, font, indentation) would only add false
+        # ones here - an item with one empty cell looks like a "different" row.
+        none: list[bool | None] = [None] * len(rows)
+        mask = span = font = height = none
+        ranks: list[int | None] = [None] * len(rows)
+    else:
+        mask = _mask_feature(rows, layout, numbered, scope)
+        span, font, height = _geometry_features(rows, layout.label_col, numbered, scope, scoring)
+        ranks = _indent_ranks(rows, layout.label_col, scoring.indent_cluster_tolerance)
     binary_signals = (
         ("span", span, scoring.weight_span),
         ("font", font, scoring.weight_font),

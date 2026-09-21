@@ -24,8 +24,7 @@ def _pages(*texts: str) -> list[dict[str, object]]:
     span-flag detection would pick up)."""
 
     return [
-        {"metadata": {"page_number": index + 1}, "text": text}
-        for index, text in enumerate(texts)
+        {"metadata": {"page_number": index + 1}, "text": text} for index, text in enumerate(texts)
     ]
 
 
@@ -315,11 +314,7 @@ def test_pdf_numbered_line_with_underline_is_promoted_to_heading() -> None:
     instead of being silently lost as ordinary paragraph text."""
 
     pages = _pages(
-        "# Tieu de tai lieu\n\n"
-        "6. Ke hoach cong viec <u>(12 tuan)</u>\n\n"
-        "|A|B|\n"
-        "|---|---|\n"
-        "|1|2|\n"
+        "# Tieu de tai lieu\n\n6. Ke hoach cong viec <u>(12 tuan)</u>\n\n|A|B|\n|---|---|\n|1|2|\n"
     )
 
     with patch("pymupdf4llm.to_markdown", return_value=pages):
@@ -338,9 +333,7 @@ def test_pdf_numbered_line_before_a_table_is_promoted_without_underline() -> Non
     """The second, independent promotion signal: no `<u>` span needed if the
     very next non-blank line starts a table."""
 
-    pages = _pages(
-        "# Tieu de\n\n5. Gioi thieu bang\n\n|A|B|\n|---|---|\n|1|2|\n"
-    )
+    pages = _pages("# Tieu de\n\n5. Gioi thieu bang\n\n|A|B|\n|---|---|\n|1|2|\n")
 
     with patch("pymupdf4llm.to_markdown", return_value=pages):
         regions = split_regions(make_pdf_bytes("x"), "handbook.pdf", "pdf")
@@ -373,10 +366,7 @@ def test_pdf_heading_title_strips_markdown_emphasis_and_html_tags() -> None:
     renders bold heading text as `# **Title**`) and from a promoted
     numbered line (which may still carry its source `<u>` wrapper)."""
 
-    pages = _pages(
-        "# **Tieu De In Dam**\n\n"
-        "6. Ke hoach <u>(chi tiet)</u>\n\n|A|\n|---|\n|1|\n"
-    )
+    pages = _pages("# **Tieu De In Dam**\n\n6. Ke hoach <u>(chi tiet)</u>\n\n|A|\n|---|\n|1|\n")
 
     with patch("pymupdf4llm.to_markdown", return_value=pages):
         regions = split_regions(make_pdf_bytes("x"), "handbook.pdf", "pdf")
@@ -450,10 +440,7 @@ def test_pdf_bold_wrapped_arabic_subsection_is_promoted_as_sibling() -> None:
     just more text glued under "3."."""
 
     pages = _pages(
-        "## 3. Muc thu ba\n\n"
-        "Noi dung muc 3.\n\n"
-        "**4. Muc thu tu**\n\n"
-        "- Gach dau dong dau tien.\n"
+        "## 3. Muc thu ba\n\nNoi dung muc 3.\n\n**4. Muc thu tu**\n\n- Gach dau dong dau tien.\n"
     )
 
     with patch("pymupdf4llm.to_markdown", return_value=pages):

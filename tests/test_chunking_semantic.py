@@ -90,9 +90,7 @@ def test_tiny_trailing_region_is_merged_not_emitted_alone() -> None:
     )
 
     assert chunks
-    assert all(
-        len(_ENCODING.encode(chunk.content)) >= chunker.min_tokens for chunk in chunks
-    )
+    assert all(len(_ENCODING.encode(chunk.content)) >= chunker.min_tokens for chunk in chunks)
     assert any("Den ngay co" in chunk.content for chunk in chunks)
 
 

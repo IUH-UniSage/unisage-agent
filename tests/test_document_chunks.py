@@ -76,9 +76,7 @@ def test_list_chunks_paginates_with_page_and_limit(client: TestClient) -> None:
 
 
 def test_list_chunks_returns_404_when_document_never_chunked(client: TestClient) -> None:
-    response = client.get(
-        "/api/v1/documents/no-such-document/chunks", headers=_TRUSTED_HEADERS
-    )
+    response = client.get("/api/v1/documents/no-such-document/chunks", headers=_TRUSTED_HEADERS)
 
     assert response.status_code == 404
     body = response.json()

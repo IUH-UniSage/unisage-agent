@@ -23,9 +23,7 @@ class ChunkRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_page(
-        self, document_id: str, *, limit: int, offset: int
-    ) -> ChunkPageDTO | None:
+    async def get_page(self, document_id: str, *, limit: int, offset: int) -> ChunkPageDTO | None:
         """Return a page of chunks for one document, ordered by `chunk_index`.
 
         Returns `None` if the document has no chunking draft at all (distinct

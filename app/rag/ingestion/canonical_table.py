@@ -64,6 +64,9 @@ class SourceRow:
     # any header/data decision). Lets a header row be re-read as data when the
     # table turns out to continue on a page without repeating its header.
     cells: list[str] = field(default_factory=list)
+    # Position of the logical row (one geometry row) this source row belongs to;
+    # several markdown rows share it when a wrapped cell was split over lines.
+    logical_row: int | None = None
 
 
 @dataclass
@@ -84,6 +87,10 @@ class RowSignals:
     cell_size: list[float | None]
     cell_merged: list[bool]  # True where the cell is covered by a merged cell
     height: float = 0.0
+    # Left edge of each cell. Indentation is the text's offset FROM this edge:
+    # an absolute x would read a column that merely sits further right on part
+    # of a page as a deeper level. Empty for hand-built rows (offset = x0).
+    cell_left: list[float | None] = field(default_factory=list)
 
 
 @dataclass
@@ -220,6 +227,8 @@ def build_table_from_plain_rows(
 
 
 _NON_ALNUM = re.compile(r"[\W_]+", re.UNICODE)
+# Inline markup the markdown extractor wraps around text; it is not content.
+_MARKUP_TAG = re.compile(r"</?(?:br|sup|sub|b|i|u|em|strong)\s*/?>", re.IGNORECASE)
 
 
 def normalize_for_compare(text: str) -> str:
@@ -228,7 +237,7 @@ def normalize_for_compare(text: str) -> str:
     `<br>`, `~~` strike markers, pipes or a cell split/merge - while any lost
     or invented character still shows up."""
 
-    without_tags = re.sub(r"<br\s*/?>", "", text, flags=re.IGNORECASE)
+    without_tags = _MARKUP_TAG.sub("", text)
     return _NON_ALNUM.sub("", unicodedata.normalize("NFC", without_tags)).casefold()
 
 

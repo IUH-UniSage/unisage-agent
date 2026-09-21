@@ -29,9 +29,7 @@ def _valid_table_chunk(**overrides: object) -> Chunk:
         "has_header": True,
         "header_source": HeaderSource.EXPLICIT,
         "header_confidence": 1.0,
-        "source_locator": SourceLocator(
-            table_id="table-0", row_start=1, row_end=1, row_count=1
-        ),
+        "source_locator": SourceLocator(table_id="table-0", row_start=1, row_end=1, row_count=1),
         "chunking_version": "2026-09-structural-v1",
     }
     defaults.update(overrides)

@@ -1,4 +1,5 @@
 import re
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from io import BytesIO
 
@@ -14,7 +15,11 @@ from docx.table import _Row as DocxRow
 from docx.text.paragraph import Paragraph as DocxParagraph
 
 from app.core.exceptions import UnsupportedFileTypeException
-from app.rag.ingestion.canonical_table import TableBlock, build_table_from_plain_rows
+from app.rag.ingestion.canonical_table import (
+    TableBlock,
+    build_table_from_plain_rows,
+    normalize_for_compare,
+)
 from app.rag.ingestion.table_evidence import TableEvidence, collect_table_evidence
 from app.rag.ingestion.table_hierarchy import infer_hierarchy
 from app.rag.ingestion.table_merger import (
@@ -117,6 +122,9 @@ _UNDERLINE_TAG = re.compile(r"<u>", re.IGNORECASE)
 _HTML_TAG = re.compile(r"<[^>]+>")
 _MARKDOWN_EMPHASIS = re.compile(r"\*\*|__")
 _PDF_PROMOTED_HEADING_FALLBACK_LEVEL = 2
+# Share of characters a geometric table must have in common with a markdown table
+# to be taken for the same table.
+_EVIDENCE_MATCH_MIN = 0.9
 
 
 def _heading_level_for_title(title: str, fallback_level: int) -> int:
@@ -238,19 +246,6 @@ def _looks_like_pdf_heading(
     return False
 
 
-def _count_markdown_tables(page_text: str) -> int:
-    """Number of contiguous runs of `|` lines in a page's markdown."""
-
-    count = 0
-    in_table = False
-    for line in page_text.splitlines():
-        starts_table = line.strip().startswith("|")
-        if starts_table and not in_table:
-            count += 1
-        in_table = starts_table
-    return count
-
-
 def _regions_from_pdf_pages(
     pages: list[dict[str, object]],
     evidence: dict[int, list[TableEvidence]] | None = None,
@@ -279,23 +274,38 @@ def _regions_from_pdf_pages(
     block_index = 0
     region_start_page: int | None = None
     evidence = evidence or {}
-    # Evidence is paired to a page's markdown tables by order (both read
-    # top-to-bottom), and only when the two agree on how many tables the page
-    # has - otherwise that page falls back to markdown alone.
-    page_markdown_tables = {
-        int(page["metadata"]["page_number"]): _count_markdown_tables(str(page["text"]))  # type: ignore[index]
-        for page in pages
-    }
-    page_table_cursor: dict[int, int] = {}
+    used_evidence: dict[int, set[int]] = {}
     evidence_by_block: dict[int, TableEvidence | None] = {}
 
-    def evidence_for_next_table(page_number: int) -> TableEvidence | None:
-        cursor = page_table_cursor.get(page_number, 0)
-        page_table_cursor[page_number] = cursor + 1
-        page_evidence = evidence.get(page_number, [])
-        if len(page_evidence) != page_markdown_tables.get(page_number, 0):
+    def evidence_for_table(page_number: int, lines: list[str]) -> TableEvidence | None:
+        """The page's geometric table that holds the same text as these markdown
+        lines. Matched by CONTENT, not by order or count: the layout-driven
+        markdown and the line-driven geometry may disagree on how many tables a
+        page has (a side box, a split table), but they never disagree on the
+        text of the table they both found."""
+
+        candidates = evidence.get(page_number, [])
+        if not candidates:
             return None
-        return page_evidence[cursor] if cursor < len(page_evidence) else None
+        taken = used_evidence.setdefault(page_number, set())
+        markdown_chars = Counter(normalize_for_compare(" ".join(lines)))
+        best_index, best_score = None, 0.0
+        for index, candidate in enumerate(candidates):
+            if index in taken:
+                continue
+            candidate_chars = Counter(
+                normalize_for_compare(
+                    " ".join(cell.text for row in candidate.rows for cell in row.cells if cell)
+                )
+            )
+            larger = max(sum(markdown_chars.values()), sum(candidate_chars.values()), 1)
+            score = sum((markdown_chars & candidate_chars).values()) / larger
+            if score > best_score:
+                best_index, best_score = index, score
+        if best_index is None or best_score < _EVIDENCE_MATCH_MIN:
+            return None
+        taken.add(best_index)
+        return candidates[best_index]
 
     def flush(end_page: int) -> None:
         nonlocal current_type, block_index, region_start_page
@@ -306,9 +316,14 @@ def _regions_from_pdf_pages(
             table_page = region_start_page or end_page
             table = None
             if current_type == RegionType.TABLE:
-                table_evidence = evidence_for_next_table(table_page)
+                table_evidence = evidence_for_table(table_page, lines_snapshot)
                 table = build_page_table(lines_snapshot, table_page, table_evidence)
-                evidence_by_block[block_index] = table_evidence
+                # Geometry that did not line up with the markdown is not evidence
+                # about this table - the merge must not lean on it either.
+                aligned_evidence = (
+                    None if "evidence_unaligned" in table.warnings else table_evidence
+                )
+                evidence_by_block[block_index] = aligned_evidence
             regions.append(
                 ParsedRegion(
                     current_type,

@@ -39,9 +39,9 @@ class ExcelRowChunker:
             sheet_name = sheet.title
             rows = sheet.iter_rows(values_only=True)
             header = next(rows, None)
-            column_names = [
-                "" if value is None else str(value) for value in header
-            ] if header else None
+            column_names = (
+                ["" if value is None else str(value) for value in header] if header else None
+            )
             header_line = _format_row(header) if header else ""
 
             chunks: list[Chunk] = []

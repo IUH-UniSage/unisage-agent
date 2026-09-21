@@ -47,7 +47,5 @@ async def list_document_chunks(
         )
 
     return ApiResponse.success(
-        PageResponse.of(
-            chunk_page.chunks, page=page, limit=limit, total_items=chunk_page.total
-        )
+        PageResponse.of(chunk_page.chunks, page=page, limit=limit, total_items=chunk_page.total)
     )
