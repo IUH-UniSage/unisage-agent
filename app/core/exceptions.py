@@ -159,6 +159,17 @@ class ConversationRejectedException(UniSageException):
         super().__init__(error_code)
 
 
+class UsageLimitExceededException(UniSageException):
+    """Java refused `POST /messages` (USER) with 429: the caller's token quota is used up.
+
+    Carries Java's `errors` (`window`, `resetAt`) through untouched so the web can tell the user
+    when they may ask again. The graph must not run and no assistant placeholder is created.
+    """
+
+    def __init__(self, errors: dict[str, str] | None = None) -> None:
+        super().__init__(ErrorCode.USAGE_LIMIT_EXCEEDED, errors=errors)
+
+
 class BackendJavaUnavailableException(UniSageException):
     """Network-level failure calling backend-java (not an HTTP error response)."""
 
