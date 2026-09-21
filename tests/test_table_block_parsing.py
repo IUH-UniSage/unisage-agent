@@ -30,10 +30,7 @@ def test_html_table_with_th_row_is_explicit_header() -> None:
 
 def test_html_table_without_th_is_missing_header() -> None:
     content = _html(
-        "<table>"
-        "<tr><td>Name</td><td>Score</td></tr>"
-        "<tr><td>Alice</td><td>90</td></tr>"
-        "</table>"
+        "<table><tr><td>Name</td><td>Score</td></tr><tr><td>Alice</td><td>90</td></tr></table>"
     )
 
     [region] = split_regions(content, "handbook.html", "html")

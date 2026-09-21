@@ -1,4 +1,3 @@
-
 import pymupdf
 import pytest
 

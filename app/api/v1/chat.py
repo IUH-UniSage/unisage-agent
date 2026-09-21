@@ -71,6 +71,7 @@ async def _load_history(
         if message.get("status") == "COMPLETED" and message.get("content")
     ]
 
+
 # asyncio.create_task() only holds a WEAK reference to the task it schedules
 # per the stdlib's own docs - without keeping a strong reference somewhere,
 # the task can be garbage-collected mid-run. This set is that reference; the

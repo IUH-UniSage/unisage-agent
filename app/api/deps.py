@@ -75,6 +75,7 @@ class DepartmentAccessEntry:
     department_id: str
     access_level: int
 
+
 WILDCARD_DEPARTMENT_ID = "*"
 
 

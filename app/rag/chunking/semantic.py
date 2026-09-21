@@ -186,9 +186,7 @@ class SemanticChunker:
     def _prepare_sentences(self, content: str, usable_max_tokens: int) -> list[str]:
         prepared: list[str] = []
         for sentence in _split_sentences(content):
-            prepared.extend(
-                _split_oversized(sentence, usable_max_tokens, self._overlap_tokens)
-            )
+            prepared.extend(_split_oversized(sentence, usable_max_tokens, self._overlap_tokens))
         return prepared
 
     def _group_sentences(
@@ -266,8 +264,7 @@ class SemanticChunker:
                     _token_len(previous.content) < self.min_tokens
                     or _token_len(chunk.content) < self.min_tokens
                 )
-                and _token_len(previous.content) + _token_len(chunk.content)
-                <= usable_max_tokens
+                and _token_len(previous.content) + _token_len(chunk.content) <= usable_max_tokens
             )
             if can_merge_back and previous is not None:
                 merged[-1] = previous.model_copy(
@@ -277,6 +274,5 @@ class SemanticChunker:
                 merged.append(chunk)
 
         return [
-            chunk.model_copy(update={"chunk_index": index})
-            for index, chunk in enumerate(merged)
+            chunk.model_copy(update={"chunk_index": index}) for index, chunk in enumerate(merged)
         ]

@@ -70,9 +70,7 @@ def _validate_one(chunk: Chunk) -> list[str]:
             reasons.append("chunk bảng/hàng phải có source_locator")
         else:
             if locator.row_start is None or locator.row_end is None or locator.row_count is None:
-                reasons.append(
-                    "chunk bảng/hàng phải có row_start/row_end/row_count đều khác None"
-                )
+                reasons.append("chunk bảng/hàng phải có row_start/row_end/row_count đều khác None")
             else:
                 if locator.row_start > locator.row_end:
                     reasons.append("row_start phải <= row_end")
@@ -100,9 +98,7 @@ def _validate_one(chunk: Chunk) -> list[str]:
         else:
             # (i) inverse of (d): a normal row must not carry partial-row markers.
             if locator.row_part is not None or locator.row_part_count is not None:
-                reasons.append(
-                    "is_partial_row=False nhưng row_part/row_part_count không phải None"
-                )
+                reasons.append("is_partial_row=False nhưng row_part/row_part_count không phải None")
 
     # (f)/(h) header_source == MISSING implications.
     if chunk.header_source == HeaderSource.MISSING:
