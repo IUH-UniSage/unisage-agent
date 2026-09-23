@@ -146,6 +146,22 @@ class ChunkingResponse(BaseModel):
     chunks: list[Chunk]
 
 
+class IndexedChunk(Chunk):
+    """One chunk as it actually exists in Qdrant, read back from a point's
+    payload - a superset of `Chunk` (the pre-embed chunking *draft*) adding
+    the fields that only get computed at embed time by
+    `MultiRepresentationEnricher`.
+
+    Used by the indexed-chunk management endpoints (`GET`/`DELETE
+    .../chunks/indexed`), which read live Qdrant state rather than the
+    Postgres chunking draft `ChunkRepository` serves.
+    """
+
+    chunk_id: str
+    summary: str
+    questions: list[str]
+
+
 class EmbeddingRequest(BaseModel):
     """Request to enrich, embed, and upsert a client-approved chunk list."""
 
