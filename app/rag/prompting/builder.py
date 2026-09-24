@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
+from app.core.timezone import now_ict
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
@@ -114,7 +115,10 @@ def _page_suffix(chunk: RetrievedChunk) -> str:
 
 def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
     """Build `{prepared_context}` - the `<academic_context>` block, chunks numbered
-    to match the `[1][2]` citation indices the generation prompt asks the model to use.
+    to match the `[1][2]` citation indices the generation prompt asks the model to use,
+    plus the `<current_date>` block (today, ICT/GMT+7) so the model has a real-world
+    time anchor for questions like "học phí năm 2025-2026" without nêu rõ mốc thời gian,
+    or for checking whether a document's stated effective date has passed.
 
     Each chunk's source is suffixed with its page number(s) when available
     (`_page_suffix`) - this is the mechanism that finally gets `page_start`/
@@ -128,7 +132,10 @@ def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
         )
         or _NO_RETRIEVED_CONTEXT
     )
-    return get_templates().prepared_context.format(context_chunks=context_chunks)
+    current_date = now_ict().strftime("%d/%m/%Y")
+    return get_templates().prepared_context.format(
+        context_chunks=context_chunks, current_date=current_date
+    )
 
 
 def build_missing_metadata_block(pending: PendingClarification | None) -> str:
