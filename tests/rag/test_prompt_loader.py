@@ -46,6 +46,26 @@ def test_ticket_fallback_templates_do_not_mention_rerank_score_or_a_button() -> 
         assert "nhấn nút" not in text
 
 
+def test_security_access_control_uses_department_access_not_stale_terms() -> None:
+    templates = get_templates()
+
+    assert "max_access_level" not in templates.security_access_control
+    assert "organization_scopes" not in templates.security_access_control
+    assert "department_access" in templates.security_access_control
+
+
+def test_advisory_prompt_includes_the_security_access_control_block() -> None:
+    prompt = build_system_prompt(
+        user_query="Điều kiện học bổng là gì?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+
+    assert "Quy Tắc Bảo Mật & Phân Quyền Thông Tin" in prompt
+
+
 def test_prompt_renders_two_separate_tags_never_merged() -> None:
     security = AcademicSecurityContext(
         user_id="u1",

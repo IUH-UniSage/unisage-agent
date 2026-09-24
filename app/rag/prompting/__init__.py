@@ -47,14 +47,6 @@ __all__ = [
     "reset_templates_cache",
 ]
 
-# `security_access_control.yaml` asserts that `<academic_context>` has already
-# passed a department_access/access_level filter - not true yet (retrieval
-# doesn't filter by permission this phase), so wiring it in now would tell the
-# model something false about its own input. Passed as an empty string until
-# that filter exists; the placeholder in the copied main templates is kept
-# so no template edit is needed to turn it on later.
-_SECURITY_ACCESS_CONTROL_DEFERRED = ""
-
 
 def build_system_prompt(
     *,
@@ -84,7 +76,7 @@ def build_system_prompt(
         header=templates.header,
         academic_metadata=build_metadata_section(security, confirmed_metadata),
         history_message=build_history_section(history),
-        security_access_control=_SECURITY_ACCESS_CONTROL_DEFERRED,
+        security_access_control=templates.security_access_control,
         academic_domain_rules=templates.academic_domain_rules,
         response_style=templates.response_style,
         citation_rules=templates.citation_rules,
