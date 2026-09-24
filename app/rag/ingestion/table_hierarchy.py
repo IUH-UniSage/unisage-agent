@@ -17,7 +17,7 @@ any document:
 
 Each signal votes for the depth of the current row given the previous row's
 depth; weights, thresholds and the tie rule are in `HIERARCHY_SCORING`
-(deterministic - see AD9). A row whose winning depth is not clear enough gets
+(deterministic). A row whose winning depth is not clear enough gets
 NO ancestors and a `hierarchy_uncertain` warning, and never disturbs the rows
 around it: no guess is better than a wrong breadcrumb.
 """

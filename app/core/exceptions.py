@@ -186,10 +186,8 @@ class ChunkingConfigException(UniSageException):
     Deliberately fail-fast instead of any of the alternatives considered:
     silently shrinking `overlap`, or silently letting a chunk exceed the
     configured hard cap - both would hide a real configuration problem
-    rather than surface it. Defined here (Task 2.2, Phase 2) rather than
-    alongside `ChunkValidationException` (Task 4.1, Phase 4) because
-    `TableRowChunker`/`RecursiveChunker`/`TokenBasedChunker`/
-    `SemanticChunker` (Phase 2-3) need to raise it before Phase 4 exists.
+    rather than surface it. Raised by the chunkers themselves, before
+    `validate_chunks` runs.
     """
 
     def __init__(self, message: str):
@@ -207,7 +205,7 @@ class IngestionJobNotFoundException(UniSageException):
 
 
 class ChunkValidationException(UniSageException):
-    """Raised by `validate_chunks` (Phase 4) when one or more `Chunk`s have
+    """Raised by `validate_chunks` when one or more `Chunk`s have
     internally inconsistent fields - e.g. a TABLE chunk missing
     `source_locator.row_count`, or a PDF TEXT chunk missing `page_start`.
 

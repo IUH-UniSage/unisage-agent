@@ -53,8 +53,8 @@ class SourceLocator(BaseModel):
     All fields are optional/`None` by default because most fields only make
     sense for a subset of `region_type`/`source_type` combinations (e.g.
     `sheet_name` only for XLSX, `row_start`/`row_end`/`row_count` only for
-    TABLE/EXCEL_ROW chunks) - see `validate_chunks` (Phase 4) for which
-    fields become mandatory for which chunk kind.
+    TABLE/EXCEL_ROW chunks) - see `validate_chunks` for which fields
+    become mandatory for which chunk kind.
     """
 
     section: str | None = None  # DOCX/HTML/TXT: heading_path joined with " > ",
@@ -63,10 +63,8 @@ class SourceLocator(BaseModel):
     row_start: int | None = None  # XLSX or TABLE chunk: first data row (1-indexed,
     # header not counted)
     row_end: int | None = None  # XLSX or TABLE chunk: last data row
-    row_count: int | None = None  # number of real data rows in this chunk - an
-    # independent figure the validator (Phase 4) cross-checks against
-    # `row_end - row_start + 1` (a round-trip consistency check, NOT a
-    # re-verification of the actual cell content - see Task 2.2/4.2)
+    row_count: int | None = None  # number of real data rows in this chunk;
+    # `validate_chunks` cross-checks it against `row_end - row_start + 1`
     table_id: str | None = None  # "table-{n}" (n = order of the table in the
     # document, a table continuing across pages is ONE table) - distinguishes
     # two tables sharing the same page/heading
@@ -102,15 +100,10 @@ class ChunkingRequest(BaseModel):
 class Chunk(BaseModel):
     """One chunk produced by a chunking strategy.
 
-    `source_type`/`block_index` default to `None` rather than being
-    required so that every existing `Chunk(chunk_index=.., content=..,
-    region_type=..)` call (tests, older chunkers before Phase 3) keeps
-    constructing successfully - the chunkers wired through
-    `strategy.dispatch()` (Phase 3) always set them explicitly, and
-    `validate_chunks` (Phase 4) is the place that enforces they are set,
-    not the Pydantic model itself. `block_index=None` is distinct from
-    `block_index=0` (a valid region index) - `None` means "no chunker has
-    assigned this yet".
+    `source_type`/`block_index` default to `None` so older call sites keep
+    working; the chunkers behind `strategy.dispatch()` always set them, and
+    `validate_chunks` enforces that. `block_index=None` means "not assigned
+    yet", distinct from the valid index `0`.
     """
 
     chunk_index: int = Field(ge=0)
@@ -129,7 +122,7 @@ class Chunk(BaseModel):
     # Deliberately NOT `settings.INGEST_CHUNKING_VERSION` - that default would also
     # apply when deserializing an old row that never had this field at all,
     # mislabeling legacy data as produced by the current chunking logic.
-    # Every new chunker (Phase 2/3) sets this explicitly at construction.
+    # Every chunker sets this explicitly at construction.
     chunking_version: str = "legacy"
     # TABLE chunks only: the lowest structural confidence of any row in the
     # chunk (header/hierarchy/text quality, 0..1) and the de-duplicated parse
@@ -165,12 +158,8 @@ class IndexedChunk(Chunk):
 class EmbeddingRequest(BaseModel):
     """Request to enrich, embed, and upsert a client-approved chunk list.
 
-    `is_public` mirrors `unisage-backend`'s `Document.isPublic` (a document-
-    level flag, independent of `access_level`): when true, every chunk of
-    this document is visible to every caller, including an unauthenticated
-    guest, regardless of `department_id`/`access_level`. Defaults to
-    `False` so an omitted value never accidentally makes a document public.
-    """
+    `is_public` mirrors `Document.isPublic` in unisage-backend: visible to
+    everyone, guests included. Defaults to `False`."""
 
     document_id: str = Field(min_length=1, max_length=100)
     department_id: str = Field(min_length=1, max_length=100)

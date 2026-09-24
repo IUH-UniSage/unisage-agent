@@ -2,16 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Every env var `unisage-agent` reads, grouped by prefix - see
-    `docs/guide/cau-hinh.md` > Biến môi trường for the prefix convention
-    (`APP_`, `DB_`, `CHAT_`, `INGEST_`, plus one prefix per external system:
-    `OPENAI_`, `MINIO_`, `QDRANT_`, and the single-var `REDIS_URL`/
-    `BACKEND_JAVA_BASE_URL`). A field belongs to `CHAT_` when it tunes a
-    per-request graph/chat behavior, `INGEST_` when it only ever applies at
-    document-ingestion time - a field a caller could plausibly need in both
-    (the OpenAI provider settings) stays under its vendor prefix instead of
-    being forced into one of the two.
-    """
+    """Env vars, grouped by prefix - see `docs/guide/cau-hinh.md`."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -72,7 +63,7 @@ class Settings(BaseSettings):
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800
     INGEST_CHUNKING_VERSION: str = "2026-09-structural-v2"
 
-    # --- CHAT_: read on every graph/chat turn (nodes 02/06/08/09/10) ---
+    # --- CHAT_: read on every chat turn ---
     CHAT_CLARIFICATION_MAX_RETRY: int = 2
     CHAT_RETRIEVAL_MAX_CHUNKS: int = 8
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70

@@ -28,11 +28,8 @@ class RetrievalServiceProtocol(Protocol):
 
 @dataclass(frozen=True)
 class RetrievalService:
-    """Embeds the query, then nearest-neighbor searches Qdrant's `content_vector`
-    for ingested chunks (see app/rag/vectorstore/qdrant_store.py), pre-filtered
-    by `security`'s `department_access` (see `build_access_filter`) - a chunk
-    the caller isn't allowed to see is excluded at the Qdrant query itself,
-    not filtered out afterward.
+    """Embeds the query and searches Qdrant, pre-filtered by the caller's
+    permissions (see `build_access_filter`).
 
     `client`/`embedder` are built lazily on first use, not at construction
     time, so constructing a `RetrievalService()` never requires a reachable

@@ -141,8 +141,8 @@ def append_recent_history(query: str, history: Sequence[HistoryMessage]) -> str:
 def _page_suffix(chunk: RetrievedChunk) -> str:
     """`", tr. X"` / `", tr. X-Y"` when the chunk carries a real page number
     (PDF only - `page_start` stays `None` for HTML/DOCX/TXT/XLSX), else `""`.
-    `content` already carries its own heading prefix (chunker-side, Phase 3),
-    so this is the only structural metadata the builder itself needs to add."""
+    `content` already carries its heading prefix, so this is the only
+    structural metadata the builder adds."""
 
     if chunk.page_start is None:
         return ""
@@ -159,9 +159,7 @@ def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
     or for checking whether a document's stated effective date has passed.
 
     Each chunk's source is suffixed with its page number(s) when available
-    (`_page_suffix`) - this is the mechanism that finally gets `page_start`/
-    `page_end` in front of the LLM (Phase 6's main goal); `citation_rules.yaml`
-    (Task 6.5) is what then instructs the LLM to copy it into its answer."""
+    (`_page_suffix`); `citation_rules.yaml` tells the LLM to cite them."""
 
     context_chunks = (
         "\n".join(

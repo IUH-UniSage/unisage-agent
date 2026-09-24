@@ -4,8 +4,7 @@ Revision ID: e2f3a4b5c6d7
 Revises: d1e2f3a4b5c6
 Create Date: 2026-09-14 12:00:00.000000+00:00
 
-Phase 0 (Task 0.2) of changes/13-09-2026-Chunking-Structural-Metadata: every
-`Chunk` field beyond chunk_index/content/region_type (heading_path,
+Every `Chunk` field beyond chunk_index/content/region_type (heading_path,
 source_type, block_index, source_locator, column_names, has_header,
 header_source, header_confidence, chunking_version) is persisted as JSON
 into this column instead of getting its own column. `server_default='{}'`

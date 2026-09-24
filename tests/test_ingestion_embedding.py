@@ -44,8 +44,8 @@ def _create_chunking_draft(
 ) -> list[dict[str, Any]]:
     """Chunk a tiny document (real `dispatch()`, real `validate_chunks()`)
     through the actual endpoint so the resulting draft has genuine,
-    non-legacy structural metadata - exactly what Task 4.5's canonical
-    merge reads back. Returns the chunk list from the response."""
+    non-legacy structural metadata - what the canonical merge reads back.
+    Returns the chunk list from the response."""
 
     with patch("app.api.v1.ingestion.minio_client.get_object_bytes") as mock_get_object_bytes:
         mock_get_object_bytes.return_value = make_pdf_bytes(text)
@@ -104,7 +104,7 @@ def test_embedding_returns_403_when_access_level_exceeds_grant(client: TestClien
 
 
 def test_embedding_returns_404_when_no_draft_exists_for_the_document(client: TestClient) -> None:
-    """Task 4.5: `/ingestion/embedding` reads the stored draft as canonical
+    """`/ingestion/embedding` reads the stored draft as canonical
     metadata - there is nothing to merge from if the document was never
     chunked (or the draft was never created)."""
 
@@ -227,7 +227,7 @@ def test_embedding_uses_canonical_metadata_and_only_client_content(
     mock_qdrant_store: MagicMock,
     client: TestClient,
 ) -> None:
-    """Task 4.5 acceptance criteria: a client tampering with structural
+    """A client tampering with structural
     fields (page_start/source_locator/...) must be ignored - only `content`
     from the request payload is applied, everything else comes from the
     stored draft."""
@@ -416,8 +416,7 @@ def test_embedding_rejects_legacy_draft_with_409(client: TestClient) -> None:
     re-chunked first. `/ingestion/chunking` always produces non-legacy
     chunks now, so a legacy draft is simulated here by stubbing `get_draft`
     to return one directly - this is exactly the shape a pre-migration
-    Postgres row deserializes into (see Task 0.2's `chunking_version`
-    default)."""
+    Postgres row deserializes into (see the `chunking_version` default)."""
 
     from app.database.models import DocumentProcessStep
     from app.database.repositories.ingestion_job import DraftDTO

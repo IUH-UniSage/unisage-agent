@@ -122,7 +122,7 @@ async def test_get_draft_returns_none_when_absent(db_session: AsyncSession) -> N
 async def test_upsert_and_get_draft_round_trips_full_structural_metadata(
     db_session: AsyncSession,
 ) -> None:
-    """Task 0.2 acceptance: a `Chunk` with every new field set, persisted and
+    """A `Chunk` with every structural field set, persisted and
     read back, must match 100%."""
 
     chunk = Chunk(

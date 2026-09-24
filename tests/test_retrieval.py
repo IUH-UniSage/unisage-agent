@@ -124,9 +124,8 @@ def test_retrieve_maps_structural_metadata_including_source_locator() -> None:
     assert chunks[0].source_locator.row_count == 3
 
 
-def test_retrieve_defaults_structural_metadata_for_a_pre_phase5_point() -> None:
-    """A point upserted before Phase 5 has none of the new payload keys -
-    must still parse into a valid RetrievedChunk, not raise."""
+def test_retrieve_defaults_structural_metadata_for_a_legacy_point() -> None:
+    """A legacy point without the structural payload keys still parses."""
 
     fake_qdrant = MagicMock()
     fake_qdrant.collection_exists.return_value = True

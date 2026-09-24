@@ -8,15 +8,9 @@ from app.schemas.ingestion import SourceLocator
 class RetrievedChunk(BaseModel):
     """A chunk returned by retrieval before generation.
 
-    The structural-metadata fields below (Phase 6) carry `Chunk`'s
-    page/heading/table info all the way to citation-building
-    (`build_prepared_context_section`) - without them, `page_start`/
-    `page_end` stop at the Qdrant payload (Phase 5) and the LLM never sees
-    what page a chunk came from, defeating the whole point of "citation by
-    page". All default to `None`/`[]` so a point upserted before Phase 5
-    (missing these payload keys entirely) still parses into a valid
-    `RetrievedChunk` - just without page/heading/table info available for
-    that older chunk.
+    The structural-metadata fields carry page/heading/table info through to
+    citations. They default to `None`/`[]` so an older point without these
+    payload keys still parses.
     """
 
     chunk_id: str

@@ -46,8 +46,7 @@ _STRIKE_MARK = re.compile(r"~~")
 _HEADER_CONFIDENCE_MARKDOWN_ONLY = 0.6
 _HEADER_CONFIDENCE_WITH_EVIDENCE = 0.75
 
-# Row confidence levels (see AD5/AD9 in the plan; hierarchy scoring later
-# multiplies into these, it never raises a row above what is set here).
+# Row confidence levels; hierarchy scoring only multiplies into these.
 _CONFIDENCE_OK = 1.0
 _CONFIDENCE_TEXT_MISMATCH = 0.7
 _CONFIDENCE_PADDED = 0.8

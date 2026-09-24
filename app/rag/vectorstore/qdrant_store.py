@@ -12,10 +12,7 @@ _EMBEDDING_DIMENSIONS = 1536
 
 _VECTOR_NAMES = ("content_vector", "summary_vector", "questions_vector")
 
-# A department_access entry with this id grants its access_level across every
-# department, not just one - mirrors `TrustedContext.granted_access_level`'s
-# WILDCARD_DEPARTMENT_ID on the ingestion side (app/api/deps.py), so the same
-# token means the same thing whether it's gating an upload or a chat answer.
+# Grants its access_level in every department (same meaning as in app/api/deps.py).
 WILDCARD_DEPARTMENT_ID = "*"
 
 
@@ -26,14 +23,8 @@ def get_client() -> QdrantClient:
 
 
 def ensure_collection(client: QdrantClient) -> None:
-    """Bootstrap the chunks collection with its three named vectors and the
-    payload indexes `build_access_filter`'s conditions need, if absent.
-
-    Safe to call on every startup/task: a no-op when the collection already exists.
-    Deliberately does not migrate an existing collection - a pre-existing
-    collection from before the department/access_level payload index was
-    added is expected to be dropped and recreated, not patched in place.
-    """
+    """Create the collection (3 named vectors + permission payload indexes) if
+    absent. An existing collection is never migrated - drop and recreate it."""
 
     if client.collection_exists(settings.QDRANT_COLLECTION):
         return
@@ -62,35 +53,12 @@ def ensure_collection(client: QdrantClient) -> None:
 
 
 def build_access_filter(security: AcademicSecurityContext) -> models.Filter:
-    """The permission pre-filter (flow_design node 08, tier 1): which chunks
-    `security` is allowed to see, built ONLY from the JWT-verified
-    `department_access` - never from `confirmed_metadata` (a student's own
-    unverified in-conversation claims), so a claim like "em là học viên cao
-    học" can never widen what gets retrieved.
+    """Permission pre-filter, built only from the JWT-verified
+    `department_access` (never from self-declared `confirmed_metadata`).
 
-    A chunk is visible when:
-    - `is_public == True` - a document-level flag, independent of
-      `access_level`/`department` (mirrors `unisage-backend`'s
-      `Document.isPublic`), that opens the chunk to everyone, including a
-      guest whose `department_access` is empty. This condition is always
-      present, so the `should` list is never empty even for a guest, and it
-      is NOT expressed as `access_level == 0`: a guest's own identity carries
-      no `access_level` at all (only per-department entries do), so
-      "public" has to be its own flag, not a level a non-public chunk could
-      also legitimately hold; OR
-    - one of `security.department_access`'s entries grants it: either that
-      entry's `department_id` matches the chunk's `department` at an
-      `access_level` the chunk's `access_level` is `<=` to, or the entry's
-      `department_id` is the wildcard (`*`), which grants its `access_level`
-      across every department the same way `TrustedContext.
-      granted_access_level` does for ingestion. This clause never applies to
-      a public chunk's visibility (already covered above) - it only gates
-      non-public, department-scoped chunks.
-
-    A chunk missing `department`/`access_level`/`is_public` (pre-migration
-    data) matches none of these and is denied by default - see qdrant
-    collection reset note in `ensure_collection`.
-    """
+    A chunk is visible if `is_public`, or if a `department_access` entry
+    covers its department (or is `*`) at an `access_level` >= the chunk's.
+    Chunks missing these payload fields are denied."""
 
     should: list[models.Condition] = [
         models.FieldCondition(key="is_public", match=models.MatchValue(value=True))
@@ -118,15 +86,10 @@ def build_access_filter(security: AcademicSecurityContext) -> models.Filter:
 
 @dataclass(frozen=True)
 class ChunkPoint:
-    """One Qdrant point: a chunk's three named vectors plus its retrieval payload.
+    """One Qdrant point: a chunk's three named vectors plus its payload.
 
-    The structural-metadata fields below (`source_type` through
-    `chunking_version`) all default to `None`/`"legacy"` so a caller
-    upserting a point for a legacy chunk (missing these fields entirely)
-    doesn't have to fabricate values - see `RetrievedChunk`/
-    `_to_retrieved_chunk` (Phase 6) for how a point missing them degrades
-    gracefully at read time instead of erroring.
-    """
+    Fields after `questions_vector` have defaults so a legacy chunk can be
+    upserted without fabricating values."""
 
     point_id: str
     document_id: str

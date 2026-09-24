@@ -42,11 +42,9 @@ class ParsedRegion:
     All fields beyond `region_type`/`content` have safe defaults and are
     placed after those two original fields so that
     `ParsedRegion(RegionType.TEXT, text)` (positional, as used throughout
-    the existing test suite) keeps constructing unchanged. Phase 1 is
-    responsible for actually populating `heading_path`/`page_start`/
-    `page_end`/`block_index`/`source_type`; Phase 2 populates `table` for
-    TABLE regions. `content` never has a heading prefixed into it (unlike
-    the pre-Phase-1 behavior) - heading text lives only in `heading_path`.
+    the existing test suite) keeps constructing unchanged. `table` is set for
+    TABLE regions only. `content` never has a heading prefixed into it -
+    heading text lives only in `heading_path`.
     """
 
     region_type: RegionType
@@ -632,7 +630,7 @@ def _regions_from_docx(content: bytes) -> list[ParsedRegion]:
 
     Headings are recognized by Word's own built-in paragraph style name
     ("Heading 1".."Heading 9") - this is a different concept from a table's
-    *header row* (see `_docx_table_to_block`, Task 2.1): one is document
+    *header row* (see `_docx_table_to_block`): one is document
     section structure, the other is "does this table's first row repeat as
     a header".
     """
@@ -827,7 +825,7 @@ def _html_table_to_markdown(table_tag: Tag) -> str:
     This is a display-only rendering used for `ParsedRegion.content` (kept
     for chunkers that consume a region's raw content directly, bypassing
     `TableRowChunker`); it does not escape `|`/newlines the way
-    `TableRowChunker`'s own markdown rendering does (see Task 2.2) - the
+    `TableRowChunker`'s own markdown rendering does - the
     structural source of truth for chunking is `_html_table_to_block`,
     not this string.
     """

@@ -11,9 +11,7 @@ round-trip/mapping bugs (DB, Qdrant, legacy-vs-new `chunking_version`
 mixing, a client tampering with fields before `POST /ingestion/embedding`),
 not to re-derive table structure truth from `content` text.
 
-Rules (a)-(m) below match plan.md v5, Task 4.2 exactly - see that file for
-the full rationale of each rule, including the two v5 "inverse" rules
-(k)/(l) that close the loop on (f)/(g)/(d).
+Rules (a)-(m) below; (k)/(l) are the inverse checks of (f)/(g)/(d).
 """
 
 from app.core.exceptions import ChunkValidationException

@@ -122,10 +122,8 @@ def test_embedding_request_rejects_negative_access_level() -> None:
 
 
 def test_chunk_still_constructs_with_only_the_original_three_fields() -> None:
-    """Phase 0 must not break existing call sites - every new field needs a
-    safe default so `Chunk(chunk_index=.., content=.., region_type=..)`
-    (used throughout the test suite and by chunkers before Phase 3) keeps
-    constructing without a ValidationError."""
+    """Every structural field needs a safe default so
+    `Chunk(chunk_index=.., content=.., region_type=..)` keeps constructing."""
 
     chunk = Chunk(chunk_index=0, content="text", region_type=RegionType.TEXT)
 

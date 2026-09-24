@@ -142,7 +142,7 @@ def test_parse_replaces_an_empty_query_with_the_whole_message() -> None:
 @pytest.mark.parametrize(
     ("intent", "raw_mode", "expected_mode"),
     [
-        ("off_topic", "SINGLE", None),  # never reaches node 06
+        ("off_topic", "SINGLE", None),  # never reaches QueryTransformationNode
         ("academic_calculation", "MULTI", None),
         ("academic_advisory", None, "SINGLE"),  # missing mode on an intent that needs one
         ("academic_advisory", "bogus", "SINGLE"),

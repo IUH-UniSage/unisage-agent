@@ -109,18 +109,8 @@ def _task_payload(intent: str, query: str, routing_mode: str | None) -> dict[str
 
 
 def make_classification_llm_model(*intents: str, routing_mode: str | None = None) -> FunctionModel:
-    """Build a `FunctionModel` for `GraphModels.classification` that returns
-    a valid `IntentClassification` JSON payload - most tests just want a
-    fixed route and don't care about the JSON shape MessageClassificationNode
-    parses (see tests/graph/test_message_classification_node.py for that).
-
-    One intent (the common case) → one task whose `query` is the user's
-    message copied verbatim, exactly what the real prompt asks the model to
-    do for a one-question message. Several intents → one task each, with a
-    placeholder `query` per task. `routing_mode` applies to every task that
-    needs one (`"SINGLE"` by default, `None` for intents that never reach
-    node 06), so callers only pass it for a MULTI case.
-    """
+    """Classification double returning valid task JSON. One intent → one task
+    whose `query` is the message verbatim; several → one task each."""
 
     if not intents:
         raise ValueError("make_classification_llm_model needs at least one intent")

@@ -38,7 +38,7 @@ class TableStructureError(RuntimeError):
     (e.g. a row's cell count doesn't match the table's header). This is the
     ONLY place left holding the table's raw `list[list[str]]` - the
     self-check here is what actually catches "a row got cut/misaligned",
-    not `validate_chunks` downstream (Phase 4), which only checks summary
+    not `validate_chunks` downstream, which only checks summary
     fields for internal consistency, not real cell content.
 
     This is an internal INVARIANT failure (a bug in the chunker itself),
@@ -169,7 +169,7 @@ class TableRowChunker:
         table = region.table
         if table is None:
             # Should not happen for a real TABLE region produced by
-            # `table_aware_parser` (Phase 1/2 always attach a `TableBlock`,
+            # `table_aware_parser` (it always attaches a `TableBlock`,
             # even a MISSING-header one) - treat as an empty table rather
             # than crashing on a malformed/hand-built region.
             return []
