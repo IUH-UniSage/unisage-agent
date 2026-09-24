@@ -2,7 +2,7 @@
 
 Two flavors, matching how the graph nodes call the LLM:
 - `make_streaming_llm_model` — for nodes using `Agent.run_stream()`
-  (DirectLLMNode, GenerationSynthesisNode): yields a fixed sequence of
+  (GenerationSynthesisNode): yields a fixed sequence of
   text token deltas.
 - `make_sync_llm_model` — for nodes using `Agent.run()`/`run_sync()`
   (MessageClassificationNode, QueryTransformationNode, and any future

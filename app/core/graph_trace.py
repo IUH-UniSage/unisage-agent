@@ -9,7 +9,10 @@ request did:
    the identifiers needed to correlate it: conversation_id, the assistant
    message being generated, and who asked (user_id or "guest" + client IP).
 2. `GraphTrace.prompt(node_name, text)` - only when `settings.DEBUG` is
-   true, dumps the exact prompt sent to an LLM node after it's built.
+   true, dumps the per-request parts worth inspecting: the HyDE output
+   used as the retrieval query, and for GenerationSynthesisNode only the
+   `academic_metadata` and `prepared_context` blocks (not the static YAML
+   around them).
 """
 
 import logging

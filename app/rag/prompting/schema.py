@@ -11,8 +11,11 @@ class PromptTemplates:
 
     # Main (per-node system prompts)
     chat_academic_advisory: str
-    chat_direct_llm: str
     json_repair: str
+
+    # Agents (system prompts of single-purpose LLM nodes)
+    agent_hyde_generator: str
+    agent_message_classification: str
 
     # Common components
     header: str

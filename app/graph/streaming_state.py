@@ -13,14 +13,13 @@ from app.schemas.security import AcademicSecurityContext
 
 @dataclass(frozen=True)
 class GraphModels:
-    """The graph's injected dependencies: the 4 LLM-backed nodes' models
+    """The graph's injected dependencies: the 3 LLM-backed nodes' models
     (so tests can pass `pydantic_ai.models.function.FunctionModel` doubles,
     see tests/llm_mocks.py, instead of hitting a real provider) plus the
     retrieval service (so tests can inject a fake Qdrant client/embedder
     instead of hitting the network)."""
 
     classification: Model | str
-    direct_llm: Model | str
     query_transformation: Model | str
     generation: Model | str
     retrieval: RetrievalServiceProtocol

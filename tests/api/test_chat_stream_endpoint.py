@@ -92,7 +92,6 @@ def mock_graph_models(
 ) -> GraphModels:
     return GraphModels(
         classification=mock_sync_llm_model("academic_advisory"),
-        direct_llm=mock_streaming_llm_model(["42"]),
         query_transformation=mock_sync_llm_model("hyde doc"),
         generation=mock_streaming_llm_model(["Câu trả lời cuối cùng."]),
         retrieval=FakeRetrievalService(

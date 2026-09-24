@@ -1,5 +1,4 @@
 from app.rag.prompting import (
-    build_direct_llm_prompt,
     build_json_repair_prompt,
     build_system_prompt,
     get_templates,
@@ -14,7 +13,6 @@ def test_templates_load_without_error() -> None:
     templates = get_templates()
 
     assert templates.chat_academic_advisory
-    assert templates.chat_direct_llm
     assert "{academic_metadata}" not in templates.header  # loader returns raw text, not re-parsed
 
 
@@ -219,22 +217,6 @@ def test_prompt_embeds_the_user_query() -> None:
     assert "Điều kiện học bổng loại giỏi là gì?" in prompt
 
 
-def test_direct_llm_prompt_has_no_academic_context_or_task_sections() -> None:
-    prompt = build_direct_llm_prompt(
-        user_query="1 + 1 bằng mấy?",
-        security=AcademicSecurityContext(),
-        confirmed_metadata={},
-    )
-
-    assert "1 + 1 bằng mấy?" in prompt
-    assert "<academic_user_context>" in prompt  # still identity-aware
-    assert "<academic_context>" not in prompt  # no retrieved context in this flow
-    # response_style.yaml (shared) legitimately references "NHIỆM VỤ 1" in one
-    # of its formatting rules - task_1/task_2's own headings are the real signal.
-    assert "NHIỆM VỤ 1: XÁC NHẬN" not in prompt
-    assert "NHIỆM VỤ 2: THU THẬP" not in prompt
-
-
 def test_guest_security_context_renders_khach_role_and_no_department_access() -> None:
     prompt = build_system_prompt(
         user_query="Điều kiện học bổng là gì?",
@@ -324,3 +306,45 @@ def test_citation_rules_ask_for_inline_markers_without_trailing_source_block() -
     assert "SAU câu hoặc đoạn dùng nguồn" in prompt
     assert "MỖI hàng dữ liệu của bảng" in prompt
     assert "Văn bản tham chiếu chính thức" not in prompt
+
+
+def test_resolved_query_prepended_when_it_differs_from_raw_user_query() -> None:
+    security = AcademicSecurityContext(user_id="u1", role="SINH_VIEN", department_access=[])
+
+    prompt = build_system_prompt(
+        user_query="còn Khóa tuyển sinh năm học 2023-2024 thì sao",
+        resolved_query=(
+            "Học phí đại học chính quy khóa tuyển sinh năm học 2023-2024 ngành Công nghệ "
+            "là bao nhiêu?"
+        ),
+        security=security,
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+
+    assert "Học phí đại học chính quy khóa tuyển sinh năm học 2023-2024" in prompt
+    assert "còn Khóa tuyển sinh năm học 2023-2024 thì sao" in prompt
+
+
+def test_resolved_query_omitted_when_same_as_raw_user_query() -> None:
+    security = AcademicSecurityContext(user_id="u1", role="SINH_VIEN", department_access=[])
+    raw_query = "Điều kiện học bổng là gì?"
+
+    with_resolved = build_system_prompt(
+        user_query=raw_query,
+        resolved_query=raw_query,
+        security=security,
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+    without_resolved = build_system_prompt(
+        user_query=raw_query,
+        security=security,
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+
+    assert with_resolved == without_resolved

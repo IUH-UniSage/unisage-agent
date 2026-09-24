@@ -37,12 +37,16 @@ template: |
   là SAI:
   - Câu trả lời không thực sự đang hỏi lại thuộc tính nào.
   - Câu trả lời là LỜI MỜI CHUNG CHUNG, CÓ ĐIỀU KIỆN kiểu "Nếu bạn cần thêm
-    thông tin về X hoặc Y, vui lòng cho biết thêm thông tin." — câu này chỉ
-    ngỏ ý sẵn sàng giúp về những chủ đề người dùng CHƯA hỏi, không phải yêu
-    cầu cụ thể cần thiết để tiếp tục trả lời câu hỏi VỪA RỒI. Dấu hiệu nhận
-    biết: mở đầu bằng "Nếu bạn cần...\"/"Nếu muốn biết thêm..." và/hoặc nêu
-    từ hai chủ đề trở lên nối bằng "hoặc" thay vì MỘT thuộc tính cụ thể. Câu
-    hỏi thật luôn là yêu cầu trực tiếp cho MỘT thuộc tính rõ ràng (VD: "Bạn
-    cho mình biết ngành học để tra học phí nhé" — dù không có dấu `?`, đây
-    VẪN là câu hỏi thật vì nêu đích danh một thuộc tính cần thiết).
+    thông tin về X hoặc Y, vui lòng cho biết thêm thông tin." (điều kiện nói
+    trước) hoặc kiểu đảo "Bạn vui lòng cho biết thêm thông tin nếu bạn cần
+    hỗ trợ gì khác." (điều kiện nói SAU, cùng một câu) — cả hai cách viết
+    đều chỉ ngỏ ý sẵn sàng giúp về những chủ đề người dùng CHƯA hỏi, không
+    phải yêu cầu cụ thể cần thiết để tiếp tục trả lời câu hỏi VỪA RỒI. Dấu
+    hiệu nhận biết: cụm "nếu bạn/em cần...\"/"nếu muốn biết thêm..." xuất
+    hiện ở BẤT KỲ VỊ TRÍ nào trong câu (đầu, giữa hay cuối câu đều tính),
+    và/hoặc nêu từ hai chủ đề trở lên nối bằng "hoặc"/"gì khác" thay vì MỘT
+    thuộc tính cụ thể. Câu hỏi thật luôn là yêu cầu trực tiếp cho MỘT thuộc
+    tính rõ ràng, không kèm điều kiện "nếu cần" nào cả (VD: "Bạn cho mình
+    biết ngành học để tra học phí nhé" — dù không có dấu `?`, đây VẪN là
+    câu hỏi thật vì nêu đích danh một thuộc tính cần thiết).
   - Thuộc tính được nhắc tới đã có trong `<student_declared_attributes>`.

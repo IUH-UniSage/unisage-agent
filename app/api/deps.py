@@ -46,7 +46,7 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 def get_graph_models() -> GraphModels:
-    """FastAPI dependency: the 4 LLM-backed nodes' models for the streaming graph.
+    """FastAPI dependency: the 3 LLM-backed nodes' models for the streaming graph.
 
     Overridden in tests with `pydantic_ai.models.function.FunctionModel`
     doubles (see tests/llm_mocks.py). Production builds a real `OpenAIChatModel`
@@ -61,7 +61,6 @@ def get_graph_models() -> GraphModels:
     )
     return GraphModels(
         classification=model,
-        direct_llm=model,
         query_transformation=model,
         generation=model,
         retrieval=RetrievalService(),

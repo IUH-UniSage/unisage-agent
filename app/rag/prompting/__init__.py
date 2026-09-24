@@ -19,6 +19,7 @@ from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
 from .builder import (
+    append_recent_history,
     build_ask_user_form_guide,
     build_history_section,
     build_json_repair_prompt,
@@ -27,20 +28,22 @@ from .builder import (
     build_missing_metadata_block,
     build_prepared_context_section,
     build_task_2_section,
+    render_resolved_user_query,
 )
 from .loader import get_templates, reset_templates_cache
 from .schema import PromptTemplates
 
 __all__ = [
     "PromptTemplates",
+    "append_recent_history",
     "build_ask_user_form_guide",
-    "build_direct_llm_prompt",
     "build_history_section",
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
     "build_missing_metadata_block",
     "build_system_prompt",
     "get_templates",
+    "render_resolved_user_query",
     "reset_templates_cache",
 ]
 
@@ -56,6 +59,7 @@ _SECURITY_ACCESS_CONTROL_DEFERRED = ""
 def build_system_prompt(
     *,
     user_query: str,
+    resolved_query: str | None = None,
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
@@ -64,7 +68,16 @@ def build_system_prompt(
 ) -> str:
     """Assemble the full prompt for `GenerationSynthesisNode`'s unified advisory
     flow (advisory/procedure/document/calendar - one frame, `academic_domain_rules`
-    picks the response format per question type)."""
+    picks the response format per question type).
+
+    `resolved_query` is `QueryTransformationNode`'s self-contained rewrite of
+    a follow-up turn (see `extract_standalone_question`) - e.g. turn 3's raw
+    "còn ĐHCQ ngành CN thì sao" carries no khóa on its own. Retrieval already
+    benefits from it (it drove the HyDE search), but without it here too,
+    generation has to re-derive the same topic from raw `<history_message>`
+    text on its own - which is exactly the step observed to drop the khóa
+    and answer the wrong row. `build_render_user_query` folds it into
+    `{user_query}` so no template placeholder needs to change for this."""
 
     templates = get_templates()
     return templates.chat_academic_advisory.format(
@@ -78,26 +91,5 @@ def build_system_prompt(
         prepared_context=build_prepared_context_section(chunks),
         task_1=templates.task_1,
         task_2=build_task_2_section(pending_clarification),
-        user_query=user_query,
-    )
-
-
-def build_direct_llm_prompt(
-    *,
-    user_query: str,
-    security: AcademicSecurityContext,
-    confirmed_metadata: dict[str, str],
-    history: Sequence[HistoryMessage] = (),
-) -> str:
-    """Assemble the full prompt for `DirectLLMNode` (general-knowledge questions,
-    no `<academic_context>` - no `task_1`/`task_2`, no retrieved chunks)."""
-
-    templates = get_templates()
-    return templates.chat_direct_llm.format(
-        header=templates.header,
-        academic_metadata=build_metadata_section(security, confirmed_metadata),
-        history_message=build_history_section(history),
-        security_access_control=_SECURITY_ACCESS_CONTROL_DEFERRED,
-        response_style=templates.response_style,
-        user_query=user_query,
+        user_query=render_resolved_user_query(user_query, resolved_query),
     )

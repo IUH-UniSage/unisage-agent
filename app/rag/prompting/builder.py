@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 
 from app.core.timezone import now_ict
@@ -19,6 +20,14 @@ _NO_RETRIEVED_CONTEXT = "  (không có tài liệu liên quan)"
 _NO_HISTORY = "  (đây là lượt đầu tiên, chưa có lịch sử)"
 _HISTORY_ROLE_LABELS = {"USER": "Người dùng", "ASSISTANT": "Trợ lý"}
 NO_PENDING_CLARIFICATION = "Không có"
+
+RECENT_HISTORY_LIMIT = 4
+_RECENT_ASSISTANT_MAX_CHARS = 300
+_CITATION_MARKER_PATTERN = re.compile(r"\[\d+(?:\s*,\s*\d+)*\]")
+_JSON_BLOCK_PATTERN = re.compile(r"```json.*?```", re.DOTALL)
+# Amounts like "60.000.000" - the previous turn's figures belong to a
+# different question, and would otherwise be copied into this turn's output.
+_AMOUNT_PATTERN = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
 
 
 def build_metadata_section(
@@ -98,6 +107,35 @@ def build_history_section(history: Sequence[HistoryMessage]) -> str:
         or _NO_HISTORY
     )
     return get_templates().history_message.format(history_lines=history_lines)
+
+
+def _recent_history_line(message: HistoryMessage) -> str:
+    content = message.content
+    if message.role == "ASSISTANT":
+        # Only the topic matters here - citation markers, ask_user_form JSON
+        # and amounts are noise, and a long answer is truncated to its opening.
+        content = _JSON_BLOCK_PATTERN.sub("", content)
+        content = _CITATION_MARKER_PATTERN.sub("", content)
+        content = _AMOUNT_PATTERN.sub("...", content)
+        content = content[:_RECENT_ASSISTANT_MAX_CHARS]
+    content = " ".join(content.split())
+    return f"- {_HISTORY_ROLE_LABELS.get(message.role, message.role)}: {content}"
+
+
+def append_recent_history(query: str, history: Sequence[HistoryMessage]) -> str:
+    """User prompt for the small agents: the message first, then the last
+    `RECENT_HISTORY_LIMIT` history messages. The message comes first so the
+    prompt is just the message itself when there is no history (first turn)."""
+
+    recent = list(history)[-RECENT_HISTORY_LIMIT:]
+    if not recent:
+        return query
+    history_lines = "\n".join(_recent_history_line(message) for message in recent)
+    return (
+        f"{query}\n\n"
+        "Lịch sử hội thoại gần đây (chỉ dùng để hiểu tin nhắn nối tiếp ở trên):\n"
+        f"{history_lines}"
+    )
 
 
 def _page_suffix(chunk: RetrievedChunk) -> str:
@@ -187,6 +225,25 @@ def build_json_repair_prompt(
         academic_metadata=build_metadata_section(security, confirmed_metadata),
         ask_user_form_guide=build_ask_user_form_guide(),
     )
+
+
+def render_resolved_user_query(user_query: str, resolved_query: str | None) -> str:
+    """Fills `{user_query}` in `chat_academic_advisory.yaml`/`json_repair.yaml`.
+
+    When `resolved_query` (QueryTransformationNode's self-contained rewrite
+    of this turn, see `extract_standalone_question`) differs from the raw
+    `user_query`, both are shown: the rewrite first, since it is what the
+    model should treat as the actual question (carrying forward whatever
+    khóa/hệ/khối a follow-up like "còn ĐHCQ ngành CN thì sao" left implicit),
+    then the verbatim text the student typed, so nothing said this turn is
+    lost either. Identical strings (first turn, or a question that was
+    already self-contained) render as plain `user_query` - no placeholder
+    change needed in the YAML for either case."""
+
+    resolved = (resolved_query or "").strip()
+    if not resolved or resolved == user_query.strip():
+        return user_query
+    return f'{resolved}\n\n(Nguyên văn người dùng vừa nhắn ở lượt này: "{user_query}")'
 
 
 def build_task_2_section(pending: PendingClarification | None) -> str:

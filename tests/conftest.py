@@ -117,7 +117,7 @@ async def db_session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession
 def mock_streaming_llm_model() -> Callable[[Sequence[str]], FunctionModel]:
     """Factory fixture: `mock_streaming_llm_model(["Xin ", "chào"])` builds a
     `pydantic_ai` model double whose `Agent.run_stream()` yields those tokens in
-    order. For nodes that stream (DirectLLMNode, GenerationSynthesisNode).
+    order. For nodes that stream (GenerationSynthesisNode).
     """
 
     return make_streaming_llm_model

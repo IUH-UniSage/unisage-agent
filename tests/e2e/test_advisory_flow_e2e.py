@@ -137,7 +137,6 @@ async def test_clarification_two_turn_round_trip_via_real_endpoint(
     # --- Turn 1: question triggers a Type B clarification request. ---
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
         classification=mock_sync_llm_model("academic_advisory"),
-        direct_llm=mock_streaming_llm_model(["unused"]),
         query_transformation=mock_sync_llm_model("HyDE: quy định miễn giảm GDQP"),
         generation=mock_streaming_llm_model([_TRAINING_TYPE_ASK_FORM]),
         retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
@@ -168,7 +167,6 @@ async def test_clarification_two_turn_round_trip_via_real_endpoint(
     # change the response if it were reached), advisory flow resumes. ---
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
         classification=mock_sync_llm_model("off_topic"),  # must NOT be reached
-        direct_llm=mock_streaming_llm_model(["unused"]),
         query_transformation=mock_sync_llm_model("HyDE: GDQP hệ chính quy"),
         generation=mock_streaming_llm_model(["Sinh viên hệ chính quy được miễn GDQP [1]."]),
         retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
@@ -204,7 +202,6 @@ async def test_ticket_fallback_when_no_valid_context(
     _install_java(java)
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
         classification=mock_sync_llm_model("academic_advisory"),
-        direct_llm=mock_streaming_llm_model(["unused"]),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["unused"]),
         retrieval=FakeRetrievalService(),
@@ -231,9 +228,12 @@ async def test_guest_without_authorization_header_completes_full_round_trip(
 ) -> None:
     java = _JavaBackend()
     _install_java(java)
+    # off_topic is the fully static, model-independent path (no `generation`
+    # call - see `OFF_TOPIC_TEMPLATE`) - the closest equivalent of the old
+    # general_knowledge/DirectLLMNode round trip now that general-knowledge
+    # questions are classified as off_topic (see message_classification.yaml).
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
-        classification=mock_sync_llm_model("general_knowledge"),
-        direct_llm=mock_streaming_llm_model(["42"]),
+        classification=mock_sync_llm_model("off_topic"),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["unused"]),
         retrieval=FakeRetrievalService(),
@@ -247,5 +247,7 @@ async def test_guest_without_authorization_header_completes_full_round_trip(
         assert response.status_code == 200
         body = "".join(response.iter_text())
 
-    assert "42" in body
+    # body is SSE `data: "<json-escaped-string>"`, so assert on a
+    # newline-free fragment rather than the raw (multi-line) template.
+    assert "chỉ có thể hỗ trợ các câu hỏi liên quan đến học vụ" in body
     assert all(call["authorization"] is None for call in java.calls)

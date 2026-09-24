@@ -62,5 +62,18 @@ class Settings(BaseSettings):
     RERANK_SCORE_THRESHOLD: float = 0.70
     HISTORY_MESSAGE_LIMIT: int = 15
 
+    # GenerationSynthesisNode's JSON-repair follow-up call (see
+    # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
+    # heuristic fires a second LLM call when a response reads like it forgot
+    # the mandatory ```json ask_user_form``` block. The heuristic has a known
+    # false-positive gap (a closing offer phrased "..., nếu bạn cần..." -
+    # condition trailing, not leading - isn't recognized as non-committal),
+    # which can make the repair call hallucinate a field nobody asked about.
+    # Off (false) skips the repair call entirely: a real missed form goes
+    # unfixed, but no spurious one is ever hallucinated. Defaults on to keep
+    # existing behavior; flip off in .env if the false positives outweigh
+    # the (rare) real misses it exists to catch.
+    ALLOW_REPAIR_JSON: bool = True
+
 
 settings = Settings()

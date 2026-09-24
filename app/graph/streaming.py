@@ -22,8 +22,8 @@ async def stream_agent_text(
 
     Returns the full accumulated text once the stream completes. This is the
     ONLY place graph nodes call `run_stream` - keeping it in one function
-    means both DirectLLMNode and GenerationSynthesisNode get identical
-    delta-forwarding behavior.
+    means every streaming graph node gets identical delta-forwarding
+    behavior.
     """
 
     collected: list[str] = []

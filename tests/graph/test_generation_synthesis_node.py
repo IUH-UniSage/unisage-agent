@@ -3,6 +3,7 @@ from collections.abc import Callable, Sequence
 import pytest
 from pydantic_ai.models.function import FunctionModel
 
+from app.core.config import settings
 from app.core.graph_trace import GraphTrace
 from app.graph.nodes.generation_synthesis import (
     build_generation_agent,
@@ -172,6 +173,40 @@ async def test_repairs_missing_ask_form_when_prose_asks_for_missing_attribute(
 
 
 @pytest.mark.asyncio
+async def test_skips_repair_call_when_allow_repair_json_is_false(
+    mock_sequential_streaming_llm_model: Callable[[Sequence[Sequence[str]]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ALLOW_REPAIR_JSON=false` must skip `_repair_missing_ask_form`
+    entirely, not just suppress its effect - only ONE response is scripted
+    below (unlike `test_repairs_missing_ask_form_when_prose_asks_for_missing
+    _attribute`'s two), so a repair call that fired anyway would exhaust the
+    mock and fail the test."""
+
+    monkeypatch.setattr(settings, "ALLOW_REPAIR_JSON", False)
+    prose_without_json = "Bạn vui lòng cho biết ngành học của bạn để mình tra học phí nhé!"
+    agent = build_generation_agent(mock_sequential_streaming_llm_model([[prose_without_json]]))
+
+    async def sink(_token: str) -> None:
+        return None
+
+    result = await run_generation_synthesis(
+        agent,
+        user_query="học phí ngành tôi học là bao nhiêu?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        previous_pending=None,
+        origin_node="QueryTransformationNode",
+        token_sink=sink,
+        trace=_TRACE,
+    )
+
+    assert result.response_text == prose_without_json
+    assert result.pending_clarification is None
+
+
+@pytest.mark.asyncio
 async def test_repairs_missing_ask_form_with_words_wedged_between_anchor_phrase(
     mock_sequential_streaming_llm_model: Callable[[Sequence[Sequence[str]]], FunctionModel],
 ) -> None:
@@ -269,6 +304,44 @@ async def test_does_not_repair_a_conditional_offer_about_an_unrelated_topic(
     result = await run_generation_synthesis(
         agent,
         user_query="chương trình đào tạo ngành Logistics như thế nào?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        previous_pending=None,
+        origin_node="QueryTransformationNode",
+        token_sink=sink,
+        trace=_TRACE,
+    )
+
+    assert result.pending_clarification is None
+    assert result.response_text == prose
+
+
+@pytest.mark.asyncio
+async def test_does_not_repair_a_trailing_conditional_offer(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    """Live-observed bug: the earlier heuristic only recognized "Nếu bạn
+    cần..." when it OPENED the sentence, missing the equally common reversed
+    phrasing where the "nếu" clause trails the main clause - exactly what
+    the model wrote here. Only ONE response is scripted below, so if repair
+    (wrongly) fired it would run out of scripted turns and the test would
+    fail with a mock exhaustion error."""
+
+    prose = (
+        "Mức thu học phí dành cho sinh viên hệ đại học chính quy khóa tuyển sinh "
+        "năm học 2025-2026 thuộc khối Công nghệ là 38.350.000 đồng cho một năm "
+        "học [1].\n\nBạn vui lòng cho tôi biết thêm thông tin nếu bạn cần hỗ trợ "
+        "gì khác."
+    )
+    agent = build_generation_agent(mock_streaming_llm_model([prose]))
+
+    async def sink(_token: str) -> None:
+        return None
+
+    result = await run_generation_synthesis(
+        agent,
+        user_query="học phí đại học chính quy khối công nghệ khóa 2025-2026 là bao nhiêu?",
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],

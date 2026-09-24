@@ -73,11 +73,13 @@ def _load_all_templates() -> PromptTemplates:
     templates_dir = _get_templates_dir()
     common = templates_dir / "common"
     main = templates_dir / "main"
+    agents = templates_dir / "agents"
 
     return PromptTemplates(
         chat_academic_advisory=_load_yaml_template(main / "chat_academic_advisory.yaml"),
-        chat_direct_llm=_load_yaml_template(main / "chat_direct_llm.yaml"),
         json_repair=_load_yaml_template(main / "json_repair.yaml"),
+        agent_hyde_generator=_load_yaml_template(agents / "hyde_generator.yaml"),
+        agent_message_classification=_load_yaml_template(agents / "message_classification.yaml"),
         header=_load_yaml_template(common / "header.yaml"),
         academic_metadata=_load_yaml_template(common / "academic_metadata.yaml"),
         history_message=_load_yaml_template(common / "history_message.yaml"),

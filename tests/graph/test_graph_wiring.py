@@ -32,7 +32,6 @@ def _models(
 ) -> GraphModels:
     return GraphModels(
         classification=mock_sync_llm_model(classification),
-        direct_llm=mock_streaming_llm_model(["42"]),
         query_transformation=mock_sync_llm_model("HyDE doc giả định"),
         generation=mock_streaming_llm_model(["Câu trả lời cuối cùng [1]."]),
         retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
@@ -142,29 +141,6 @@ async def test_off_topic_routes_to_static_template(
     )
 
     assert result.response_text == OFF_TOPIC_TEMPLATE
-
-
-@pytest.mark.asyncio
-async def test_general_knowledge_routes_to_direct_llm(
-    mock_sync_llm_model: Callable[[str], FunctionModel],
-    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
-) -> None:
-    graph_input = GraphInput(
-        conversation_id="c1",
-        user_message="1 + 1 bằng mấy?",
-        is_first_turn=False,
-        security=AcademicSecurityContext(),
-    )
-    tokens: list[str] = []
-
-    result = await run_graph(
-        graph_input,
-        _models(mock_sync_llm_model, mock_streaming_llm_model, classification="general_knowledge"),
-        _sink(tokens),
-        _TRACE,
-    )
-
-    assert result.response_text == "42"
 
 
 @pytest.mark.asyncio
@@ -287,7 +263,6 @@ async def test_resuming_clarification_retrieves_using_original_query_not_the_rep
     retrieval = _RecordingRetrievalService([_DUMMY_CHUNK])
     models = GraphModels(
         classification=mock_sync_llm_model("off_topic"),  # must never be reached
-        direct_llm=mock_streaming_llm_model(["42"]),
         query_transformation=_echo_query_transformation_model(),
         generation=mock_streaming_llm_model(["Câu trả lời cuối cùng [1]."]),
         retrieval=retrieval,

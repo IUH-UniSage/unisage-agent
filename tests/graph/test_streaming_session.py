@@ -8,6 +8,7 @@ from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.repositories.clarification_state import ClarificationStateRepository
+from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
@@ -20,8 +21,7 @@ def _models(
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
 ) -> GraphModels:
     return GraphModels(
-        classification=mock_sync_llm_model("general_knowledge"),
-        direct_llm=mock_streaming_llm_model(["4"]),
+        classification=mock_sync_llm_model("off_topic"),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["ans"]),
         retrieval=FakeRetrievalService(),
@@ -77,7 +77,7 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
 
     assert patched["method"] == "PATCH"
     assert patched["body"]["status"] == "COMPLETED"
-    assert patched["body"]["content"] == "4"
+    assert patched["body"]["content"] == OFF_TOPIC_TEMPLATE
     assert "citations" not in patched["body"]
 
     tokens = []
@@ -86,7 +86,7 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
         if token is None:
             break
         tokens.append(token)
-    assert tokens == ["4"]
+    assert tokens == [OFF_TOPIC_TEMPLATE]
 
 
 @pytest.mark.asyncio
@@ -170,8 +170,8 @@ async def test_run_and_persist_persists_clarification_state_on_success(
     )
 
     repo = ClarificationStateRepository(db_session)
-    # general_knowledge -> DirectLLMNode never touches confirmed_metadata,
-    # but a row should still exist (upserted with the empty defaults).
+    # off_topic never touches confirmed_metadata, but a row should still
+    # exist (upserted with the empty defaults).
     assert await repo.get_confirmed_metadata("conv-42") == {}
 
 

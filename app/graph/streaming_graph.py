@@ -14,14 +14,17 @@ mocks.
 """
 
 from app.core.graph_trace import GraphTrace
-from app.graph.nodes.direct_llm import build_direct_llm_agent, run_direct_llm
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
 from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, route_intent
 from app.graph.nodes.message_classification import build_classification_agent, classify_intent
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
-from app.graph.nodes.query_transformation import build_query_transformation_agent, transform_query
+from app.graph.nodes.query_transformation import (
+    build_query_transformation_agent,
+    extract_standalone_question,
+    transform_query,
+)
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.graph.nodes.security_context import (
     ClarificationGuardResult,
@@ -76,7 +79,9 @@ async def run_graph(
     # Node 03 - MessageClassificationNode.
     trace.node("03_MessageClassificationNode")
     classification_agent = build_classification_agent(models.classification)
-    intent = await classify_intent(classification_agent, graph_input.user_message)
+    intent = await classify_intent(
+        classification_agent, graph_input.user_message, history=graph_input.history
+    )
 
     # Node 04 - IntentRoutingNode (deterministic).
     trace.node("04_IntentRoutingNode")
@@ -96,23 +101,6 @@ async def run_graph(
         await token_sink(OFF_TOPIC_TEMPLATE)
         return GraphOutput(
             response_text=OFF_TOPIC_TEMPLATE,
-            confirmed_metadata=confirmed_metadata,
-            pending_clarification=pending_clarification,
-        )
-
-    if route == "DirectLLMNode":
-        trace.node("05A_DirectLLMNode")
-        direct_llm_agent = build_direct_llm_agent(models.direct_llm)
-        text = await run_direct_llm(
-            direct_llm_agent,
-            user_query=graph_input.user_message,
-            security=graph_input.security,
-            confirmed_metadata=confirmed_metadata,
-            history=graph_input.history,
-            token_sink=token_sink,
-        )
-        return GraphOutput(
-            response_text=text,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
         )
@@ -166,24 +154,15 @@ async def _run_advisory_flow(
     # Node 06 - QueryTransformationNode (HyDE).
     trace.node("06_QueryTransformationNode")
     query_transformation_agent = build_query_transformation_agent(models.query_transformation)
-    # Resuming a clarification round: `graph_input.user_message` this turn is
-    # just the reply that answers the form (e.g. "Công nghệ Thông tin, chính
-    # quy, K21"), not a question - retrieving on that text alone loses the
-    # original topic (e.g. "học phí") entirely. `resume_original_query` comes
-    # from the Clarification Guard (ultimately `PendingClarification.
-    # original_query`, recorded when the round started - see
-    # generation_synthesis.py::collect_pending_clarification) and is read from
-    # the Guard's result rather than `pending_clarification.original_query`
-    # directly, because a fully-resolved reply clears `pending_clarification`
-    # to `None` on exactly the turn this is needed most. A fresh, non-resumed
-    # question has no active round, so `resume_original_query` is `None` and
-    # `graph_input.user_message` IS the question.
     retrieval_query = resume_original_query or graph_input.user_message
     hyde_doc = await transform_query(
         query_transformation_agent,
         retrieval_query,
         confirmed_metadata=confirmed_metadata,
+        history=graph_input.history,
     )
+    trace.prompt("06_QueryTransformationNode_HyDE", hyde_doc)
+    resolved_query = extract_standalone_question(hyde_doc)
 
     # Node 10 - RetrievalFilteringNode (no permission filter yet).
     trace.node("10_RetrievalFilteringNode")
@@ -211,6 +190,7 @@ async def _run_advisory_flow(
     generation_result = await run_generation_synthesis(
         generation_agent,
         user_query=graph_input.user_message,
+        resolved_query=resolved_query,
         security=graph_input.security,
         confirmed_metadata=confirmed_metadata,
         chunks=rerank_result.chunks,

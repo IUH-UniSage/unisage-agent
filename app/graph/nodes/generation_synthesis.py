@@ -19,17 +19,6 @@ call) step scans every ```json fenced block in the response for two shapes:
   here. Only fields the model was actually asked about (i.e. present in the
   turn's pending clarification) are accepted - anything else is dropped, so
   a model that misreads the instruction can't inject arbitrary metadata.
-
-Known model failure mode this node also guards against: sometimes the model
-asks for a missing attribute in prose (any phrasing, any punctuation) but
-forgets the mandatory ```json ask_user_form``` block the prompt requires.
-`_repair_missing_ask_form` is a second, small follow-up LLM call - fired only
-when a cheap regex heuristic thinks the response reads like a clarification
-request AND no JSON block is present at all - that asks the model to look at
-its own just-written response and emit only the JSON block it forgot. This
-keeps the primary response streaming in true real time (the heuristic/repair
-only run after the main stream is done) at the cost of one extra call in the
-rare case a violation is actually detected.
 """
 
 import json
@@ -41,39 +30,17 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
+from app.core.config import settings
 from app.core.graph_trace import GraphTrace
 from app.graph.streaming import TokenSink, stream_agent_text
 from app.rag.prompting import build_json_repair_prompt, build_system_prompt
+from app.rag.prompting.builder import build_metadata_section, build_prepared_context_section
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
 _JSON_BLOCK_PATTERN = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
-
-# Heuristic-only (no LLM call): does the response READ like it's asking the
-# user to supply a missing attribute, in prose, regardless of punctuation?
-# Cheap to evaluate on every turn - only turns that both match this AND have
-# no JSON block at all pay for the repair call below. `.{0,25}?` gaps
-# (non-greedy, same-line only - `.` doesn't cross newlines here) tolerate
-# words wedged between the anchor phrase and its target, e.g. "cung cấp
-# CHO MÌNH thông tin" or "cho tôi biết THÊM MỘT CHÚT thông tin" - a plain
-# fixed-word regex misses these and was the actual cause of at least one
-# live miss (see tasks/report.md).
-#
-# On its own this phrase match is NOT enough: it also matches a generic
-# CONDITIONAL closing offer ("Nếu bạn cần thêm thông tin..., vui lòng cho
-# biết thêm thông tin.") that isn't a real question at all - observed live
-# triggering a hallucinated `ask_user_form` for a topic (học bổng) the user
-# never asked about this turn. Ending punctuation (`?` vs `.`) turned out to
-# NOT be a reliable signal here: chat_academic_advisory.yaml lines 27-31
-# explicitly require JSON even for a real question disguised as a
-# declarative sentence specifically to dodge `?` - so a real question can
-# legitimately lack `?` too (that's the exact failure mode this repair path
-# exists to catch). The signal that actually distinguishes the two is
-# CONDITIONAL FRAMING: "Nếu bạn cần/muốn X, (vui lòng) Y" is an open-ended
-# offer to help with something not yet asked, never a real request for
-# something needed to answer THIS turn - see `_LEADING_OFFER_PATTERN`.
 _CLARIFICATION_PHRASE_PATTERN = re.compile(
     r"cho\s+.{0,15}?bi[eế]t\b"
     r"|cung\s+c[aấ]p\b.{0,25}?th[oô]ng\s+tin\b"
@@ -81,15 +48,8 @@ _CLARIFICATION_PHRASE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# A sentence opening with this is an offer ("if you need X, just say"), not
-# a real request the assistant needs answered to proceed - see the comment
-# on `_CLARIFICATION_PHRASE_PATTERN` above for the live case that motivated
-# this. Matched against the sentence that CONTAINS the phrase match (see
-# `_is_conditional_offer`), not the whole response, so a genuine question
-# elsewhere in a longer reply isn't discarded because an unrelated earlier
-# sentence happened to use this framing.
-_LEADING_OFFER_PATTERN = re.compile(
-    r"^\s*n[eế]u\s+(b[aạ]n|em)?\s*(c[aầ]n|mu[oố]n|c[oó]\s+nhu\s+c[aầ]u)\b", re.IGNORECASE
+_OFFER_CONDITION_PATTERN = re.compile(
+    r"n[eế]u\s+(b[aạ]n|em)?\s*(c[aầ]n|mu[oố]n|c[oó]\s+nhu\s+c[aầ]u)\b", re.IGNORECASE
 )
 
 # Splits on sentence-ending punctuation followed by whitespace - good enough
@@ -104,15 +64,16 @@ def build_generation_agent(model: Model | str) -> Agent[None, str]:
 
 def _is_conditional_offer(full_text: str) -> bool:
     """True if the sentence containing `_CLARIFICATION_PHRASE_PATTERN`'s
-    match - OR the sentence immediately before it - opens with
-    `_LEADING_OFFER_PATTERN`.
+    match - OR the sentence immediately before it - contains
+    `_OFFER_CONDITION_PATTERN` anywhere in it (either order, see that
+    pattern's comment).
 
     Checking only the matching sentence itself is NOT enough: Vietnamese
     routinely splits a conditional offer across two sentences - "Nếu bạn
     cần thêm thông tin cụ thể hơn (...), mình có thể giúp bạn tìm kiếm
     thông tin đó. Hãy cho mình biết nhé!" - where the `_CLARIFICATION_PHRASE
     _PATTERN` match ("cho mình biết") lands in the SECOND sentence, which on
-    its own starts with "Hãy", not "Nếu". Observed live (twice): a
+    its own contains no "nếu" at all. Observed live (twice): a
     single-sentence-only version of this check missed exactly this split and
     let a hallucinated `ask_user_form` for an unrelated topic through. Only
     looking one sentence back keeps this from also swallowing a genuine
@@ -125,7 +86,7 @@ def _is_conditional_offer(full_text: str) -> bool:
         if not _CLARIFICATION_PHRASE_PATTERN.search(sentence):
             continue
         window = sentences[max(0, index - 1) : index + 1]
-        return any(_LEADING_OFFER_PATTERN.match(candidate) for candidate in window)
+        return any(_OFFER_CONDITION_PATTERN.search(candidate) for candidate in window)
     return False
 
 
@@ -137,7 +98,6 @@ async def _repair_missing_ask_form(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     token_sink: TokenSink,
-    trace: GraphTrace,
 ) -> str:
     """Second-chance fixup for a known model failure mode: the response reads
     like a clarification request in prose but the mandatory
@@ -171,7 +131,6 @@ async def _repair_missing_ask_form(
     repair_prompt = build_json_repair_prompt(
         full_text, chunks, security=security, confirmed_metadata=confirmed_metadata
     )
-    trace.prompt("12b_GenerationSynthesisNode_JsonRepair", repair_prompt)
 
     async def _capture_sink(_token: str) -> None:
         return None
@@ -197,6 +156,7 @@ async def run_generation_synthesis(
     agent: Agent[None, str],
     *,
     user_query: str,
+    resolved_query: str | None = None,
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     chunks: list[RetrievedChunk],
@@ -208,23 +168,30 @@ async def run_generation_synthesis(
 ) -> GenerationResult:
     full_prompt = build_system_prompt(
         user_query=user_query,
+        resolved_query=resolved_query,
         security=security,
         confirmed_metadata=confirmed_metadata,
         chunks=chunks,
         pending_clarification=previous_pending,
         history=history,
     )
-    trace.prompt("12_GenerationSynthesisNode", full_prompt)
-    full_text = await stream_agent_text(agent, full_prompt, token_sink)
-    full_text = await _repair_missing_ask_form(
-        agent,
-        full_text,
-        chunks=chunks,
-        security=security,
-        confirmed_metadata=confirmed_metadata,
-        token_sink=token_sink,
-        trace=trace,
+    # Only the two per-request blocks are worth dumping - the rest of the
+    # prompt is static YAML that can be read from the templates directly.
+    trace.prompt(
+        "12_GenerationSynthesisNode",
+        f"{build_metadata_section(security, confirmed_metadata)}\n"
+        f"{build_prepared_context_section(chunks)}",
     )
+    full_text = await stream_agent_text(agent, full_prompt, token_sink)
+    if settings.ALLOW_REPAIR_JSON:
+        full_text = await _repair_missing_ask_form(
+            agent,
+            full_text,
+            chunks=chunks,
+            security=security,
+            confirmed_metadata=confirmed_metadata,
+            token_sink=token_sink,
+        )
     confirmed_updates = collect_confirmed_metadata_updates(full_text, previous=previous_pending)
     updated_confirmed_metadata = (
         {**confirmed_metadata, **confirmed_updates} if confirmed_updates else confirmed_metadata
