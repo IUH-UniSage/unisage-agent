@@ -16,7 +16,7 @@ from app.graph.streaming_state import GraphInput, GraphModels
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
-from tests.llm_mocks import FakeRetrievalService
+from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
 _DUMMY_CHUNK = RetrievedChunk(
@@ -31,7 +31,7 @@ def _models(
     classification: str = "academic_advisory",
 ) -> GraphModels:
     return GraphModels(
-        classification=mock_sync_llm_model(classification),
+        classification=make_classification_llm_model(classification),
         query_transformation=mock_sync_llm_model("HyDE doc giả định"),
         generation=mock_streaming_llm_model(["Câu trả lời cuối cùng [1]."]),
         retrieval=FakeRetrievalService([_DUMMY_CHUNK]),

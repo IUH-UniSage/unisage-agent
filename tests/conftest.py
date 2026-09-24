@@ -19,6 +19,7 @@ from app.database.models import Base
 from app.database.session import get_db_session
 from app.main import app
 from tests.llm_mocks import (
+    make_classification_llm_model,
     make_gated_streaming_llm_model,
     make_sequential_streaming_llm_model,
     make_streaming_llm_model,
@@ -148,8 +149,22 @@ def mock_gated_streaming_llm_model() -> Callable[[Sequence[str], asyncio.Event],
 def mock_sync_llm_model() -> Callable[[str], FunctionModel]:
     """Factory fixture: `mock_sync_llm_model("some text")` builds a
     `pydantic_ai` model double whose `Agent.run()`/`run_sync()` returns that text
-    as one response. For non-streaming nodes (message classification, query
-    transformation, comparison/calculation).
+    as one response. For non-streaming nodes (query transformation,
+    comparison/calculation) - NOT message classification, which needs valid
+    `IntentClassification` JSON: use `mock_classification_llm_model` instead.
     """
 
     return make_sync_llm_model
+
+
+@pytest.fixture
+def mock_classification_llm_model() -> Callable[..., FunctionModel]:
+    """Factory fixture: `mock_classification_llm_model("off_topic")` builds a
+    `GraphModels.classification` double that returns a valid
+    `IntentClassification` JSON payload for that `primary_intent` (see
+    `tests.llm_mocks.make_classification_llm_model`) - most tests just want a
+    fixed intent to route on, not to exercise JSON parsing itself (see
+    `tests/graph/test_message_classification_node.py` for that).
+    """
+
+    return make_classification_llm_model

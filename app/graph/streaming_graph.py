@@ -79,13 +79,16 @@ async def run_graph(
     # Node 03 - MessageClassificationNode.
     trace.node("03_MessageClassificationNode")
     classification_agent = build_classification_agent(models.classification)
-    intent = await classify_intent(
+    classification = await classify_intent(
         classification_agent, graph_input.user_message, history=graph_input.history
     )
 
     # Node 04 - IntentRoutingNode (deterministic).
+    # TODO(Task 7): build a RoutePlan from every task (a turn may take both
+    # the 06 and 07 branches); until then route on the first task only,
+    # which is exactly the baseline behavior for a one-question message.
     trace.node("04_IntentRoutingNode")
-    route = route_intent(intent)
+    route = route_intent(classification.tasks[0].intent)
 
     if route == "END_SOCIAL_CHAT":
         trace.node("04_IntentRouting_SocialChat")

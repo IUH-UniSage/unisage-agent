@@ -15,6 +15,7 @@ stubbing the graph node itself.
 """
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 
@@ -86,6 +87,60 @@ def make_sync_llm_model(text: str) -> FunctionModel:
 
     def function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
         return ModelResponse(parts=[TextPart(content=text)])
+
+    return FunctionModel(function=function)
+
+
+# Intents that never reach QueryTransformationNode - mirrors
+# app.graph.nodes.message_classification._NO_ROUTING_MODE_INTENTS.
+_NO_ROUTING_MODE_INTENTS = frozenset(
+    {"social_chat", "off_topic", "academic_calculation", "greeting"}
+)
+
+# `append_recent_history` puts the message first, then this separator and
+# the recent history - everything before it is the user's own message.
+_HISTORY_SEPARATOR = "\n\nLịch sử hội thoại gần đây"
+
+
+def _task_payload(intent: str, query: str, routing_mode: str | None) -> dict[str, object]:
+    if routing_mode is None and intent not in _NO_ROUTING_MODE_INTENTS:
+        routing_mode = "SINGLE"
+    return {"intent": intent, "query": query, "routing_mode": routing_mode}
+
+
+def make_classification_llm_model(*intents: str, routing_mode: str | None = None) -> FunctionModel:
+    """Build a `FunctionModel` for `GraphModels.classification` that returns
+    a valid `IntentClassification` JSON payload - most tests just want a
+    fixed route and don't care about the JSON shape MessageClassificationNode
+    parses (see tests/graph/test_message_classification_node.py for that).
+
+    One intent (the common case) → one task whose `query` is the user's
+    message copied verbatim, exactly what the real prompt asks the model to
+    do for a one-question message. Several intents → one task each, with a
+    placeholder `query` per task. `routing_mode` applies to every task that
+    needs one (`"SINGLE"` by default, `None` for intents that never reach
+    node 06), so callers only pass it for a MULTI case.
+    """
+
+    if not intents:
+        raise ValueError("make_classification_llm_model needs at least one intent")
+
+    def function(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        prompt = ""
+        for part in messages[-1].parts:
+            content = getattr(part, "content", None)
+            if isinstance(content, str):
+                prompt = content
+        message = prompt.split(_HISTORY_SEPARATOR, 1)[0]
+        if len(intents) == 1:
+            tasks = [_task_payload(intents[0], message, routing_mode)]
+        else:
+            tasks = [
+                _task_payload(intent, f"câu hỏi {index} ({intent})", routing_mode)
+                for index, intent in enumerate(intents, 1)
+            ]
+        payload = {"tasks": tasks, "confidence": 0.95}
+        return ModelResponse(parts=[TextPart(content=json.dumps(payload, ensure_ascii=False))])
 
     return FunctionModel(function=function)
 

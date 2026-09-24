@@ -13,7 +13,7 @@ from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
 from app.schemas.security import AcademicSecurityContext
-from tests.llm_mocks import FakeRetrievalService
+from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 
 def _models(
@@ -21,7 +21,7 @@ def _models(
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
 ) -> GraphModels:
     return GraphModels(
-        classification=mock_sync_llm_model("off_topic"),
+        classification=make_classification_llm_model("off_topic"),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["ans"]),
         retrieval=FakeRetrievalService(),

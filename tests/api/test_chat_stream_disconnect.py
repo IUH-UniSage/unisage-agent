@@ -54,7 +54,7 @@ from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
 from app.schemas.retrieval import RetrievedChunk
-from tests.llm_mocks import FakeRetrievalService
+from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 
 class _JavaBackend:
@@ -169,7 +169,7 @@ async def test_client_disconnect_mid_stream_still_patches_completed(
         chunk_id="c1", content="dummy retrieved content", source="s", score=0.9
     )
     models = GraphModels(
-        classification=mock_sync_llm_model("academic_advisory"),
+        classification=make_classification_llm_model("academic_advisory"),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_gated_streaming_llm_model(["token-1 ", "token-2 ", "token-3"], gate),
         retrieval=FakeRetrievalService([dummy_chunk]),

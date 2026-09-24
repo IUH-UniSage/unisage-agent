@@ -37,7 +37,7 @@ from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
 from app.schemas.retrieval import RetrievedChunk
-from tests.llm_mocks import FakeRetrievalService
+from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 _DUMMY_CHUNK = RetrievedChunk(
     chunk_id="c1", content="dummy retrieved content", source="s", score=0.9
@@ -136,7 +136,7 @@ async def test_clarification_two_turn_round_trip_via_real_endpoint(
 
     # --- Turn 1: question triggers a Type B clarification request. ---
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
-        classification=mock_sync_llm_model("academic_advisory"),
+        classification=make_classification_llm_model("academic_advisory"),
         query_transformation=mock_sync_llm_model("HyDE: quy định miễn giảm GDQP"),
         generation=mock_streaming_llm_model([_TRAINING_TYPE_ASK_FORM]),
         retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
@@ -166,7 +166,7 @@ async def test_clarification_two_turn_round_trip_via_real_endpoint(
     # classification is skipped (a misleading classification mock would
     # change the response if it were reached), advisory flow resumes. ---
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
-        classification=mock_sync_llm_model("off_topic"),  # must NOT be reached
+        classification=make_classification_llm_model("off_topic"),  # must NOT be reached
         query_transformation=mock_sync_llm_model("HyDE: GDQP hệ chính quy"),
         generation=mock_streaming_llm_model(["Sinh viên hệ chính quy được miễn GDQP [1]."]),
         retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
@@ -201,7 +201,7 @@ async def test_ticket_fallback_when_no_valid_context(
     java = _JavaBackend()
     _install_java(java)
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
-        classification=mock_sync_llm_model("academic_advisory"),
+        classification=make_classification_llm_model("academic_advisory"),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["unused"]),
         retrieval=FakeRetrievalService(),
@@ -232,7 +232,7 @@ async def test_guest_without_authorization_header_completes_full_round_trip(
     # call - see `OFF_TOPIC_TEMPLATE`). A general-knowledge question like this
     # one is classified as off_topic (see message_classification.yaml).
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
-        classification=mock_sync_llm_model("off_topic"),
+        classification=make_classification_llm_model("off_topic"),
         query_transformation=mock_sync_llm_model("hyde"),
         generation=mock_streaming_llm_model(["unused"]),
         retrieval=FakeRetrievalService(),
