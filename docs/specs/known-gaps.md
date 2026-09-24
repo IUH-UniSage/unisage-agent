@@ -173,6 +173,35 @@ Deliberate, reviewed-and-accepted limitations, not bugs to silently patch:
   those into a single citable table would need a `table_group_id`
   distinct from `block_index` - left for a future phase, does not block
   citation-by-page (the primary goal here).
+- **A PDF table that ends mid-page is merged with the next page's table when
+  that table repeats its header** (2026-09-24, accepted as a provisional
+  rule). `decide_merge` (`app/rag/ingestion/table_merger.py`) used to block a
+  merge whenever the first table did not reach the bottom of its page. Real
+  documents often break a table early and continue it at the top of the next
+  page under a repeated header (`Quyet Dinh 1035 - Hoc phi 2025-2026.pdf`
+  pages 3-4, `Thong Bao 867 - Tuyen sinh Dai hoc Chinh quy 2026.pdf` pages
+  2-3-4). Split, each part got its own hierarchy, so rows after the break lost
+  their ancestors (`5 Đại học liên thông` lost `A ĐỐI VỚI TRỤ SỞ CHÍNH`, and
+  `B PHÂN HIỆU…` was wrongly nested under `5 > 5.2`). Page position now only
+  counts as a missing signal, not a blocker, when all of these hold: the
+  second table starts at the top of the next page, its header matches
+  (`MERGE_SCORING.early_break_min_header`, 0.9; a column also matches when
+  one name is a prefix of the other, e.g. `… (Tiếp theo)`), and the column
+  borders line up (`early_break_min_bounds`, 0.8). The existing blockers
+  still apply: nothing but page furniture between the tables, the same
+  `heading_path`, and the next page. **Residual risk:** two genuinely
+  different tables that share a header, sit on consecutive pages with
+  nothing between them, and have the second starting at the top of its page
+  are merged into one table. Their rows and cells stay correct, but they
+  share one `table_id` and one continuous row numbering, and the second
+  table's rows can pick up ancestors from the first. The geometry alone
+  cannot tell this case apart from a table broken early. Pinned by
+  `test_two_short_tables_with_the_same_header_on_consecutive_pages_are_merged`.
+  **Alternative if this bites:** keep the tables separate and instead seed
+  the second table's hierarchy inference with the first table's final
+  ancestor stack when their headers and `heading_path` match. That fixes the
+  ancestors without merging `table_id`/row numbering, at the cost of a
+  cross-table hand-off in `infer_hierarchy`.
 - **Draft re-chunk race condition**: if a user re-chunks the same document
   (overwriting its draft, `upsert_chunking_draft` is "last write wins", no
   locking) while another tab/request is mid-`POST /ingestion/embedding` for
