@@ -52,6 +52,12 @@ class MergeScoring:
     position_bottom_fraction: float = 0.25
     position_top_fraction: float = 0.15
     header_confidence_when_repeated: float = 0.9
+    # A first table that ends mid-page still continues on the next page when
+    # the next page repeats its header this closely and the column borders
+    # line up this well (the page was simply broken early); position is then
+    # a missing signal instead of a blocker. See docs/specs/known-gaps.md.
+    early_break_min_header: float = 0.9
+    early_break_min_bounds: float = 0.8
     # A column is the "running text" column - whose tail a page break can leave at
     # the top of the next page - when its cells average at least this many chars.
     continuation_min_mean_length: float = 20.0
@@ -99,7 +105,13 @@ def _header_match(first: TableBlock, second: TableBlock) -> float:
     second_names = [normalize_for_compare(name) for name in second.header_row or []]
     if not first_names or len(first_names) != len(second_names):
         return 0.0
-    same = sum(1 for a, b in zip(first_names, second_names, strict=True) if a == b)
+    # a continuation header may add or drop a suffix: `... (Tiếp theo)`,
+    # `Tự chọn` for `Tự chọn (chọn 1)`
+    same = sum(
+        1
+        for a, b in zip(first_names, second_names, strict=True)
+        if a == b or (a and b and (a.startswith(b) or b.startswith(a)))
+    )
     return same / len(first_names)
 
 
@@ -127,6 +139,10 @@ def _position_ok(first: TableEvidence, second: TableEvidence, scoring: MergeScor
         bottom_gap <= scoring.position_bottom_fraction * first.page_height
         and top_gap <= scoring.position_top_fraction * second.page_height
     )
+
+
+def _starts_at_top(second: TableEvidence, scoring: MergeScoring) -> bool:
+    return second.bbox[1] <= scoring.position_top_fraction * second.page_height
 
 
 def _cell_kind(text: str, scoring: MergeScoring) -> int:
@@ -192,13 +208,18 @@ def decide_merge(
     a_ev, b_ev = first.evidence, second.evidence
     position: float | None = None
     bounds: float | None = None
-    if a_ev is not None and b_ev is not None:
-        if not _position_ok(a_ev, b_ev, scoring):
-            return MergeDecision(False, None, False, False, "position_not_continuous")
-        position = 1.0
-        bounds = _bounds_match(a_ev, b_ev, scoring.bounds_tolerance)
-
     header_match = _header_match(first.table, second.table)
+    if a_ev is not None and b_ev is not None:
+        bounds = _bounds_match(a_ev, b_ev, scoring.bounds_tolerance)
+        if _position_ok(a_ev, b_ev, scoring):
+            position = 1.0
+        elif not (
+            _starts_at_top(b_ev, scoring)
+            and header_match >= scoring.early_break_min_header
+            and bounds is not None
+            and bounds >= scoring.early_break_min_bounds
+        ):
+            return MergeDecision(False, None, False, False, "position_not_continuous")
     header_present = header_match >= scoring.header_present_min_match
 
     signals: list[tuple[float, float]] = [(scoring.weight_columns, 1.0)]

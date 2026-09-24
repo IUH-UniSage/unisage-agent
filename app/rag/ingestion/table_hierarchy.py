@@ -400,6 +400,16 @@ def _geometry_features(
     )
 
 
+def _is_group_row(row: TableRow, layout: _Layout) -> bool:
+    """A row that only names something: no cell besides its ordinal and label."""
+
+    return not any(
+        cell.strip()
+        for column, cell in enumerate(row.cells)
+        if column not in (layout.ordinal_col, layout.label_col)
+    )
+
+
 def _numbering(
     rows: list[TableRow], layout: _Layout, scoring: HierarchyScoring
 ) -> tuple[list[tuple[str, str] | None], list[str], list[int | None]]:
@@ -420,9 +430,20 @@ def _numbering(
 
     parsed: list[tuple[str, str] | None] = []
     labels = []
+    span_origin_is_group = False
     for row in rows:
         if layout.ordinal_col is not None and layout.ordinal_col < len(row.cells):
-            parsed.append(_parse_ordinal(row.cells[layout.ordinal_col]))
+            if layout.ordinal_col not in row.inherited_cells:
+                span_origin_is_group = _is_group_row(row, layout)
+                parsed.append(_parse_ordinal(row.cells[layout.ordinal_col]))
+            elif span_origin_is_group:
+                # the ordinal was merged down from a row that only names a
+                # group: the rows it covers are that group's children
+                parsed.append(None)
+            else:
+                # merged down from a row holding values: the covered rows are
+                # further items under the same number (siblings)
+                parsed.append(_parse_ordinal(row.cells[layout.ordinal_col]))
             labels.append(label_of(row))
         else:
             item, rest = _split_prefix(label_of(row))

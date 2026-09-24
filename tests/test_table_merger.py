@@ -70,7 +70,10 @@ def test_repeated_header_and_continuous_geometry_merge() -> None:
     assert decision.score == pytest.approx(1.0)
 
 
-def test_two_different_tables_with_the_same_header_are_not_merged_when_position_breaks() -> None:
+def test_a_table_broken_early_merges_when_the_next_page_repeats_its_header() -> None:
+    # Known gap (docs/specs/known-gaps.md): two different tables with the same
+    # header, nothing between them, the second at the top of the next page, are
+    # merged too - they cannot be told apart from one table broken early.
     first = _plain(HEADER, [["1", "a", "1", "2"]], 1)
     second = _plain(HEADER, [["2", "b", "3", "4"]], 2)
 
@@ -80,8 +83,34 @@ def test_two_different_tables_with_the_same_header_are_not_merged_when_position_
         only_furniture_between=True,
     )
 
+    assert decision.merge and decision.header_present
+
+
+def test_a_table_ending_mid_page_without_a_repeated_header_is_not_merged() -> None:
+    first = _plain(HEADER, [["1", "a", "1", "2"]], 1)
+    second = _plain(["TT", "Other", "Fee", "Year"], [["2", "b", "3", "4"]], 2)
+
+    decision = decide_merge(
+        _candidate(first, page=1, evidence=_evidence(1, top=100, bottom=300)),  # ends mid-page
+        _candidate(second, page=2, evidence=_evidence(2, top=50, bottom=300)),
+        only_furniture_between=True,
+    )
+
     assert not decision.merge
     assert decision.reason == "position_not_continuous"
+
+
+def test_a_continuation_header_may_add_a_suffix() -> None:
+    first = _plain(["TT", "Programme", "Fee"], [["1", "a", "1"]], 1)
+    second = _plain(["TT", "Programme (continued)", "Fee"], [["2", "b", "3"]], 2)
+
+    decision = decide_merge(
+        _candidate(first, page=1, evidence=_evidence(1, top=100, bottom=800)),
+        _candidate(second, page=2, evidence=_evidence(2, top=50, bottom=300)),
+        only_furniture_between=True,
+    )
+
+    assert decision.merge and decision.header_present
 
 
 def test_second_table_starting_low_on_the_page_is_not_a_continuation() -> None:
@@ -283,7 +312,9 @@ def test_pdf_table_continuing_without_a_repeated_header_is_merged_without_losing
     assert check_table_invariants(table) == []
 
 
-def test_two_short_tables_with_the_same_header_stay_separate() -> None:
+def test_two_short_tables_with_the_same_header_on_consecutive_pages_are_merged() -> None:
+    # Known gap (docs/specs/known-gaps.md): indistinguishable from one table
+    # whose page was broken early, which is the common case in real documents.
     content = _pdf_with_tables(
         {"rows": _rows(3), "top": 100},
         {"rows": _rows(3, start=4), "top": 100},
@@ -291,9 +322,8 @@ def test_two_short_tables_with_the_same_header_stay_separate() -> None:
 
     tables = _tables(content)
 
-    assert len(tables) == 2
-    assert [t.table.table_id for t in tables] == ["table-0", "table-1"]
-    assert [row.row_index for row in tables[1].table.rows] == [1, 2, 3]
+    assert len(tables) == 1
+    assert [row.row_index for row in tables[0].table.rows] == [1, 2, 3, 4, 5, 6]
 
 
 def test_a_heading_between_two_tables_prevents_the_merge() -> None:

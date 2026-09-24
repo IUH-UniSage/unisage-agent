@@ -125,6 +125,17 @@ _PDF_PROMOTED_HEADING_FALLBACK_LEVEL = 2
 # Share of characters a geometric table must have in common with a markdown table
 # to be taken for the same table.
 _EVIDENCE_MATCH_MIN = 0.9
+# The geometric box may take in a row or two of text around the table (a heading
+# right above it); the match is scored with up to this many rows left off each end.
+_EVIDENCE_EDGE_ROWS = 2
+
+
+def _match_score(markdown_chars: Counter[str], rows: list[Counter[str]]) -> float:
+    candidate: Counter[str] = Counter()
+    for chars in rows:
+        candidate += chars
+    larger = max(sum(markdown_chars.values()), sum(candidate.values()), 1)
+    return sum((markdown_chars & candidate).values()) / larger
 
 
 def _heading_level_for_title(title: str, fallback_level: int) -> int:
@@ -293,13 +304,16 @@ def _regions_from_pdf_pages(
         for index, candidate in enumerate(candidates):
             if index in taken:
                 continue
-            candidate_chars = Counter(
-                normalize_for_compare(
-                    " ".join(cell.text for row in candidate.rows for cell in row.cells if cell)
-                )
+            row_chars = [
+                Counter(normalize_for_compare(" ".join(cell.text for cell in row.cells if cell)))
+                for row in candidate.rows
+            ]
+            score = max(
+                _match_score(markdown_chars, row_chars[lead : len(row_chars) - trail])
+                for lead in range(_EVIDENCE_EDGE_ROWS + 1)
+                for trail in range(_EVIDENCE_EDGE_ROWS + 1)
+                if lead + trail < len(row_chars)
             )
-            larger = max(sum(markdown_chars.values()), sum(candidate_chars.values()), 1)
-            score = sum((markdown_chars & candidate_chars).values()) / larger
             if score > best_score:
                 best_index, best_score = index, score
         if best_index is None or best_score < _EVIDENCE_MATCH_MIN:
@@ -324,6 +338,19 @@ def _regions_from_pdf_pages(
                     None if "evidence_unaligned" in table.warnings else table_evidence
                 )
                 evidence_by_block[block_index] = aligned_evidence
+            for before in table.text_before if table is not None else []:
+                regions.append(
+                    ParsedRegion(
+                        RegionType.TEXT,
+                        before,
+                        heading_path=[title for _level, title in heading_stack],
+                        page_start=table_page,
+                        page_end=table_page,
+                        block_index=block_index,
+                        source_type=SourceType.PDF,
+                    )
+                )
+                block_index += 1
             regions.append(
                 ParsedRegion(
                     current_type,
@@ -337,6 +364,19 @@ def _regions_from_pdf_pages(
                 )
             )
             block_index += 1
+            for spilled in table.spilled_text if table is not None else []:
+                regions.append(
+                    ParsedRegion(
+                        RegionType.TEXT,
+                        spilled,
+                        heading_path=[title for _level, title in heading_stack],
+                        page_start=end_page,
+                        page_end=end_page,
+                        block_index=block_index,
+                        source_type=SourceType.PDF,
+                    )
+                )
+                block_index += 1
         current_type = None
         region_start_page = None
 

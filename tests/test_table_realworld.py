@@ -11,11 +11,17 @@ from app.rag.ingestion.canonical_table import (
     EventKind,
     RowDisposition,
     RowSignals,
+    TableRow,
     build_table_from_plain_rows,
     check_table_invariants,
 )
 from app.rag.ingestion.table_aware_parser import split_regions
-from app.rag.ingestion.table_evidence import EvidenceCell, EvidenceRow, TableEvidence
+from app.rag.ingestion.table_evidence import (
+    EvidenceCell,
+    EvidenceRow,
+    TableEvidence,
+    _resolve_spans,
+)
 from app.rag.ingestion.table_hierarchy import infer_hierarchy
 from app.rag.ingestion.table_merger import (
     MERGE_SCORING,
@@ -432,3 +438,297 @@ def test_automation_curriculum_merges_wrapped_rows_and_all_pages() -> None:
     )
     leaves = _leaf_names(table)
     assert not any(ancestor in leaves for row in table.rows for ancestor in row.ancestors)
+
+
+# --- merged cells resolved from geometry --------------------------------------
+
+
+def _cell(x0: float, y0: float, x1: float, y1: float, text: str) -> EvidenceCell:
+    return EvidenceCell((x0, y0, x1, y1), text)
+
+
+def _spanned_evidence() -> TableEvidence:
+    """TT | Label | Group header over (Per credit | Per year); `2.1` merged down
+    over two data rows. Columns start at x = 0, 50, 250, 350; table ends at 450."""
+
+    rows = [
+        EvidenceRow(
+            [
+                _cell(0, 0, 50, 40, "TT"),
+                _cell(50, 0, 250, 40, "Programme"),
+                _cell(250, 0, 450, 20, "Fees 2025 - 2026"),
+                None,
+            ],
+            0,
+            20,
+        ),
+        EvidenceRow(
+            [
+                None,
+                None,
+                _cell(250, 20, 350, 40, "Per credit"),
+                _cell(350, 20, 450, 40, "Per year"),
+            ],
+            20,
+            40,
+        ),
+        EvidenceRow(
+            [
+                _cell(0, 40, 50, 80, "2.1"),
+                _cell(50, 40, 250, 60, "Intake 2025 - Economics"),
+                _cell(250, 40, 350, 60, "1.430.000"),
+                _cell(350, 40, 450, 60, "43.000.000"),
+            ],
+            40,
+            60,
+        ),
+        EvidenceRow(
+            [
+                None,
+                _cell(50, 60, 250, 80, "Intake 2025 - Engineering | evening"),
+                _cell(250, 60, 350, 80, "1.600.000"),
+                _cell(350, 60, 450, 80, "48.000.000"),
+            ],
+            60,
+            80,
+        ),
+    ]
+    return TableEvidence(
+        page_number=2,
+        bbox=(0.0, 0.0, 450.0, 80.0),
+        page_height=842.0,
+        rows=_resolve_spans(rows, [0.0, 50.0, 250.0, 350.0], 450.0),
+        column_bounds=[0.0, 50.0, 250.0, 350.0],
+        header_row_count=2,
+    )
+
+
+def test_spans_are_resolved_to_the_cell_that_covers_them() -> None:
+    evidence = _spanned_evidence()
+
+    assert evidence.rows[0].covered_by[3] == (0, 2)  # header merged across columns
+    assert evidence.rows[1].covered_by[:2] == [(0, 0), (0, 1)]  # header merged down
+    assert evidence.rows[3].covered_by[0] == (2, 0)  # row label merged down
+
+
+def test_a_garbled_markdown_header_and_a_misplaced_row_label_are_read_from_geometry() -> None:
+    # The markdown extractor: loses the accents of a merged header cell into a
+    # row of their own, pulls text from above the table into the header, cuts
+    # the merged group header in two, and puts `2.1` on the row it is centred on.
+    lines = [
+        "||ÀÓỂ|Fees|Unit: VND<br>2025 - 2026|",
+        "|---|---|---|---|",
+        "|TT|Prgramme|Per credit|Per year|",
+        "||Intake 2025 - Economics|1.430.000|43.000.000|",
+        "|2.1|Intake 2025 - Engineering | evening|1.600.000|48.000.000|",
+    ]
+
+    table = build_page_table(lines, 2, _spanned_evidence())
+
+    assert table.header_row == [
+        "TT",
+        "Programme",
+        "Fees 2025 - 2026 > Per credit",
+        "Fees 2025 - 2026 > Per year",
+    ]
+    assert [row.cells for row in table.rows] == [
+        ["2.1", "Intake 2025 - Economics", "1.430.000", "43.000.000"],
+        ["2.1", "Intake 2025 - Engineering | evening", "1.600.000", "48.000.000"],
+    ]
+    assert table.rows[1].inherited_cells == [0]
+    assert not any("geometry_text_mismatch" in row.warnings for row in table.rows)
+    assert any(e.kind == EventKind.FILL_MERGED_CELL for e in table.normalization_events)
+    assert check_table_invariants(table) == []
+
+
+def _row(cells: list[str], inherited: list[int] | None = None) -> TableRow:
+    return TableRow(cells=cells, inherited_cells=inherited or [])
+
+
+def _hierarchy(rows: list[TableRow]) -> list[list[str]]:
+    table = build_table_from_plain_rows(
+        ["TT", "Label", "Per credit", "Per year"],
+        [row.cells for row in rows],
+        HeaderSource.INFERRED,
+        1.0,
+    )
+    numbered = [replace(row, row_index=index + 1) for index, row in enumerate(rows)]
+    return [row.ancestors for row in infer_hierarchy(replace(table, rows=numbered)).rows]
+
+
+def test_a_number_merged_down_from_a_row_with_values_makes_siblings() -> None:
+    ancestors = _hierarchy(
+        [
+            _row(["2", "Postgraduate", "", ""]),
+            _row(["2.1", "Economics", "1.430.000", "43.000.000"]),
+            _row(["2.1", "Engineering", "1.600.000", "48.000.000"], [0]),
+            _row(["2.2", "Economics", "1.400.000", "42.050.000"]),
+        ]
+    )
+
+    assert ancestors[2] == ["2 Postgraduate"]
+    assert ancestors[3] == ["2 Postgraduate"]
+
+
+def test_a_number_merged_down_from_a_group_row_makes_children() -> None:
+    ancestors = _hierarchy(
+        [
+            _row(["3", "Undergraduate", "", ""]),
+            _row(["3.1", "Intake 2025", "", ""]),
+            _row(["3.1", "Economics", "980.000", "36.260.000"], [0]),
+            _row(["3.1", "Engineering", "980.000", "38.350.000"], [0]),
+            _row(["3.2", "Intake 2024", "", ""]),
+        ]
+    )
+
+    assert ancestors[2] == ["3 Undergraduate", "3.1 Intake 2025"]
+    assert ancestors[3] == ["3 Undergraduate", "3.1 Intake 2025"]
+    assert ancestors[4] == ["3 Undergraduate"]
+
+
+TUITION = _sample("Quyet Dinh 1035*.pdf")
+
+
+@pytest.mark.skipif(TUITION is None, reason="sample PDF not available")
+def test_tuition_decision_header_spans_and_row_labels() -> None:
+    assert TUITION is not None
+    tables = _tables(TUITION)
+
+    table = tables[0].table
+    # page 3 ends mid-page; page 4 repeats the header and continues the table
+    assert (tables[0].page_start, tables[0].page_end) == (2, 4)
+    assert table.header_row == [
+        "TT",
+        "HỆ ĐÀO TẠO / KHÓA TUYỂN SINH",
+        "Mức thu trong năm học 2025 - 2026 > Mức thu 01 tín chỉ",
+        "Mức thu trong năm học 2025 - 2026 > Mức thu theo năm học",
+    ]
+    assert check_table_invariants(table) == []
+    by_label: dict[str, TableRow] = {}
+    for row in table.rows:  # first occurrence: section B repeats some labels
+        by_label.setdefault(row.cells[1], row)
+    # each row of a merged `2.x` cell carries its own number, never the next one
+    assert by_label["Khóa tuyển sinh năm học 2024-2025 - Khối Công nghệ"].cells[0] == "2.2"
+    economics = by_label["Khóa tuyển sinh năm học 2023-2024 trở về trước - Khối Kinh tế"]
+    assert economics.cells[0] == "2.3"
+    assert economics.ancestors == ["A ĐỐI VỚI TRỤ SỞ CHÍNH", "2 Cao học"]
+    # a `|` inside a cell stays in that cell
+    pharmacy = next(row for row in table.rows if "5.000.000 | Môn QPAN" in row.cells[1])
+    assert pharmacy.cells[2:] == ["980k / 5.000k", ""]
+    assert pharmacy.ancestors[-2:] == ["3.1 Khóa tuyển sinh năm học 2025-2026", "- Ngành Dược:"]
+    # the first row of page 3 is a row of its own, not the tail of the last row
+    assert by_label["Khóa tuyển sinh năm học 2024-2025"].cells[0] == "3.2"
+    assert not any("geometry_text_mismatch" in row.warnings for row in table.rows)
+    # the numbering carries on across the early page break
+    assert by_label["Đại học liên thông, văn bằng 2 (Trụ sở chính)"].ancestors == [
+        "A ĐỐI VỚI TRỤ SỞ CHÍNH"
+    ]
+    assert by_label["PHÂN HIỆU QUẢNG NGÃI, CƠ SỞ THANH HÓA"].ancestors == []
+
+
+ADMISSION = _sample("Thong Bao 867*.pdf")
+
+
+@pytest.mark.skipif(ADMISSION is None, reason="sample PDF not available")
+def test_admission_notice_fills_merged_combination_cells() -> None:
+    assert ADMISSION is not None
+    tables = [
+        region
+        for region in _tables(ADMISSION)
+        if region.heading_path[-1].startswith("a) Ngành/nhóm ngành")
+    ]
+
+    first = tables[0].table
+    assert first.header_row == [
+        "Stt",
+        "Tên ngành / Nhóm ngành",
+        "Mã ngành > CT chuẩn",
+        "Mã ngành > CT TC Tiếng Anh",
+        "Tổ hợp (gồm 3 môn) > Bắt buộc",
+        "Tổ hợp (gồm 3 môn) > Tự chọn (chọn 1)",
+    ]
+    assert check_table_invariants(first) == []
+    codes = ["7510301", "7510303", "7510302", "7480108", "7510201"]
+    codes += ["7510203", "7510202", "7510205", "7510206"]
+    # section a) is one table over pages 2-4 (each page breaks it early)
+    assert len(tables) == 1
+    assert (tables[0].page_start, tables[0].page_end) == (2, 4)
+    page_two = first.rows[:9]
+    assert [row.cells[0] for row in page_two] == [str(n) for n in range(1, 10)]
+    assert [row.cells[2] for row in page_two] == codes
+    assert [row.cells[3] for row in page_two] == [f"{code}C" for code in codes]
+    # every row of both merged `Toán, Vật lí | Nhóm môn TC1` blocks carries them
+    assert all(row.cells[4:] == ["Toán, Vật lí", "Nhóm môn TC1"] for row in page_two)
+    assert first.rows[6].cells[1] == "Công nghệ chế tạo máy"  # no glyph shards
+    assert not any(row.warnings for row in first.rows)
+
+    # page 3: shuffled markdown rows still line up with the geometry
+    rows = first.rows[9:]
+    it_rows = [row for row in rows if row.cells[0] == "13"]
+    assert [row.cells[4:] for row in it_rows] == [
+        ["Toán, Vật lí", "Nhóm môn TC1"],
+        ["Toán, Ngữ văn", "Nhóm môn TC12"],
+    ]
+    assert "KT Phần mềm**" in it_rows[1].cells[1]  # the document's own mark, kept
+    assert next(row for row in rows if row.cells[0] == "19").cells[4] == (
+        "Toán, Hóa học hoặc Toán, Sinh học"
+    )
+
+
+GUIDE = _sample("HDSD_Thisinh*.pdf")
+
+
+@pytest.mark.skipif(GUIDE is None, reason="sample PDF not available")
+def test_user_guide_tables_have_their_real_columns() -> None:
+    assert GUIDE is not None
+    regions = split_regions(GUIDE.read_bytes(), GUIDE.name, "pdf")
+    tables = {
+        region.heading_path[-1]: region.table
+        for region in regions
+        if region.region_type == RegionType.TABLE and region.table
+    }
+
+    terms = tables["1.3. Các thuật ngữ và từ viết tắt"]
+    assert terms.header_row == ["STT", "Cụm từ", "Từ viết tắt"]  # not "Cụm từ<br>Từ viết tắt"
+    assert terms.rows[0].cells == ["1", "Điểm tiếp nhận hồ sơ", "Điểm TNHS"]
+
+    functions = tables["3.1. Các chức năng trong Phân hệ"]
+    # double borders cut 12 grid columns; the table has 4
+    assert functions.header_row == ["STT", "Chức năng", "Mô tả", "Đối tượng sử dụng"]
+    assert functions.rows[-1].cells == [
+        "14",
+        "Lịch sửa giao dịch",
+        "Lịch sửa giao dịch",
+        "Thí sinh",
+    ]
+    for table in (terms, functions):
+        assert check_table_invariants(table) == []
+        assert not any(row.warnings for row in table.rows)
+    # the heading the markdown glued into the last row is kept, as text after the table
+    after = regions[regions.index(next(r for r in regions if r.table is functions)) + 1]
+    assert after.region_type == RegionType.TEXT
+    assert after.content == "4. HƯỚNG DẪN SỬ DỤNG CÁC CHỨC NĂNG HỆ THỐNG"
+
+
+FINTECH = _sample("KHUNG FINTECH K20.pdf")
+
+
+@pytest.mark.skipif(FINTECH is None, reason="sample PDF not available")
+def test_fintech_curriculum_elective_group_is_one_row() -> None:
+    assert FINTECH is not None
+    table = _tables(FINTECH)[0].table
+
+    assert check_table_invariants(table) == []
+    labels = [row.cells[0] for row in table.rows]
+    # the header repeated on page 2 is not a data row
+    assert "STT" not in labels
+    elective = next(row for row in table.rows if row.cells[0].startswith("Học phần tự chọn (Sinh"))
+    assert elective.cells[0] == "Học phần tự chọn (Sinh viên chọn 1 trong các học phần sau đây)"
+    assert elective.cells[4] == "3"
+    # two courses the markdown glued into one row (`1<br>2`) are two rows again
+    position = table.rows.index(elective)
+    first, second = table.rows[position + 1], table.rows[position + 2]
+    assert (first.cells[0], first.cells[1]) == ("1", "2112011")
+    assert (second.cells[0], second.cells[1]) == ("2", "2111491")
+    assert second.ancestors[-1] == elective.cells[0]
+    assert not any(row.warnings for row in table.rows)

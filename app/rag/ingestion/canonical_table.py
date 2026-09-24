@@ -27,12 +27,16 @@ class RowDisposition(StrEnum):
     MERGED = "merged"  # combined with other source rows into one canonical row
     SPLIT = "split"  # produced more than one canonical row
     DROPPED_EMPTY = "dropped_empty"  # had no content (blank/separator only)
+    # text outside the table the extractor read as a table row; it is emitted
+    # as running text next to the table (`TableBlock.text_before`)
+    MOVED_TO_TEXT = "moved_to_text"
 
 
 class EventKind(StrEnum):
     SPLIT_CELL = "split_cell"
     MERGE_CELLS = "merge_cells"
     FILL_MERGED_HEADER = "fill_merged_header"
+    FILL_MERGED_CELL = "fill_merged_cell"
     DROP_REPEATED_HEADER = "drop_repeated_header"
     RECOVER_TEXT = "recover_text"
     PAD_MISSING_CELL = "pad_missing_cell"
@@ -109,6 +113,9 @@ class TableRow:
     source_cell_count: int = 0
     canonical_cell_count: int = 0
     signals: RowSignals | None = None
+    # Columns whose text was copied down from a cell merged over several rows
+    # (the source only holds it once, on the first row of the span).
+    inherited_cells: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -132,6 +139,11 @@ class TableBlock:
     source_rows: list[SourceRow] = field(default_factory=list)
     normalization_events: list[NormalizationEvent] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Text outside the table that the extractor had glued into its rows; the
+    # parser emits it as running text right after the table.
+    spilled_text: list[str] = field(default_factory=list)
+    # Same, for text above the table read into its first rows.
+    text_before: list[str] = field(default_factory=list)
 
     @property
     def column_names(self) -> list[str] | None:
@@ -295,7 +307,7 @@ def check_table_invariants(table: TableBlock) -> list[str]:
             events_by_source.setdefault(source_id, set()).add(event.kind)
 
     # I1: per source row
-    header_count = 0
+    header_rows: set[object] = set()
     for source in table.source_rows:
         blank = _is_blank(source.raw_text)
         disposition = source.disposition
@@ -328,16 +340,21 @@ def check_table_invariants(table: TableBlock) -> list[str]:
             if disposition == RowDisposition.SPLIT and len(source.canonical_row_ids) < 2:
                 violations.append(f"I1: source row {source.source_row_id} is split into <2 rows")
         elif disposition == RowDisposition.HEADER:
-            header_count += 1
+            # several markdown rows may make up one header tier
+            header_rows.add(
+                (source.page, source.logical_row)
+                if source.logical_row is not None
+                else source.source_row_id
+            )
         elif disposition == RowDisposition.REPEATED_HEADER:
             if source.source_row_id not in dropped_header_ids:
                 violations.append(
                     f"I1: repeated header {source.source_row_id} has no drop_repeated_header event"
                 )
 
-    if header_count != len(table.header_levels):
+    if len(header_rows) != len(table.header_levels):
         violations.append(
-            f"I1: {header_count} header source rows but {len(table.header_levels)} header levels"
+            f"I1: {len(header_rows)} header rows but {len(table.header_levels)} header levels"
         )
 
     referenced_rows: set[int] = set()
@@ -378,7 +395,11 @@ def check_table_invariants(table: TableBlock) -> list[str]:
         if EventKind.RECOVER_TEXT in explained:
             continue
         expected = Counter(normalize_for_compare(" ".join(source_texts)))
-        actual = Counter(normalize_for_compare(" ".join(row.cells)))
+        # text copied down from a merged cell above is not this row's source
+        own_cells = [
+            cell for column, cell in enumerate(row.cells) if column not in row.inherited_cells
+        ]
+        actual = Counter(normalize_for_compare(" ".join(own_cells)))
         if expected != actual:
             lost = expected - actual
             invented = actual - expected
