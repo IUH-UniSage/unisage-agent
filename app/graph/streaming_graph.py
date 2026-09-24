@@ -13,7 +13,10 @@ calls `BackendJavaClient` itself, keeping graph logic testable without HTTP
 mocks.
 """
 
+from dataclasses import replace
+
 from app.core.graph_trace import GraphTrace
+from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
 from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, plan_route
@@ -105,12 +108,28 @@ async def run_graph(
             pending_clarification=pending_clarification,
         )
 
-    # Academic tasks (advisory and/or calculation). Until Task 8 adds
-    # CalculationNode and Task 9 runs node 06 per task, every academic turn
-    # takes the unified advisory flow on the whole message - identical to the
-    # baseline for a one-question message, whose single task's `query` is
-    # the message itself.
-    return await _run_advisory_flow(
+    if not route_plan.advisory_tasks:
+        # Only calculation tasks: node 07 answers the whole turn.
+        trace.node("07_CalculationNode")
+        await token_sink(CALCULATION_PLACEHOLDER_TEMPLATE)
+        return GraphOutput(
+            response_text=CALCULATION_PLACEHOLDER_TEMPLATE,
+            confirmed_metadata=confirmed_metadata,
+            pending_clarification=pending_clarification,
+        )
+
+    # A turn mixing calculation and advisory tasks answers the advisory part
+    # through 06 → 08 → 09 → 10/11 on the advisory question(s) alone - not the
+    # whole message, or generation would try to answer the calculation part
+    # from regulations too - then appends node 07's part (AD14). An
+    # advisory-only turn still runs on the whole message, unchanged from the
+    # baseline; running node 06 once per task lands in Task 9.
+    advisory_question = (
+        " ".join(task.query for task, _mode in route_plan.advisory_tasks)
+        if route_plan.calculation_tasks
+        else None
+    )
+    output = await _run_advisory_flow(
         graph_input,
         models,
         token_sink,
@@ -118,7 +137,17 @@ async def run_graph(
         confirmed_metadata=confirmed_metadata,
         pending_clarification=pending_clarification,
         resume_original_query=guard_result.original_query,
+        question=advisory_question,
     )
+    if not route_plan.calculation_tasks:
+        return output
+
+    # Node 07 - CalculationNode (placeholder): appended deterministically, never
+    # through the LLM, so it can't pick up a citation marker or get rephrased.
+    trace.node("07_CalculationNode")
+    calculation_part = f"\n\n{CALCULATION_PLACEHOLDER_TEMPLATE}"
+    await token_sink(calculation_part)
+    return replace(output, response_text=output.response_text + calculation_part)
 
 
 def _resume_retrieval_query(
@@ -154,11 +183,17 @@ async def _run_advisory_flow(
     confirmed_metadata: dict[str, str],
     pending_clarification: PendingClarification | None,
     resume_original_query: str | None,
+    question: str | None = None,
 ) -> GraphOutput:
+    """06 → 08 → 09 → 10 (or 11) on `question` - the advisory part of the
+    turn. `None` means the whole user message (an advisory-only turn)."""
+
+    question = question or graph_input.user_message
+
     # Node 06 - QueryTransformationNode (HyDE).
     trace.node("06_QueryTransformationNode")
     query_transformation_agent = build_query_transformation_agent(models.query_transformation)
-    retrieval_query = resume_original_query or graph_input.user_message
+    retrieval_query = resume_original_query or question
     hyde_doc = await transform_query(
         query_transformation_agent,
         retrieval_query,
@@ -179,7 +214,7 @@ async def _run_advisory_flow(
     if not rerank_result.has_valid_context:
         # Node 11 - TicketFallbackNode.
         trace.node("11_TicketFallbackNode")
-        fallback = build_ticket_fallback_response(graph_input.user_message)
+        fallback = build_ticket_fallback_response(question)
         await token_sink(fallback.message)
         return GraphOutput(
             response_text=fallback.message,
@@ -193,7 +228,7 @@ async def _run_advisory_flow(
     generation_agent = build_generation_agent(models.generation)
     generation_result = await run_generation_synthesis(
         generation_agent,
-        user_query=graph_input.user_message,
+        user_query=question,
         resolved_query=resolved_query,
         security=graph_input.security,
         confirmed_metadata=confirmed_metadata,
