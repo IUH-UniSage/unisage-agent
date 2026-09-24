@@ -37,7 +37,7 @@ Toàn bộ biến nằm trong một class `Settings(BaseSettings)` duy nhất �
 | `QDRANT_` | Vector store | `app/rag/vectorstore/` |
 | `REDIS_URL`, `BACKEND_JAVA_BASE_URL` | Hệ ngoài chỉ có đúng một biến — tự tên đã đủ rõ, không cần gói thành nhóm | Celery/broker; `BackendJavaClient` |
 | `INGEST_` | Chỉ đọc lúc **ingest tài liệu** (chunking, enrichment) — không bao giờ đọc trong một lượt chat | `app/rag/chunking/`, `app/rag/enrichment/` |
-| `CHAT_` | Chỉ đọc trong một **lượt chat** (node 02/06/08/09/10 của graph) | `app/graph/`, `app/api/v1/chat.py` |
+| `CHAT_` | Chỉ đọc trong một **lượt chat** (các node của graph) | `app/graph/`, `app/api/v1/chat.py` |
 
 Một biến dùng được ở **cả hai** nhánh ingest và chat (ví dụ provider LLM) thì **không** ép vào
 `INGEST_`/`CHAT_` — giữ tiền tố theo tên hệ ngoài nó gọi tới (`OPENAI_`). Chỉ dùng `INGEST_`/`CHAT_`
@@ -143,10 +143,11 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
-| `CHAT_CLARIFICATION_MAX_RETRY` | `2` | Node 02 (Clarification Guard): số lần hỏi lại tối đa cho một field trước khi buộc trả lời an toàn theo hướng "so sánh phương án" thay vì hỏi tiếp mãi |
-| `CHAT_RETRIEVAL_MAX_CHUNKS` | `8` | Số chunk tối đa trả về sau retrieval (node 08), trước khi qua ngưỡng rerank |
-| `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở node 09. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |
+| `CHAT_CLARIFICATION_MAX_RETRY` | `2` | Clarification Guard (SecurityContextExtractionNode): số lần hỏi lại tối đa cho một field trước khi buộc trả lời an toàn theo hướng "so sánh phương án" thay vì hỏi tiếp mãi |
+| `CHAT_RETRIEVAL_MAX_CHUNKS` | `8` | Số chunk tối đa trả về sau RetrievalFilteringNode, trước khi qua ngưỡng rerank |
+| `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở PostRetrievalRerankNode. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |
 | `CHAT_HISTORY_MESSAGE_LIMIT` | `15` | Số tin nhắn gần nhất đưa vào `<history_message>` của prompt sinh câu trả lời |
+| `CHAT_MAX_SUB_QUERIES` | `3` | Số câu hỏi con tối đa khi decomposer tách một câu so sánh (task `MULTI`); tối thiểu 2. Mỗi câu hỏi con tốn thêm một lần embedding + tìm Qdrant, và chia nhỏ quota chunk của RetrievalFilteringNode |
 | `CHAT_ALLOW_REPAIR_JSON` | `True` | Bật/tắt lệnh gọi LLM sửa lỗi lần 2 khi câu trả lời quên khối `ask_user_form` bắt buộc (`generation_synthesis.py::_repair_missing_ask_form`). Heuristic phát hiện có lỗ hổng biết trước (câu mời đặt điều kiện ở cuối câu, kiểu "..., nếu bạn cần...", không bị nhận diện là câu không ràng buộc) khiến lần gọi sửa đôi khi bịa ra một form không ai hỏi. Tắt thì bỏ hẳn lần gọi sửa: một form thật sự bị quên sẽ không được vá, nhưng không bao giờ bịa form giả |
 
 ### Ví dụ thêm một biến mới

@@ -52,13 +52,16 @@ class _PerQueryRetrieval:
 
     results: dict[str, list[RetrievedChunk]]
     queries: list[str] = field(default_factory=list)
+    limits: list[int | None] = field(default_factory=list)
 
     def retrieve(
         self, query: str, *, security: AcademicSecurityContext, limit: int | None = None
     ) -> list[RetrievedChunk]:
-        del security, limit
+        del security
         self.queries.append(query)
-        return self.results[query]
+        self.limits.append(limit)
+        chunks = self.results[query]
+        return chunks if limit is None else chunks[:limit]
 
 
 def _chunk(chunk_id: str, score: float) -> RetrievedChunk:
@@ -90,11 +93,37 @@ def test_retrieve_chunks_keeps_the_earlier_query_copy_on_a_score_tie() -> None:
 
 
 def test_retrieve_chunks_caps_the_merged_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 2 slots, 3 queries → quota 1 each → 3 candidates, capped to the best 2.
     monkeypatch.setattr(settings, "CHAT_RETRIEVAL_MAX_CHUNKS", 2)
     service = _PerQueryRetrieval(
-        {"q1": [_chunk("a", 0.9), _chunk("b", 0.8)], "q2": [_chunk("c", 0.7)]}
+        {"q1": [_chunk("a", 0.9)], "q2": [_chunk("b", 0.8)], "q3": [_chunk("c", 0.7)]}
     )
 
-    chunks = retrieve_chunks(["q1", "q2"], service, AcademicSecurityContext())
+    chunks = retrieve_chunks(["q1", "q2", "q3"], service, AcademicSecurityContext())
 
     assert [c.chunk_id for c in chunks] == ["a", "b"]
+
+
+def test_retrieve_chunks_gives_each_query_an_equal_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A high-scoring sub-query must not fill the whole top-k: with 8 slots
+    and 2 queries, each contributes at most 4 chunks."""
+
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_MAX_CHUNKS", 8)
+    strong = [_chunk(f"cntt-{i}", 0.9 - i * 0.01) for i in range(8)]
+    weak = [_chunk(f"ketoan-{i}", 0.5 - i * 0.01) for i in range(8)]
+    service = _PerQueryRetrieval({"cntt": strong, "ketoan": weak})
+
+    chunks = retrieve_chunks(["cntt", "ketoan"], service, AcademicSecurityContext())
+
+    assert service.limits == [4, 4]
+    ids = [c.chunk_id for c in chunks]
+    assert sum(i.startswith("cntt") for i in ids) == 4
+    assert sum(i.startswith("ketoan") for i in ids) == 4
+
+
+def test_retrieve_chunks_single_query_keeps_the_default_limit() -> None:
+    service = _PerQueryRetrieval({"q": [_chunk("a", 0.9)]})
+
+    retrieve_chunks(["q"], service, AcademicSecurityContext())
+
+    assert service.limits == [None]

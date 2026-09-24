@@ -25,6 +25,7 @@ from app.graph.nodes.message_classification import build_classification_agent, c
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.query_transformation import (
+    build_decomposer_agent,
     build_query_transformation_agent,
     extract_standalone_question,
     transform_tasks,
@@ -201,27 +202,31 @@ async def _run_advisory_flow(
 
     question = question or graph_input.user_message
 
-    # QueryTransformationNode, once per advisory task.
+    # QueryTransformationNode: HyDE per SINGLE task, decomposer per MULTI task.
     trace.node("06_QueryTransformationNode")
-    query_transformation_agent = build_query_transformation_agent(models.query_transformation)
-    transformed_queries = await transform_tasks(
-        query_transformation_agent,
+    sub_queries = await transform_tasks(
+        build_query_transformation_agent(models.query_transformation),
         advisory_tasks,
+        decomposer_agent=build_decomposer_agent(models.query_transformation),
         confirmed_metadata=confirmed_metadata,
         history=graph_input.history,
     )
-    for transformed_query in transformed_queries:
-        trace.prompt("06_QueryTransformationNode_HyDE", transformed_query)
-    # The standalone rewrite only applies to a single question.
+    for sub_query in sub_queries:
+        trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
+    # The standalone rewrite only applies to a single HyDE question.
     resolved_query = (
-        extract_standalone_question(transformed_queries[0])
-        if len(transformed_queries) == 1
+        extract_standalone_question(sub_queries[0].retrieval_text)
+        if len(sub_queries) == 1
         else None
     )
 
     # RetrievalFilteringNode (permission pre-filter on every query).
     trace.node("08_RetrievalFilteringNode")
-    chunks = retrieve_chunks(transformed_queries, models.retrieval, graph_input.security)
+    chunks = retrieve_chunks(
+        [sub_query.retrieval_text for sub_query in sub_queries],
+        models.retrieval,
+        graph_input.security,
+    )
 
     # PostRetrievalRerankNode.
     trace.node("09_PostRetrievalRerankNode")

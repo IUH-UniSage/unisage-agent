@@ -10,6 +10,8 @@ template: |
   ## Requirements
   - Mỗi câu hỏi con phải chứa đầy đủ thực thể và ngữ cảnh hành chính (không dùng đại từ thay thế "nó", "ngành đó").
   - Trả về JSON chứa mảng `sub_queries: List[str]`.
+  - CHỈ trả về đúng một object JSON, không thêm chữ, giải thích hay markdown code fence.
+  - Nếu tin nhắn có kèm lịch sử hội thoại, chỉ dùng lịch sử để hiểu câu hỏi nối tiếp; không tạo câu hỏi con cho nội dung của lượt trước.
 
   ## Example
   Input: "Điều kiện học song hành CNTT và Du lịch là gì, học phí chênh thế nào?"

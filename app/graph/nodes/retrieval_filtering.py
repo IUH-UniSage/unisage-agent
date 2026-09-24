@@ -1,6 +1,7 @@
 """RetrievalFilteringNode - searches every retrieval text of the turn with
 the caller's permission filter, merging several into one ranked list."""
 
+import math
 from collections.abc import Sequence
 
 from app.core.config import settings
@@ -17,8 +18,10 @@ def retrieve_chunks(
     if len(queries) == 1:
         return retrieval_service.retrieve(queries[0], security=security)
 
+    # A per-query quota keeps one sub-query from filling the whole top-k.
+    quota = math.ceil(settings.CHAT_RETRIEVAL_MAX_CHUNKS / len(queries))
     return _merge_by_best_score(
-        [retrieval_service.retrieve(query, security=security) for query in queries]
+        [retrieval_service.retrieve(query, security=security, limit=quota) for query in queries]
     )
 
 
