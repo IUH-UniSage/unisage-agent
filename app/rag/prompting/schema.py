@@ -11,11 +11,16 @@ class PromptTemplates:
 
     # Main (per-node system prompts)
     chat_academic_advisory: str
+    chat_multi_intent_synthesis: str
+    chat_ticket_fallback: str
     json_repair: str
 
     # Agents (system prompts of single-purpose LLM nodes)
     agent_hyde_generator: str
     agent_message_classification: str
+    agent_multi_query_decomposer: str
+    agent_calculation_extractor: str
+    agent_reranker_compressor: str
 
     # Common components
     header: str
@@ -30,3 +35,4 @@ class PromptTemplates:
     task_2: str
     ask_user_form_guide: str
     confirmed_metadata_guide: str
+    ticket_fallback: str

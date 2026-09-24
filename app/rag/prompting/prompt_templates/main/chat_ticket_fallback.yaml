@@ -1,0 +1,13 @@
+# MAIN_ACADEMIC_TICKET_FALLBACK_PROMPT
+description: "System prompt cho TicketFallbackNode - chạy sau retrieve + rerank khi không có văn bản nào đủ liên quan; không có <academic_context>, task_1, task_2"
+template: |
+  {header}
+  {academic_metadata}
+  {history_message}
+  {security_access_control}
+  {response_style}
+  {ticket_fallback}
+
+  ## Thông Báo Người Dùng
+  Không tìm thấy văn bản quy chế đủ liên quan cho câu hỏi: "{user_query}".
+  Hãy tạo phản hồi fallback chuẩn mực theo Quy Tắc Phản Hồi Fallback ở trên.

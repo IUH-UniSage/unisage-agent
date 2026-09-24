@@ -16,6 +16,36 @@ def test_templates_load_without_error() -> None:
     assert "{academic_metadata}" not in templates.header  # loader returns raw text, not re-parsed
 
 
+def test_design_only_templates_are_loaded() -> None:
+    templates = get_templates()
+
+    assert "{sub_queries_list}" in templates.chat_multi_intent_synthesis
+    assert "{history_message}" in templates.chat_multi_intent_synthesis
+    assert "{ticket_fallback}" in templates.chat_ticket_fallback
+    assert "{prepared_context}" not in templates.chat_ticket_fallback
+    assert templates.ticket_fallback
+    assert templates.agent_calculation_extractor
+    assert templates.agent_reranker_compressor
+
+
+def test_agent_templates_keep_literal_json_braces() -> None:
+    """Agent prompts are used verbatim as `system_prompt`, never `.format()`-ed -
+    their JSON examples must survive loading with braces intact."""
+
+    templates = get_templates()
+
+    assert '"sub_queries": [' in templates.agent_multi_query_decomposer
+    assert '"missing_params": [' in templates.agent_calculation_extractor
+
+
+def test_ticket_fallback_templates_do_not_mention_rerank_score_or_a_button() -> None:
+    templates = get_templates()
+
+    for text in (templates.ticket_fallback, templates.chat_ticket_fallback):
+        assert "rerank_score" not in text
+        assert "nhấn nút" not in text
+
+
 def test_prompt_renders_two_separate_tags_never_merged() -> None:
     security = AcademicSecurityContext(
         user_id="u1",

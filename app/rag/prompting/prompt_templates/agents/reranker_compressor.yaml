@@ -1,0 +1,8 @@
+# AGENT_RERANKER_COMPRESSOR_PROMPT
+description: "System prompt và cấu hình tinh lọc nén bối cảnh cho Re-ranker"
+template: |
+  ## Objective
+  Nhận danh sách các chunks văn bản thô cùng điểm số Cross-Encoder, thực hiện:
+  1. Loại bỏ tất cả chunk có điểm `rerank_score < 0.70`.
+  2. Nén loại bỏ câu từ dư thừa rác (tiêu đề trang lặp lại, khoảng trắng).
+  3. Giữ lại tối đa Top 5 chunks chất lượng nhất.
