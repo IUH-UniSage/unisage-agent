@@ -282,3 +282,68 @@ async def test_resuming_clarification_retrieves_using_original_query_not_the_rep
     # resolved - exactly the turn `original_query` is easiest to lose (see
     # ClarificationGuardResult.original_query's docstring).
     assert result.pending_clarification is None
+
+
+def _traced_nodes(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage().split(" ", 1)[0].removeprefix("node=")
+        for record in caplog.records
+        if record.name == "unisage.graph" and record.getMessage().startswith("node=")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_advisory_turn_traces_nodes_with_flow_design_numbering(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message="Điều kiện học bổng là gì?",
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        await run_graph(
+            graph_input,
+            _models(mock_sync_llm_model, mock_streaming_llm_model),
+            _sink([]),
+            _TRACE,
+        )
+
+    assert _traced_nodes(caplog) == [
+        "01_GreetingDetectionNode",
+        "02_SecurityContextExtractionNode_ClarificationGuard",
+        "03_MessageClassificationNode",
+        "04_IntentRoutingNode",
+        "06_QueryTransformationNode",
+        "08_RetrievalFilteringNode",
+        "09_PostRetrievalRerankNode",
+        "10_GenerationSynthesisNode",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_off_topic_turn_traces_node_05(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message="Giá vàng hôm nay?",
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        await run_graph(
+            graph_input,
+            _models(mock_sync_llm_model, mock_streaming_llm_model, classification="off_topic"),
+            _sink([]),
+            _TRACE,
+        )
+
+    assert _traced_nodes(caplog)[-1] == "05_OffTopicRejectNode"

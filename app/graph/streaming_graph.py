@@ -88,7 +88,7 @@ async def run_graph(
     route = route_intent(intent)
 
     if route == "END_SOCIAL_CHAT":
-        trace.node("05B_SocialChat")
+        trace.node("04_IntentRouting_SocialChat")
         await token_sink(SOCIAL_CHAT_TEMPLATE)
         return GraphOutput(
             response_text=SOCIAL_CHAT_TEMPLATE,
@@ -97,7 +97,7 @@ async def run_graph(
         )
 
     if route == "OffTopicRejectNode":
-        trace.node("05B_OffTopicRejectNode")
+        trace.node("05_OffTopicRejectNode")
         await token_sink(OFF_TOPIC_TEMPLATE)
         return GraphOutput(
             response_text=OFF_TOPIC_TEMPLATE,
@@ -164,17 +164,17 @@ async def _run_advisory_flow(
     trace.prompt("06_QueryTransformationNode_HyDE", hyde_doc)
     resolved_query = extract_standalone_question(hyde_doc)
 
-    # Node 10 - RetrievalFilteringNode (no permission filter yet).
-    trace.node("10_RetrievalFilteringNode")
+    # Node 08 - RetrievalFilteringNode (no permission filter yet).
+    trace.node("08_RetrievalFilteringNode")
     chunks = retrieve_chunks(hyde_doc, models.retrieval)
 
-    # Node 11 - PostRetrievalRerankNode.
-    trace.node("11_PostRetrievalRerankNode")
+    # Node 09 - PostRetrievalRerankNode.
+    trace.node("09_PostRetrievalRerankNode")
     rerank_result = rerank_chunks(chunks)
 
     if not rerank_result.has_valid_context:
-        # Node 13 - TicketFallbackNode.
-        trace.node("13_TicketFallbackNode")
+        # Node 11 - TicketFallbackNode.
+        trace.node("11_TicketFallbackNode")
         fallback = build_ticket_fallback_response(graph_input.user_message)
         await token_sink(fallback.message)
         return GraphOutput(
@@ -184,8 +184,8 @@ async def _run_advisory_flow(
             used_ticket_fallback=True,
         )
 
-    # Node 12 - GenerationSynthesisNode (streaming fan-in).
-    trace.node("12_GenerationSynthesisNode")
+    # Node 10 - GenerationSynthesisNode (streaming fan-in).
+    trace.node("10_GenerationSynthesisNode")
     generation_agent = build_generation_agent(models.generation)
     generation_result = await run_generation_synthesis(
         generation_agent,

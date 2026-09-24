@@ -47,10 +47,10 @@ def test_prompt_logs_only_when_debug_true(
 ) -> None:
     with caplog.at_level(logging.INFO, logger="unisage.graph"):
         monkeypatch.setattr(settings, "DEBUG", False)
-        _trace().prompt("12_GenerationSynthesisNode", "the full system prompt")
+        _trace().prompt("10_GenerationSynthesisNode", "the full system prompt")
         assert "the full system prompt" not in caplog.text
 
         monkeypatch.setattr(settings, "DEBUG", True)
-        _trace().prompt("12_GenerationSynthesisNode", "the full system prompt")
+        _trace().prompt("10_GenerationSynthesisNode", "the full system prompt")
         assert "the full system prompt" in caplog.text
-        assert "node=12_GenerationSynthesisNode" in caplog.text
+        assert "node=10_GenerationSynthesisNode" in caplog.text

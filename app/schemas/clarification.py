@@ -10,7 +10,7 @@ class PendingClarification(BaseModel):
     """One outstanding "please clarify" round, attached to a conversation.
 
     `origin_node` is the node to resume at once the user's reply resolves
-    this — for Type B (content-driven fields, detected at node 12 but always
+    this — for Type B (content-driven fields, detected at node 10 but always
     resumed at `QueryTransformationNode`) this deliberately does NOT equal
     the node that detected the missing field; see design doc section 5,
     "điểm phát hiện != điểm quay lại".

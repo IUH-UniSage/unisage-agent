@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     CLARIFICATION_MAX_RETRY: int = 2
 
-    # Retrieval / rerank (nodes 10/11).
+    # Retrieval / rerank (nodes 08/09).
     RETRIEVAL_MAX_CHUNKS: int = 8
     RERANK_SCORE_THRESHOLD: float = 0.70
     HISTORY_MESSAGE_LIMIT: int = 15

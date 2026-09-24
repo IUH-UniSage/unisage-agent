@@ -178,7 +178,7 @@ async def run_generation_synthesis(
     # Only the two per-request blocks are worth dumping - the rest of the
     # prompt is static YAML that can be read from the templates directly.
     trace.prompt(
-        "12_GenerationSynthesisNode",
+        "10_GenerationSynthesisNode",
         f"{build_metadata_section(security, confirmed_metadata)}\n"
         f"{build_prepared_context_section(chunks)}",
     )
