@@ -5,11 +5,18 @@ from uuid import UUID
 from qdrant_client import QdrantClient, models
 
 from app.core.config import settings
+from app.schemas.security import AcademicSecurityContext
 
 # Dimension of OpenAI's `text-embedding-3-small`, the configured default model.
 _EMBEDDING_DIMENSIONS = 1536
 
 _VECTOR_NAMES = ("content_vector", "summary_vector", "questions_vector")
+
+# A department_access entry with this id grants its access_level across every
+# department, not just one - mirrors `TrustedContext.granted_access_level`'s
+# WILDCARD_DEPARTMENT_ID on the ingestion side (app/api/deps.py), so the same
+# token means the same thing whether it's gating an upload or a chat answer.
+WILDCARD_DEPARTMENT_ID = "*"
 
 
 def get_client() -> QdrantClient:
@@ -19,9 +26,13 @@ def get_client() -> QdrantClient:
 
 
 def ensure_collection(client: QdrantClient) -> None:
-    """Bootstrap the chunks collection with its three named vectors, if absent.
+    """Bootstrap the chunks collection with its three named vectors and the
+    payload indexes `build_access_filter`'s conditions need, if absent.
 
     Safe to call on every startup/task: a no-op when the collection already exists.
+    Deliberately does not migrate an existing collection - a pre-existing
+    collection from before the department/access_level payload index was
+    added is expected to be dropped and recreated, not patched in place.
     """
 
     if client.collection_exists(settings.QDRANT_COLLECTION):
@@ -33,6 +44,76 @@ def ensure_collection(client: QdrantClient) -> None:
             for name in _VECTOR_NAMES
         },
     )
+    client.create_payload_index(
+        collection_name=settings.QDRANT_COLLECTION,
+        field_name="department",
+        field_schema=models.PayloadSchemaType.KEYWORD,
+    )
+    client.create_payload_index(
+        collection_name=settings.QDRANT_COLLECTION,
+        field_name="access_level",
+        field_schema=models.PayloadSchemaType.INTEGER,
+    )
+    client.create_payload_index(
+        collection_name=settings.QDRANT_COLLECTION,
+        field_name="is_public",
+        field_schema=models.PayloadSchemaType.BOOL,
+    )
+
+
+def build_access_filter(security: AcademicSecurityContext) -> models.Filter:
+    """The permission pre-filter (flow_design node 08, tier 1): which chunks
+    `security` is allowed to see, built ONLY from the JWT-verified
+    `department_access` - never from `confirmed_metadata` (a student's own
+    unverified in-conversation claims), so a claim like "em là học viên cao
+    học" can never widen what gets retrieved.
+
+    A chunk is visible when:
+    - `is_public == True` - a document-level flag, independent of
+      `access_level`/`department` (mirrors `unisage-backend`'s
+      `Document.isPublic`), that opens the chunk to everyone, including a
+      guest whose `department_access` is empty. This condition is always
+      present, so the `should` list is never empty even for a guest, and it
+      is NOT expressed as `access_level == 0`: a guest's own identity carries
+      no `access_level` at all (only per-department entries do), so
+      "public" has to be its own flag, not a level a non-public chunk could
+      also legitimately hold; OR
+    - one of `security.department_access`'s entries grants it: either that
+      entry's `department_id` matches the chunk's `department` at an
+      `access_level` the chunk's `access_level` is `<=` to, or the entry's
+      `department_id` is the wildcard (`*`), which grants its `access_level`
+      across every department the same way `TrustedContext.
+      granted_access_level` does for ingestion. This clause never applies to
+      a public chunk's visibility (already covered above) - it only gates
+      non-public, department-scoped chunks.
+
+    A chunk missing `department`/`access_level`/`is_public` (pre-migration
+    data) matches none of these and is denied by default - see qdrant
+    collection reset note in `ensure_collection`.
+    """
+
+    should: list[models.Condition] = [
+        models.FieldCondition(key="is_public", match=models.MatchValue(value=True))
+    ]
+    for entry in security.department_access:
+        access_level_condition = models.FieldCondition(
+            key="access_level", range=models.Range(lte=entry.access_level)
+        )
+        if entry.department_id == WILDCARD_DEPARTMENT_ID:
+            should.append(access_level_condition)
+        else:
+            should.append(
+                models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="department",
+                            match=models.MatchValue(value=entry.department_id),
+                        ),
+                        access_level_condition,
+                    ]
+                )
+            )
+    return models.Filter(should=should)
 
 
 @dataclass(frozen=True)
@@ -61,6 +142,7 @@ class ChunkPoint:
     content_vector: list[float]
     summary_vector: list[float]
     questions_vector: list[float]
+    is_public: bool = False
     source_type: str | None = None
     block_index: int | None = None
     heading_path: list[str] = field(default_factory=list)
@@ -80,6 +162,7 @@ def search_chunks(
     *,
     query_vector: list[float],
     limit: int,
+    query_filter: models.Filter | None = None,
 ) -> list[models.ScoredPoint]:
     """Nearest-neighbor search across all 3 named vectors (content/summary/
     questions - see app/rag/enrichment/multi_representation.py), keeping the
@@ -93,6 +176,10 @@ def search_chunks(
     native RRF fusion: RRF scores are rank-based (~0.01-0.03), not cosine
     similarity, and would be meaningless against `RERANK_SCORE_THRESHOLD`
     (a cosine-similarity cutoff).
+
+    `query_filter` (see `build_access_filter`) is applied identically on all
+    3 vector queries - a chunk the caller isn't allowed to see must never
+    surface via ANY of the three representations, not just `content_vector`.
 
     Returns an empty list (not an error) when the collection doesn't exist
     yet - a fresh environment with nothing ingested is a normal state, not
@@ -110,6 +197,7 @@ def search_chunks(
             using=vector_name,
             limit=limit,
             with_payload=True,
+            query_filter=query_filter,
         )
         for point in response.points:
             existing = best_by_id.get(point.id)
@@ -210,6 +298,7 @@ def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:
                     "questions": point.questions,
                     "department": point.department,
                     "access_level": point.access_level,
+                    "is_public": point.is_public,
                     "category": point.category,
                     "region_type": point.region_type,
                     "source_type": point.source_type,

@@ -6,9 +6,10 @@ from qdrant_client.http.models import ScoredPoint
 
 from app.core.config import settings
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
-from app.rag.vectorstore.qdrant_store import get_client, search_chunks
+from app.rag.vectorstore.qdrant_store import build_access_filter, get_client, search_chunks
 from app.schemas.ingestion import SourceLocator
 from app.schemas.retrieval import RetrievedChunk
+from app.schemas.security import AcademicSecurityContext
 
 
 class RetrievalServiceProtocol(Protocol):
@@ -16,15 +17,22 @@ class RetrievalServiceProtocol(Protocol):
     `RetrievalService` below, and by test doubles that skip Qdrant/OpenAI
     entirely (see tests/llm_mocks.py's `FakeRetrievalService`)."""
 
-    def retrieve(self, query: str, *, limit: int | None = None) -> list[RetrievedChunk]: ...
+    def retrieve(
+        self,
+        query: str,
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[RetrievedChunk]: ...
 
 
 @dataclass(frozen=True)
 class RetrievalService:
     """Embeds the query, then nearest-neighbor searches Qdrant's `content_vector`
-    for ingested chunks (see app/rag/vectorstore/qdrant_store.py).
-
-    Deliberately does not filter by `department_access`/permission yet.
+    for ingested chunks (see app/rag/vectorstore/qdrant_store.py), pre-filtered
+    by `security`'s `department_access` (see `build_access_filter`) - a chunk
+    the caller isn't allowed to see is excluded at the Qdrant query itself,
+    not filtered out afterward.
 
     `client`/`embedder` are built lazily on first use, not at construction
     time, so constructing a `RetrievalService()` never requires a reachable
@@ -35,11 +43,22 @@ class RetrievalService:
     client: QdrantClient | None = None
     embedder: OpenAIEmbedder = field(default_factory=OpenAIEmbedder)
 
-    def retrieve(self, query: str, *, limit: int | None = None) -> list[RetrievedChunk]:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[RetrievedChunk]:
         effective_limit = limit if limit is not None else settings.RETRIEVAL_MAX_CHUNKS
         (query_vector,) = self.embedder.embed([query])
         client = self.client or get_client()
-        points = search_chunks(client, query_vector=query_vector, limit=effective_limit)
+        points = search_chunks(
+            client,
+            query_vector=query_vector,
+            limit=effective_limit,
+            query_filter=build_access_filter(security),
+        )
         return [_to_retrieved_chunk(point) for point in points]
 
 
@@ -61,6 +80,7 @@ def _to_retrieved_chunk(point: ScoredPoint) -> RetrievedChunk:
             "document_id": payload.get("document_id"),
             "department": payload.get("department"),
             "access_level": payload.get("access_level"),
+            "is_public": payload.get("is_public", False),
             "category": payload.get("category"),
             "region_type": payload.get("region_type"),
         },

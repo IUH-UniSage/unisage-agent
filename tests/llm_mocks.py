@@ -22,6 +22,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.schemas.retrieval import RetrievedChunk
+from app.schemas.security import AcademicSecurityContext
 
 
 def make_streaming_llm_model(tokens: Sequence[str]) -> FunctionModel:
@@ -92,10 +93,18 @@ def make_sync_llm_model(text: str) -> FunctionModel:
 @dataclass(frozen=True)
 class FakeRetrievalService:
     """`GraphModels.retrieval` test double - returns a fixed list of chunks,
-    no Qdrant/OpenAI call. Satisfies `RetrievalServiceProtocol` structurally."""
+    no Qdrant/OpenAI call. Satisfies `RetrievalServiceProtocol` structurally.
+    Ignores `security` - tests that care about permission filtering use
+    `app.rag.vectorstore.qdrant_store.build_access_filter` directly instead."""
 
     chunks: list[RetrievedChunk] = field(default_factory=list)
 
-    def retrieve(self, query: str, *, limit: int | None = None) -> list[RetrievedChunk]:
-        del query
+    def retrieve(
+        self,
+        query: str,
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, security
         return self.chunks if limit is None else self.chunks[:limit]

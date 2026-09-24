@@ -163,11 +163,19 @@ class IndexedChunk(Chunk):
 
 
 class EmbeddingRequest(BaseModel):
-    """Request to enrich, embed, and upsert a client-approved chunk list."""
+    """Request to enrich, embed, and upsert a client-approved chunk list.
+
+    `is_public` mirrors `unisage-backend`'s `Document.isPublic` (a document-
+    level flag, independent of `access_level`): when true, every chunk of
+    this document is visible to every caller, including an unauthenticated
+    guest, regardless of `department_id`/`access_level`. Defaults to
+    `False` so an omitted value never accidentally makes a document public.
+    """
 
     document_id: str = Field(min_length=1, max_length=100)
     department_id: str = Field(min_length=1, max_length=100)
     access_level: int = Field(ge=0)
+    is_public: bool = False
     object_key: str = Field(min_length=1, max_length=1024)
     chunks: list[Chunk] = Field(min_length=1)
 

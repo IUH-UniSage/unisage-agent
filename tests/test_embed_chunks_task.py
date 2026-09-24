@@ -182,3 +182,43 @@ def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
     assert point_kwargs["chunking_version"] == "2026-09-structural-v1"
     assert point_kwargs["structure_confidence"] == 0.3
     assert point_kwargs["parse_warnings"] == ["garbled_text_raw_kept"]
+
+
+@patch("app.worker.celery_app.qdrant_store")
+@patch("app.worker.celery_app.MultiRepresentationEnricher")
+@patch("app.worker.celery_app.OpenAIEmbedder")
+def test_embed_chunks_defaults_is_public_to_false_when_omitted(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+) -> None:
+    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
+    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
+        summary="a summary", questions=["Q1?", "Q2?"]
+    )
+    mock_qdrant_store.get_client.return_value = MagicMock()
+
+    embed_chunks.apply(args=("doc-1", "docs/handbook.pdf", [_chunk_payload(0)], "CNTT", 2)).get()
+
+    assert mock_qdrant_store.ChunkPoint.call_args.kwargs["is_public"] is False
+
+
+@patch("app.worker.celery_app.qdrant_store")
+@patch("app.worker.celery_app.MultiRepresentationEnricher")
+@patch("app.worker.celery_app.OpenAIEmbedder")
+def test_embed_chunks_passes_is_public_true_through_to_chunk_point(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+) -> None:
+    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
+    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
+        summary="a summary", questions=["Q1?", "Q2?"]
+    )
+    mock_qdrant_store.get_client.return_value = MagicMock()
+
+    embed_chunks.apply(
+        args=("doc-1", "docs/handbook.pdf", [_chunk_payload(0)], "CNTT", 2, True)
+    ).get()
+
+    assert mock_qdrant_store.ChunkPoint.call_args.kwargs["is_public"] is True

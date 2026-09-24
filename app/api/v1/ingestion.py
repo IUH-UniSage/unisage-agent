@@ -164,6 +164,7 @@ async def embed_document(
         [chunk.model_dump(mode="json") for chunk in merged_chunks],
         request.department_id,
         request.access_level,
+        request.is_public,
     )
     await mark_embedding(db_session, document_id=request.document_id, celery_task_id=task.id)
     return ApiResponse.success(EmbeddingAcceptedResponse(task_id=task.id))

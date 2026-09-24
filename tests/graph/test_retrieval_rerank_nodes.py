@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.schemas.retrieval import RetrievedChunk
+from app.schemas.security import AcademicSecurityContext
 from tests.llm_mocks import FakeRetrievalService
 
 
@@ -12,7 +13,7 @@ def test_retrieve_chunks_delegates_to_the_injected_retrieval_service() -> None:
         [RetrievedChunk(chunk_id="a", content="x", source="s", score=0.9)]
     )
 
-    chunks = retrieve_chunks("quy chế đào tạo", service)
+    chunks = retrieve_chunks("quy chế đào tạo", service, AcademicSecurityContext())
 
     assert [c.chunk_id for c in chunks] == ["a"]
 

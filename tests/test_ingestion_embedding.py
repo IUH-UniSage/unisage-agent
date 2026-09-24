@@ -359,6 +359,23 @@ def test_embedding_accepts_a_subset_when_the_user_deleted_chunks(
     ]
 
 
+@patch("app.api.v1.ingestion.embed_chunks")
+def test_embedding_dispatch_forwards_is_public_defaulting_to_false(
+    mock_embed_chunks: MagicMock, client: TestClient
+) -> None:
+    mock_embed_chunks.delay.return_value = MagicMock(id="task-is-public")
+    draft_chunks = _create_chunking_draft(client, "doc-embed-is-public")
+
+    client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-is-public", "chunks": draft_chunks},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    # (document_id, object_key, chunks, department_id, access_level, is_public)
+    assert mock_embed_chunks.delay.call_args.args[5] is False
+
+
 def test_embedding_rejects_duplicate_chunk_index(client: TestClient) -> None:
     draft_chunks = _create_chunking_draft(client, "doc-embed-dup-index")
     duplicated = [draft_chunks[0], draft_chunks[0]]

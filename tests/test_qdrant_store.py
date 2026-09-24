@@ -1,14 +1,22 @@
 from unittest.mock import MagicMock
 
-from qdrant_client.http.models import QueryResponse, ScoredPoint
+from qdrant_client.http.models import (
+    FieldCondition,
+    Filter,
+    PayloadSchemaType,
+    QueryResponse,
+    ScoredPoint,
+)
 
 from app.core.config import settings
 from app.rag.vectorstore.qdrant_store import (
     ChunkPoint,
+    build_access_filter,
     ensure_collection,
     search_chunks,
     upsert_chunk,
 )
+from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
 
 
 def test_ensure_collection_creates_when_absent() -> None:
@@ -76,6 +84,7 @@ def test_upsert_chunk_builds_expected_payload_and_vector_shape() -> None:
         "questions": ["Q1?", "Q2?"],
         "department": "CNTT",
         "access_level": 2,
+        "is_public": False,
         "category": "HOC_VU",
         "region_type": "text",
         "source_type": None,
@@ -212,3 +221,164 @@ def test_search_chunks_respects_limit_after_merging() -> None:
 
     assert len(points) == 2
     assert [p.id for p in points] == ["c0", "c1"]
+
+
+def test_ensure_collection_creates_department_access_level_and_is_public_payload_index() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = False
+
+    ensure_collection(client)
+
+    assert client.create_payload_index.call_count == 3
+    calls = {
+        call.kwargs["field_name"]: call.kwargs["field_schema"]
+        for call in client.create_payload_index.call_args_list
+    }
+    assert calls["department"] == PayloadSchemaType.KEYWORD
+    assert calls["access_level"] == PayloadSchemaType.INTEGER
+    assert calls["is_public"] == PayloadSchemaType.BOOL
+    for call in client.create_payload_index.call_args_list:
+        assert call.kwargs["collection_name"] == settings.QDRANT_COLLECTION
+
+
+def test_ensure_collection_skips_payload_index_when_already_present() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = True
+
+    ensure_collection(client)
+
+    client.create_payload_index.assert_not_called()
+
+
+def _condition_dump(condition: object) -> dict[str, object]:
+    """Recursively serialize a qdrant-client condition/filter model to a
+    plain dict, so tests can assert on structure without depending on the
+    library's exact model classes."""
+
+    if isinstance(condition, Filter | FieldCondition):
+        return condition.model_dump(exclude_none=True)
+    raise TypeError(f"unexpected condition type: {type(condition)!r}")
+
+
+def test_build_access_filter_for_a_guest_only_allows_public_chunks() -> None:
+    guest = AcademicSecurityContext()
+
+    access_filter = build_access_filter(guest)
+
+    assert isinstance(access_filter.should, list)
+    assert len(access_filter.should) == 1
+    condition = _condition_dump(access_filter.should[0])
+    assert condition == {"key": "is_public", "match": {"value": True}}
+
+
+def test_build_access_filter_for_one_department_allows_public_and_that_department() -> None:
+    security = AcademicSecurityContext(
+        department_access=[DepartmentAccessEntry(department_id="KHOA_CNTT", access_level=2)]
+    )
+
+    access_filter = build_access_filter(security)
+
+    assert isinstance(access_filter.should, list)
+    assert len(access_filter.should) == 2
+    department_clause = _condition_dump(access_filter.should[1])
+    assert department_clause == {
+        "must": [
+            {"key": "department", "match": {"value": "KHOA_CNTT"}},
+            {"key": "access_level", "range": {"lte": 2}},
+        ]
+    }
+
+
+def test_build_access_filter_for_multiple_departments_uses_each_departments_own_level() -> None:
+    security = AcademicSecurityContext(
+        department_access=[
+            DepartmentAccessEntry(department_id="KHOA_CNTT", access_level=2),
+            DepartmentAccessEntry(department_id="PHONG_DAOTAO", access_level=1),
+        ]
+    )
+
+    access_filter = build_access_filter(security)
+
+    assert isinstance(access_filter.should, list)
+    assert len(access_filter.should) == 3
+    dumped = [_condition_dump(c) for c in access_filter.should[1:]]
+    assert {
+        "must": [
+            {"key": "department", "match": {"value": "KHOA_CNTT"}},
+            {"key": "access_level", "range": {"lte": 2}},
+        ]
+    } in dumped
+    assert {
+        "must": [
+            {"key": "department", "match": {"value": "PHONG_DAOTAO"}},
+            {"key": "access_level", "range": {"lte": 1}},
+        ]
+    } in dumped
+
+
+def test_build_access_filter_wildcard_grants_its_level_across_every_department() -> None:
+    security = AcademicSecurityContext(
+        department_access=[DepartmentAccessEntry(department_id="*", access_level=2)]
+    )
+
+    access_filter = build_access_filter(security)
+
+    assert isinstance(access_filter.should, list)
+    assert len(access_filter.should) == 2
+    wildcard_clause = _condition_dump(access_filter.should[1])
+    assert wildcard_clause == {"key": "access_level", "range": {"lte": 2}}
+
+
+def test_build_access_filter_mixes_wildcard_with_a_department_specific_grant() -> None:
+    """A wildcard at a lower level plus a specific department at a higher
+    level: the department gets its own higher ceiling, every other
+    department is capped at the wildcard's lower one."""
+
+    security = AcademicSecurityContext(
+        department_access=[
+            DepartmentAccessEntry(department_id="*", access_level=1),
+            DepartmentAccessEntry(department_id="KHOA_CNTT", access_level=3),
+        ]
+    )
+
+    access_filter = build_access_filter(security)
+
+    assert isinstance(access_filter.should, list)
+    dumped = [_condition_dump(c) for c in access_filter.should[1:]]
+    assert {"key": "access_level", "range": {"lte": 1}} in dumped
+    assert {
+        "must": [
+            {"key": "department", "match": {"value": "KHOA_CNTT"}},
+            {"key": "access_level", "range": {"lte": 3}},
+        ]
+    } in dumped
+
+
+def test_build_access_filter_public_clause_never_references_department_or_level() -> None:
+    """Regression guard: the public clause is a bare `is_public == True`
+    condition, never a `Filter(must=[...])` combining it with `department`
+    or `access_level` - a public chunk must be visible regardless of
+    which department it belongs to or what access_level it carries."""
+
+    security = AcademicSecurityContext(
+        department_access=[DepartmentAccessEntry(department_id="KHOA_CNTT", access_level=2)]
+    )
+
+    access_filter = build_access_filter(security)
+
+    assert isinstance(access_filter.should, list)
+    public_clause = _condition_dump(access_filter.should[0])
+    assert public_clause == {"key": "is_public", "match": {"value": True}}
+
+
+def test_search_chunks_passes_query_filter_to_every_named_vector_query() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    client.query_points.return_value = QueryResponse(points=[])
+    access_filter = build_access_filter(AcademicSecurityContext())
+
+    search_chunks(client, query_vector=[0.1], limit=5, query_filter=access_filter)
+
+    assert client.query_points.call_count == 3
+    for call in client.query_points.call_args_list:
+        assert call.kwargs["query_filter"] is access_filter

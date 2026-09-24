@@ -71,7 +71,14 @@ class _RecordingRetrievalService:
     chunks: list[RetrievedChunk] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
 
-    def retrieve(self, query: str, *, limit: int | None = None) -> list[RetrievedChunk]:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[RetrievedChunk]:
+        del security
         self.queries.append(query)
         return self.chunks if limit is None else self.chunks[:limit]
 
