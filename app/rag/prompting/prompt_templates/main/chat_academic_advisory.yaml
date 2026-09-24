@@ -19,33 +19,4 @@ template: |
   định dạng theo loại câu hỏi (advisory/procedure/document/calendar) trong
   phần ACADEMIC DOMAIN RULES phía trên.
 
-  ⚠️ Nếu và chỉ nếu bạn cần hỏi lại thuộc tính theo NHIỆM VỤ 2 ở trên: câu trả
-  lời BẮT BUỘC kết thúc bằng đúng 1 khối ```json ask_user_form``` theo đúng
-  format đã hướng dẫn — TUYỆT ĐỐI không liệt kê các lựa chọn bằng văn xuôi/
-  gạch đầu dòng thay cho khối JSON đó. Nếu không cần hỏi gì, không thêm khối
-  JSON nào cả.
-
-  ⚠️ RÀNG BUỘC BẮT BUỘC (kiểm tra lại TRƯỚC KHI gửi câu trả lời): quy tắc này
-  xét theo Ý NGHĨA câu trả lời, KHÔNG chỉ theo dấu câu — đổi câu hỏi thành câu
-  điều kiện/trần thuật để né dấu `?` (VD: "Nếu bạn cho mình biết ngành đang
-  học, mình sẽ..." / "Bạn vui lòng cung cấp thêm ngành học.") VẪN được tính là
-  hỏi lại và VẪN vi phạm quy tắc này y hệt như dùng dấu `?`.
-
-  Nếu câu đó NÊU ĐÍCH DANH một thuộc tính cụ thể còn thiếu (hệ đào tạo, khóa,
-  ngành, điểm số, hay bất kỳ thuộc tính nào bạn tự phát hiện ở NHIỆM VỤ 1) mà
-  người dùng cần cung cấp để bạn trả lời tiếp, thì đó CHÍNH LÀ tình huống của
-  NHIỆM VỤ 2 và bạn BẮT BUỘC phải kèm khối ```json ask_user_form``` tương ứng
-  ngay sau câu đó, liệt kê ĐỦ field/label/options bạn vừa nêu. TUYỆT ĐỐI
-  không được nêu tên một thuộc tính cụ thể mà thiếu khối JSON đi kèm, dưới
-  bất kỳ cách diễn đạt nào — hỏi mà không kèm JSON làm hỏng cơ chế hiển thị
-  form/resume ở phía người dùng.
-
-  NGOẠI LỆ — KHÔNG áp dụng ràng buộc trên cho câu mời chung chung không nêu
-  tên thuộc tính cụ thể nào, dùng để khép lại câu trả lời đã đầy đủ (kể cả
-  khi bạn vừa chọn CÁCH 1 ở NHIỆM VỤ 1, tức KHÔNG hỏi lại) — ví dụ: "Nếu bạn
-  cần thêm thông tin, hãy cho mình biết nhé", "Có câu hỏi khác cứ hỏi mình".
-  Loại câu này KHÔNG cần và TUYỆT ĐỐI KHÔNG được kèm khối JSON nào — kèm JSON
-  rỗng hay bịa thuộc tính không có thật để "hợp thức hoá" câu mời xã giao là
-  SAI, tạo yêu cầu xác nhận giả cho người dùng.
-
   Câu hỏi: {user_query}
