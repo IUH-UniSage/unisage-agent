@@ -174,7 +174,7 @@ def search_chunks(
     match - fanning out to all 3 and keeping the max score per chunk finds
     those. Uses plain per-vector queries + client-side max, not Qdrant's
     native RRF fusion: RRF scores are rank-based (~0.01-0.03), not cosine
-    similarity, and would be meaningless against `RERANK_SCORE_THRESHOLD`
+    similarity, and would be meaningless against `CHAT_RERANK_SCORE_THRESHOLD`
     (a cosine-similarity cutoff).
 
     `query_filter` (see `build_access_filter`) is applied identically on all

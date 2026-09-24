@@ -33,7 +33,7 @@ def test_request_with_correct_secret_reaches_the_route(
     mock_get_object_bytes: MagicMock, client: TestClient
 ) -> None:
     mock_get_object_bytes.return_value = b"Hello world."
-    client.headers["X-Internal-Secret"] = settings.INTERNAL_SECRET_KEY
+    client.headers["X-Internal-Secret"] = settings.APP_INTERNAL_SECRET_KEY
 
     response = client.post(
         "/api/v1/ingestion/preview",

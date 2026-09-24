@@ -19,7 +19,7 @@ def test_retrieve_chunks_delegates_to_the_injected_retrieval_service() -> None:
 
 
 def test_rerank_chunks_filters_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 0.9)
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.9)
     chunks = [
         RetrievedChunk(chunk_id="a", content="x", source="s", score=0.95),
         RetrievedChunk(chunk_id="b", content="y", source="s", score=0.5),
@@ -34,7 +34,7 @@ def test_rerank_chunks_filters_below_threshold(monkeypatch: pytest.MonkeyPatch) 
 def test_rerank_chunks_no_valid_context_when_all_below_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 0.9)
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.9)
     chunks = [RetrievedChunk(chunk_id="a", content="x", source="s", score=0.1)]
 
     result = rerank_chunks(chunks)

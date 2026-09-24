@@ -298,7 +298,7 @@ def test_every_java_call_carries_x_internal_secret(
         list(response.iter_text())
 
     assert len(java.calls) >= 3  # GET history, POST user, POST assistant, PATCH
-    assert all(call["x_internal_secret"] == settings.INTERNAL_SECRET_KEY for call in java.calls)
+    assert all(call["x_internal_secret"] == settings.APP_INTERNAL_SECRET_KEY for call in java.calls)
 
 
 def test_resolve_client_ip_prefers_x_forwarded_for_first_hop() -> None:

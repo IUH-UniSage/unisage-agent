@@ -269,7 +269,7 @@ class EmbeddingChunkSetMismatchException(UniSageException):
 class EmbeddingDraftLegacyException(UniSageException):
     """Raised when `POST /ingestion/embedding`'s canonical draft was not
     produced by the current chunking logic: `chunking_version` differs from
-    `settings.CHUNKING_VERSION` (this covers `"legacy"` and any older
+    `settings.INGEST_CHUNKING_VERSION` (this covers `"legacy"` and any older
     version), or any canonical chunk has `source_type`/`block_index` still
     `None`.
 

@@ -94,7 +94,7 @@ def _build_scope(*, body: bytes) -> Scope:
     headers = {
         "content-type": "application/json",
         "content-length": str(len(body)),
-        "x-internal-secret": settings.INTERNAL_SECRET_KEY,
+        "x-internal-secret": settings.APP_INTERNAL_SECRET_KEY,
     }
     return {
         "type": "http",
@@ -158,7 +158,7 @@ async def test_client_disconnect_mid_stream_still_patches_completed(
     mock_sync_llm_model: Callable[[str], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
     java = _JavaBackend()
     app.dependency_overrides[get_backend_java_client] = lambda: BackendJavaClient(
         base_url="http://java.test", transport=httpx.MockTransport(java.handler)

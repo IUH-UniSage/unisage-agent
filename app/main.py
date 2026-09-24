@@ -17,7 +17,7 @@ from app.rag.chunking.table_row import TableStructureError
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# `settings.DEBUG` only controls our own verbose output (see
+# `settings.APP_DEBUG` only controls our own verbose output (see
 # app/core/graph_trace.py's prompt dump) - it must NOT raise the root level,
 # or every third-party library's own DEBUG logs (httpx, httpcore, the
 # OpenAI SDK's vendored httpx fork, SQLAlchemy's engine echo) drown out the
@@ -98,7 +98,7 @@ async def table_structure_error_handler(request: Request, exc: TableStructureErr
     actual cell count, a non-reversible digest of the offending row) so an
     on-call engineer can actually debug it - but the row's raw/untruncated
     text (which may hold PII pulled straight from an uploaded document) is
-    only ever logged when `settings.DEBUG` is on (local/test runs), never
+    only ever logged when `settings.APP_DEBUG` is on (local/test runs), never
     in a production log line. The client still only sees a generic 500.
     """
 
@@ -119,8 +119,8 @@ async def table_structure_error_handler(request: Request, exc: TableStructureErr
         "actual_cell_count": exc.actual_cell_count,
         "row_sample_digest": exc.row_sample_digest,
     }
-    if settings.DEBUG:
-        # Debug/test only - never reached in production, where DEBUG=False.
+    if settings.APP_DEBUG:
+        # Debug/test only - never reached in production, where APP_DEBUG=False.
         context["raw_row"] = exc.raw_row
     logger.critical("TableStructureError: internal chunker invariant violated: %s", context)
 

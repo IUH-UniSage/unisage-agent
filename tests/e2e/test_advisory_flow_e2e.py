@@ -129,7 +129,7 @@ async def test_clarification_two_turn_round_trip_via_real_endpoint(
     skipping classification, with the value folded into confirmed_metadata.
     """
 
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
     java = _JavaBackend()
     _install_java(java)
     session_factory = _session_factory(client)
@@ -197,7 +197,7 @@ async def test_ticket_fallback_when_no_valid_context(
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 1.1)  # nothing can pass
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)  # nothing can pass
     java = _JavaBackend()
     _install_java(java)
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(

@@ -99,5 +99,5 @@ class ExcelRowChunker:
                 HeaderSource.EXPLICIT if column_names is not None else HeaderSource.MISSING
             ),
             header_confidence=1.0 if column_names is not None else 0.0,
-            chunking_version=settings.CHUNKING_VERSION,
+            chunking_version=settings.INGEST_CHUNKING_VERSION,
         )

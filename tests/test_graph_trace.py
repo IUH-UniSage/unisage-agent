@@ -15,7 +15,7 @@ def _trace() -> GraphTrace:
 def test_node_always_logs_regardless_of_debug_flag(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(settings, "DEBUG", False)
+    monkeypatch.setattr(settings, "APP_DEBUG", False)
     with caplog.at_level(logging.INFO, logger="unisage.graph"):
         _trace().node("01_GreetingDetectionNode")
 
@@ -46,11 +46,11 @@ def test_prompt_logs_only_when_debug_true(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.INFO, logger="unisage.graph"):
-        monkeypatch.setattr(settings, "DEBUG", False)
+        monkeypatch.setattr(settings, "APP_DEBUG", False)
         _trace().prompt("10_GenerationSynthesisNode", "the full system prompt")
         assert "the full system prompt" not in caplog.text
 
-        monkeypatch.setattr(settings, "DEBUG", True)
+        monkeypatch.setattr(settings, "APP_DEBUG", True)
         _trace().prompt("10_GenerationSynthesisNode", "the full system prompt")
         assert "the full system prompt" in caplog.text
         assert "node=10_GenerationSynthesisNode" in caplog.text

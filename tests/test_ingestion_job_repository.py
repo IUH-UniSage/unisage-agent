@@ -170,7 +170,7 @@ async def test_get_draft_defaults_chunking_version_to_legacy_for_pre_migration_r
     """A row inserted before this feature existed (or by any code that never
     sets `chunk_metadata`) has an empty `metadata` JSON object - reading it
     back must resolve `chunking_version` to "legacy", never to the current
-    `settings.CHUNKING_VERSION`."""
+    `settings.INGEST_CHUNKING_VERSION`."""
 
     log = DocumentProcessLog(
         id=uuid4(),

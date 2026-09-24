@@ -4,9 +4,11 @@ vars:
   # Python environment runner (uses project .venv)
   UV_RUN: '.venv/Scripts/python -m'
 
-  # Host & Port defaults for Windows/POSIX compatibility
-  HOST: '{{.HOST | default "127.0.0.1"}}'
-  PORT: '{{.PORT | default "8402"}}'
+  # Host & Port defaults for Windows/POSIX compatibility - sourced from
+  # .env's APP_HOST/APP_PORT (see taskfiles/backend.yml's dotenv), not
+  # Settings: no code in app/ needs to know its own bind address.
+  HOST: '{{.APP_HOST | default "127.0.0.1"}}'
+  PORT: '{{.APP_PORT | default "8402"}}'
 
   # ANSI Color Codes
   COLOR_RESET: '\033[0m'

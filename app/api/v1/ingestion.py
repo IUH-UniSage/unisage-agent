@@ -182,7 +182,7 @@ def _merge_canonical_chunks(request: EmbeddingRequest, draft: DraftDTO | None) -
       draft belonging to a different context, even if `document_id` matches).
     - `EmbeddingDraftLegacyException` (HTTP 409) - the draft (or any of its
       chunks) was not produced by the current chunking logic
-      (`chunking_version != settings.CHUNKING_VERSION`, which includes
+      (`chunking_version != settings.INGEST_CHUNKING_VERSION`, which includes
       `"legacy"`, or `source_type`/`block_index` still `None`) - cannot be
       embedded safely; the document must be re-chunked. Chunks already
       embedded in Qdrant are never touched.
@@ -202,7 +202,7 @@ def _merge_canonical_chunks(request: EmbeddingRequest, draft: DraftDTO | None) -
 
     canonical_chunks = draft.chunks
     is_outdated_draft = any(
-        chunk.chunking_version != settings.CHUNKING_VERSION
+        chunk.chunking_version != settings.INGEST_CHUNKING_VERSION
         or chunk.source_type is None
         or chunk.block_index is None
         for chunk in canonical_chunks
@@ -276,7 +276,7 @@ async def ingestion_events(
     caller is granted access to.
     """
 
-    if not x_internal_secret or x_internal_secret != settings.INTERNAL_SECRET_KEY:
+    if not x_internal_secret or x_internal_secret != settings.APP_INTERNAL_SECRET_KEY:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     try:

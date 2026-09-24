@@ -1,7 +1,7 @@
 """Retrieval filtering node.
 
 Thin wrapper over `RetrievalService` (real Qdrant search), reading
-`RETRIEVAL_MAX_CHUNKS` from settings via the service itself instead of a
+`CHAT_RETRIEVAL_MAX_CHUNKS` from settings via the service itself instead of a
 hardcoded default. `security` is passed straight through to the service so
 its `department_access` gates the Qdrant query itself (see
 `app.rag.vectorstore.qdrant_store.build_access_filter`) - not applied as a

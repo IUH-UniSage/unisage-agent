@@ -50,7 +50,7 @@ class RetrievalService:
         security: AcademicSecurityContext,
         limit: int | None = None,
     ) -> list[RetrievedChunk]:
-        effective_limit = limit if limit is not None else settings.RETRIEVAL_MAX_CHUNKS
+        effective_limit = limit if limit is not None else settings.CHAT_RETRIEVAL_MAX_CHUNKS
         (query_vector,) = self.embedder.embed([query])
         client = self.client or get_client()
         points = search_chunks(

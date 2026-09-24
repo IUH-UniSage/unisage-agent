@@ -177,13 +177,13 @@ async def test_skips_repair_call_when_allow_repair_json_is_false(
     mock_sequential_streaming_llm_model: Callable[[Sequence[Sequence[str]]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`ALLOW_REPAIR_JSON=false` must skip `_repair_missing_ask_form`
+    """`CHAT_ALLOW_REPAIR_JSON=false` must skip `_repair_missing_ask_form`
     entirely, not just suppress its effect - only ONE response is scripted
     below (unlike `test_repairs_missing_ask_form_when_prose_asks_for_missing
     _attribute`'s two), so a repair call that fired anyway would exhaust the
     mock and fail the test."""
 
-    monkeypatch.setattr(settings, "ALLOW_REPAIR_JSON", False)
+    monkeypatch.setattr(settings, "CHAT_ALLOW_REPAIR_JSON", False)
     prose_without_json = "Bạn vui lòng cho biết ngành học của bạn để mình tra học phí nhé!"
     agent = build_generation_agent(mock_sequential_streaming_llm_model([[prose_without_json]]))
 

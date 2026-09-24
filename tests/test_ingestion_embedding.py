@@ -482,7 +482,7 @@ def test_embedding_rejects_a_draft_chunked_under_an_older_version_with_409(
             headers=_TRUSTED_HEADERS,
         )
 
-    assert settings.CHUNKING_VERSION != "2026-09-structural-v1"
+    assert settings.INGEST_CHUNKING_VERSION != "2026-09-structural-v1"
     assert outdated.status_code == 409
 
 

@@ -25,7 +25,7 @@ from tests.llm_mocks import (
     make_sync_llm_model,
 )
 
-settings.INTERNAL_SECRET_KEY = "test-internal-secret"
+settings.APP_INTERNAL_SECRET_KEY = "test-internal-secret"
 
 
 def _in_memory_sqlite_engine_and_sessions() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
@@ -73,7 +73,7 @@ def client() -> Generator[TestClient, None, None]:
     # in-memory SQLite engine so a streaming test can see what it wrote.
     app.dependency_overrides[get_session_factory] = lambda: session_factory
     with TestClient(
-        app, headers={"X-Internal-Secret": settings.INTERNAL_SECRET_KEY}
+        app, headers={"X-Internal-Secret": settings.APP_INTERNAL_SECRET_KEY}
     ) as test_client:
         yield test_client
     app.dependency_overrides.clear()

@@ -39,7 +39,7 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
     Overridden in tests so `run_and_persist`'s clarification-state write
     lands in the same in-memory SQLite engine the rest of the test uses,
-    instead of the real (unreachable in CI) Postgres `DATABASE_URL`.
+    instead of the real (unreachable in CI) Postgres `DB_URL`.
     """
 
     return async_session_factory

@@ -297,7 +297,7 @@ class TableRowChunker:
             has_header=table.header_row is not None,
             header_source=table.header_source,
             header_confidence=table.header_confidence,
-            chunking_version=settings.CHUNKING_VERSION,
+            chunking_version=settings.INGEST_CHUNKING_VERSION,
             structure_confidence=confidence,
             parse_warnings=warnings,
         )
@@ -373,7 +373,7 @@ class TableRowChunker:
                     has_header=table.header_row is not None,
                     header_source=table.header_source,
                     header_confidence=table.header_confidence,
-                    chunking_version=settings.CHUNKING_VERSION,
+                    chunking_version=settings.INGEST_CHUNKING_VERSION,
                     structure_confidence=confidence,
                     parse_warnings=warnings,
                 )

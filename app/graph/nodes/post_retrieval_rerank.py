@@ -1,7 +1,7 @@
 """Post-retrieval rerank node.
 
 Thin wrapper over `app.rag.reranking.cross_encoder.rerank`, using
-`settings.RERANK_SCORE_THRESHOLD` (default 0.70) rather than a hardcoded
+`settings.CHAT_RERANK_SCORE_THRESHOLD` (default 0.70) rather than a hardcoded
 constant, so it stays configurable.
 """
 

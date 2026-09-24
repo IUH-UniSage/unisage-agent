@@ -158,7 +158,7 @@ async def test_academic_advisory_routes_through_full_rag_pipeline(
 ) -> None:
     # This test proves routing/wiring, not the crude demo-corpus scoring
     # heuristic - keep the threshold permissive so it isn't coupled to that.
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
     graph_input = GraphInput(
         conversation_id="c1",
         user_message="Điều kiện học bổng loại giỏi là gì?",
@@ -184,7 +184,7 @@ async def test_no_valid_context_falls_back_to_ticket(
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 1.1)  # nothing can pass
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)  # nothing can pass
     graph_input = GraphInput(
         conversation_id="c1",
         user_message="Điều kiện học bổng loại giỏi là gì?",
@@ -210,7 +210,7 @@ async def test_clarification_guard_match_skips_classification_and_resumes_adviso
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
     pending = PendingClarification(
         origin_node="QueryTransformationNode",
         missing_fields=["training_type"],
@@ -252,7 +252,7 @@ async def test_resuming_clarification_retrieves_using_original_query_not_the_rep
     otherwise the topic is lost and the model answers nothing relevant (see
     the tasks/report.md write-up of this bug)."""
 
-    monkeypatch.setattr(settings, "RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
     pending = PendingClarification(
         origin_node="QueryTransformationNode",
         missing_fields=["training_type"],

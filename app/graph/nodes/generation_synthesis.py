@@ -183,7 +183,7 @@ async def run_generation_synthesis(
         f"{build_prepared_context_section(chunks)}",
     )
     full_text = await stream_agent_text(agent, full_prompt, token_sink)
-    if settings.ALLOW_REPAIR_JSON:
+    if settings.CHAT_ALLOW_REPAIR_JSON:
         full_text = await _repair_missing_ask_form(
             agent,
             full_text,

@@ -126,7 +126,7 @@ class Chunk(BaseModel):
     has_header: bool = False
     header_source: HeaderSource = HeaderSource.MISSING
     header_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    # Deliberately NOT `settings.CHUNKING_VERSION` - that default would also
+    # Deliberately NOT `settings.INGEST_CHUNKING_VERSION` - that default would also
     # apply when deserializing an old row that never had this field at all,
     # mislabeling legacy data as produced by the current chunking logic.
     # Every new chunker (Phase 2/3) sets this explicitly at construction.
