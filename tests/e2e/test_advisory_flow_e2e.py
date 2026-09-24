@@ -229,9 +229,8 @@ async def test_guest_without_authorization_header_completes_full_round_trip(
     java = _JavaBackend()
     _install_java(java)
     # off_topic is the fully static, model-independent path (no `generation`
-    # call - see `OFF_TOPIC_TEMPLATE`) - the closest equivalent of the old
-    # general_knowledge/DirectLLMNode round trip now that general-knowledge
-    # questions are classified as off_topic (see message_classification.yaml).
+    # call - see `OFF_TOPIC_TEMPLATE`). A general-knowledge question like this
+    # one is classified as off_topic (see message_classification.yaml).
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
         classification=mock_sync_llm_model("off_topic"),
         query_transformation=mock_sync_llm_model("hyde"),
