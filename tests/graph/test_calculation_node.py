@@ -1,8 +1,4 @@
-"""CalculationNode (07) placeholder and its merge with the advisory branch
-(AD14): a calculation-only turn answers with the placeholder alone; a turn
-mixing calculation and advisory questions answers the advisory part through
-06 → 08 → 09 → 10/11 on the advisory question only, then appends the
-placeholder."""
+"""CalculationNode placeholder, alone and merged with the advisory branch."""
 
 import json
 from collections.abc import Callable, Sequence
@@ -57,8 +53,8 @@ def _mixed_classification_model() -> FunctionModel:
 
 
 def _echo_model() -> FunctionModel:
-    """Query-transformation double that returns its input verbatim, so the
-    retrieval query shows exactly which text node 06 was given."""
+    """Returns its input verbatim, so the retrieval query shows what
+    QueryTransformationNode was given."""
 
     def echo(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
         text = ""
@@ -236,3 +232,99 @@ async def test_mixed_turn_without_context_falls_back_then_appends_the_placeholde
     assert result.used_ticket_fallback is True
     assert result.response_text.endswith(f"\n\n{CALCULATION_PLACEHOLDER_TEMPLATE}")
     assert "chưa tìm thấy" in result.response_text.lower()
+
+
+def _two_advisory_classification_model() -> FunctionModel:
+    payload = {
+        "tasks": [
+            {
+                "intent": "academic_advisory",
+                "query": "Học phí ngành CNTT bao nhiêu?",
+                "routing_mode": "SINGLE",
+            },
+            {
+                "intent": "academic_advisory",
+                "query": "Điều kiện học bổng là gì?",
+                "routing_mode": "SINGLE",
+            },
+        ],
+        "confidence": 0.9,
+    }
+
+    def function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=json.dumps(payload, ensure_ascii=False))])
+
+    return FunctionModel(function=function)
+
+
+def _fixed_hyde_model() -> FunctionModel:
+    """HyDE double whose standalone-question line differs from the student's
+    message, so a single-task turn visibly carries a `resolved_query`."""
+
+    def function(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        prompt = str(getattr(messages[-1].parts[-1], "content", ""))
+        first_line = prompt.splitlines()[0]
+        return ModelResponse(
+            parts=[TextPart(content=f"Câu hỏi độc lập: {first_line}\n\nVăn bản HyDE.")]
+        )
+
+    return FunctionModel(function=function)
+
+
+def _prompt_capturing_generation(seen: list[str]) -> FunctionModel:
+    async def stream(messages: list[ModelMessage], _agent_info: AgentInfo):  # type: ignore[no-untyped-def]
+        seen.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        yield "ok [1]."
+
+    return FunctionModel(stream_function=stream)
+
+
+_RESOLVED_MARKER = "Nguyên văn người dùng vừa nhắn ở lượt này"
+
+
+@pytest.mark.asyncio
+async def test_two_advisory_questions_run_node_06_per_task_and_search_both(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    retrieval = _RecordingRetrieval([_CHUNK])
+    generation_prompts: list[str] = []
+    message = "Học phí ngành CNTT bao nhiêu, với lại điều kiện học bổng là gì?"
+    models = GraphModels(
+        classification=_two_advisory_classification_model(),
+        query_transformation=_fixed_hyde_model(),
+        generation=_prompt_capturing_generation(generation_prompts),
+        retrieval=retrieval,
+    )
+
+    await run_graph(_input(message), models, _sink([]), _TRACE)
+
+    assert retrieval.queries == [
+        "Câu hỏi độc lập: Học phí ngành CNTT bao nhiêu?\n\nVăn bản HyDE.",
+        "Câu hỏi độc lập: Điều kiện học bổng là gì?\n\nVăn bản HyDE.",
+    ]
+    # Two questions → no standalone rewrite; the student's message is answered.
+    (prompt,) = generation_prompts
+    assert _RESOLVED_MARKER not in prompt
+    assert message in prompt
+
+
+@pytest.mark.asyncio
+async def test_single_advisory_question_still_passes_its_resolved_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    generation_prompts: list[str] = []
+    message = "còn khóa 2024 thì sao?"
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=_fixed_hyde_model(),
+        generation=_prompt_capturing_generation(generation_prompts),
+        retrieval=_RecordingRetrieval([_CHUNK]),
+    )
+
+    await run_graph(_input(message), models, _sink([]), _TRACE)
+
+    (prompt,) = generation_prompts
+    assert f"Câu hỏi độc lập: {message}" in prompt
+    assert _RESOLVED_MARKER in prompt

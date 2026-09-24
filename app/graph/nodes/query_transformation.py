@@ -1,9 +1,5 @@
-"""Query transformation node - entry point of the unified
-Advisory/Procedure/Document/Calendar flow.
-
-Implements HyDE-only query rewriting (single query, no sub-query fan-out);
-other modes can be added later without changing `transform_query`'s
-signature.
+"""QueryTransformationNode - entry point of the advisory flow. Turns each
+advisory task into retrieval text (HyDE), all tasks concurrently.
 
 Follow-up questions: a turn like "còn nghiên cứu sinh khóa 2024-2025?" carries
 no topic of its own (the "học phí" lives in the previous turn). Without the
@@ -21,6 +17,7 @@ retrieval benefits from it immediately (e.g. student confirms "chinh_quy" ->
 the query mentions it before retrieval runs again).
 """
 
+import asyncio
 from collections.abc import Sequence
 
 from pydantic_ai import Agent
@@ -28,6 +25,7 @@ from pydantic_ai.models import Model
 
 from app.rag.prompting import append_recent_history, get_templates
 from app.schemas.chat_history import HistoryMessage
+from app.schemas.intent import ClassifiedTask, RoutingMode
 
 
 def build_query_transformation_agent(model: Model | str) -> Agent[None, str]:
@@ -54,6 +52,27 @@ async def transform_query(
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
     result = await agent.run(append_recent_history(enriched_query, history))
     return result.output
+
+
+async def transform_tasks(
+    agent: Agent[None, str],
+    tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
+    *,
+    confirmed_metadata: dict[str, str] | None = None,
+    history: Sequence[HistoryMessage] = (),
+) -> list[str]:
+    """One HyDE retrieval text per task, in task order."""
+
+    return list(
+        await asyncio.gather(
+            *(
+                transform_query(
+                    agent, task.query, confirmed_metadata=confirmed_metadata, history=history
+                )
+                for task, _mode in tasks
+            )
+        )
+    )
 
 
 def extract_standalone_question(hyde_output: str) -> str:

@@ -4,8 +4,13 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from app.graph.nodes.query_transformation import build_query_transformation_agent, transform_query
+from app.graph.nodes.query_transformation import (
+    build_query_transformation_agent,
+    transform_query,
+    transform_tasks,
+)
 from app.schemas.chat_history import HistoryMessage
+from app.schemas.intent import ClassifiedTask, RoutingMode
 
 
 @pytest.mark.asyncio
@@ -69,3 +74,37 @@ async def test_transform_query_appends_recent_history_without_citation_markers()
     assert "Mức thu là ... đồng" in prompt
     assert "60.000.000" not in prompt
     assert "[1]" not in prompt
+
+
+def _echo_first_line_model() -> FunctionModel:
+    """Returns "HyDE: <first line of its prompt>", so each output shows which
+    task's query produced it."""
+
+    def function(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        prompt = str(getattr(messages[-1].parts[-1], "content", ""))
+        return ModelResponse(parts=[TextPart(content=f"HyDE: {prompt.splitlines()[0]}")])
+
+    return FunctionModel(function=function)
+
+
+@pytest.mark.asyncio
+async def test_transform_tasks_returns_one_query_per_task_in_task_order() -> None:
+    agent = build_query_transformation_agent(_echo_first_line_model())
+    tasks: list[tuple[ClassifiedTask, RoutingMode]] = [
+        (ClassifiedTask(intent="academic_advisory", query="Học phí ngành CNTT?"), "SINGLE"),
+        (ClassifiedTask(intent="academic_advisory", query="Điều kiện học bổng?"), "SINGLE"),
+    ]
+
+    queries = await transform_tasks(agent, tasks)
+
+    assert queries == ["HyDE: Học phí ngành CNTT?", "HyDE: Điều kiện học bổng?"]
+
+
+@pytest.mark.asyncio
+async def test_transform_tasks_single_task_matches_transform_query() -> None:
+    agent = build_query_transformation_agent(_echo_first_line_model())
+    task = ClassifiedTask(intent="academic_advisory", query="Thủ tục bảo lưu?")
+
+    queries = await transform_tasks(agent, [(task, "SINGLE")])
+
+    assert queries == [await transform_query(agent, "Thủ tục bảo lưu?")]
