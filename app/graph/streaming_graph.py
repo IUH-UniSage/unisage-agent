@@ -16,7 +16,7 @@ mocks.
 from app.core.graph_trace import GraphTrace
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
-from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, route_intent
+from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, plan_route
 from app.graph.nodes.message_classification import build_classification_agent, classify_intent
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
@@ -84,13 +84,10 @@ async def run_graph(
     )
 
     # Node 04 - IntentRoutingNode (deterministic).
-    # TODO(Task 7): build a RoutePlan from every task (a turn may take both
-    # the 06 and 07 branches); until then route on the first task only,
-    # which is exactly the baseline behavior for a one-question message.
     trace.node("04_IntentRoutingNode")
-    route = route_intent(classification.tasks[0].intent)
+    route_plan = plan_route(classification)
 
-    if route == "END_SOCIAL_CHAT":
+    if route_plan.end == "SOCIAL_CHAT":
         trace.node("04_IntentRouting_SocialChat")
         await token_sink(SOCIAL_CHAT_TEMPLATE)
         return GraphOutput(
@@ -99,7 +96,7 @@ async def run_graph(
             pending_clarification=pending_clarification,
         )
 
-    if route == "OffTopicRejectNode":
+    if route_plan.end == "OFF_TOPIC":
         trace.node("05_OffTopicRejectNode")
         await token_sink(OFF_TOPIC_TEMPLATE)
         return GraphOutput(
@@ -108,7 +105,11 @@ async def run_graph(
             pending_clarification=pending_clarification,
         )
 
-    # route == "QueryTransformationNode": the unified advisory/procedure/document/calendar flow.
+    # Academic tasks (advisory and/or calculation). Until Task 8 adds
+    # CalculationNode and Task 9 runs node 06 per task, every academic turn
+    # takes the unified advisory flow on the whole message - identical to the
+    # baseline for a one-question message, whose single task's `query` is
+    # the message itself.
     return await _run_advisory_flow(
         graph_input,
         models,
