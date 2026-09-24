@@ -86,9 +86,7 @@ class ChunkService:
         ]
         return IndexedChunkPageDTO(department_id=department_id, total=total, chunks=chunks)
 
-    def delete_indexed_chunk(
-        self, client: QdrantClient, document_id: str, chunk_id: str
-    ) -> None:
+    def delete_indexed_chunk(self, client: QdrantClient, document_id: str, chunk_id: str) -> None:
         """Remove one chunk's point from the live Qdrant index.
 
         Does not touch the Postgres chunking draft - this only affects what

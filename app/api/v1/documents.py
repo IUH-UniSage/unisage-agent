@@ -86,9 +86,7 @@ async def list_indexed_chunks(
         require_department_membership(indexed_page.department_id, context)
 
     return ApiResponse.success(
-        PageResponse.of(
-            indexed_page.chunks, page=page, limit=limit, total_items=indexed_page.total
-        )
+        PageResponse.of(indexed_page.chunks, page=page, limit=limit, total_items=indexed_page.total)
     )
 
 

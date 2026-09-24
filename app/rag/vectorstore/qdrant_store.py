@@ -120,9 +120,7 @@ def search_chunks(
     return ranked[:limit]
 
 
-def scroll_chunks_by_document(
-    client: QdrantClient, document_id: str
-) -> list[models.Record]:
+def scroll_chunks_by_document(client: QdrantClient, document_id: str) -> list[models.Record]:
     """Return every indexed point (payload only, no vectors) for `document_id`,
     ordered by `chunk_id` (which sorts numerically-by-suffix since it's built
     as f"{document_id}:{chunk_index}").
@@ -183,9 +181,7 @@ def delete_chunk_point(client: QdrantClient, document_id: str, chunk_id: str) ->
                     models.FieldCondition(
                         key="document_id", match=models.MatchValue(value=document_id)
                     ),
-                    models.FieldCondition(
-                        key="chunk_id", match=models.MatchValue(value=chunk_id)
-                    ),
+                    models.FieldCondition(key="chunk_id", match=models.MatchValue(value=chunk_id)),
                 ]
             )
         ),
