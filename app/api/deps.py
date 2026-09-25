@@ -13,12 +13,18 @@ from app.core.exceptions import (
     InvalidTrustedContextException,
     MissingTrustedContextException,
 )
+from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client
 from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.retrieval.service import RetrievalService
 
 _DOCUMENT_WRITE_PERMISSIONS = {"DOCUMENT_ALL", "DOCUMENT_CREATE"}
+
+# Static .env-sourced credential for now — registry-driven provider selection
+# (llmProvider -> Model/Provider class mapping from the model registry snapshot)
+# is Task 5/9's job.
+_OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 
 def get_backend_java_client() -> BackendJavaClient:
@@ -57,7 +63,12 @@ def get_graph_models() -> GraphModels:
 
     model = OpenAIChatModel(
         settings.OPENAI_MODEL,
-        provider=OpenAIProvider(api_key=settings.OPENAI_API_KEY),
+        provider=OpenAIProvider(
+            api_key=settings.OPENAI_API_KEY,
+            http_client=build_provider_http_client(
+                ProviderConnectionInfo(api_base_url=_OPENAI_API_BASE_URL)
+            ),
+        ),
     )
     return GraphModels(
         classification=model,
