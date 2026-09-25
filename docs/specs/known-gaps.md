@@ -1,9 +1,13 @@
-# Known Gaps: Ingestion Service
+# Known Gaps
 
-Tracked deliberately, not silently patched around. See `SPEC-ingestion.md` for
-the full ingestion pipeline spec these gaps belong to.
+Tracked deliberately, not silently patched around.
 
-## Java has no `.xlsx` in `AllowedFileType`
+## Ingestion
+
+See `SPEC-ingestion.md` for the full ingestion pipeline spec these gaps
+belong to.
+
+### Java has no `.xlsx` in `AllowedFileType`
 
 The `excel_row` chunking strategy is fully implemented and unit-tested
 (`app/rag/chunking/excel_rows.py`), but `unisage-backend`'s upload whitelist
@@ -12,7 +16,7 @@ Java side, no `.xlsx` object can reach MinIO through the normal upload path,
 so `excel_row` is unreachable end-to-end in practice even though the API and
 chunker both work against a manually-placed `.xlsx` object.
 
-## No caller updates Java's `DocStatus` after ingestion completes
+### No caller updates Java's `DocStatus` after ingestion completes
 
 Java's `Document.status` lifecycle (`PENDING -> COMPLETED`) has no caller in
 this scope: per the spec, Python never calls back into `unisage-backend`, and
@@ -23,7 +27,7 @@ change adds a webhook/callback (out of scope here, and explicitly listed as
 never in `SPEC-ingestion.md`'s Boundaries: "never call back into the Java
 backend from Python").
 
-## A closed browser tab leaves a draft stuck in `EMBEDDING` forever
+### A closed browser tab leaves a draft stuck in `EMBEDDING` forever
 
 `document_process_logs.current_step` moves from `CHUNKED` to `EMBEDDING`
 when `POST /ingestion/embedding` dispatches a Celery task, and back out
@@ -39,7 +43,7 @@ rather than resolving. See `SPEC-ingestion-resume.md`'s "Extension:
 resuming into an in-flight embed" section for the full design and why a
 worker-side or scheduled-sweep fix was left out of scope.
 
-## Structural chunking metadata (2026-09) - known limitations
+### Structural chunking metadata (2026-09) - known limitations
 
 See `SPEC-ingestion.md`'s "Structural Chunking Metadata" section and
 `changes/13-09-2026-Chunking-Structural-Metadata/plan.md` for the full design.
@@ -219,7 +223,7 @@ Deliberate, reviewed-and-accepted limitations, not bugs to silently patch:
   of existing Qdrant points was done or is planned (confirmed acceptable:
   existing Qdrant data is not a concern for this project).
 
-## `.doc` (legacy binary Word format) is not parsed
+### `.doc` (legacy binary Word format) is not parsed
 
 `extract_raw_text` (`app/rag/ingestion/parser.py`) and `split_regions`
 (`app/rag/ingestion/table_aware_parser.py`) support `.txt`, `.pdf`, and
@@ -229,3 +233,114 @@ format needs a different converter (e.g. LibreOffice headless, `antiword`)
 that isn't part of this project's dependencies. If `.doc` uploads need to
 work, this requires either adding such a converter or asking users to
 re-save as `.docx` before upload.
+
+## Graph / Retrieval
+
+See `RAG_Graph/KLTN/nodes/` for the full node-by-node design these gaps
+belong to, and `backend-java`'s `changes/24-09-2026-GraphFlowAlignment/`
+(`plan.md`'s Architecture Decisions, `todo.md`) for the implementation
+decisions behind each one.
+
+### No hybrid search, RRF, or cross-encoder rerank (2026-09)
+
+The design (`RAG_Graph/KLTN/nodes/08`, `09`) describes `RetrievalFilteringNode`
+as pre-filter + dense + BM25 + RRF fusion, and `PostRetrievalRerankNode` as a
+`bge-reranker-base` cross-encoder pass + a 0.70 threshold + context
+compression. The code does pre-filter + dense search across 3 named vectors
+(`content`/`summary`/`questions`, keeping each chunk's best score) + a
+threshold on the raw cosine score. This is a deliberate decision, not an
+oversight:
+
+- **BM25 / sparse search:** its main value is exact matching on codes/numbers
+  (`QĐ-45/2023`, `INT1001`), while students mostly ask by meaning. The
+  runtime cost is near zero, but it needs a sparse vector added to the Qdrant
+  collection - i.e. an ingestion change plus **re-indexing every document**.
+  No evidence yet that dense search actually misses this kind of question, so
+  that cost isn't justified.
+- **RRF:** RRF scores are rank-based (`1/(60 + rank)`, in the 0.01-0.03
+  range), not on the same scale as the 0.70 threshold. Switching node 08 to
+  RRF without a cross-encoder re-scoring at node 09 would put every chunk
+  under the threshold and send every question to TicketFallback. RRF only
+  makes sense paired with a reranker. The MULTI flow's sub-queries are
+  therefore merged by quota + best score, not RRF.
+- **Cross-encoder rerank:** the most expensive piece (per-question API cost,
+  or RAM/CPU/GPU to self-host). Its benefit is reduced here because (1) the
+  pre-generated `questions` vector already closely matches how students
+  phrase things, and (2) each turn only retrieves 8 chunks. Also, the
+  design's `bge-reranker-base` is weak on Vietnamese; if this is built,
+  `bge-reranker-v2-m3` (self-hosted via HuggingFace TEI) or a multilingual
+  API (Cohere `rerank-v3.5`, Jina, Voyage) would be the better pick.
+- **Context compression** (`agents/reranker_compressor.yaml`): the template is
+  loaded but unused by any node, since it only makes sense once reranking
+  exists.
+
+**Residual risk:** `CHAT_RERANK_SCORE_THRESHOLD = 0.70` is applied to
+`text-embedding-3-small`'s raw cosine score, while the design set this
+threshold for a cross-encoder score. A genuinely relevant chunk pair can
+score under 0.70 on cosine alone (or an irrelevant pair over it), causing a
+wrong TicketFallback (or the reverse). This needs measuring against a
+30-50 question set with labeled correct chunks to retune the threshold.
+
+**When to revisit:** the evaluation set shows misses on code/number-heavy
+questions → add BM25; correct chunks are retrieved but ranked wrong, or the
+cosine threshold can't separate right from wrong → add reranking (and only
+then RRF).
+
+### `CalculationNode` is a placeholder
+
+No extractor, no Calculator Tool, no data source for scores/tuition figures.
+`app/graph/nodes/calculation.py` streams a static "under development" message
+and never calls an LLM or tool.
+
+### Resuming a clarification round in the MULTI flow re-runs every origin task
+
+`PendingClarification.origin_tasks` lets a resume turn re-run exactly the
+advisory tasks that were running when the round started, at their own modes
+(see AD6/AD15). But it always re-runs **all** of them - `pending_sub_query_id`
+(which `SQk` the `ask_user_form` actually targeted) is recorded and
+round-tripped through the database, but nothing yet uses it to resume only
+the one sub-query that was missing information. Splitting a form reply across
+several tasks/sub-queries this precisely is future work.
+
+### A turn needing clarification from two branches at once isn't supported
+
+`PendingClarification` has a single `origin_node`. Today only the advisory
+branch (node 06 onward) can raise a clarification form - `CalculationNode` is
+still a placeholder and never does. Once CalculationNode does real work, a
+turn where both the calculation and advisory branches need to ask something
+in the same turn has no way to hold two clarification rounds in parallel.
+
+### At most 3 tasks per message
+
+A message with more than 3 genuinely different-intent questions only gets
+the first 3 answered (`MessageClassificationNode`'s `MAX_TASKS`); the rest
+are silently dropped (logged, not surfaced to the user). This is a
+deliberate cap on LLM calls/retrieval fan-out per turn (see AD2), not a
+parsing bug.
+
+### A decomposer failure on a merged MULTI task loses per-question coverage
+
+Since AD15 (2026-09-25), `MessageClassificationNode` no longer splits 2+
+questions under `academic_advisory` into separate tasks - they are always one
+task with `routing_mode = MULTI`, and the decomposer (node 06) is the only
+place that breaks it into sub-queries. If the decomposer returns unusable
+output (empty, malformed JSON, or only 1 sub-query), `_transform_task` falls
+back to running HyDE once over the **whole merged task query** (both/all
+original questions concatenated) as if it were a single question. Before
+AD15, each question was already its own task, so a HyDE fallback for one
+question never affected the other. Now, a decomposer failure on a
+multi-question task risks HyDE producing a hypothetical document skewed
+toward only one of the questions, silently under-serving the other(s) in
+retrieval. No evaluation data yet on how often the decomposer actually fails
+on genuinely independent (non-comparison) questions - if this turns out to
+be common, the HyDE fallback would need its own multi-question handling
+instead of treating the merged text as one question.
+
+### Calculation results don't reach `GenerationSynthesisNode`'s prompt
+
+While `CalculationNode` is a placeholder, its static message is appended
+after the advisory answer deterministically (string concatenation outside
+the LLM, see AD14) rather than being reasoned about together with the
+advisory answer. Once CalculationNode does real work, its result should flow
+into node 10's prompt so the model can phrase both parts as one coherent
+answer instead of two concatenated pieces.
