@@ -48,6 +48,8 @@ dev = [
     "mypy>=1.13.0",
     "types-openpyxl>=3.1.0",
     "aiosqlite>=0.20.0",
+    "dnslib>=0.9.23,<1.0",
+    "cryptography>=43.0.0",
 ]
 
 [tool.pytest.ini_options]
