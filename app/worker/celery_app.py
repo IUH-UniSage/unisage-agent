@@ -1,7 +1,9 @@
 import logging
+import time
 import uuid
 from typing import Any
 
+import redis
 from celery import Celery
 from kombu import Queue
 
@@ -31,6 +33,33 @@ celery_app.conf.result_expires = 60 * 60 * 24 * 7
 _default_queue = f"{settings.CELERY_QUEUE_PREFIX}-default"
 celery_app.conf.task_default_queue = _default_queue
 celery_app.conf.task_queues = (Queue(_default_queue, routing_key=_default_queue),)
+
+# Beat heartbeat: the only thing on Beat's schedule until Task 8 (hot-reload
+# poll) adds the real verify-poll entry. Exists so the integration harness has
+# something observable to assert "Beat is actually ticking, not just started"
+# (plan.md Task 0.5's smoke test) - writes the current time to a registry-namespaced
+# (`mr:`) Redis key on DB 0, not the Celery broker/backend DB, and never touches
+# task args/results (plan.md "Secret redaction" - Celery tasks in this feature
+# never carry credentials as arguments).
+BEAT_HEARTBEAT_REDIS_KEY = "mr:beat:last_tick"
+celery_app.conf.beat_schedule = {
+    "model-registry-beat-heartbeat": {
+        "task": "beat_heartbeat",
+        "schedule": settings.CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS,
+    },
+}
+
+
+@celery_app.task(name="beat_heartbeat", ignore_result=True)
+def beat_heartbeat() -> None:
+    """Writes the current time to Redis - see `BEAT_HEARTBEAT_REDIS_KEY` above."""
+
+    try:
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        client.set(BEAT_HEARTBEAT_REDIS_KEY, str(time.time()))
+        client.close()
+    except Exception:
+        logger.exception("Beat heartbeat failed to write to Redis")
 
 
 @celery_app.task(bind=True, name="embed_chunks")

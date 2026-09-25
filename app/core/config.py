@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     # commit"). Pub/sub isn't namespaced by DB, so the channel name itself is what
     # separates one harness run's Java from another's.
     MODEL_REGISTRY_CHANNEL: str = "model-registry:updates"
+    # How often Celery Beat's own heartbeat task runs - the one thing this task's
+    # integration harness needs Beat to visibly do before Task 8 gives it a real
+    # verify-poll schedule to run. The harness's integration profile overrides this
+    # to a couple seconds so `test_model_registry_smoke.py` doesn't wait 15s+ for
+    # a tick.
+    CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS: int = 15
 
     # --- QDRANT_: the vector store ---
     QDRANT_HOST: str = "localhost"
