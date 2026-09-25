@@ -10,6 +10,7 @@ from kombu import Queue
 from app.core.config import settings
 from app.core.events import publish_ingestion_event
 from app.core.logging_config import configure_logging
+from app.core.redaction import safe_error_message
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
@@ -160,8 +161,16 @@ def embed_chunks(
             results.append({"chunk_index": chunk.chunk_index, "status": "SUCCESS"})
         except Exception as exc:
             logger.exception("Failed to embed chunk %s of %s", chunk.chunk_index, document_id)
+            # This dict is the task's return value, which Celery persists to the
+            # result backend (`result_expires` above keeps it there for a week) -
+            # exactly the kind of DB-like sink plan.md "Secret redaction" warns
+            # about, so the raw exception text never goes in unredacted.
             results.append(
-                {"chunk_index": chunk.chunk_index, "status": "FAILED", "error": str(exc)}
+                {
+                    "chunk_index": chunk.chunk_index,
+                    "status": "FAILED",
+                    "error": safe_error_message(exc),
+                }
             )
 
         percent = round((position + 1) / total * 100)
