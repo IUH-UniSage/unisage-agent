@@ -6,6 +6,7 @@ from openai import OpenAI
 
 from app.core.config import settings
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
+from app.rag.prompting.loader import get_templates
 from app.schemas.ingestion import Chunk
 
 logger = logging.getLogger(__name__)
@@ -13,15 +14,6 @@ logger = logging.getLogger(__name__)
 # Static .env-sourced credential for now — registry-driven provider selection
 # (per-purpose base URL/provider from the model registry snapshot) is Task 5/9's job.
 _OPENAI_API_BASE_URL = "https://api.openai.com/v1"
-
-_SYSTEM_PROMPT = (
-    "You summarize a document chunk and propose hypothetical questions it answers. "
-    "Always respond in Vietnamese, regardless of the input chunk's language - the "
-    "summary and questions must match the language a Vietnamese student would "
-    "actually ask in, so they embed close to real user queries. "
-    'Respond with JSON only: {{"summary": string, "questions": string[]}}. '
-    "Produce exactly {question_count} questions."
-)
 
 
 @dataclass(frozen=True)
@@ -58,7 +50,9 @@ class MultiRepresentationEnricher:
             messages=[
                 {
                     "role": "system",
-                    "content": _SYSTEM_PROMPT.format(question_count=self.question_count),
+                    "content": get_templates().agent_multi_representation_enricher.format(
+                        question_count=self.question_count
+                    ),
                 },
                 {"role": "user", "content": chunk.content},
             ],
