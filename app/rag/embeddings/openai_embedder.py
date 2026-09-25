@@ -3,12 +3,17 @@ from dataclasses import dataclass, field
 from openai import OpenAI
 
 from app.core.config import settings
+from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 
 # The OpenAI embeddings endpoint rejects an `input` array longer than 2048
 # items with a 400. A single parsed region can produce more sentences than
 # that, so requests are split into batches of this size and stitched back
 # together in input order.
 _MAX_INPUTS_PER_REQUEST = 2048
+
+# Static .env-sourced credential for now — registry-driven provider selection
+# (per-purpose base URL/provider from the model registry snapshot) is Task 5/9's job.
+_OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 
 @dataclass(frozen=True)
@@ -30,7 +35,12 @@ class OpenAIEmbedder:
 
         if not texts:
             return []
-        client = self.client or OpenAI(api_key=settings.OPENAI_API_KEY)
+        client = self.client or OpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            http_client=build_provider_http_client_sync(
+                ProviderConnectionInfo(api_base_url=_OPENAI_API_BASE_URL)
+            ),
+        )
         vectors: list[list[float]] = []
         for start in range(0, len(texts), _MAX_INPUTS_PER_REQUEST):
             batch = texts[start : start + _MAX_INPUTS_PER_REQUEST]
