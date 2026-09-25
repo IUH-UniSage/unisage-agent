@@ -1,0 +1,93 @@
+{
+  "vectors": [
+    {
+      "description": "Authorization header with Bearer token",
+      "input": "Provider error: Authorization: Bearer sk-live-abcdefghij1234567890 failed",
+      "expected": "Provider error: [REDACTED] failed"
+    },
+    {
+      "description": "Authorization header, lowercase header name",
+      "input": "authorization: Bearer sk-lower1234567890abc caused a 401",
+      "expected": "[REDACTED] caused a 401"
+    },
+    {
+      "description": "bare Bearer token without the Authorization header name",
+      "input": "sent header Bearer sk-live-abcdefghij1234567890 to provider",
+      "expected": "sent header [REDACTED] to provider"
+    },
+    {
+      "description": "x-api-key header, colon separator",
+      "input": "Request failed, x-api-key: abcdefghijklmnop rejected",
+      "expected": "Request failed, [REDACTED] rejected"
+    },
+    {
+      "description": "api-key header, equals separator, embedded in other text",
+      "input": "config dump: api-key=abcdefghijklmnop;timeout=30",
+      "expected": "config dump: [REDACTED];timeout=30"
+    },
+    {
+      "description": "raw sk- prefixed key with no header context",
+      "input": "invalid key sk-proj-abcdefghijklmnopqrstuvwx used",
+      "expected": "invalid key [REDACTED] used"
+    },
+    {
+      "description": "raw sk-ant- prefixed key (Anthropic) with no header context",
+      "input": "auth failed for sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890 provider",
+      "expected": "auth failed for [REDACTED] provider"
+    },
+    {
+      "description": "query param key=",
+      "input": "GET https://api.example.com/v1/models?key=AbCdEf123456 returned 401",
+      "expected": "GET https://api.example.com/v1/models?key=[REDACTED] returned 401"
+    },
+    {
+      "description": "query param api_key= followed by another param",
+      "input": "https://x.com/path?api_key=zzzz9999&other=1",
+      "expected": "https://x.com/path?api_key=[REDACTED]&other=1"
+    },
+    {
+      "description": "query param token=",
+      "input": "https://x.com/path?token=abcde12345",
+      "expected": "https://x.com/path?token=[REDACTED]"
+    },
+    {
+      "description": "URL userinfo (user:pass@)",
+      "input": "https://alice:p4ssw0rd1@api.example.com/v1",
+      "expected": "https://[REDACTED]@api.example.com/v1"
+    },
+    {
+      "description": "exact known secret of the credential being processed",
+      "knownSecret": "sk-canary-1234567890abcdefghijklmno",
+      "input": "Error calling provider with key sk-canary-1234567890abcdefghijklmno: invalid_api_key",
+      "expected": "Error calling provider with key [REDACTED]: invalid_api_key"
+    },
+    {
+      "description": "substring (>= 8 chars) of the known secret, without the full secret present",
+      "knownSecret": "sk-canary-abcdefghij1234567890",
+      "input": "diagnostic dump contained fragment abcdefgh unexpectedly",
+      "expected": "diagnostic dump contained fragment [REDACTED] unexpectedly"
+    },
+    {
+      "description": "short fragment (< 8 chars) of the known secret is left alone -- not over-redacted",
+      "knownSecret": "sk-canary-abcdefghij1234567890",
+      "input": "log noise abcdef nothing to see",
+      "expected": "log noise abcdef nothing to see"
+    },
+    {
+      "description": "plain text with no secret-like content passes through unchanged",
+      "input": "Connection timed out after 30s while calling https://api.openai.com/v1/chat/completions",
+      "expected": "Connection timed out after 30s while calling https://api.openai.com/v1/chat/completions"
+    },
+    {
+      "description": "plain text over 500 chars is truncated to exactly 500 chars, no secret involved",
+      "input": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      "expected": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    },
+    {
+      "description": "known secret straddling the 500-char truncation boundary must be fully redacted, not truncated mid-secret -- redaction MUST run before truncation",
+      "knownSecret": "sk-canary-93f1c2b0e4d7a9c8b1f6e3d2a5c7b9e1",
+      "input": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAsk-canary-93f1c2b0e4d7a9c8b1f6e3d2a5c7b9e1BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "expected": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA[REDACTED]"
+    }
+  ]
+}
