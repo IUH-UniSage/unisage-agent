@@ -1,0 +1,314 @@
+# Cross-repo integration harness for the Dynamic Model Registry feature - see
+# ../../../backend-java/changes/23-09-2026-Dynamic-Model-Registry-Runtime-Failover/
+# plan.md ("Hot-reload consistency", "SSRF policy") and todo.md's "Task 0.5: Khung
+# test tich hop cross-repo" for the full spec this file implements. README.md in
+# this directory has the how-to-run instructions and what's still stubbed.
+#
+# Run from this directory:
+#   IT_RUN_PREFIX=it-$(python3 -c "import uuid;print(uuid.uuid4().hex[:8])") \
+#     docker compose -f docker-compose.integration.yml run --rm test-runner pytest -m integration
+#
+# No service publishes a port to the host in this file - see docker-compose.integration.debug.yml
+# for the one exception (gateway on 127.0.0.1, debug-only, never used in CI).
+#
+# Every credential/secret value below is test-only, shared across every
+# service in this file, and never used outside this compose network.
+
+x-agent-image: &agent-build
+  context: ../..
+  dockerfile: Dockerfile
+
+x-internal-secret: &internal_secret "it-integration-shared-secret-not-for-real-use-0123456789"
+
+networks:
+  it_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  it_postgres_data:
+  it_reports:
+  it_minio_data:
+  fake_provider_certs:
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: assistant_DB
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "123456"
+    volumes:
+      - it_postgres_data:/var/lib/postgresql/data
+      - ./postgres_init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.11
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.12
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - it_minio_data:/data
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.13
+
+  # --- backend-java + api-gateway: built from the sibling repo checkouts
+  # (D:\KLTN\Main\backend-java, D:\KLTN\Main\api-gateway - same layout this
+  # compose file's own repo, unisage-agent, sits in). Their Dockerfiles expect
+  # a pre-built jar (`COPY target/*.jar app.jar`) - run `mvn package` (or
+  # `./mvnw package -DskipTests`) in each repo before `docker compose build`.
+  # See README.md - the seeder/reset-endpoint this service needs
+  # (ModelRegistryIntegrationSeeder, POST /internal/test/registry/reset) do not
+  # exist yet, so this service will start but the registry-lifecycle parts of
+  # the stack will not be exercisable until that lands in backend-java.
+  backend-java:
+    build:
+      context: ../../../backend-java
+    environment:
+      SERVER_PORT: "8401"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: assistant_DB
+      DB_USER: postgres
+      DB_PASSWORD: "123456"
+      REDIS_URL: "redis://redis:6379/0"
+      INTERNAL_SECRET_KEY: *internal_secret
+      # Task 0.1's CIDR allowlist for /internal/** - scoped to exactly this
+      # network's subnet so test-runner (inside it) can call /internal/**
+      # directly but nothing outside this compose network can.
+      INTERNAL_ALLOWED_CIDRS: "172.30.0.0/24"
+      # Task 0.5 acceptance: integration profile must never coexist with prod/any
+      # other profile (backend-java fails startup if it does - see todo.md).
+      SPRING_PROFILES_ACTIVE: integration
+      JWT_SECRET: "unisage-integration-test-jwt-secret-not-for-real-use"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3000"
+      MODEL_REGISTRY_URL_ALLOWLIST: "fake-llm-provider,fake-provider.test"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      # Best-effort liveness only, NOT "seed finished" - actuator's raw
+      # endpoints are locked down (application.properties) and this repo does
+      # not have an unauthenticated probe route yet. Accepts wget exit 0 (2xx)
+      # or 8 (server answered with a non-2xx status) as "the JVM is up and
+      # answering HTTP" - see README.md's backend-java section for why this
+      # can't yet mean "seeded" and what to change once the reset endpoint lands.
+      test:
+        - "CMD-SHELL"
+        - >-
+          wget -q -O /dev/null http://127.0.0.1:8401/actuator/health;
+          code=$$?; [ $$code -eq 0 -o $$code -eq 8 ]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 20s
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.20
+
+  api-gateway:
+    build:
+      context: ../../../api-gateway
+    environment:
+      SERVER_PORT: "8889"
+      JAVA_BACKEND_URI: "http://backend-java:8401"
+      PYTHON_AI_URI: "http://unisage-agent:8000"
+      INTERNAL_SECRET_KEY: *internal_secret
+      JWT_SECRET: "unisage-integration-test-jwt-secret-not-for-real-use"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3000"
+    depends_on:
+      - backend-java
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.21
+
+  # --- unisage-agent: gunicorn app, one Celery worker, exactly one Celery Beat
+  # (todo.md is explicit: hot-reload's verify-pull-based design depends on there
+  # being exactly one Beat instance) ---
+  unisage-agent:
+    build: *agent-build
+    command: ["gunicorn", "-w", "2", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "app.main:app"]
+    environment: &agent_env
+      APP_ENV: development
+      APP_INTERNAL_SECRET_KEY: *internal_secret
+      DB_URL: "postgresql+asyncpg://postgres:123456@postgres:5432/unisage_agent_db"
+      BACKEND_JAVA_BASE_URL: "http://backend-java:8401/api/v1"
+      INTERNAL_NETWORK_ENCRYPTED: "false"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+      CELERY_QUEUE_PREFIX: "${IT_RUN_PREFIX:-it-local}"
+      MODEL_REGISTRY_CHANNEL: "model-registry:updates"
+      # Verify pull-based (Task 6/8, not implemented yet) will read this; set
+      # short here per todo.md ("Beat dùng schedule rút ngắn qua env ở profile
+      # test") so nothing in the harness waits 15s+ for a tick.
+      CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS: "2"
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MODEL_REGISTRY_URL_ALLOWLIST: "fake-llm-provider,fake-provider.test"
+    depends_on:
+      backend-java:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    # Points the container's resolver at the rebinding DNS server so SSRF/DNS
+    # tests exercise the real OS resolver (plan.md "SSRF policy"). Falls back to
+    # the network's normal DNS for every other name via the rebinding server's own
+    # NXDOMAIN-for-anything-else behavior only applying to rebind.test -
+    # everything else this container needs to resolve is a compose service name,
+    # not a public hostname, so this alone is sufficient.
+    dns: 172.30.0.53
+    extra_hosts:
+      - "fake-provider.test:172.30.0.40"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=2)\""
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.30
+
+  celery-worker:
+    build: *agent-build
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "-l", "info"]
+    environment: *agent_env
+    depends_on:
+      backend-java:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    dns: 172.30.0.53
+    extra_hosts:
+      - "fake-provider.test:172.30.0.40"
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.31
+
+  celery-beat:
+    # container_name (not just the compose service name) so the reset fixture
+    # can address it directly through the docker SDK without depending on
+    # compose's project-name-prefixed container naming.
+    container_name: it-celery-beat
+    build: *agent-build
+    command: ["celery", "-A", "app.worker.celery_app", "beat", "-l", "info", "--pidfile="]
+    environment: *agent_env
+    depends_on:
+      backend-java:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.32
+
+  fake-llm-provider:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/fake_llm_provider/Dockerfile
+    environment:
+      FAKE_PROVIDER_HTTP_PORT: "8000"
+      FAKE_PROVIDER_TLS_PORT: "8443"
+      FAKE_PROVIDER_TLS_CERT_DIR: "/certs"
+    volumes:
+      - it_reports:/reports
+      - fake_provider_certs:/certs
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.40
+
+  # DNS server for the rebind.test rebinding test (Task 0.6's SSRF integration
+  # test uses this; Task 0.5 only needs it running and reachable).
+  rebinding-dns:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/rebinding_dns/Dockerfile
+    environment:
+      DNS_PORT: "53"
+      REBIND_SAFE_IP: "172.30.0.40" # fake-llm-provider
+      REBIND_DECOY_IP: "172.30.0.99" # decoy - nothing listens here on purpose
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.53
+
+  # test-runner: the only place pytest actually runs (todo.md - host only runs
+  # `docker compose ... run` and reads the report). /var/run/docker.sock is
+  # mounted ONLY here, ONLY in this integration compose file - never in any
+  # other compose file in this repo - so the reset fixture can stop/start
+  # celery-beat via the docker SDK (see README.md's "docker.sock mount" risk note).
+  test-runner:
+    build: *agent-build
+    entrypoint: ["python", "-m", "pytest"]
+    command: ["-m", "integration", "--junitxml=/reports/junit.xml"]
+    environment:
+      <<: *agent_env
+      # This service's own view of the stack, for the fixtures/tests (calls
+      # /internal/** on backend-java directly, per Task 0.5's "test-runner đóng
+      # vai Python ở Checkpoint: Registry lifecycle").
+      BACKEND_JAVA_INTERNAL_BASE_URL: "http://backend-java:8401"
+      FAKE_LLM_PROVIDER_BASE_URL: "http://fake-llm-provider:8000"
+      FAKE_LLM_PROVIDER_ADMIN_BASE_URL: "http://fake-llm-provider:8000/admin"
+      CELERY_BEAT_CONTAINER_NAME: "it-celery-beat"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - it_reports:/reports
+    depends_on:
+      backend-java:
+        condition: service_healthy
+      unisage-agent:
+        condition: service_healthy
+      celery-worker:
+        condition: service_started
+      celery-beat:
+        condition: service_started
+      fake-llm-provider:
+        condition: service_started
+      rebinding-dns:
+        condition: service_started
+    dns: 172.30.0.53
+    extra_hosts:
+      - "fake-provider.test:172.30.0.40"
+    networks:
+      it_net:
+        ipv4_address: 172.30.0.60

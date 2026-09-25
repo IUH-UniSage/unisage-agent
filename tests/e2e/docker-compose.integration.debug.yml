@@ -1,0 +1,14 @@
+# Debug-only override - publishes api-gateway on 127.0.0.1 so a human can poke
+# the stack with a browser/curl while it's running. Never used by the
+# `test-runner run` invocation in README.md, never used in CI. Nothing else in
+# this compose file (or any other compose file in this repo) publishes a port
+# to the host - see docker-compose.integration.yml's header comment and
+# README.md's "no ports published" note.
+#
+# Usage:
+#   docker compose -f docker-compose.integration.yml -f docker-compose.integration.debug.yml up -d
+
+services:
+  api-gateway:
+    ports:
+      - "127.0.0.1:8889:8889"
