@@ -1,5 +1,10 @@
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import patch
+
 from app.rag.prompting import (
     build_json_repair_prompt,
+    build_multi_intent_prompt,
     build_system_prompt,
     get_templates,
 )
@@ -7,6 +12,8 @@ from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
+
+_SNAPSHOT_PATH = Path(__file__).parent.parent / "fixtures" / "advisory_prompt_snapshot.txt"
 
 
 def test_templates_load_without_error() -> None:
@@ -398,3 +405,80 @@ def test_resolved_query_omitted_when_same_as_raw_user_query() -> None:
     )
 
     assert with_resolved == without_resolved
+
+
+def test_build_system_prompt_unchanged_by_the_multi_intent_frame_refactor() -> None:
+    """Snapshot captured before `_base_params` was factored out of
+    `build_system_prompt` - a single-question advisory prompt must render
+    byte-for-byte the same after the refactor."""
+
+    with patch("app.rag.prompting.builder.now_ict", return_value=datetime(2026, 9, 24, 9, 0)):
+        prompt = build_system_prompt(
+            user_query="còn khóa 2024 thì sao?",
+            resolved_query="Học phí khóa 2024 ngành CNTT là bao nhiêu?",
+            security=AcademicSecurityContext(
+                user_id="u1",
+                role="SINH_VIEN",
+                department_access=[
+                    DepartmentAccessEntry(department_id="KHOA_CNTT", access_level=2)
+                ],
+            ),
+            confirmed_metadata={"he_dao_tao": "chinh_quy"},
+            chunks=[
+                RetrievedChunk(
+                    chunk_id="c1",
+                    content="Học phí khóa 2024...",
+                    source="hoc-phi.pdf",
+                    score=0.9,
+                    page_start=3,
+                ),
+                RetrievedChunk(
+                    chunk_id="c2", content="Điều 5...", source="quy-che.docx", score=0.8
+                ),
+            ],
+            pending_clarification=PendingClarification(
+                origin_node="QueryTransformationNode",
+                missing_fields=["nganh_hoc"],
+                options=[["cntt", "ke_toan"]],
+                original_query="Học phí khóa 2023?",
+            ),
+            history=[
+                HistoryMessage(role="USER", content="Học phí khóa 2023?"),
+                HistoryMessage(role="ASSISTANT", content="Học phí khóa 2023 là ... [1]."),
+            ],
+        )
+
+    assert prompt == _SNAPSHOT_PATH.read_text(encoding="utf-8")
+
+
+def test_build_multi_intent_prompt_renders_sub_queries_and_shares_base_params() -> None:
+    prompt = build_multi_intent_prompt(
+        user_query="Học phí ngành CNTT bao nhiêu, với lại điều kiện học bổng là gì?",
+        sub_queries=["Học phí ngành CNTT bao nhiêu?", "Điều kiện học bổng là gì?"],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[RetrievedChunk(chunk_id="c1", content="Nội dung", source="s", score=0.9)],
+        pending_clarification=None,
+    )
+
+    assert "SQ1. Học phí ngành CNTT bao nhiêu?" in prompt
+    assert "SQ2. Điều kiện học bổng là gì?" in prompt
+    assert "<academic_context>" in prompt
+    assert "Nội dung" in prompt
+
+
+def test_build_multi_intent_prompt_never_shows_the_resolved_query_marker() -> None:
+    """The multi-intent frame has no `resolved_query` concept - it always
+    renders the plain `user_query`, unlike the advisory frame."""
+
+    prompt = build_multi_intent_prompt(
+        user_query="Câu hỏi gốc",
+        sub_queries=["SQ một", "SQ hai"],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        pending_clarification=None,
+    )
+
+    assert "Câu hỏi gốc" in prompt
+    assert "Nguyên văn người dùng vừa nhắn" not in prompt

@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -14,6 +15,7 @@ from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.schemas.clarification import PendingClarification
+from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
@@ -354,3 +356,182 @@ async def test_off_topic_turn_traces_node_05(
         )
 
     assert _traced_nodes(caplog)[-1] == "05_OffTopicRejectNode"
+
+
+def _capturing_generation_model(seen: list[str]) -> FunctionModel:
+    async def stream(messages: list[ModelMessage], _agent_info: AgentInfo):  # type: ignore[no-untyped-def]
+        for part in messages[-1].parts:
+            content = getattr(part, "content", None)
+            if isinstance(content, str):
+                seen.append(content)
+        yield "Câu trả lời cuối cùng [1]."
+
+    return FunctionModel(stream_function=stream)
+
+
+@pytest.mark.asyncio
+async def test_one_multi_advisory_task_decomposed_into_sub_queries_uses_the_multi_intent_frame(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The typical shape post-merge: MessageClassificationNode keeps 2+
+    same-intent questions as ONE academic_advisory task with routing_mode
+    MULTI; splitting into sub-queries is the decomposer's job, not
+    classification's - the two nodes no longer duplicate that work."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    message = "Học phí ngành CNTT bao nhiêu, với lại điều kiện học bổng là gì?"
+    payload = {
+        "tasks": [
+            {"intent": "academic_advisory", "query": message, "routing_mode": "MULTI"},
+        ],
+        "confidence": 0.9,
+    }
+    sub_queries_payload = {
+        "sub_queries": ["Học phí ngành CNTT bao nhiêu?", "Điều kiện học bổng là gì?"]
+    }
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=mock_sync_llm_model(json.dumps(payload, ensure_ascii=False)),
+        query_transformation=mock_sync_llm_model(
+            json.dumps(sub_queries_payload, ensure_ascii=False)
+        ),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message=message,
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+    )
+
+    await run_graph(graph_input, models, _sink([]), _TRACE)
+
+    (prompt,) = seen_prompts
+    assert "SQ1. Học phí ngành CNTT bao nhiêu?" in prompt
+    assert "SQ2. Điều kiện học bổng là gì?" in prompt
+
+
+@pytest.mark.asyncio
+async def test_two_advisory_questions_use_the_multi_intent_frame(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive: even if classification ever emits 2 separate SINGLE tasks
+    for the same intent instead of 1 MULTI task, the graph still answers
+    both via the multi-intent frame."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    message = "Học phí ngành CNTT bao nhiêu, với lại điều kiện học bổng là gì?"
+    payload = {
+        "tasks": [
+            {
+                "intent": "academic_advisory",
+                "query": "Học phí ngành CNTT bao nhiêu?",
+                "routing_mode": "SINGLE",
+            },
+            {
+                "intent": "academic_advisory",
+                "query": "Điều kiện học bổng là gì?",
+                "routing_mode": "SINGLE",
+            },
+        ],
+        "confidence": 0.9,
+    }
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=mock_sync_llm_model(json.dumps(payload, ensure_ascii=False)),
+        query_transformation=_echo_query_transformation_model(),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message=message,
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+    )
+
+    await run_graph(graph_input, models, _sink([]), _TRACE)
+
+    (prompt,) = seen_prompts
+    assert "SQ1. Học phí ngành CNTT bao nhiêu?" in prompt
+    assert "SQ2. Điều kiện học bổng là gì?" in prompt
+
+
+@pytest.mark.asyncio
+async def test_resuming_a_single_origin_task_folds_the_reply_into_its_query(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    origin_task = ClassifiedTask(
+        intent="academic_advisory", query="học phí của ngành tôi học", routing_mode="SINGLE"
+    )
+    pending = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["training_type"],
+        options=[["chinh_quy", "lien_thong"]],
+        original_query="học phí của ngành tôi học",
+        origin_tasks=[origin_task],
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message="Chính quy ạ",
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+        pending_clarification=pending,
+    )
+    retrieval = _RecordingRetrievalService([_DUMMY_CHUNK])
+    models = GraphModels(
+        classification=mock_streaming_llm_model(["unused"]),  # must never be reached
+        query_transformation=_echo_query_transformation_model(),
+        generation=mock_streaming_llm_model(["Câu trả lời cuối cùng [1]."]),
+        retrieval=retrieval,
+    )
+
+    await run_graph(graph_input, models, _sink([]), _TRACE)
+
+    (query,) = retrieval.queries
+    assert query.startswith("học phí của ngành tôi học")
+
+
+@pytest.mark.asyncio
+async def test_resuming_several_origin_tasks_reruns_each_on_its_own_query(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    origin_tasks = [
+        ClassifiedTask(
+            intent="academic_advisory", query="Học phí ngành CNTT bao nhiêu?", routing_mode="SINGLE"
+        ),
+        ClassifiedTask(
+            intent="academic_advisory", query="Điều kiện học bổng là gì?", routing_mode="SINGLE"
+        ),
+    ]
+    pending = PendingClarification(
+        origin_node="QueryTransformationNode",
+        missing_fields=["training_type"],
+        options=[["chinh_quy", "lien_thong"]],
+        original_query="Học phí ngành CNTT bao nhiêu, với lại điều kiện học bổng là gì?",
+        origin_tasks=origin_tasks,
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message="Chính quy ạ",
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+        pending_clarification=pending,
+    )
+    retrieval = _RecordingRetrievalService([_DUMMY_CHUNK])
+    models = GraphModels(
+        classification=mock_sync_llm_model("off_topic"),  # must never be reached
+        query_transformation=_echo_query_transformation_model(),
+        generation=mock_streaming_llm_model(["Câu trả lời cuối cùng [1]."]),
+        retrieval=retrieval,
+    )
+
+    await run_graph(graph_input, models, _sink([]), _TRACE)
+
+    assert len(retrieval.queries) == len(origin_tasks)
+    for query, task in zip(retrieval.queries, origin_tasks, strict=True):
+        assert query.startswith(task.query)

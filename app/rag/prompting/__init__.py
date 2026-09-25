@@ -41,11 +41,38 @@ __all__ = [
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
     "build_missing_metadata_block",
+    "build_multi_intent_prompt",
     "build_system_prompt",
     "get_templates",
     "render_resolved_user_query",
+    "render_sub_queries_list",
     "reset_templates_cache",
 ]
+
+
+def _base_params(
+    *,
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    chunks: Sequence[RetrievedChunk],
+    pending_clarification: PendingClarification | None,
+    history: Sequence[HistoryMessage],
+) -> dict[str, str]:
+    """Blocks shared by every GenerationSynthesisNode frame."""
+
+    templates = get_templates()
+    return {
+        "header": templates.header,
+        "academic_metadata": build_metadata_section(security, confirmed_metadata),
+        "history_message": build_history_section(history),
+        "security_access_control": templates.security_access_control,
+        "academic_domain_rules": templates.academic_domain_rules,
+        "response_style": templates.response_style,
+        "citation_rules": templates.citation_rules,
+        "prepared_context": build_prepared_context_section(chunks),
+        "task_1": templates.task_1,
+        "task_2": build_task_2_section(pending_clarification),
+    }
 
 
 def build_system_prompt(
@@ -58,30 +85,45 @@ def build_system_prompt(
     pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage] = (),
 ) -> str:
-    """Assemble the full prompt for `GenerationSynthesisNode`'s unified advisory
-    flow (advisory/procedure/document/calendar - one frame, `academic_domain_rules`
-    picks the response format per question type).
+    """Advisory frame for a single question. `resolved_query` (the standalone
+    rewrite of a follow-up) is shown ahead of the raw message."""
 
-    `resolved_query` is `QueryTransformationNode`'s self-contained rewrite of
-    a follow-up turn (see `extract_standalone_question`) - e.g. turn 3's raw
-    "còn ĐHCQ ngành CN thì sao" carries no khóa on its own. Retrieval already
-    benefits from it (it drove the HyDE search), but without it here too,
-    generation has to re-derive the same topic from raw `<history_message>`
-    text on its own - which is exactly the step observed to drop the khóa
-    and answer the wrong row. `build_render_user_query` folds it into
-    `{user_query}` so no template placeholder needs to change for this."""
-
-    templates = get_templates()
-    return templates.chat_academic_advisory.format(
-        header=templates.header,
-        academic_metadata=build_metadata_section(security, confirmed_metadata),
-        history_message=build_history_section(history),
-        security_access_control=templates.security_access_control,
-        academic_domain_rules=templates.academic_domain_rules,
-        response_style=templates.response_style,
-        citation_rules=templates.citation_rules,
-        prepared_context=build_prepared_context_section(chunks),
-        task_1=templates.task_1,
-        task_2=build_task_2_section(pending_clarification),
+    return get_templates().chat_academic_advisory.format(
+        **_base_params(
+            security=security,
+            confirmed_metadata=confirmed_metadata,
+            chunks=chunks,
+            pending_clarification=pending_clarification,
+            history=history,
+        ),
         user_query=render_resolved_user_query(user_query, resolved_query),
     )
+
+
+def build_multi_intent_prompt(
+    *,
+    user_query: str,
+    sub_queries: Sequence[str],
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    chunks: Sequence[RetrievedChunk],
+    pending_clarification: PendingClarification | None,
+    history: Sequence[HistoryMessage] = (),
+) -> str:
+    """Multi-intent frame for several sub-queries, listed as `SQk. ...`."""
+
+    return get_templates().chat_multi_intent_synthesis.format(
+        **_base_params(
+            security=security,
+            confirmed_metadata=confirmed_metadata,
+            chunks=chunks,
+            pending_clarification=pending_clarification,
+            history=history,
+        ),
+        sub_queries_list=render_sub_queries_list(sub_queries),
+        user_query=user_query,
+    )
+
+
+def render_sub_queries_list(sub_queries: Sequence[str]) -> str:
+    return "\n".join(f"SQ{index}. {query}" for index, query in enumerate(sub_queries, 1))

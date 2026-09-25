@@ -79,11 +79,7 @@ async def run_graph(
             trace,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
-            advisory_tasks=[
-                _single_advisory_task(
-                    _resume_retrieval_query(graph_input, guard_result) or graph_input.user_message
-                )
-            ],
+            advisory_tasks=_resume_advisory_tasks(graph_input, guard_result),
         )
 
     # MessageClassificationNode.
@@ -159,6 +155,25 @@ def _single_advisory_task(query: str) -> tuple[ClassifiedTask, RoutingMode]:
         ClassifiedTask(intent="academic_advisory", query=query, routing_mode="SINGLE"),
         "SINGLE",
     )
+
+
+def _resume_advisory_tasks(
+    graph_input: GraphInput, guard_result: ClarificationGuardResult
+) -> list[tuple[ClassifiedTask, RoutingMode]]:
+    """Task(s) to re-run for a resume turn: several origin tasks are re-run on
+    their own queries unchanged (splitting a reply across tasks is a known
+    gap); a single task, or no recorded origin_tasks (legacy rows), folds
+    the reply into the resume query first."""
+
+    origin_tasks = guard_result.origin_tasks
+    if origin_tasks and len(origin_tasks) > 1:
+        return [(task, task.routing_mode or "SINGLE") for task in origin_tasks]
+
+    query = _resume_retrieval_query(graph_input, guard_result) or graph_input.user_message
+    if origin_tasks:
+        task = origin_tasks[0].model_copy(update={"query": query})
+        return [(task, task.routing_mode or "SINGLE")]
+    return [_single_advisory_task(query)]
 
 
 def _resume_retrieval_query(
@@ -247,6 +262,9 @@ async def _run_advisory_flow(
     # GenerationSynthesisNode (streaming).
     trace.node("10_GenerationSynthesisNode")
     generation_agent = build_generation_agent(models.generation)
+    sub_query_questions = (
+        [sub_query.question for sub_query in sub_queries] if len(sub_queries) > 1 else None
+    )
     generation_result = await run_generation_synthesis(
         generation_agent,
         user_query=question,
@@ -259,6 +277,8 @@ async def _run_advisory_flow(
         history=graph_input.history,
         token_sink=token_sink,
         trace=trace,
+        advisory_tasks=[task for task, _mode in advisory_tasks],
+        sub_queries=sub_query_questions,
     )
     return GraphOutput(
         response_text=generation_result.response_text,

@@ -33,14 +33,20 @@ from pydantic_ai.models import Model
 from app.core.config import settings
 from app.core.graph_trace import GraphTrace
 from app.graph.streaming import TokenSink, stream_agent_text
-from app.rag.prompting import build_json_repair_prompt, build_system_prompt
+from app.rag.prompting import (
+    build_json_repair_prompt,
+    build_multi_intent_prompt,
+    build_system_prompt,
+)
 from app.rag.prompting.builder import build_metadata_section, build_prepared_context_section
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
+from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
 _JSON_BLOCK_PATTERN = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+_SUB_QUERY_ID_PATTERN = re.compile(r"SQ(\d+)")
 _CLARIFICATION_PHRASE_PATTERN = re.compile(
     r"cho\s+.{0,15}?bi[eế]t\b"
     r"|cung\s+c[aấ]p\b.{0,25}?th[oô]ng\s+tin\b"
@@ -165,16 +171,32 @@ async def run_generation_synthesis(
     token_sink: TokenSink,
     trace: GraphTrace,
     history: Sequence[HistoryMessage] = (),
+    advisory_tasks: Sequence[ClassifiedTask] | None = None,
+    sub_queries: Sequence[str] | None = None,
 ) -> GenerationResult:
-    full_prompt = build_system_prompt(
-        user_query=user_query,
-        resolved_query=resolved_query,
-        security=security,
-        confirmed_metadata=confirmed_metadata,
-        chunks=chunks,
-        pending_clarification=previous_pending,
-        history=history,
-    )
+    # A single HyDE question uses the advisory frame; several sub-queries
+    # (a decomposed comparison, or several different questions in one
+    # message) use the multi-intent frame instead.
+    if sub_queries and len(sub_queries) > 1:
+        full_prompt = build_multi_intent_prompt(
+            user_query=user_query,
+            sub_queries=sub_queries,
+            security=security,
+            confirmed_metadata=confirmed_metadata,
+            chunks=chunks,
+            pending_clarification=previous_pending,
+            history=history,
+        )
+    else:
+        full_prompt = build_system_prompt(
+            user_query=user_query,
+            resolved_query=resolved_query,
+            security=security,
+            confirmed_metadata=confirmed_metadata,
+            chunks=chunks,
+            pending_clarification=previous_pending,
+            history=history,
+        )
     # Only the two per-request blocks are worth dumping - the rest of the
     # prompt is static YAML that can be read from the templates directly.
     trace.prompt(
@@ -202,6 +224,8 @@ async def run_generation_synthesis(
         previous=previous_pending,
         user_query=user_query,
         confirmed_metadata=updated_confirmed_metadata,
+        origin_tasks=list(advisory_tasks) if advisory_tasks else None,
+        sub_query_count=len(sub_queries) if sub_queries else 1,
     )
     if new_pending is None:
         new_pending = _carry_forward_unanswered(
@@ -301,6 +325,8 @@ def collect_pending_clarification(
     previous: PendingClarification | None,
     user_query: str = "",
     confirmed_metadata: dict[str, str] | None = None,
+    origin_tasks: list[ClassifiedTask] | None = None,
+    sub_query_count: int = 1,
 ) -> PendingClarification | None:
     """Rebuild the pending round from the model's `ask_user_form` block.
 
@@ -385,6 +411,20 @@ def collect_pending_clarification(
     )
     original_query = previous.original_query if previous is not None else user_query
 
+    # Only trust an ask_user_form's sub_query_id when it names one of THIS
+    # turn's sub-queries - a stale or made-up SQk would misroute the resume.
+    raw_sub_query_id = parsed.get("sub_query_id")
+    sub_query_match = (
+        _SUB_QUERY_ID_PATTERN.fullmatch(raw_sub_query_id)
+        if isinstance(raw_sub_query_id, str)
+        else None
+    )
+    pending_sub_query_id = (
+        raw_sub_query_id
+        if sub_query_match and 1 <= int(sub_query_match.group(1)) <= sub_query_count
+        else None
+    )
+
     return PendingClarification(
         origin_node=origin_node,
         missing_fields=missing_fields,
@@ -392,4 +432,6 @@ def collect_pending_clarification(
         option_labels=option_labels,
         retry_count=retry_count,
         original_query=original_query,
+        pending_sub_query_id=pending_sub_query_id,
+        origin_tasks=origin_tasks,
     )
