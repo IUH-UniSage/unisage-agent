@@ -9,11 +9,16 @@ from kombu import Queue
 
 from app.core.config import settings
 from app.core.events import publish_ingestion_event
+from app.core.logging_config import configure_logging
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
 
+# Same redaction filter + noisy-logger silencing as the API process (see
+# app/main.py) - Celery worker/beat is a separate process that never imports
+# app.main, so it needs its own call. plan.md "Secret redaction".
+configure_logging()
 logger = logging.getLogger(__name__)
 
 celery_app = Celery(

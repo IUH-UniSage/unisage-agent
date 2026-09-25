@@ -11,28 +11,16 @@ from app.api.v1 import chat, documents, health, ingestion
 from app.core.config import settings
 from app.core.error_codes import ErrorCode
 from app.core.exceptions import UniSageException
+from app.core.logging_config import configure_logging
 from app.core.middleware import request_logging_middleware
 from app.rag.chunking.table_row import TableStructureError
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Sets the root format, silences noisy/secret-leaking third-party loggers
+# (httpx/httpcore/openai/anthropic/...) and attaches the redaction filter that
+# scrubs every log record before it's written - see app/core/logging_config.py
+# and plan.md "Secret redaction".
+configure_logging()
 logger = logging.getLogger(__name__)
-
-# `settings.APP_DEBUG` only controls our own verbose output (see
-# app/core/graph_trace.py's prompt dump) - it must NOT raise the root level,
-# or every third-party library's own DEBUG logs (httpx, httpcore, the
-# OpenAI SDK's vendored httpx fork, SQLAlchemy's engine echo) drown out the
-# one thing worth reading here: which graph node a request went through.
-for _noisy_logger in (
-    "httpx",
-    "httpcore",
-    "httpx2",
-    "httpcore2",
-    "openai",
-    "openai._base_client",
-    "sqlalchemy.engine",
-    "asyncio",
-):
-    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
 
 
 @asynccontextmanager
