@@ -43,6 +43,7 @@ __all__ = [
     "build_missing_metadata_block",
     "build_multi_intent_prompt",
     "build_system_prompt",
+    "build_ticket_fallback_prompt",
     "get_templates",
     "render_resolved_user_query",
     "render_sub_queries_list",
@@ -121,6 +122,29 @@ def build_multi_intent_prompt(
             history=history,
         ),
         sub_queries_list=render_sub_queries_list(sub_queries),
+        user_query=user_query,
+    )
+
+
+def build_ticket_fallback_prompt(
+    *,
+    user_query: str,
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    history: Sequence[HistoryMessage] = (),
+) -> str:
+    """TicketFallbackNode frame: no `{prepared_context}`/`task_1`/`task_2` -
+    the model gets no chunks and no clarification machinery, so it can only
+    write the fallback message, never cite a regulation it has no source for."""
+
+    templates = get_templates()
+    return templates.chat_ticket_fallback.format(
+        header=templates.header,
+        academic_metadata=build_metadata_section(security, confirmed_metadata),
+        history_message=build_history_section(history),
+        security_access_control=templates.security_access_control,
+        response_style=templates.response_style,
+        ticket_fallback=templates.ticket_fallback,
         user_query=user_query,
     )
 

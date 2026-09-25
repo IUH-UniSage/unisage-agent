@@ -35,7 +35,7 @@ from app.graph.nodes.security_context import (
     ClarificationGuardResult,
     resolve_clarification_guard,
 )
-from app.graph.nodes.ticket_fallback import build_ticket_fallback_response
+from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
 from app.graph.streaming import TokenSink
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.rag.prompting.citations import build_citations
@@ -248,12 +248,19 @@ async def _run_advisory_flow(
     rerank_result = rerank_chunks(chunks)
 
     if not rerank_result.has_valid_context:
-        # TicketFallbackNode.
+        # TicketFallbackNode (streaming).
         trace.node("11_TicketFallbackNode")
-        fallback = build_ticket_fallback_response(question)
-        await token_sink(fallback.message)
+        fallback_agent = build_ticket_fallback_agent(models.generation)
+        fallback_text = await run_ticket_fallback(
+            fallback_agent,
+            question,
+            security=graph_input.security,
+            confirmed_metadata=confirmed_metadata,
+            history=graph_input.history,
+            token_sink=token_sink,
+        )
         return GraphOutput(
-            response_text=fallback.message,
+            response_text=fallback_text,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
             used_ticket_fallback=True,

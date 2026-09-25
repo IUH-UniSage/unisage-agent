@@ -194,13 +194,14 @@ async def test_no_valid_context_falls_back_to_ticket(
         security=AcademicSecurityContext(),
     )
     tokens: list[str] = []
-
-    result = await run_graph(
-        graph_input,
-        _models(mock_sync_llm_model, mock_streaming_llm_model, classification="academic_advisory"),
-        _sink(tokens),
-        _TRACE,
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE doc giả định"),
+        generation=mock_streaming_llm_model(["Chưa tìm thấy quy định phù hợp."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
     )
+
+    result = await run_graph(graph_input, models, _sink(tokens), _TRACE)
 
     assert result.used_ticket_fallback is True
     assert "chưa tìm thấy" in result.response_text.lower()

@@ -223,7 +223,7 @@ async def test_mixed_turn_without_context_falls_back_then_appends_the_placeholde
     models = GraphModels(
         classification=_mixed_classification_model(),
         query_transformation=_echo_model(),
-        generation=mock_streaming_llm_model(["unused"]),
+        generation=mock_streaming_llm_model(["Chưa tìm thấy quy định phù hợp."]),
         retrieval=_RecordingRetrieval([_CHUNK]),
     )
 

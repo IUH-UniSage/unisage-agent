@@ -203,7 +203,9 @@ async def test_ticket_fallback_when_no_valid_context(
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
         classification=make_classification_llm_model("academic_advisory"),
         query_transformation=mock_sync_llm_model("hyde"),
-        generation=mock_streaming_llm_model(["unused"]),
+        generation=mock_streaming_llm_model(
+            ["Hệ thống chưa tìm thấy quy định chính thức cho câu hỏi này."]
+        ),
         retrieval=FakeRetrievalService(),
     )
 
