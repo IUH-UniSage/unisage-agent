@@ -13,28 +13,34 @@ calls `BackendJavaClient` itself, keeping graph logic testable without HTTP
 mocks.
 """
 
+from collections.abc import Sequence
+from dataclasses import replace
+
 from app.core.graph_trace import GraphTrace
+from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
-from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, route_intent
+from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, plan_route
 from app.graph.nodes.message_classification import build_classification_agent, classify_intent
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.query_transformation import (
+    build_decomposer_agent,
     build_query_transformation_agent,
     extract_standalone_question,
-    transform_query,
+    transform_tasks,
 )
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.graph.nodes.security_context import (
     ClarificationGuardResult,
     resolve_clarification_guard,
 )
-from app.graph.nodes.ticket_fallback import build_ticket_fallback_response
+from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
 from app.graph.streaming import TokenSink
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.rag.prompting.citations import build_citations
 from app.schemas.clarification import PendingClarification
+from app.schemas.intent import ClassifiedTask, RoutingMode
 
 _ORIGIN_NODE_QUERY_TRANSFORMATION = "QueryTransformationNode"
 
@@ -45,7 +51,7 @@ async def run_graph(
     token_sink: TokenSink,
     trace: GraphTrace,
 ) -> GraphOutput:
-    # Node 01 - GreetingDetectionNode: Fast Path, zero LLM tokens.
+    # GreetingDetectionNode: fast path, no LLM.
     trace.node("01_GreetingDetectionNode")
     if detect_greeting(graph_input.user_message, first_turn=graph_input.is_first_turn):
         await token_sink(GREETING_TEMPLATE)
@@ -54,7 +60,7 @@ async def run_graph(
             confirmed_metadata=graph_input.confirmed_metadata,
         )
 
-    # Node 02 - Clarification Guard (part of SecurityContextExtractionNode).
+    # Clarification Guard (SecurityContextExtractionNode).
     trace.node("02_SecurityContextExtractionNode_ClarificationGuard")
     guard_result = resolve_clarification_guard(
         user_message=graph_input.user_message,
@@ -73,22 +79,22 @@ async def run_graph(
             trace,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
-            resume_original_query=_resume_retrieval_query(graph_input, guard_result),
+            advisory_tasks=_resume_advisory_tasks(graph_input, guard_result),
         )
 
-    # Node 03 - MessageClassificationNode.
+    # MessageClassificationNode.
     trace.node("03_MessageClassificationNode")
     classification_agent = build_classification_agent(models.classification)
-    intent = await classify_intent(
+    classification = await classify_intent(
         classification_agent, graph_input.user_message, history=graph_input.history
     )
 
-    # Node 04 - IntentRoutingNode (deterministic).
+    # IntentRoutingNode (deterministic).
     trace.node("04_IntentRoutingNode")
-    route = route_intent(intent)
+    route_plan = plan_route(classification)
 
-    if route == "END_SOCIAL_CHAT":
-        trace.node("05B_SocialChat")
+    if route_plan.end == "SOCIAL_CHAT":
+        trace.node("04_IntentRouting_SocialChat")
         await token_sink(SOCIAL_CHAT_TEMPLATE)
         return GraphOutput(
             response_text=SOCIAL_CHAT_TEMPLATE,
@@ -96,8 +102,8 @@ async def run_graph(
             pending_clarification=pending_clarification,
         )
 
-    if route == "OffTopicRejectNode":
-        trace.node("05B_OffTopicRejectNode")
+    if route_plan.end == "OFF_TOPIC":
+        trace.node("05_OffTopicRejectNode")
         await token_sink(OFF_TOPIC_TEMPLATE)
         return GraphOutput(
             response_text=OFF_TOPIC_TEMPLATE,
@@ -105,16 +111,69 @@ async def run_graph(
             pending_clarification=pending_clarification,
         )
 
-    # route == "QueryTransformationNode": the unified advisory/procedure/document/calendar flow.
-    return await _run_advisory_flow(
+    if not route_plan.advisory_tasks:
+        # Only calculation tasks: CalculationNode answers the whole turn.
+        trace.node("07_CalculationNode")
+        await token_sink(CALCULATION_PLACEHOLDER_TEMPLATE)
+        return GraphOutput(
+            response_text=CALCULATION_PLACEHOLDER_TEMPLATE,
+            confirmed_metadata=confirmed_metadata,
+            pending_clarification=pending_clarification,
+        )
+
+    # A mixed turn answers only the advisory question(s), so generation doesn't
+    # try to answer the calculation part from regulations.
+    advisory_question = (
+        " ".join(task.query for task, _mode in route_plan.advisory_tasks)
+        if route_plan.calculation_tasks
+        else None
+    )
+    output = await _run_advisory_flow(
         graph_input,
         models,
         token_sink,
         trace,
         confirmed_metadata=confirmed_metadata,
         pending_clarification=pending_clarification,
-        resume_original_query=guard_result.original_query,
+        advisory_tasks=route_plan.advisory_tasks,
+        question=advisory_question,
     )
+    if not route_plan.calculation_tasks:
+        return output
+
+    # CalculationNode placeholder, appended outside the LLM.
+    trace.node("07_CalculationNode")
+    calculation_part = f"\n\n{CALCULATION_PLACEHOLDER_TEMPLATE}"
+    await token_sink(calculation_part)
+    return replace(output, response_text=output.response_text + calculation_part)
+
+
+def _single_advisory_task(query: str) -> tuple[ClassifiedTask, RoutingMode]:
+    """A resume turn re-runs the original question as one SINGLE advisory task."""
+
+    return (
+        ClassifiedTask(intent="academic_advisory", query=query, routing_mode="SINGLE"),
+        "SINGLE",
+    )
+
+
+def _resume_advisory_tasks(
+    graph_input: GraphInput, guard_result: ClarificationGuardResult
+) -> list[tuple[ClassifiedTask, RoutingMode]]:
+    """Task(s) to re-run for a resume turn: several origin tasks are re-run on
+    their own queries unchanged (splitting a reply across tasks is a known
+    gap); a single task, or no recorded origin_tasks (legacy rows), folds
+    the reply into the resume query first."""
+
+    origin_tasks = guard_result.origin_tasks
+    if origin_tasks and len(origin_tasks) > 1:
+        return [(task, task.routing_mode or "SINGLE") for task in origin_tasks]
+
+    query = _resume_retrieval_query(graph_input, guard_result) or graph_input.user_message
+    if origin_tasks:
+        task = origin_tasks[0].model_copy(update={"query": query})
+        return [(task, task.routing_mode or "SINGLE")]
+    return [_single_advisory_task(query)]
 
 
 def _resume_retrieval_query(
@@ -149,47 +208,73 @@ async def _run_advisory_flow(
     *,
     confirmed_metadata: dict[str, str],
     pending_clarification: PendingClarification | None,
-    resume_original_query: str | None,
+    advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
+    question: str | None = None,
 ) -> GraphOutput:
-    # Node 06 - QueryTransformationNode (HyDE).
+    """Advisory branch: query transformation → retrieval → rerank → generation
+    (or ticket fallback). `question` is what gets answered; `None` means the
+    whole user message."""
+
+    question = question or graph_input.user_message
+
+    # QueryTransformationNode: HyDE per SINGLE task, decomposer per MULTI task.
     trace.node("06_QueryTransformationNode")
-    query_transformation_agent = build_query_transformation_agent(models.query_transformation)
-    retrieval_query = resume_original_query or graph_input.user_message
-    hyde_doc = await transform_query(
-        query_transformation_agent,
-        retrieval_query,
+    sub_queries = await transform_tasks(
+        build_query_transformation_agent(models.query_transformation),
+        advisory_tasks,
+        decomposer_agent=build_decomposer_agent(models.query_transformation),
         confirmed_metadata=confirmed_metadata,
         history=graph_input.history,
     )
-    trace.prompt("06_QueryTransformationNode_HyDE", hyde_doc)
-    resolved_query = extract_standalone_question(hyde_doc)
+    for sub_query in sub_queries:
+        trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
+    # The standalone rewrite only applies to a single HyDE question.
+    resolved_query = (
+        extract_standalone_question(sub_queries[0].retrieval_text)
+        if len(sub_queries) == 1
+        else None
+    )
 
-    # Node 10 - RetrievalFilteringNode (no permission filter yet).
-    trace.node("10_RetrievalFilteringNode")
-    chunks = retrieve_chunks(hyde_doc, models.retrieval)
+    # RetrievalFilteringNode (permission pre-filter on every query).
+    trace.node("08_RetrievalFilteringNode")
+    chunks = retrieve_chunks(
+        [sub_query.retrieval_text for sub_query in sub_queries],
+        models.retrieval,
+        graph_input.security,
+    )
 
-    # Node 11 - PostRetrievalRerankNode.
-    trace.node("11_PostRetrievalRerankNode")
+    # PostRetrievalRerankNode.
+    trace.node("09_PostRetrievalRerankNode")
     rerank_result = rerank_chunks(chunks)
 
     if not rerank_result.has_valid_context:
-        # Node 13 - TicketFallbackNode.
-        trace.node("13_TicketFallbackNode")
-        fallback = build_ticket_fallback_response(graph_input.user_message)
-        await token_sink(fallback.message)
+        # TicketFallbackNode (streaming).
+        trace.node("11_TicketFallbackNode")
+        fallback_agent = build_ticket_fallback_agent(models.generation)
+        fallback_text = await run_ticket_fallback(
+            fallback_agent,
+            question,
+            security=graph_input.security,
+            confirmed_metadata=confirmed_metadata,
+            history=graph_input.history,
+            token_sink=token_sink,
+        )
         return GraphOutput(
-            response_text=fallback.message,
+            response_text=fallback_text,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
             used_ticket_fallback=True,
         )
 
-    # Node 12 - GenerationSynthesisNode (streaming fan-in).
-    trace.node("12_GenerationSynthesisNode")
+    # GenerationSynthesisNode (streaming).
+    trace.node("10_GenerationSynthesisNode")
     generation_agent = build_generation_agent(models.generation)
+    sub_query_questions = (
+        [sub_query.question for sub_query in sub_queries] if len(sub_queries) > 1 else None
+    )
     generation_result = await run_generation_synthesis(
         generation_agent,
-        user_query=graph_input.user_message,
+        user_query=question,
         resolved_query=resolved_query,
         security=graph_input.security,
         confirmed_metadata=confirmed_metadata,
@@ -199,6 +284,8 @@ async def _run_advisory_flow(
         history=graph_input.history,
         token_sink=token_sink,
         trace=trace,
+        advisory_tasks=[task for task, _mode in advisory_tasks],
+        sub_queries=sub_query_questions,
     )
     return GraphOutput(
         response_text=generation_result.response_text,

@@ -12,6 +12,7 @@ from app.graph.nodes.generation_synthesis import (
     run_generation_synthesis,
 )
 from app.schemas.clarification import PendingClarification
+from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
@@ -128,6 +129,86 @@ def test_collect_pending_clarification_resets_retry_count_for_new_field() -> Non
     assert result.options == [["k21", "k22"]]
 
 
+def test_collect_pending_clarification_keeps_sub_query_id_within_range() -> None:
+    text = (
+        "```json"
+        '\n{"type": "ask_user_form", "sub_query_id": "SQ2", "fields": '
+        '[{"field": "he_dao_tao", "options": [{"id": "chinh_quy"}]}]}\n'
+        "```"
+    )
+
+    result = collect_pending_clarification(
+        text, origin_node="QueryTransformationNode", previous=None, sub_query_count=2
+    )
+
+    assert result is not None
+    assert result.pending_sub_query_id == "SQ2"
+
+
+@pytest.mark.parametrize(
+    ("sub_query_id", "sub_query_count"),
+    [
+        ("SQ5", 2),  # out of range for this turn
+        ("abc", 2),  # not an SQk shape at all
+    ],
+)
+def test_collect_pending_clarification_drops_an_unusable_sub_query_id(
+    sub_query_id: str, sub_query_count: int
+) -> None:
+    text = (
+        "```json"
+        f'\n{{"type": "ask_user_form", "sub_query_id": "{sub_query_id}", "fields": '
+        '[{"field": "he_dao_tao", "options": [{"id": "chinh_quy"}]}]}\n'
+        "```"
+    )
+
+    result = collect_pending_clarification(
+        text, origin_node="QueryTransformationNode", previous=None, sub_query_count=sub_query_count
+    )
+
+    assert result is not None
+    assert result.pending_sub_query_id is None
+
+
+def test_collect_pending_clarification_defaults_sub_query_id_to_none_for_a_single_question() -> (
+    None
+):
+    """A form with no `sub_query_id` at all (the common, single-question case)."""
+
+    text = (
+        "```json"
+        '\n{"type": "ask_user_form", "fields": '
+        '[{"field": "he_dao_tao", "options": [{"id": "chinh_quy"}]}]}\n'
+        "```"
+    )
+
+    result = collect_pending_clarification(
+        text, origin_node="QueryTransformationNode", previous=None
+    )
+
+    assert result is not None
+    assert result.pending_sub_query_id is None
+
+
+def test_collect_pending_clarification_records_the_turns_origin_tasks() -> None:
+    text = (
+        "```json"
+        '\n{"type": "ask_user_form", "fields": '
+        '[{"field": "he_dao_tao", "options": [{"id": "chinh_quy"}]}]}\n'
+        "```"
+    )
+    tasks = [
+        ClassifiedTask(intent="academic_advisory", query="Thủ tục bảo lưu?", routing_mode="SINGLE")
+    ]
+
+    result = collect_pending_clarification(
+        text, origin_node="QueryTransformationNode", previous=None, origin_tasks=tasks
+    )
+
+    assert result is not None
+    assert result.origin_tasks == tasks
+
+
 @pytest.mark.asyncio
 async def test_repairs_missing_ask_form_when_prose_asks_for_missing_attribute(
     mock_sequential_streaming_llm_model: Callable[[Sequence[Sequence[str]]], FunctionModel],
@@ -177,13 +258,13 @@ async def test_skips_repair_call_when_allow_repair_json_is_false(
     mock_sequential_streaming_llm_model: Callable[[Sequence[Sequence[str]]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`ALLOW_REPAIR_JSON=false` must skip `_repair_missing_ask_form`
+    """`CHAT_ALLOW_REPAIR_JSON=false` must skip `_repair_missing_ask_form`
     entirely, not just suppress its effect - only ONE response is scripted
     below (unlike `test_repairs_missing_ask_form_when_prose_asks_for_missing
     _attribute`'s two), so a repair call that fired anyway would exhaust the
     mock and fail the test."""
 
-    monkeypatch.setattr(settings, "ALLOW_REPAIR_JSON", False)
+    monkeypatch.setattr(settings, "CHAT_ALLOW_REPAIR_JSON", False)
     prose_without_json = "Bạn vui lòng cho biết ngành học của bạn để mình tra học phí nhé!"
     agent = build_generation_agent(mock_sequential_streaming_llm_model([[prose_without_json]]))
 

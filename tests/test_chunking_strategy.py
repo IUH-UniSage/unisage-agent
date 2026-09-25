@@ -84,7 +84,7 @@ def test_table_chunk_budget_defaults_to_the_setting_and_ignores_text_target_toke
         return [c for c in chunks if c.region_type == RegionType.TABLE]
 
     default = table_chunks({})
-    assert settings.TABLE_CHUNK_MAX_TOKENS == 800
+    assert settings.INGEST_TABLE_CHUNK_MAX_TOKENS == 800
     assert max(len(encoding.encode(c.content)) for c in default) <= 800
     assert len(default) < len(table_chunks({"table_max_tokens": 400}))
     # the text strategy's own knobs never touch table chunks

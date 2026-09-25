@@ -10,10 +10,10 @@ services:
       # unisage-agent connects to the same physical Postgres/MinIO as
       # backend-java (their containers, published on the host - see
       # SPEC-ingestion-resume.md and app/core/config.py), not
-      # container-local ones. `.env`'s DATABASE_URL/MINIO_ENDPOINT use
+      # container-local ones. `.env`'s DB_URL/MINIO_ENDPOINT use
       # `localhost`, which only resolves from the host itself; from inside
       # this container `host.docker.internal` reaches the host instead.
-      - DATABASE_URL=postgresql+asyncpg://postgres:123456@host.docker.internal:5433/unisage_agent_db
+      - DB_URL=postgresql+asyncpg://postgres:123456@host.docker.internal:5433/unisage_agent_db
       - MINIO_ENDPOINT=host.docker.internal:9000
       - REDIS_URL=redis://redis:6379/0
       - QDRANT_HOST=qdrant

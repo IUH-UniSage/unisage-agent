@@ -74,7 +74,7 @@ class TokenBasedChunker:
                         page_start=region.page_start,
                         page_end=region.page_end,
                         source_locator=SourceLocator(section=_section(region.heading_path)),
-                        chunking_version=settings.CHUNKING_VERSION,
+                        chunking_version=settings.INGEST_CHUNKING_VERSION,
                     )
                 )
         return chunks

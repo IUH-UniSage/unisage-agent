@@ -31,7 +31,7 @@ async def run_async_migrations() -> None:
     configuration = config.get_section(config.config_ini_section)
     if configuration is None:
         raise RuntimeError("Alembic configuration section is missing.")
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    configuration["sqlalchemy.url"] = settings.DB_URL
 
     connectable = async_engine_from_config(
         configuration,

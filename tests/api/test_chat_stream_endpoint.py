@@ -20,7 +20,7 @@ from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
 from app.schemas.retrieval import RetrievedChunk
-from tests.llm_mocks import FakeRetrievalService
+from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 
 def _fake_request(client_host: str | None) -> Request:
@@ -91,7 +91,7 @@ def mock_graph_models(
     mock_sync_llm_model: Callable[[str], FunctionModel],
 ) -> GraphModels:
     return GraphModels(
-        classification=mock_sync_llm_model("academic_advisory"),
+        classification=make_classification_llm_model("academic_advisory"),
         query_transformation=mock_sync_llm_model("hyde doc"),
         generation=mock_streaming_llm_model(["Câu trả lời cuối cùng."]),
         retrieval=FakeRetrievalService(
@@ -298,7 +298,7 @@ def test_every_java_call_carries_x_internal_secret(
         list(response.iter_text())
 
     assert len(java.calls) >= 3  # GET history, POST user, POST assistant, PATCH
-    assert all(call["x_internal_secret"] == settings.INTERNAL_SECRET_KEY for call in java.calls)
+    assert all(call["x_internal_secret"] == settings.APP_INTERNAL_SECRET_KEY for call in java.calls)
 
 
 def test_resolve_client_ip_prefers_x_forwarded_for_first_hop() -> None:

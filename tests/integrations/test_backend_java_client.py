@@ -173,7 +173,7 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
     )
     await client.get_conversation_messages(conversation_id="conv-1", authorization=None)
 
-    assert seen == [settings.INTERNAL_SECRET_KEY] * 3
+    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 3
 
 
 @pytest.mark.asyncio

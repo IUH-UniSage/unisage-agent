@@ -44,8 +44,8 @@ router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)]
 # 20, used by GET /messages/conversation/{id} for the frontend's history
 # list) - this is specifically how many prior turns get folded into the
 # generation prompt as raw <history_message> context, not how many the UI
-# shows. Configurable via HISTORY_MESSAGE_LIMIT (see app/core/config.py).
-_HISTORY_MESSAGE_LIMIT = settings.HISTORY_MESSAGE_LIMIT
+# shows. Configurable via CHAT_HISTORY_MESSAGE_LIMIT (see app/core/config.py).
+_HISTORY_MESSAGE_LIMIT = settings.CHAT_HISTORY_MESSAGE_LIMIT
 
 
 async def _load_history(
@@ -256,7 +256,7 @@ async def chat_stream_endpoint(
         security=security,
         confirmed_metadata=confirmed_metadata,
         pending_clarification=pending_clarification,
-        clarification_max_retry=settings.CLARIFICATION_MAX_RETRY,
+        clarification_max_retry=settings.CHAT_CLARIFICATION_MAX_RETRY,
         history=history,
     )
 

@@ -7,7 +7,7 @@
       "aliases": ["hệ đào tạo", "loại hình đào tạo", "hệ"],
       "example_options": ["Chính quy", "Liên thông", "Vừa làm vừa học"],
       "priority": "high",
-      "description": "Thuộc tính phân nhánh quy chế phổ biến nhất — hầu hết văn bản học phí/miễn giảm/điều kiện đều tách theo hệ. Sinh viên luôn tự biết mình học hệ nào."
+      "description": "Hình thức đào tạo (chính quy/liên thông...)."
     },
     {
       "field": "bac_dao_tao",
@@ -15,7 +15,7 @@
       "aliases": ["bậc đào tạo", "trình độ đào tạo"],
       "example_options": ["Đại học", "Cao đẳng", "Sau đại học"],
       "priority": "medium",
-      "description": "KHÁC với he_dao_tao — bậc là cấp học (đại học/cao đẳng...), hệ là hình thức đào tạo (chính quy/liên thông...). Không gộp chung hai khái niệm này vào một field dù có vẻ liên quan, vì văn bản thường chỉ chia nhánh theo MỘT trong hai, không phải cả hai cùng lúc."
+      "description": "Cấp học (đại học/cao đẳng/sau đại học) - KHÁC he_dao_tao, không gộp."
     },
     {
       "field": "nganh_hoc",
@@ -23,7 +23,7 @@
       "aliases": ["ngành học", "ngành đào tạo", "chuyên ngành", "chương trình đào tạo", "program"],
       "example_options": ["Công nghệ Thông tin", "Kỹ thuật Phần mềm", "Quản trị Kinh doanh"],
       "priority": "high",
-      "description": "Học phí, mã ngành, chuẩn đầu ra... hầu như luôn tách theo ngành. Options PHẢI copy nguyên văn danh sách ngành trong <academic_context> lượt này, không tự bịa danh sách ngành của trường."
+      "description": "Options copy nguyên văn danh sách ngành trong văn bản."
     },
     {
       "field": "khoa_nhap_hoc",
@@ -31,7 +31,7 @@
       "aliases": ["khóa nhập học", "khóa tuyển sinh", "năm nhập học", "academic_year", "khóa"],
       "example_options": ["K21", "K22", "K23"],
       "priority": "high",
-      "description": "Nhiều quy định (mức học phí, chương trình đào tạo áp dụng) chỉ có hiệu lực từ một khóa tuyển sinh trở về sau — khóa nhập học quyết định văn bản nào áp dụng. Không nhầm với current_year (năm học hiện tại đang theo, khác khái niệm)."
+      "description": "Khóa tuyển sinh (K21...) - KHÁC nam_thu_may."
     },
     {
       "field": "dieu_kien_hoc_bong",
@@ -39,7 +39,7 @@
       "aliases": ["điều kiện học bổng", "diện học bổng", "loại học bổng"],
       "example_options": [],
       "priority": "medium",
-      "description": "Options phụ thuộc hoàn toàn vào văn bản học bổng đang đọc lượt này — không có tập giá trị cố định, PHẢI lấy nguyên văn nhãn nhánh từ <academic_context>."
+      "description": "Options lấy nguyên văn từ văn bản học bổng."
     },
     {
       "field": "khoa_quan_ly",
@@ -47,7 +47,7 @@
       "aliases": ["khoa quản lý", "đơn vị đào tạo", "department"],
       "example_options": [],
       "priority": "low",
-      "description": "Hiếm khi văn bản quy chế phân nhánh trực tiếp theo khoa quản lý (thường phân theo ngành/hệ là đủ) — chỉ hỏi khi CHÍNH văn bản đang đọc lượt này thực sự chia nhánh theo khoa, không suy đoán từ tên ngành."
+      "description": "Hiếm khi hợp lệ - chỉ khi văn bản chia nhánh theo khoa."
     },
     {
       "field": "lop",
@@ -55,7 +55,7 @@
       "aliases": ["lớp", "class"],
       "example_options": [],
       "priority": "low",
-      "description": "Gần như không bao giờ là thuộc tính phân nhánh của văn bản quy chế cấp trường (lớp chỉ dùng nội bộ quản lý giảng dạy) — chỉ đặt field này nếu văn bản đang đọc thực sự nêu rõ theo lớp, trường hợp cực hiếm."
+      "description": "Hiếm khi hợp lệ - chỉ khi văn bản chia nhánh theo lớp."
     },
     {
       "field": "co_so_hoc",
@@ -63,7 +63,7 @@
       "aliases": ["cơ sở", "campus", "cơ sở đào tạo"],
       "example_options": [],
       "priority": "low",
-      "description": "Chỉ hỏi khi trường có nhiều cơ sở VÀ văn bản đang đọc thực sự quy định khác nhau theo cơ sở (VD mức phí ký túc xá theo từng cơ sở) — không mặc định hỏi cho mọi câu hỏi."
+      "description": "Chỉ khi văn bản quy định khác nhau theo cơ sở."
     },
     {
       "field": "nam_thu_may",
@@ -71,7 +71,7 @@
       "aliases": ["năm mấy", "sinh viên năm thứ", "current_year"],
       "example_options": ["Năm 1", "Năm 2", "Năm 3", "Năm 4"],
       "priority": "medium",
-      "description": "KHÁC khoa_nhap_hoc (khóa tuyển sinh là mốc cố định, VD K21; năm học hiện tại thay đổi theo thời gian). Dùng khi văn bản chia nhánh theo tiến độ học (VD điều kiện xét tốt nghiệp chỉ áp dụng sinh viên năm cuối)."
+      "description": "Năm học hiện tại (năm 1/2/3/4) - KHÁC khoa_nhap_hoc."
     },
     {
       "field": "ma_so_sinh_vien",
@@ -79,7 +79,7 @@
       "aliases": ["mã sinh viên", "MSSV", "student_id"],
       "example_options": [],
       "priority": "low",
-      "description": "KHÔNG có tập giá trị hữu hạn (số tự khai) — theo ask_user_form_guide, thuộc tính dạng này KHÔNG được đưa vào form (options: null bị hệ thống drop). Gần như không bao giờ là thuộc tính phân nhánh của một QUY ĐỊNH (mã số không quyết định quy định nào áp dụng) — nếu cần xác minh danh tính thật, đó là việc của đăng nhập/JWT (academic_user_context), không phải confirmed_metadata tự khai."
+      "description": "KHÔNG hỏi qua form (không có tập giá trị, không phân nhánh quy định)."
     },
     {
       "field": "ho_ten",
@@ -87,7 +87,7 @@
       "aliases": ["tên", "họ tên", "name"],
       "example_options": [],
       "priority": "low",
-      "description": "KHÔNG có tập giá trị hữu hạn và KHÔNG phải thuộc tính quy chế bao giờ phân nhánh theo — không tạo ask_user_form cho field này. Chỉ liệt kê ở đây để nếu model vô tình định hỏi tên, biết rằng đây không phải một thuộc tính hợp lệ cho NHIỆM VỤ 2."
+      "description": "KHÔNG hỏi qua form (không phải thuộc tính quy chế)."
     }
   ]
 }

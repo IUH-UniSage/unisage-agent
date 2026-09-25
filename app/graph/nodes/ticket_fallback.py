@@ -1,33 +1,39 @@
-"""Ticket fallback node - zero-hallucination fallback.
+"""Ticket fallback node - streams a zero-hallucination fallback via LLM.
 
-Activates when retrieval reports `has_valid_context = False`. Deterministic,
-no LLM: never lets a model guess at a regulation it has no source for.
+Activates when retrieval reports `has_valid_context = False`. The model is
+given no chunks and no clarification-form machinery, so it structurally
+cannot cite a regulation it has no source for - it can only write the
+fallback message defined by `common/ticket_fallback.yaml`.
 """
 
-from dataclasses import dataclass, field
-from typing import Any
+from collections.abc import Sequence
+
+from pydantic_ai import Agent
+from pydantic_ai.models import Model
+
+from app.graph.streaming import TokenSink, stream_agent_text
+from app.rag.prompting import build_ticket_fallback_prompt
+from app.schemas.chat_history import HistoryMessage
+from app.schemas.security import AcademicSecurityContext
 
 
-@dataclass(frozen=True)
-class TicketFallbackResponse:
-    message: str
-    ui_buttons: list[dict[str, Any]] = field(default_factory=list)
+def build_ticket_fallback_agent(model: Model | str) -> Agent[None, str]:
+    return Agent(model=model)
 
 
-def build_ticket_fallback_response(user_query: str) -> TicketFallbackResponse:
-    return TicketFallbackResponse(
-        message=(
-            "Hệ thống chưa tìm thấy quy định chính thức cho câu hỏi này. "
-            "Bạn có thể tạo phiếu hỗ trợ để được cán bộ phòng ban liên quan giải đáp trực tiếp."
-        ),
-        ui_buttons=[
-            {
-                "label": "Tạo Ticket Hỗ Trợ Học Vụ",
-                "action": "OPEN_TICKET_MODAL",
-                "prefill": {
-                    "subject": user_query[:200],
-                    "department": "PHONG_DAOTAO",
-                },
-            }
-        ],
+async def run_ticket_fallback(
+    agent: Agent[None, str],
+    user_query: str,
+    *,
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    history: Sequence[HistoryMessage] = (),
+    token_sink: TokenSink,
+) -> str:
+    prompt = build_ticket_fallback_prompt(
+        user_query=user_query,
+        security=security,
+        confirmed_metadata=confirmed_metadata,
+        history=history,
     )
+    return await stream_agent_text(agent, prompt, token_sink)

@@ -3,6 +3,7 @@ import asyncio
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.database.models import ConversationClarificationState
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.schemas.clarification import PendingClarification
 
@@ -112,3 +113,35 @@ async def test_concurrent_upserts_for_same_conversation_both_succeed_last_write_
     # row exists, and it holds one writer's value whole (not a merge of
     # both) - "last write wins" semantics.
     assert final in ({"source": "writer-a"}, {"source": "writer-b"})
+
+
+@pytest.mark.asyncio
+async def test_get_pending_clarification_parses_a_legacy_row_without_origin_tasks(
+    db_session: AsyncSession,
+) -> None:
+    """A row persisted before `origin_tasks`/`pending_sub_query_id` existed
+    (bare JSONB, missing both keys entirely) must still `model_validate`."""
+
+    legacy_json = {
+        "origin_node": "QueryTransformationNode",
+        "missing_fields": ["training_type"],
+        "options": [["chinh_quy", "lien_thong"]],
+        "retry_count": 0,
+    }
+    session = db_session
+    session.add(
+        ConversationClarificationState(
+            conversation_id="conv-legacy",
+            pending_clarification=legacy_json,
+            confirmed_metadata={},
+        )
+    )
+    await session.commit()
+
+    repo = ClarificationStateRepository(session)
+    pending = await repo.get_pending_clarification("conv-legacy")
+
+    assert pending is not None
+    assert pending.origin_tasks is None
+    assert pending.pending_sub_query_id is None
+    assert pending.missing_fields == ["training_type"]

@@ -41,19 +41,39 @@ __all__ = [
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
     "build_missing_metadata_block",
+    "build_multi_intent_prompt",
     "build_system_prompt",
+    "build_ticket_fallback_prompt",
     "get_templates",
     "render_resolved_user_query",
+    "render_sub_queries_list",
     "reset_templates_cache",
 ]
 
-# `security_access_control.yaml` asserts that `<academic_context>` has already
-# passed a department_access/access_level filter - not true yet (retrieval
-# doesn't filter by permission this phase), so wiring it in now would tell the
-# model something false about its own input. Passed as an empty string until
-# that filter exists; the placeholder in the copied main templates is kept
-# so no template edit is needed to turn it on later.
-_SECURITY_ACCESS_CONTROL_DEFERRED = ""
+
+def _base_params(
+    *,
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    chunks: Sequence[RetrievedChunk],
+    pending_clarification: PendingClarification | None,
+    history: Sequence[HistoryMessage],
+) -> dict[str, str]:
+    """Blocks shared by every GenerationSynthesisNode frame."""
+
+    templates = get_templates()
+    return {
+        "header": templates.header,
+        "academic_metadata": build_metadata_section(security, confirmed_metadata),
+        "history_message": build_history_section(history),
+        "security_access_control": templates.security_access_control,
+        "academic_domain_rules": templates.academic_domain_rules,
+        "response_style": templates.response_style,
+        "citation_rules": templates.citation_rules,
+        "prepared_context": build_prepared_context_section(chunks),
+        "task_1": templates.task_1,
+        "task_2": build_task_2_section(pending_clarification),
+    }
 
 
 def build_system_prompt(
@@ -66,30 +86,68 @@ def build_system_prompt(
     pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage] = (),
 ) -> str:
-    """Assemble the full prompt for `GenerationSynthesisNode`'s unified advisory
-    flow (advisory/procedure/document/calendar - one frame, `academic_domain_rules`
-    picks the response format per question type).
+    """Advisory frame for a single question. `resolved_query` (the standalone
+    rewrite of a follow-up) is shown ahead of the raw message."""
 
-    `resolved_query` is `QueryTransformationNode`'s self-contained rewrite of
-    a follow-up turn (see `extract_standalone_question`) - e.g. turn 3's raw
-    "còn ĐHCQ ngành CN thì sao" carries no khóa on its own. Retrieval already
-    benefits from it (it drove the HyDE search), but without it here too,
-    generation has to re-derive the same topic from raw `<history_message>`
-    text on its own - which is exactly the step observed to drop the khóa
-    and answer the wrong row. `build_render_user_query` folds it into
-    `{user_query}` so no template placeholder needs to change for this."""
+    return get_templates().chat_academic_advisory.format(
+        **_base_params(
+            security=security,
+            confirmed_metadata=confirmed_metadata,
+            chunks=chunks,
+            pending_clarification=pending_clarification,
+            history=history,
+        ),
+        user_query=render_resolved_user_query(user_query, resolved_query),
+    )
+
+
+def build_multi_intent_prompt(
+    *,
+    user_query: str,
+    sub_queries: Sequence[str],
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    chunks: Sequence[RetrievedChunk],
+    pending_clarification: PendingClarification | None,
+    history: Sequence[HistoryMessage] = (),
+) -> str:
+    """Multi-intent frame for several sub-queries, listed as `SQk. ...`."""
+
+    return get_templates().chat_multi_intent_synthesis.format(
+        **_base_params(
+            security=security,
+            confirmed_metadata=confirmed_metadata,
+            chunks=chunks,
+            pending_clarification=pending_clarification,
+            history=history,
+        ),
+        sub_queries_list=render_sub_queries_list(sub_queries),
+        user_query=user_query,
+    )
+
+
+def build_ticket_fallback_prompt(
+    *,
+    user_query: str,
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    history: Sequence[HistoryMessage] = (),
+) -> str:
+    """TicketFallbackNode frame: no `{prepared_context}`/`task_1`/`task_2` -
+    the model gets no chunks and no clarification machinery, so it can only
+    write the fallback message, never cite a regulation it has no source for."""
 
     templates = get_templates()
-    return templates.chat_academic_advisory.format(
+    return templates.chat_ticket_fallback.format(
         header=templates.header,
         academic_metadata=build_metadata_section(security, confirmed_metadata),
         history_message=build_history_section(history),
-        security_access_control=_SECURITY_ACCESS_CONTROL_DEFERRED,
-        academic_domain_rules=templates.academic_domain_rules,
+        security_access_control=templates.security_access_control,
         response_style=templates.response_style,
-        citation_rules=templates.citation_rules,
-        prepared_context=build_prepared_context_section(chunks),
-        task_1=templates.task_1,
-        task_2=build_task_2_section(pending_clarification),
-        user_query=render_resolved_user_query(user_query, resolved_query),
+        ticket_fallback=templates.ticket_fallback,
+        user_query=user_query,
     )
+
+
+def render_sub_queries_list(sub_queries: Sequence[str]) -> str:
+    return "\n".join(f"SQ{index}. {query}" for index, query in enumerate(sub_queries, 1))

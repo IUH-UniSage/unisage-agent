@@ -5,12 +5,14 @@ different "turns_waited" concept from an older draft — see tasks/plan.md).
 
 from pydantic import BaseModel, Field
 
+from app.schemas.intent import ClassifiedTask
+
 
 class PendingClarification(BaseModel):
     """One outstanding "please clarify" round, attached to a conversation.
 
     `origin_node` is the node to resume at once the user's reply resolves
-    this — for Type B (content-driven fields, detected at node 12 but always
+    this — for Type B (content-driven fields, detected at GenerationSynthesisNode but always
     resumed at `QueryTransformationNode`) this deliberately does NOT equal
     the node that detected the missing field; see design doc section 5,
     "điểm phát hiện != điểm quay lại".
@@ -18,6 +20,15 @@ class PendingClarification(BaseModel):
 
     origin_node: str
     pending_sub_query_id: str | None = None
+    origin_tasks: list[ClassifiedTask] | None = Field(
+        default=None,
+        description=(
+            "The advisory tasks running the turn this round started on - resume "
+            "re-runs exactly these, at their own modes. `None` for rows persisted "
+            "before this field existed; resume then falls back to one SINGLE task "
+            "over `original_query`."
+        ),
+    )
     missing_fields: list[str]
     options: list[list[str] | None] = Field(
         description="Parallel to missing_fields; None means a free-text field (e.g. a score)."

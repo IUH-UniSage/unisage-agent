@@ -4,11 +4,11 @@ Two separate concerns, both requested to replace the raw httpx/openai/
 sqlalchemy DEBUG firehose that used to be the only way to see what a
 request did:
 
-1. `GraphTrace.node(name)` - always-on (independent of `settings.DEBUG`),
+1. `GraphTrace.node(name)` - always-on (independent of `settings.APP_DEBUG`),
    one INFO line per graph node a request actually passes through, carrying
    the identifiers needed to correlate it: conversation_id, the assistant
    message being generated, and who asked (user_id or "guest" + client IP).
-2. `GraphTrace.prompt(node_name, text)` - only when `settings.DEBUG` is
+2. `GraphTrace.prompt(node_name, text)` - only when `settings.APP_DEBUG` is
    true, dumps the per-request parts worth inspecting: the HyDE output
    used as the retrieval query, and for GenerationSynthesisNode only the
    `academic_metadata` and `prepared_context` blocks (not the static YAML
@@ -49,7 +49,7 @@ class GraphTrace:
         )
 
     def prompt(self, node_name: str, text: str) -> None:
-        if not settings.DEBUG:
+        if not settings.APP_DEBUG:
             return
         logger.info(
             "prompt node=%s conversation_id=%s message_id=%s:\n%s",

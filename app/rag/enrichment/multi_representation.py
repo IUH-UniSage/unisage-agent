@@ -33,8 +33,8 @@ class EnrichedChunk:
 class MultiRepresentationEnricher:
     """Add a summary + hypothetical questions to a chunk via one LLM call."""
 
-    model: str = field(default_factory=lambda: settings.MULTI_REP_LLM_MODEL)
-    question_count: int = field(default_factory=lambda: settings.MULTI_REP_QUESTION_COUNT)
+    model: str = field(default_factory=lambda: settings.INGEST_MULTI_REP_LLM_MODEL)
+    question_count: int = field(default_factory=lambda: settings.INGEST_MULTI_REP_QUESTION_COUNT)
     client: OpenAI | None = None
 
     def enrich(self, chunk: Chunk) -> EnrichedChunk:

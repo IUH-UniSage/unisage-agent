@@ -44,8 +44,8 @@ def _create_chunking_draft(
 ) -> list[dict[str, Any]]:
     """Chunk a tiny document (real `dispatch()`, real `validate_chunks()`)
     through the actual endpoint so the resulting draft has genuine,
-    non-legacy structural metadata - exactly what Task 4.5's canonical
-    merge reads back. Returns the chunk list from the response."""
+    non-legacy structural metadata - what the canonical merge reads back.
+    Returns the chunk list from the response."""
 
     with patch("app.api.v1.ingestion.minio_client.get_object_bytes") as mock_get_object_bytes:
         mock_get_object_bytes.return_value = make_pdf_bytes(text)
@@ -104,7 +104,7 @@ def test_embedding_returns_403_when_access_level_exceeds_grant(client: TestClien
 
 
 def test_embedding_returns_404_when_no_draft_exists_for_the_document(client: TestClient) -> None:
-    """Task 4.5: `/ingestion/embedding` reads the stored draft as canonical
+    """`/ingestion/embedding` reads the stored draft as canonical
     metadata - there is nothing to merge from if the document was never
     chunked (or the draft was never created)."""
 
@@ -227,7 +227,7 @@ def test_embedding_uses_canonical_metadata_and_only_client_content(
     mock_qdrant_store: MagicMock,
     client: TestClient,
 ) -> None:
-    """Task 4.5 acceptance criteria: a client tampering with structural
+    """A client tampering with structural
     fields (page_start/source_locator/...) must be ignored - only `content`
     from the request payload is applied, everything else comes from the
     stored draft."""
@@ -359,6 +359,23 @@ def test_embedding_accepts_a_subset_when_the_user_deleted_chunks(
     ]
 
 
+@patch("app.api.v1.ingestion.embed_chunks")
+def test_embedding_dispatch_forwards_is_public_defaulting_to_false(
+    mock_embed_chunks: MagicMock, client: TestClient
+) -> None:
+    mock_embed_chunks.delay.return_value = MagicMock(id="task-is-public")
+    draft_chunks = _create_chunking_draft(client, "doc-embed-is-public")
+
+    client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": "doc-embed-is-public", "chunks": draft_chunks},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    # (document_id, object_key, chunks, department_id, access_level, is_public)
+    assert mock_embed_chunks.delay.call_args.args[5] is False
+
+
 def test_embedding_rejects_duplicate_chunk_index(client: TestClient) -> None:
     draft_chunks = _create_chunking_draft(client, "doc-embed-dup-index")
     duplicated = [draft_chunks[0], draft_chunks[0]]
@@ -399,8 +416,7 @@ def test_embedding_rejects_legacy_draft_with_409(client: TestClient) -> None:
     re-chunked first. `/ingestion/chunking` always produces non-legacy
     chunks now, so a legacy draft is simulated here by stubbing `get_draft`
     to return one directly - this is exactly the shape a pre-migration
-    Postgres row deserializes into (see Task 0.2's `chunking_version`
-    default)."""
+    Postgres row deserializes into (see the `chunking_version` default)."""
 
     from app.database.models import DocumentProcessStep
     from app.database.repositories.ingestion_job import DraftDTO
@@ -465,7 +481,7 @@ def test_embedding_rejects_a_draft_chunked_under_an_older_version_with_409(
             headers=_TRUSTED_HEADERS,
         )
 
-    assert settings.CHUNKING_VERSION != "2026-09-structural-v1"
+    assert settings.INGEST_CHUNKING_VERSION != "2026-09-structural-v1"
     assert outdated.status_code == 409
 
 

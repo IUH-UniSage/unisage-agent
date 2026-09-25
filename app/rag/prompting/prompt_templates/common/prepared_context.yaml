@@ -1,9 +1,7 @@
 # PREPARED_ACADEMIC_CONTEXT
-description: "Khung XML chứa toàn bộ các chunk bối cảnh trích xuất từ VectorDB & Re-ranker, kèm <current_date> - ngày hiện tại (giờ Việt Nam) để mô hình có mốc thời gian thực khi xác định năm học/học kỳ hiện hành hoặc đối chiếu hiệu lực văn bản."
+description: "Khung XML chứa các chunk đã lọc quyền + rerank, kèm <current_date> (giờ Việt Nam) làm mốc thời gian thực"
 content: |
-  ## Tri Thức Học Vụ Trích Xuất Được
-  Dưới đây là các đoạn văn bản quy chế chính thức đã qua bộ lọc phân quyền và re-rank:
-
+  ## Văn Bản Quy Chế Trích Xuất Được
   <academic_context>
     {context_chunks}
   </academic_context>
@@ -11,7 +9,4 @@ content: |
   <current_date>
   {current_date}
   </current_date>
-  Cách dùng `<current_date>`: đây là ngày hiện tại thực tế, dùng để xác định năm học/học kỳ hiện
-  hành khi câu hỏi không nêu rõ mốc thời gian, hoặc để đối chiếu với các mốc hiệu lực nêu trong
-  `<academic_context>` (VD: quy định "áp dụng từ năm học X trở về sau"). KHÔNG tự suy diễn năm
-  học/học kỳ nếu tài liệu không nêu rõ - chỉ dùng mốc này làm căn cứ tham chiếu.
+  `<current_date>` là ngày thực tế, dùng để xác định năm học/học kỳ hiện hành khi câu hỏi không nêu mốc, hoặc đối chiếu hiệu lực văn bản. Không tự suy năm học nếu văn bản không nêu rõ.

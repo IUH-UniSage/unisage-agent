@@ -1,7 +1,7 @@
 """Decide whether a table on one page continues the table on the previous page
 and, if so, merge the two into one logical table.
 
-The decision is a deterministic weighted score (see AD4/AD9 in the plan), not a
+The decision is a deterministic weighted score, not a
 string comparison of headers:
 
     header 0.35 | column count 0.20 | column boundaries 0.20 | page position 0.25

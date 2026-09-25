@@ -142,10 +142,9 @@ async def embed_document(
 ) -> ApiResponse[EmbeddingAcceptedResponse]:
     """Dispatch a chunk list for background enrichment + embedding.
 
-    Execution order (deliberately NOT task-number order - see plan.md v5
-    Task 4.4's note): Task 4.5's canonical-metadata-from-draft merge runs
-    FIRST, then Task 4.4's `validate_chunks()` runs on the MERGED result,
-    right before dispatching Celery. `request.chunks` is never trusted for
+    The canonical-metadata merge from the draft runs first, then
+    `validate_chunks()` runs on the merged result, right before dispatching
+    Celery. `request.chunks` is never trusted for
     anything but `content` - every other field (heading_path, page_start,
     source_locator, column_names, ...) is taken from the stored draft, so a
     client (or a script bypassing the UI wizard) cannot forge structural
@@ -164,24 +163,25 @@ async def embed_document(
         [chunk.model_dump(mode="json") for chunk in merged_chunks],
         request.department_id,
         request.access_level,
+        request.is_public,
     )
     await mark_embedding(db_session, document_id=request.document_id, celery_task_id=task.id)
     return ApiResponse.success(EmbeddingAcceptedResponse(task_id=task.id))
 
 
 def _merge_canonical_chunks(request: EmbeddingRequest, draft: DraftDTO | None) -> list[Chunk]:
-    """Task 4.5: build the chunk list actually sent for embedding, trusting
+    """Build the chunk list actually sent for embedding, trusting
     ONLY `content` from `request.chunks` - every other field comes from the
     stored chunking draft (the canonical source of truth), never the client.
 
-    Raises (see plan.md v5, Task 4.5's acceptance criteria):
+    Raises:
     - `IngestionJobNotFoundException` - no draft at all for `document_id`.
     - `EmbeddingDraftMismatchException` - draft exists but its
       `department_id`/`object_key` doesn't match this request (never use a
       draft belonging to a different context, even if `document_id` matches).
     - `EmbeddingDraftLegacyException` (HTTP 409) - the draft (or any of its
       chunks) was not produced by the current chunking logic
-      (`chunking_version != settings.CHUNKING_VERSION`, which includes
+      (`chunking_version != settings.INGEST_CHUNKING_VERSION`, which includes
       `"legacy"`, or `source_type`/`block_index` still `None`) - cannot be
       embedded safely; the document must be re-chunked. Chunks already
       embedded in Qdrant are never touched.
@@ -201,7 +201,7 @@ def _merge_canonical_chunks(request: EmbeddingRequest, draft: DraftDTO | None) -
 
     canonical_chunks = draft.chunks
     is_outdated_draft = any(
-        chunk.chunking_version != settings.CHUNKING_VERSION
+        chunk.chunking_version != settings.INGEST_CHUNKING_VERSION
         or chunk.source_type is None
         or chunk.block_index is None
         for chunk in canonical_chunks
@@ -275,7 +275,7 @@ async def ingestion_events(
     caller is granted access to.
     """
 
-    if not x_internal_secret or x_internal_secret != settings.INTERNAL_SECRET_KEY:
+    if not x_internal_secret or x_internal_secret != settings.APP_INTERNAL_SECRET_KEY:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     try:

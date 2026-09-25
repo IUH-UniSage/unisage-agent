@@ -101,7 +101,7 @@ class SemanticChunker:
     not semantic quality.
 
     `target_tokens` is a soft target. The hard ceiling is derived from it
-    via `settings.SEMANTIC_MAX_TOKEN_FACTOR` (see `max_tokens`) and is used
+    via `settings.INGEST_SEMANTIC_MAX_TOKEN_FACTOR` (see `max_tokens`) and is used
     to hard-split overlong sentences and force group breaks. Chunks that
     end up below `min_tokens` are folded into an adjacent chunk of the
     same region type so the strategy never emits tiny fragments.
@@ -115,7 +115,7 @@ class SemanticChunker:
 
     @property
     def max_tokens(self) -> int:
-        return math.ceil(self.target_tokens * settings.SEMANTIC_MAX_TOKEN_FACTOR)
+        return math.ceil(self.target_tokens * settings.INGEST_SEMANTIC_MAX_TOKEN_FACTOR)
 
     @property
     def _overlap_tokens(self) -> int:
@@ -177,7 +177,7 @@ class SemanticChunker:
                         "chunk_index": index,
                         "content": f"{prefix}{chunk.content}",
                         "source_locator": SourceLocator(section=_section(chunk.heading_path)),
-                        "chunking_version": settings.CHUNKING_VERSION,
+                        "chunking_version": settings.INGEST_CHUNKING_VERSION,
                     }
                 )
             )

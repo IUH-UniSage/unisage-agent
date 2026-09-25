@@ -19,6 +19,7 @@ from fastapi import Header
 
 from app.core.exceptions import InvalidTrustedContextException
 from app.schemas.clarification import PendingClarification
+from app.schemas.intent import ClassifiedTask
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
 
 _PUNCTUATION_PATTERN = re.compile(r"[,;:.!?]")
@@ -135,6 +136,7 @@ class ClarificationGuardResult:
     pending_clarification: PendingClarification | None
     skip_classification: bool
     original_query: str | None = None
+    origin_tasks: list[ClassifiedTask] | None = None
 
 
 def resolve_clarification_guard(
@@ -197,6 +199,7 @@ def resolve_clarification_guard(
                 pending_clarification=None,
                 skip_classification=True,
                 original_query=original_query,
+                origin_tasks=pending.origin_tasks,
             )
         return ClarificationGuardResult(
             matched=True,
@@ -216,6 +219,7 @@ def resolve_clarification_guard(
             ),
             skip_classification=True,
             original_query=original_query,
+            origin_tasks=pending.origin_tasks,
         )
 
     next_retry_count = pending.retry_count + 1
@@ -238,6 +242,7 @@ def resolve_clarification_guard(
         pending_clarification=pending.model_copy(update={"retry_count": next_retry_count}),
         skip_classification=False,
         original_query=original_query,
+        origin_tasks=pending.origin_tasks,
     )
 
 

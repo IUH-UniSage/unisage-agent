@@ -20,7 +20,7 @@ def rerank(
 ) -> RerankResult:
     """Sort by score, then drop anything under `score_threshold`.
 
-    `score_threshold` defaults to `settings.RERANK_SCORE_THRESHOLD` (0.70)
+    `score_threshold` defaults to `settings.CHAT_RERANK_SCORE_THRESHOLD` (0.70)
     rather than a hardcoded constant. A real cross-encoder (bge-reranker-base)
     is not wired up yet - this keeps the existing deterministic base ranking
     and applies the threshold on top of it, which is enough to exercise the
@@ -29,7 +29,9 @@ def rerank(
     function's contract.
     """
 
-    threshold = score_threshold if score_threshold is not None else settings.RERANK_SCORE_THRESHOLD
+    threshold = (
+        score_threshold if score_threshold is not None else settings.CHAT_RERANK_SCORE_THRESHOLD
+    )
     ranked = sorted(chunks, key=lambda chunk: chunk.score, reverse=True)
     filtered = [chunk for chunk in ranked if chunk.score >= threshold]
     return RerankResult(has_valid_context=bool(filtered), chunks=filtered)

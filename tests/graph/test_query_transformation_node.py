@@ -4,8 +4,16 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from app.graph.nodes.query_transformation import build_query_transformation_agent, transform_query
+from app.graph.nodes.query_transformation import (
+    SubQuery,
+    build_decomposer_agent,
+    build_query_transformation_agent,
+    decompose_query,
+    transform_query,
+    transform_tasks,
+)
 from app.schemas.chat_history import HistoryMessage
+from app.schemas.intent import ClassifiedTask, RoutingMode
 
 
 @pytest.mark.asyncio
@@ -69,3 +77,139 @@ async def test_transform_query_appends_recent_history_without_citation_markers()
     assert "Mức thu là ... đồng" in prompt
     assert "60.000.000" not in prompt
     assert "[1]" not in prompt
+
+
+def _echo_first_line_model() -> FunctionModel:
+    """Returns "HyDE: <first line of its prompt>", so each output shows which
+    task's query produced it."""
+
+    def function(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        prompt = str(getattr(messages[-1].parts[-1], "content", ""))
+        return ModelResponse(parts=[TextPart(content=f"HyDE: {prompt.splitlines()[0]}")])
+
+    return FunctionModel(function=function)
+
+
+@pytest.mark.asyncio
+async def test_transform_tasks_returns_one_query_per_task_in_task_order() -> None:
+    agent = build_query_transformation_agent(_echo_first_line_model())
+    tasks: list[tuple[ClassifiedTask, RoutingMode]] = [
+        (ClassifiedTask(intent="academic_advisory", query="Học phí ngành CNTT?"), "SINGLE"),
+        (ClassifiedTask(intent="academic_advisory", query="Điều kiện học bổng?"), "SINGLE"),
+    ]
+
+    sub_queries = await transform_tasks(agent, tasks)
+
+    assert sub_queries == [
+        SubQuery(question="Học phí ngành CNTT?", retrieval_text="HyDE: Học phí ngành CNTT?"),
+        SubQuery(question="Điều kiện học bổng?", retrieval_text="HyDE: Điều kiện học bổng?"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_transform_tasks_single_task_matches_transform_query() -> None:
+    agent = build_query_transformation_agent(_echo_first_line_model())
+    task = ClassifiedTask(intent="academic_advisory", query="Thủ tục bảo lưu?")
+
+    (sub_query,) = await transform_tasks(agent, [(task, "SINGLE")])
+
+    assert sub_query.retrieval_text == await transform_query(agent, "Thủ tục bảo lưu?")
+
+
+def _fixed_model(text: str) -> FunctionModel:
+    def function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=text)])
+
+    return FunctionModel(function=function)
+
+
+_COMPARISON = "Ngành CNTT và Kế toán học phí chênh bao nhiêu?"
+_DECOMPOSED = (
+    '{"sub_queries": ["Định mức học phí ngành Công nghệ thông tin", '
+    '"Định mức học phí ngành Kế toán"]}'
+)
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        (
+            _DECOMPOSED,
+            ["Định mức học phí ngành Công nghệ thông tin", "Định mức học phí ngành Kế toán"],
+        ),
+        (
+            "```json\n" + _DECOMPOSED + "\n```",
+            ["Định mức học phí ngành Công nghệ thông tin", "Định mức học phí ngành Kế toán"],
+        ),
+        ('{"sub_queries": ["a", "b", "c", "d"]}', ["a", "b", "c"]),
+        ('{"sub_queries": ["a", "a", " ", 5]}', ["a"]),
+        ("không phải JSON", []),
+        ('{"sub_queries": "a"}', []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_decompose_query_parses_and_bounds_sub_queries(
+    output: str, expected: list[str]
+) -> None:
+    agent = build_decomposer_agent(_fixed_model(output))
+
+    assert await decompose_query(agent, _COMPARISON) == expected
+
+
+@pytest.mark.asyncio
+async def test_multi_task_uses_the_decomposer_instead_of_hyde() -> None:
+    hyde_calls: list[str] = []
+
+    def hyde(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        hyde_calls.append("called")
+        return ModelResponse(parts=[TextPart(content="HyDE")])
+
+    task = ClassifiedTask(intent="academic_advisory", query=_COMPARISON, routing_mode="MULTI")
+
+    sub_queries = await transform_tasks(
+        build_query_transformation_agent(FunctionModel(hyde)),
+        [(task, "MULTI")],
+        decomposer_agent=build_decomposer_agent(_fixed_model(_DECOMPOSED)),
+    )
+
+    assert hyde_calls == []
+    assert [sq.question for sq in sub_queries] == [
+        "Định mức học phí ngành Công nghệ thông tin",
+        "Định mức học phí ngành Kế toán",
+    ]
+    assert all(sq.question == sq.retrieval_text for sq in sub_queries)
+
+
+@pytest.mark.parametrize("decomposer_output", ["rác", '{"sub_queries": ["chỉ một câu"]}'])
+@pytest.mark.asyncio
+async def test_multi_task_falls_back_to_hyde_when_decomposition_is_unusable(
+    decomposer_output: str,
+) -> None:
+    task = ClassifiedTask(intent="academic_advisory", query=_COMPARISON, routing_mode="MULTI")
+
+    (sub_query,) = await transform_tasks(
+        build_query_transformation_agent(_fixed_model("HyDE doc")),
+        [(task, "MULTI")],
+        decomposer_agent=build_decomposer_agent(_fixed_model(decomposer_output)),
+    )
+
+    assert sub_query == SubQuery(question=_COMPARISON, retrieval_text="HyDE doc")
+
+
+@pytest.mark.asyncio
+async def test_sub_queries_of_several_tasks_are_flattened_in_task_order() -> None:
+    single = ClassifiedTask(intent="academic_advisory", query="Điều kiện học bổng?")
+    comparison = ClassifiedTask(intent="academic_advisory", query=_COMPARISON, routing_mode="MULTI")
+    tasks: list[tuple[ClassifiedTask, RoutingMode]] = [(single, "SINGLE"), (comparison, "MULTI")]
+
+    sub_queries = await transform_tasks(
+        build_query_transformation_agent(_fixed_model("HyDE doc")),
+        tasks,
+        decomposer_agent=build_decomposer_agent(_fixed_model(_DECOMPOSED)),
+    )
+
+    assert [sq.question for sq in sub_queries] == [
+        "Điều kiện học bổng?",
+        "Định mức học phí ngành Công nghệ thông tin",
+        "Định mức học phí ngành Kế toán",
+    ]

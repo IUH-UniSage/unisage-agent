@@ -84,7 +84,7 @@ def _auth_headers(
     safe to always include once we're already sending the secret.
     """
 
-    headers: dict[str, str] = {"X-Internal-Secret": settings.INTERNAL_SECRET_KEY}
+    headers: dict[str, str] = {"X-Internal-Secret": settings.APP_INTERNAL_SECRET_KEY}
     if authorization:
         headers["Authorization"] = authorization
     if guest_session_token:

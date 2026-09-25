@@ -13,5 +13,5 @@ async def verify_internal_secret(x_internal_secret: str | None = Header(default=
     `app/security.py`.
     """
 
-    if not x_internal_secret or x_internal_secret != settings.INTERNAL_SECRET_KEY:
+    if not x_internal_secret or x_internal_secret != settings.APP_INTERNAL_SECRET_KEY:
         raise InvalidInternalSecretException()
