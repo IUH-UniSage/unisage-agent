@@ -189,6 +189,92 @@ có cách nào phân biệt được payload nào đủ tin cậy cho field nào
 
 Luật nằm ở: `PRODUCT.md` › Business rules.
 
+## Dynamic Model Registry
+
+Chi tiết kỹ thuật đầy đủ (contract, state machine, security flow) nằm ở
+`backend-java/changes/23-09-2026-Dynamic-Model-Registry-Runtime-Failover/plan.md`. Mục này chỉ ghi
+"vì sao", cho người không đọc hết plan 1000+ dòng.
+
+### Vì sao Embedding không auto-failover, trong khi Chat/Extraction có?
+
+Failover tự động nghĩa là: credential A lỗi → tự chuyển sang credential B còn hoạt động, không cần
+người can thiệp. Với Chat/Extraction, B trả lời khác A một chút không sao — cả hai đều sinh text. Với
+Embedding, B tạo vector trong một không gian ngữ nghĩa khác A (kể cả khi cùng số chiều: hai model
+384-dim từ hai nhà cung cấp khác nhau không so sánh cosine được với nhau một cách có nghĩa). Nếu để
+failover tự động, hệ thống sẽ âm thầm bắt đầu ghi vector "sai không gian" vào cùng collection với
+vector cũ, và retrieval degrade dần mà không có lỗi nào báo — phát hiện được chỉ khi người dùng phàn
+nàn câu trả lời sai, lúc đó dữ liệu đã lẫn.
+
+Vì vậy embedding lỗi thì dừng hẳn (ingest job fail, báo SA), không tự chọn credential khác. Ràng buộc
+này ép bằng unique partial index DB (`chat_models WHERE model_purpose = 'EMBEDDING' AND status =
+'ACTIVE'`), không chỉ bằng code — tại một thời điểm chỉ có đúng 1 credential EMBEDDING ACTIVE.
+
+Luật nằm ở: `PRODUCT.md` › Business rules.
+
+### Vì sao có "embedding identity guard" (bảng `embedding_index_identity`) thay vì chỉ tin credential đang ACTIVE?
+
+Ban đầu thiết kế cho rotate/activate embedding chạy giống hệt Chat: verify ứng viên xong thì promote.
+Review chỉ ra lỗ hổng: verify OK chỉ chứng minh ứng viên **gọi được**, không chứng minh ứng viên tạo
+ra vector **cùng không gian** với vector đã có trong Qdrant. SA đổi `EMBEDDING` từ
+`text-embedding-3-small` sang `text-embedding-3-large` (cùng verify OK, khác hẳn không gian vector) sẽ
+promote êm ru rồi âm thầm phá retrieval — đúng lỗi mà quyết định "không auto-failover" ở trên cố tránh,
+chỉ là qua một đường khác (SA chủ động sửa, không phải hệ thống tự chọn).
+
+Giải pháp: tách "credential nào đang chạy" (rotation, có thể đổi) khỏi "vector trong Qdrant thuộc về
+danh tính nào" (`embedding_index_identity`, gần như bất biến — đo bằng fingerprint 3 câu probe cố
+định). Mọi đường có thể đổi embedding đang chạy (rotate, SA activate, swap, bật lại sau DISABLED) phải
+so khớp hai thứ này; lệch thì chặn (`REINDEX_REQUIRED`), không có đường "UI cảnh báo rồi cho qua".
+Bảng này khoá theo `collection_name` (không phải một singleton toàn cục) và không có method
+update/delete nào ở tầng repository, cộng thêm trigger DB chặn UPDATE/DELETE — ba lớp, vì đây là loại
+lỗi (âm thầm, phát hiện muộn) mà một lớp code review không đủ để bắt hết theo thời gian khi có người
+mới sửa code sau này.
+
+Đã cân và loại: chỉ cảnh báo UI rồi để SA tự quyết định có đổi hay không (SA không phải lúc nào cũng
+biết đổi provider/model có nghĩa là "không gian vector khác", nhất là khi verify vẫn báo OK).
+
+Luật nằm ở: `PRODUCT.md` › Source of truth, Objects, Glossary (embedding identity guard).
+
+### Vì sao verify credential đi theo chiều Python gọi Java (pull), không phải Java gọi Python (push)?
+
+Thiết kế ban đầu định để Java, sau khi SA nhập credential mới, gọi thẳng sang Python để nhờ thử
+provider, rồi Python gọi lại Java báo kết quả — một vòng Java→Python→Java. Vấn đề: không có cách nào
+để Java biết chắc Python đã nhận việc (Python có thể đang restart, network đứt giữa chừng), nên phải tự
+bịa thêm một lớp retry/timeout riêng cho chính cuộc gọi đó, tách biệt với vòng đời job.
+
+Đảo thành pull: Java chỉ tạo job ở trạng thái `QUEUED`, Python (Celery Beat) tự định kỳ tới lấy job
+(`claim`, có lease + fencing token) và tự báo kết quả về. Java không cần biết Python có đang sống hay
+không — job cứ nằm đó tới khi có người tới lấy hoặc lease hết hạn thì job khác lấy lại. Toàn bộ vấn đề
+"Java gọi Python nhưng Python không phản hồi" biến mất, đổi lại độ trễ tối đa là 1 chu kỳ Beat (15s)
+thay vì tức thời — chấp nhận được vì verify không nằm trên đường phục vụ người dùng cuối.
+
+Kéo theo: `unisage-agent` không expose endpoint "nội bộ" mới nào cho registry — Gateway đã gắn
+`X-Internal-Secret` cho mọi request `/api/v1/ai/**` nó forward, nên một endpoint "nội bộ" ở Python thực
+chất ai qua Gateway cũng gọi được, không phải hàng rào thật. Giữ nguyên tắc "mọi luồng Java↔Python của
+registry đều là Python gọi Java" loại bỏ nhu cầu đó hoàn toàn.
+
+Đã cân và loại: Java gọi Python trực tiếp kèm retry riêng (thêm một cơ chế đáng tin cậy phải tự xây,
+trong khi pull-based đạt cùng mục đích bằng đúng cơ chế job-queue đã quen thuộc) · webhook Python báo
+Java khi xong việc (vẫn cần Java→Python để giao việc trước, không giải quyết được vấn đề gốc).
+
+Luật nằm ở: `PRODUCT.md` › Business rules, Actors (model registry verifier).
+
+### Vì sao sửa credential của một `ChatModel` đang ACTIVE không ghi thẳng vào row (staged rotation)?
+
+Ghi thẳng nghĩa là: SA bấm lưu key mới → row đổi ngay → nếu key mới sai (gõ nhầm, key đã bị thu hồi),
+mọi request Chat/Extraction tiếp theo lỗi ngay lập tức, cho tới khi SA phát hiện và sửa lại — một cửa
+sổ downtime hoàn toàn có thể tránh được bằng cách verify trước.
+
+Giải pháp: giá trị mới trở thành "ứng viên" trong một verification job, row (và snapshot Python đang
+dùng) giữ nguyên giá trị cũ cho tới khi ứng viên verify xong. Verify OK mới promote (ghi đè bằng
+compare-and-set, so cả `revision` lẫn `candidate_generation` để chặn race khi SA sửa liên tiếp nhiều
+lần trước khi lần verify trước kịp xong — job dở bị đánh `SUPERSEDED`, không bao giờ promote nhầm giá
+trị cũ hơn). Verify FAIL thì báo lỗi ngay cho SA, row không đổi, hệ thống tiếp tục chạy bằng key cũ.
+
+Đã cân và loại: verify đồng bộ ngay trong request lưu credential của SA (chặn UI vài giây chờ gọi
+provider thật, và không giải quyết được trường hợp Python đang không sống để verify ngay lúc đó).
+
+Luật nằm ở: `PRODUCT.md` › Glossary (staged credential rotation).
+
 ## Cấu hình
 
 ### Vì sao mỗi biến môi trường mang một tiền tố theo nhóm (`APP_`, `DB_`, `CHAT_`, `INGEST_`...) thay vì một `env_prefix` riêng cho từng class `BaseSettings`?
