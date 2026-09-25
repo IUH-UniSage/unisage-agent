@@ -5,9 +5,14 @@ from dataclasses import dataclass, field
 from openai import OpenAI
 
 from app.core.config import settings
+from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 from app.schemas.ingestion import Chunk
 
 logger = logging.getLogger(__name__)
+
+# Static .env-sourced credential for now — registry-driven provider selection
+# (per-purpose base URL/provider from the model registry snapshot) is Task 5/9's job.
+_OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 _SYSTEM_PROMPT = (
     "You summarize a document chunk and propose hypothetical questions it answers. "
@@ -42,7 +47,12 @@ class MultiRepresentationEnricher:
         result with a logged warning rather than raising, so one bad chunk doesn't
         kill the whole embedding batch."""
 
-        client = self.client or OpenAI(api_key=settings.OPENAI_API_KEY)
+        client = self.client or OpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            http_client=build_provider_http_client_sync(
+                ProviderConnectionInfo(api_base_url=_OPENAI_API_BASE_URL)
+            ),
+        )
         response = client.chat.completions.create(
             model=self.model,
             messages=[
