@@ -1,5 +1,11 @@
-from pydantic import Field
+from urllib.parse import urlsplit
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_INTERNAL_SECRET = "unisage-internal-secret-key-2026"
+_MIN_INTERNAL_SECRET_LENGTH = 32
+_DEV_ONLY_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
 
 
 class Settings(BaseSettings):
@@ -50,6 +56,10 @@ class Settings(BaseSettings):
     # own, a prefix group of one adds nothing ---
     REDIS_URL: str = "redis://localhost:6379/0"
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
+    # Infrastructure commitment, not a code guarantee: set true only when the
+    # Python <-> Java path is actually TLS/mTLS or an encrypted private
+    # network. Required when BACKEND_JAVA_BASE_URL is http:// in production.
+    INTERNAL_NETWORK_ENCRYPTED: bool = False
 
     # --- QDRANT_: the vector store ---
     QDRANT_HOST: str = "localhost"
@@ -84,6 +94,34 @@ class Settings(BaseSettings):
     # existing behavior; flip off in .env if the false positives outweigh
     # the (rare) real misses it exists to catch.
     CHAT_ALLOW_REPAIR_JSON: bool = True
+
+    @model_validator(mode="after")
+    def _validate_production_safety(self) -> "Settings":
+        if self.APP_ENV != "production":
+            return self
+
+        if (
+            not self.APP_INTERNAL_SECRET_KEY
+            or self.APP_INTERNAL_SECRET_KEY == _DEFAULT_INTERNAL_SECRET
+            or len(self.APP_INTERNAL_SECRET_KEY) < _MIN_INTERNAL_SECRET_LENGTH
+        ):
+            raise ValueError(
+                f"APP_INTERNAL_SECRET_KEY must be a non-default value with at least "
+                f"{_MIN_INTERNAL_SECRET_LENGTH} characters when APP_ENV=production"
+            )
+
+        parsed = urlsplit(self.BACKEND_JAVA_BASE_URL)
+        if parsed.scheme == "http" and not self.INTERNAL_NETWORK_ENCRYPTED:
+            raise ValueError(
+                "BACKEND_JAVA_BASE_URL is http:// but INTERNAL_NETWORK_ENCRYPTED is not "
+                "true; production requires TLS/mTLS or an encrypted private network"
+            )
+        if parsed.hostname in _DEV_ONLY_HOSTS:
+            raise ValueError(
+                f"BACKEND_JAVA_BASE_URL host '{parsed.hostname}' is dev-only; "
+                "production must point at a real internal service name"
+            )
+        return self
 
 
 settings = Settings()
