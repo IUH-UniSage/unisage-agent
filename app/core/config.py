@@ -56,9 +56,7 @@ class Settings(BaseSettings):
     # own, a prefix group of one adds nothing ---
     REDIS_URL: str = "redis://localhost:6379/0"
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
-    # Infrastructure commitment, not a code guarantee: set true only when the
-    # Python <-> Java path is actually TLS/mTLS or an encrypted private
-    # network. Required when BACKEND_JAVA_BASE_URL is http:// in production.
+    # Set true only when Python <-> Java is actually TLS/mTLS or an encrypted private network.
     INTERNAL_NETWORK_ENCRYPTED: bool = False
 
     # --- QDRANT_: the vector store ---

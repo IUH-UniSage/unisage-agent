@@ -62,12 +62,7 @@ class BackendJavaConnectionError(BackendJavaError):
 
 
 class BackendJavaRedirectError(BackendJavaError):
-    """Java (or something impersonating it) answered with a 3xx.
-
-    Treated as an error, never followed: this client's requests carry
-    `X-Internal-Secret` and often a plaintext API key (model registry
-    snapshot/claim), so a redirect must never be followed to another host.
-    """
+    """Java answered with a 3xx — never followed, these requests carry secrets."""
 
     def __init__(self, method: str, url: str, status_code: int) -> None:
         self.method = method
