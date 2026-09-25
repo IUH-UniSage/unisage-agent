@@ -1,35 +1,12 @@
 # CONFIRMED_METADATA_GUIDE
-description: "Fallback cho cơ chế so khớp cứng (deterministic) ở Clarification Guard - khi câu trả lời của người dùng diễn đạt tự do (paraphrase, viết tắt, không khớp đúng chuỗi id) mà Guard không bắt được, LLM tự nhận diện field đã được trả lời và xác nhận qua JSON."
+description: "Fallback cho so khớp cứng ở Clarification Guard - khi người dùng trả lời form bằng lời tự do, LLM tự nhận diện field đã được trả lời và xác nhận qua JSON."
 content: |
-  ## CONFIRMED_METADATA_GUIDE — XÁC NHẬN THUỘC TÍNH ĐÃ ĐƯỢC TRẢ LỜI
+  ## CONFIRMED_METADATA_GUIDE
+  Nếu `<missing_metadata_to_confirm>` KHÁC "Không có": kiểm tra tin nhắn lượt này có trả lời field nào trong đó không, kể cả diễn đạt tự do/viết tắt (VD "tôi học chính quy" → `he_dao_tao`). Khối JSON này là đường DUY NHẤT để câu trả lời đó được ghi nhận — bỏ sót thì người dùng bị hỏi lại y hệt.
 
-  Nếu `<missing_metadata_to_confirm>` KHÁC "Không có": trước khi quyết định
-  hỏi lại, kiểm tra xem tin nhắn của người dùng lượt này CÓ THỰC SỰ trả lời
-  một hoặc nhiều field trong đó hay không - kể cả khi diễn đạt tự do, viết
-  tắt, hay không khớp đúng chuỗi id (VD: "tôi học chính quy" trả lời field
-  `he_dao_tao` dù không gõ đúng "chinh_quy").
-
-  Với MỖI field bạn xác định CHẮC CHẮN đã được trả lời:
-  - Map giá trị đó về ĐÚNG một trong các `id` liệt kê trong `options` của
-    field đó - không tự bịa giá trị ngoài danh sách.
-  - Mọi field trong khối đó đều có `options` (form không có ô nhập tự do),
-    nên value bạn ghi ra LUÔN phải là một `id` trong danh sách - không bao
-    giờ là một chuỗi tự do, và không lấy từ ví dụ nào trong hướng dẫn này.
-    Với loại field này Clarification Guard không so khớp được gì, nên khối
-    JSON này là ĐƯỜNG DUY NHẤT để giá trị được ghi nhận: bỏ sót đồng nghĩa
-    câu trả lời của người dùng bị mất trắng và họ bị hỏi lại y hệt ở lượt
-    sau. Chỉ bỏ qua khi câu trả lời thật sự mơ hồ, không nêu giá trị nào.
-
-  Nếu xác nhận được ÍT NHẤT MỘT field: thêm CHÍNH XÁC MỘT khối ```json
-  riêng (KHÁC khối `ask_user_form` - có thể có cả hai trong cùng câu trả
-  lời nếu vẫn còn field khác chưa trả lời):
+  Với mỗi field CHẮC CHẮN đã được trả lời, map về đúng một `id` trong `options` của field đó, rồi thêm MỘT khối riêng (có thể đi cùng `ask_user_form` nếu còn field chưa trả lời):
   ```json
   {"type": "confirmed_metadata", "fields": {"<FIELD_ID>": "<id đã map>"}}
   ```
-  - `fields` là object phẳng field→value, CHỈ chứa field bạn vừa xác nhận
-    ở lượt này - KHÔNG lặp lại field đã có sẵn trong
-    `<student_declared_attributes>` (đã xác nhận từ trước).
-  - Field nào chưa xác nhận được vẫn phải hỏi lại bình thường qua
-    `ask_user_form` - không bỏ sót.
-  - Không chắc chắn → KHÔNG đưa field đó vào đây, cứ hỏi lại bình thường;
-    xác nhận sai một giá trị còn tệ hơn hỏi lại thêm một lượt.
+  - Chỉ chứa field vừa xác nhận lượt này, không lặp lại field trong `<student_declared_attributes>`.
+  - Không chắc chắn → không đưa vào, hỏi lại bình thường; xác nhận sai còn tệ hơn hỏi thêm một lượt.
