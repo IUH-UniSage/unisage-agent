@@ -181,3 +181,37 @@ class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
 
     async def connect_unix_socket(self, path, timeout=None, socket_options=None):  # noqa: D102
         raise NotImplementedError("Unix sockets are never used for provider calls")
+
+
+@dataclass
+class PinnedNetworkBackendSync(httpcore.NetworkBackend):
+    """Sync counterpart of `PinnedNetworkBackend`, for provider call sites that are
+    themselves sync (Celery tasks — see `app/core/llm/http_client.py::build_provider_http_client_sync`).
+
+    `socket.getaddrinfo` already blocks the calling thread either way, so unlike the
+    async version there's no event loop to protect by offloading to a thread — the
+    resolve happens inline.
+    """
+
+    allowlist: frozenset[str] = field(default_factory=frozenset)
+    _delegate: httpcore.NetworkBackend = field(default_factory=httpcore.SyncBackend)
+
+    def connect_tcp(  # noqa: D102 - httpcore's own signature
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options=None,
+    ) -> httpcore.NetworkStream:
+        verified_ip = validate_resolved(host, port, self.allowlist)
+        return self._delegate.connect_tcp(
+            verified_ip,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    def connect_unix_socket(self, path, timeout=None, socket_options=None):  # noqa: D102
+        raise NotImplementedError("Unix sockets are never used for provider calls")

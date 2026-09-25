@@ -16,7 +16,7 @@ import certifi
 import httpcore
 import httpx
 
-from app.core.ssrf_guard import PinnedNetworkBackend
+from app.core.ssrf_guard import PinnedNetworkBackend, PinnedNetworkBackendSync
 
 
 class ProviderRedirectRejectedError(Exception):
@@ -50,6 +50,11 @@ async def _reject_redirects(response: httpx.Response) -> None:
         raise ProviderRedirectRejectedError(str(response.request.url), response.status_code)
 
 
+def _reject_redirects_sync(response: httpx.Response) -> None:
+    if response.is_redirect:
+        raise ProviderRedirectRejectedError(str(response.request.url), response.status_code)
+
+
 def build_provider_http_client(credential: ProviderConnectionInfo) -> httpx.AsyncClient:
     """Builds the one kind of client every provider call must use.
 
@@ -75,4 +80,28 @@ def build_provider_http_client(credential: ProviderConnectionInfo) -> httpx.Asyn
         trust_env=False,
         timeout=httpx.Timeout(30.0, connect=10.0),
         event_hooks={"response": [_reject_redirects]},
+    )
+
+
+def build_provider_http_client_sync(credential: ProviderConnectionInfo) -> httpx.Client:
+    """Sync counterpart of `build_provider_http_client`, for provider call sites that run
+    outside an event loop (Celery tasks). Same guarantees, same knobs — `httpcore.ConnectionPool`
+    + `PinnedNetworkBackendSync` instead of the async pair.
+    """
+
+    network_backend = PinnedNetworkBackendSync(allowlist=credential.allowlisted_hosts)
+    pool = httpcore.ConnectionPool(
+        ssl_context=_build_ssl_context(),
+        network_backend=network_backend,
+    )
+    transport = httpx.HTTPTransport()
+    transport._pool = pool  # noqa: SLF001 - httpx doesn't expose network_backend injection publicly
+
+    return httpx.Client(
+        base_url=credential.api_base_url,
+        transport=transport,
+        follow_redirects=False,
+        trust_env=False,
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        event_hooks={"response": [_reject_redirects_sync]},
     )
