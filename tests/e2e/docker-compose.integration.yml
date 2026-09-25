@@ -129,7 +129,7 @@ services:
       test:
         - "CMD-SHELL"
         - >-
-          wget -q -O /dev/null http://127.0.0.1:8401/actuator/health;
+          wget -q -O /dev/null http://127.0.0.1:8401/api/v1/actuator/health;
           code=$$?; [ $$code -eq 0 -o $$code -eq 8 ]
       interval: 3s
       timeout: 3s
@@ -286,8 +286,12 @@ services:
       # This service's own view of the stack, for the fixtures/tests (calls
       # /internal/** on backend-java directly, per Task 0.5's "test-runner đóng
       # vai Python ở Checkpoint: Registry lifecycle").
-      BACKEND_JAVA_INTERNAL_BASE_URL: "http://backend-java:8401"
+      # Includes backend-java's server.servlet.context-path (/api/v1) - its
+      # @RequestMapping("/internal/...") controllers sit under that, same as
+      # every other backend-java route.
+      BACKEND_JAVA_INTERNAL_BASE_URL: "http://backend-java:8401/api/v1"
       FAKE_LLM_PROVIDER_BASE_URL: "http://fake-llm-provider:8000"
+      UNISAGE_AGENT_BASE_URL: "http://unisage-agent:8000"
       FAKE_LLM_PROVIDER_ADMIN_BASE_URL: "http://fake-llm-provider:8000/admin"
       CELERY_BEAT_CONTAINER_NAME: "it-celery-beat"
     volumes:
