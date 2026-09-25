@@ -61,6 +61,21 @@ class BackendJavaConnectionError(BackendJavaError):
         super().__init__(f"backend-java {method} {url} -> network error: {cause}")
 
 
+class BackendJavaRedirectError(BackendJavaError):
+    """Java (or something impersonating it) answered with a 3xx.
+
+    Treated as an error, never followed: this client's requests carry
+    `X-Internal-Secret` and often a plaintext API key (model registry
+    snapshot/claim), so a redirect must never be followed to another host.
+    """
+
+    def __init__(self, method: str, url: str, status_code: int) -> None:
+        self.method = method
+        self.url = url
+        self.status_code = status_code
+        super().__init__(f"backend-java {method} {url} -> unexpected redirect (HTTP {status_code})")
+
+
 def _auth_headers(
     authorization: str | None,
     guest_session_token: str | None = None,
@@ -112,7 +127,10 @@ class BackendJavaClient:
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            base_url=self._base_url, transport=self._transport, timeout=self._timeout
+            base_url=self._base_url,
+            transport=self._transport,
+            timeout=self._timeout,
+            follow_redirects=False,
         )
 
     async def _request(
@@ -133,6 +151,9 @@ class BackendJavaClient:
                 )
         except httpx.RequestError as exc:
             raise BackendJavaConnectionError(method, path, exc) from exc
+
+        if response.is_redirect:
+            raise BackendJavaRedirectError(method, path, response.status_code)
 
         if response.status_code >= 400:
             try:

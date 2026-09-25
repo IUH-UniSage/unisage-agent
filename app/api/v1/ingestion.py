@@ -1,4 +1,5 @@
 import contextlib
+import hmac
 import logging
 
 from celery.result import AsyncResult
@@ -275,7 +276,7 @@ async def ingestion_events(
     caller is granted access to.
     """
 
-    if not x_internal_secret or x_internal_secret != settings.APP_INTERNAL_SECRET_KEY:
+    if not x_internal_secret or not hmac.compare_digest(x_internal_secret, settings.APP_INTERNAL_SECRET_KEY):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     try:

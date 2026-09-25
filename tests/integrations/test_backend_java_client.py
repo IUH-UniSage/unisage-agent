@@ -11,6 +11,7 @@ from app.integrations.backend_java_client import (
     BackendJavaClient,
     BackendJavaConnectionError,
     BackendJavaHTTPError,
+    BackendJavaRedirectError,
 )
 
 
@@ -289,3 +290,69 @@ async def test_unwraps_java_api_response_envelope() -> None:
     result = await client.create_message(conversation_id="conv-1", role="USER", content="hi")
 
     assert result == {"id": "msg-1"}
+
+
+# ── never follow a redirect from Java — every method that hits it ──────────
+
+_REDIRECT_STATUSES = [301, 302, 307, 308]
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_create_message_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.create_message(conversation_id="conv-1", role="USER", content="hi")
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_update_message_rejects_redirect(status_code: int) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.update_message(
+            message_id="msg-1", conversation_id="conv-1", content="x", status="COMPLETED"
+        )
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_create_conversation_rejects_redirect(status_code: int) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.create_conversation()
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_get_conversation_messages_rejects_redirect(status_code: int) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.get_conversation_messages(conversation_id="conv-1")
+
+
+def test_client_never_follows_redirects_by_default() -> None:
+    client = BackendJavaClient(base_url="http://java.test")
+    assert client._client().follow_redirects is False
