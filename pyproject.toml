@@ -23,7 +23,10 @@ dependencies = [
     "tiktoken>=0.7.0",
     "orjson>=3.10.0",
     "python-dotenv>=1.0.0",
-    "httpx>=0.27.0",
+    "httpx>=0.28.1,<0.29",
+    # Direct dep (not just httpx's transitive one) — PinnedNetworkBackend overrides
+    # connect_tcp, which is not public API httpcore promises to keep stable across minors.
+    "httpcore>=1.0.9,<1.1",
     "pymupdf4llm>=0.0.1",
     "minio>=7.2.0",
     "celery[redis]>=5.4.0",
