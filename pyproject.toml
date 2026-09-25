@@ -50,6 +50,14 @@ dev = [
     "aiosqlite>=0.20.0",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires the docker-compose.integration.yml stack (Java + Postgres + Redis + Celery + fake LLM provider) - see tests/e2e/README.md. Excluded from the default run.",
+]
+# Default run stays hermetic (no live Java/Redis/Celery needed) - integration
+# tests opt in explicitly via `pytest -m integration`.
+addopts = "-m 'not integration'"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]

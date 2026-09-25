@@ -54,10 +54,31 @@ class Settings(BaseSettings):
 
     # --- Single-var external systems: naming the system is enough on its
     # own, a prefix group of one adds nothing ---
+    # DB 0 only - registry/circuit-breaker/lock/event use (key prefix `mr:`).
+    # Celery's own broker/backend use their own DBs below - see plan.md's "Hot-reload
+    # consistency": the three were sharing this one DB, which meant a Celery `purge`
+    # or the registry's key sweep could clobber each other's keys.
     REDIS_URL: str = "redis://localhost:6379/0"
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
     # Set true only when Python <-> Java is actually TLS/mTLS or an encrypted private network.
     INTERNAL_NETWORK_ENCRYPTED: bool = False
+
+    # --- CELERY_: Celery's own broker/result-backend, isolated from REDIS_URL's
+    # DB 0 (see above) so a broker purge/flush never touches registry state and
+    # vice versa. DB 1/2 by convention, not enforced - point these at whatever DB
+    # you like, just not DB 0. ---
+    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+    # Prefix for every Celery queue name this service declares. The integration
+    # harness (tests/e2e/) sets a fresh prefix per run (e.g. `it-<uuid8>`) so its
+    # fixture can `celery purge -Q <prefix>-<queue>` without ever touching another
+    # run's or another service's queue.
+    CELERY_QUEUE_PREFIX: str = "unisage"
+    # Redis pub/sub channel the Java side publishes `{"version": N}` to after a
+    # registry-affecting commit (plan.md "Hot-reload consistency" - "Publish after
+    # commit"). Pub/sub isn't namespaced by DB, so the channel name itself is what
+    # separates one harness run's Java from another's.
+    MODEL_REGISTRY_CHANNEL: str = "model-registry:updates"
 
     # --- QDRANT_: the vector store ---
     QDRANT_HOST: str = "localhost"

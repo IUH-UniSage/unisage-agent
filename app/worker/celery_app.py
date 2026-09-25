@@ -3,6 +3,7 @@ import uuid
 from typing import Any
 
 from celery import Celery
+from kombu import Queue
 
 from app.core.config import settings
 from app.core.events import publish_ingestion_event
@@ -15,12 +16,21 @@ logger = logging.getLogger(__name__)
 
 celery_app = Celery(
     "unisage_ingestion",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
+    broker=settings.CELERY_BROKER_URL,
+    backend=settings.CELERY_RESULT_BACKEND,
 )
 # Keep task results well past a wizard tab's lifetime so the client's
 # reconciliation sweep can still read a terminal state days later.
 celery_app.conf.result_expires = 60 * 60 * 24 * 7
+# Every task this service declares runs in a queue named
+# `<CELERY_QUEUE_PREFIX>-<queue>` - lets the integration harness give each test
+# run its own queue namespace and `celery purge -Q <that queue>` without ever
+# touching another run's queue or (since purge is queue-scoped, not DB-scoped)
+# another Redis DB's keys. Single default queue today; task_routes can split
+# further later without changing the prefix mechanism.
+_default_queue = f"{settings.CELERY_QUEUE_PREFIX}-default"
+celery_app.conf.task_default_queue = _default_queue
+celery_app.conf.task_queues = (Queue(_default_queue, routing_key=_default_queue),)
 
 
 @celery_app.task(bind=True, name="embed_chunks")
