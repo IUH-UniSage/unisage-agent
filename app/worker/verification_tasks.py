@@ -26,6 +26,7 @@ from openai import OpenAI
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
+from app.core.alerting import alert_credential_failure
 from app.core.config import settings
 from app.core.llm.embedding_probe import EmbeddingFingerprint, measure_fingerprint
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
@@ -239,13 +240,34 @@ async def _verify_one_job(job: dict[str, Any], *, client: BackendJavaClient) -> 
     except Exception as exc:  # noqa: BLE001 - classified below, never re-raised bare
         error_type = classify_llm_error(exc)
         result_type = "TRANSIENT" if error_type is ErrorType.TRANSIENT else "PERMANENT"
+        message = safe_error_message(exc, credential.api_key)
+        if result_type == "PERMANENT":
+            # PERMANENT always ends this job FAILED on the Java side (plan.md's
+            # verification lifecycle table), so Python knows for certain at this point
+            # that the job is about to fail - alert now rather than polling Java after
+            # the fact.
+            #
+            # A TRANSIENT result is deliberately NOT alerted here even when this was the
+            # job's last attempt (which would also end it FAILED): this claim response
+            # carries `attempt` but not `maxAttempts` (see
+            # `InternalVerificationClaimResponse` on the Java side), so Python cannot
+            # tell "TRANSIENT, Java will re-queue it" apart from "TRANSIENT, Java is
+            # about to mark it FAILED" without guessing. Guessing wrong in the alerting
+            # direction would flood Slack for a routine, still-retrying transient
+            # failure - exactly what this feature exists to avoid - so this case is left
+            # unalerted. Closing this gap needs either `maxAttempts` added to the claim
+            # response, or Java alerting itself at the point it makes that FAILED
+            # transition.
+            await alert_credential_failure(
+                credential, "VERIFICATION_FAILED_PERMANENT", message, purpose=purpose
+            )
         await _submit_result(
             client,
             job_id=job_id,
             lease_token=lease_token,
             result_type=result_type,
             error_code=_error_code_for(exc),
-            message=safe_error_message(exc, credential.api_key),
+            message=message,
         )
 
 
