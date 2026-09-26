@@ -82,7 +82,9 @@ def test_redis_pubsub_round_trips_on_the_registry_channel(
             if message is not None and message["type"] == "message":
                 break
         assert message is not None and message["type"] == "message"
-        assert message["data"] == b'{"version": 1}'
+        # registry_redis is constructed with decode_responses=True, so pubsub
+        # payloads come back as str, not bytes.
+        assert message["data"] == '{"version": 1}'
     finally:
         pubsub.close()
 
