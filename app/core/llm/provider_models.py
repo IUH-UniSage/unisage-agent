@@ -12,9 +12,11 @@ from __future__ import annotations
 
 from pydantic_ai.models import Model
 from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers import Provider
 from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client
@@ -32,6 +34,9 @@ _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 #     `httpx.AsyncClient` and stores it at `client._api_client._http_options.httpx_async_client`.
 #     It emits a `PydanticAIDeprecationWarning` ("use `httpx2.AsyncClient` instead") but does not
 #     raise - same non-fatal deprecation OpenAI's own path already carries.
+#   - "groq" (`GroqProvider`, backed by `groq`'s `AsyncGroq`): accepts a plain `httpx.AsyncClient`
+#     with no warning at all - the Groq SDK itself hasn't migrated to httpx2. Stored at
+#     `client._client`.
 #
 # "anthropic" is deliberately NOT here, even though ADR 0005 assumed it would use the same
 # http_client= mechanism as OpenAI ("... AnthropicProvider, ... dùng cùng cơ chế http_client=").
@@ -53,6 +58,7 @@ _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 _PROVIDER_MAP: dict[str, tuple[type[Model], type[Provider]]] = {
     "openai": (OpenAIChatModel, OpenAIProvider),
     "google": (GoogleModel, GoogleProvider),
+    "groq": (GroqModel, GroqProvider),
 }
 
 

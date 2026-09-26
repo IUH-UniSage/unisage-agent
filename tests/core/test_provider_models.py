@@ -8,8 +8,10 @@ import asyncio
 
 import pytest
 from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.provider_models import UnsupportedProviderError, build_model
@@ -147,3 +149,36 @@ def test_google_provider_http_client_reaches_pinned_backend(
 
     assert connect_tcp_spy, "GoogleProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
     assert all(host == "generativelanguage.googleapis.com" for host, _ in connect_tcp_spy)
+
+
+def test_groq_provider_builds_groq_model() -> None:
+    credential = _credential(
+        provider="groq",
+        model_name="llama-3.3-70b-versatile",
+        api_base_url="https://api.groq.com",
+    )
+
+    model = build_model(credential)
+
+    assert isinstance(model, GroqModel)
+    assert isinstance(model.provider, GroqProvider)
+    assert model.model_name == "llama-3.3-70b-versatile"
+
+
+def test_groq_provider_http_client_reaches_pinned_backend(
+    connect_tcp_spy: list[tuple[str, int]],
+) -> None:
+    credential = _credential(
+        provider="groq",
+        model_name="llama-3.3-70b-versatile",
+        api_base_url="https://api.groq.com",
+    )
+
+    model = build_model(credential)
+    assert isinstance(model.provider, GroqProvider)
+    httpx_client = model.provider.client._client  # type: ignore[attr-defined]
+
+    _drive_one_request(httpx_client)
+
+    assert connect_tcp_spy, "GroqProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    assert all(host == "api.groq.com" for host, _ in connect_tcp_spy)
