@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import redis
@@ -10,11 +11,14 @@ from celery.signals import worker_process_init
 from kombu import Queue
 
 from app.core.config import settings
+from app.core.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.events import publish_ingestion_event
+from app.core.llm_error_classifier import ErrorType, EmbeddingProviderError, classify_llm_error
 from app.core.logging_config import configure_logging
-from app.core.model_registry import init_model_registry
+from app.core.model_registry import get_current_snapshot, init_model_registry
 from app.core.redaction import safe_error_message
 from app.core.registry_subscriber import start_thread_registry_subscriber
+from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
@@ -106,7 +110,15 @@ def embed_chunks(
     reconciliation sweep) and a Redis `progress` event per chunk (for the
     live `WS /ingestion/events` relay), then a `completed` event on finish.
     One chunk's enrichment/embedding failure is recorded in the returned
-    per-chunk results rather than raised, so it doesn't abort the batch.
+    per-chunk results rather than raised, so it doesn't abort the batch -
+    UNLESS the failure is `EmbeddingProviderError` (the ACTIVE EMBEDDING
+    credential itself is broken, or its identity guard refused it). Embedding
+    never auto-fails-over (plan.md "Embedding identity guard") - that kind of
+    failure aborts the whole job instead: chunks already upserted stay in
+    Qdrant untouched, no further chunk is embedded, no `completed` event is
+    published, and this re-raises so Celery records the task as FAILED (the
+    client's reconciliation sweep, `_draft_task_progress`, reads that state
+    straight off Celery - no separate document-status bookkeeping needed).
     """
 
     task_id = self.request.id
@@ -177,9 +189,24 @@ def embed_chunks(
                     chunking_version=chunk.chunking_version,
                     structure_confidence=chunk.structure_confidence,
                     parse_warnings=list(chunk.parse_warnings),
+                    embedding_identity_key=embedder.identity_key,
                 ),
             )
             results.append({"chunk_index": chunk.chunk_index, "status": "SUCCESS"})
+        except EmbeddingProviderError as exc:
+            # The provider itself (or the identity guard) is broken - never a per-chunk data
+            # problem. Stops the batch entirely: report health, tell the client, mark the task
+            # FAILED, and let no further chunk get embedded.
+            logger.error(
+                "Embedding provider failed for document %s at chunk %s: %s",
+                document_id,
+                chunk.chunk_index,
+                exc,
+            )
+            reason = safe_error_message(exc)
+            _publish({"type": "failed", "reason": reason})
+            _report_embedding_provider_failure(exc)
+            raise
         except Exception as exc:
             logger.exception("Failed to embed chunk %s of %s", chunk.chunk_index, document_id)
             # This dict is the task's return value, which Celery persists to the
@@ -200,3 +227,48 @@ def embed_chunks(
 
     _publish({"type": "completed", "state": "SUCCESS"})
     return {"percent": 100, "results": results}
+
+
+def _report_embedding_provider_failure(exc: EmbeddingProviderError) -> None:
+    """Best-effort health report to `backend-java` (plan.md "Internal API contract" endpoint #3),
+    same shape CHAT/EXTRACTION failures already report via `app.core.model_router`. A credential
+    identity mismatch is always `PERMANENT` (retrying never fixes a wrong model/provider); any
+    other embedding provider failure is classified from its underlying cause the same way
+    `model_router` classifies CHAT/EXTRACTION failures.
+    """
+
+    credential = exc.credential
+    snapshot = get_current_snapshot()
+    if credential is None or snapshot is None:
+        logger.warning(
+            "embed_chunks: cannot report embedding provider health - no credential/snapshot in "
+            "context for this failure"
+        )
+        return
+
+    if isinstance(exc, EmbeddingIdentityMismatchError):
+        error_type = ErrorType.PERMANENT
+    else:
+        cause = exc.__cause__
+        error_type = classify_llm_error(cause) if cause is not None else ErrorType.TRANSIENT
+
+    try:
+        asyncio.run(
+            BackendJavaClient().report_health(
+                credential_id=credential.id,
+                credential_revision=credential.revision,
+                snapshot_version=snapshot.version,
+                error_type=error_type.value,
+                error_code=type(exc.__cause__ or exc).__name__,
+                message=safe_error_message(exc, credential.api_key),
+                occurred_at=datetime.now(UTC).isoformat(),
+            )
+        )
+    except Exception:
+        # Best-effort - Java not hearing about this failure right now is not a reason to swallow
+        # the actual embedding failure this function was called to report.
+        logger.warning(
+            "embed_chunks: failed to report embedding provider health for credential=%s",
+            credential.id,
+            exc_info=True,
+        )
