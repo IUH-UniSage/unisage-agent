@@ -9,9 +9,11 @@ import asyncio
 import pytest
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.groq import GroqModel
+from pydantic_ai.models.mistral import MistralModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.groq import GroqProvider
+from pydantic_ai.providers.mistral import MistralProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.provider_models import UnsupportedProviderError, build_model
@@ -182,3 +184,36 @@ def test_groq_provider_http_client_reaches_pinned_backend(
 
     assert connect_tcp_spy, "GroqProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
     assert all(host == "api.groq.com" for host, _ in connect_tcp_spy)
+
+
+def test_mistral_provider_builds_mistral_model() -> None:
+    credential = _credential(
+        provider="mistral",
+        model_name="mistral-large-latest",
+        api_base_url="https://api.mistral.ai",
+    )
+
+    model = build_model(credential)
+
+    assert isinstance(model, MistralModel)
+    assert isinstance(model.provider, MistralProvider)
+    assert model.model_name == "mistral-large-latest"
+
+
+def test_mistral_provider_http_client_reaches_pinned_backend(
+    connect_tcp_spy: list[tuple[str, int]],
+) -> None:
+    credential = _credential(
+        provider="mistral",
+        model_name="mistral-large-latest",
+        api_base_url="https://api.mistral.ai",
+    )
+
+    model = build_model(credential)
+    assert isinstance(model.provider, MistralProvider)
+    httpx_client = model.provider.client.sdk_configuration.async_client  # type: ignore[attr-defined]
+
+    _drive_one_request(httpx_client)
+
+    assert connect_tcp_spy, "MistralProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    assert all(host == "api.mistral.ai" for host, _ in connect_tcp_spy)
