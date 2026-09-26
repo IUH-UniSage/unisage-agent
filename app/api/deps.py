@@ -14,6 +14,8 @@ from app.core.exceptions import (
     MissingTrustedContextException,
 )
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client
+from app.core.llm.provider_models import build_model
+from app.core.model_registry import ModelRegistryError, get_current_snapshot
 from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
@@ -21,9 +23,9 @@ from app.rag.retrieval.service import RetrievalService
 
 _DOCUMENT_WRITE_PERMISSIONS = {"DOCUMENT_ALL", "DOCUMENT_CREATE"}
 
-# Static .env-sourced credential for now — registry-driven provider selection
-# (llmProvider -> Model/Provider class mapping from the model registry snapshot)
-# is Task 5/9's job.
+# Only used on the MODEL_REGISTRY_ENABLED=false path below (plan.md "Cutover khỏi cấu hình
+# `.env` tĩnh" — this is the one rollout-flag branch still allowed to read settings.OPENAI_*;
+# see tests/core/test_no_env_fallback_when_registry_enabled.py).
 _OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 
@@ -54,22 +56,43 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 def get_graph_models() -> GraphModels:
     """FastAPI dependency: the 3 LLM-backed nodes' models for the streaming graph.
 
-    Overridden in tests with `pydantic_ai.models.function.FunctionModel`
-    doubles (see tests/llm_mocks.py). Production builds a real `OpenAIChatModel`
-    with `settings.OPENAI_API_KEY` passed explicitly - a bare `"openai:<name>"`
-    string instead relies on pydantic_ai reading `OPENAI_API_KEY` from the OS
-    environment, which `.env` alone does not set.
+    Overridden in tests with `pydantic_ai.models.function.FunctionModel` doubles (see
+    tests/llm_mocks.py). Production picks one of two mutually exclusive paths, gated by
+    `settings.MODEL_REGISTRY_ENABLED` (plan.md "Cutover khỏi cấu hình `.env` tĩnh"):
+
+    - `true` (registry path): build from the highest-priority ACTIVE CHAT credential in the
+      snapshot `init_model_registry()` already loaded at startup — no failover yet (Task 5's
+      explicit scope), no re-fetch here (hot-reload is Task 7), no `.env` fallback if the
+      snapshot has no CHAT credential (that's a bug this function refuses to paper over).
+    - `false` (legacy path, temporary rollout flag): the old hardcoded `OpenAIChatModel` with
+      `settings.OPENAI_API_KEY`/`OPENAI_MODEL` — the *only* branch of this function allowed to
+      read `settings.OPENAI_*` (enforced by
+      tests/core/test_no_env_fallback_when_registry_enabled.py).
     """
 
-    model = OpenAIChatModel(
-        settings.OPENAI_MODEL,
-        provider=OpenAIProvider(
-            api_key=settings.OPENAI_API_KEY,
-            http_client=build_provider_http_client(
-                ProviderConnectionInfo(api_base_url=_OPENAI_API_BASE_URL)
+    if settings.MODEL_REGISTRY_ENABLED:
+        snapshot = get_current_snapshot()
+        chat_credentials = snapshot.credentials_for("CHAT") if snapshot else ()
+        if not chat_credentials:
+            raise ModelRegistryError(
+                "Model registry is enabled but has no ACTIVE CHAT credential - "
+                "get_graph_models() refuses to fall back to .env credentials."
+            )
+        top_priority_credential = min(
+            chat_credentials, key=lambda credential: (credential.priority is None, credential.priority)
+        )
+        model = build_model(top_priority_credential)
+    else:
+        model = OpenAIChatModel(
+            settings.OPENAI_MODEL,
+            provider=OpenAIProvider(
+                api_key=settings.OPENAI_API_KEY,
+                http_client=build_provider_http_client(
+                    ProviderConnectionInfo(api_base_url=_OPENAI_API_BASE_URL)
+                ),
             ),
-        ),
-    )
+        )
+
     return GraphModels(
         classification=model,
         query_transformation=model,
