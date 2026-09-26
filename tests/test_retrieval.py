@@ -5,8 +5,10 @@ live network anywhere in this file (matches the project's convention for
 
 from unittest.mock import MagicMock
 
+import pytest
 from qdrant_client.http.models import QueryResponse, ScoredPoint
 
+from app.core.llm_error_classifier import EmbeddingProviderError
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.retrieval.service import RetrievalService
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
@@ -167,6 +169,21 @@ def test_retrieve_applies_the_callers_access_filter_to_every_vector_query() -> N
         query_filter = call.kwargs["query_filter"]
         assert isinstance(query_filter.should, list)
         assert len(query_filter.should) == 2  # public (access_level=0) + KHOA_CNTT grant
+
+
+def test_retrieve_lets_an_embedding_provider_error_escape_uncaught() -> None:
+    """plan.md "Embedding identity guard" - query-time embedding must fail clearly, never
+    swallow a guard refusal or a broken credential into an empty/degraded result."""
+
+    fake_embedder = MagicMock()
+    fake_embedder.embed.side_effect = EmbeddingProviderError("ACTIVE EMBEDDING credential broken")
+    service = RetrievalService(client=MagicMock(), embedder=fake_embedder)
+    security = AcademicSecurityContext(
+        department_access=[DepartmentAccessEntry(department_id="KHOA_CNTT", access_level=2)]
+    )
+
+    with pytest.raises(EmbeddingProviderError):
+        service.retrieve("câu hỏi", security=security)
 
 
 def test_retrieve_never_lets_confirmed_metadata_widen_the_access_filter() -> None:
