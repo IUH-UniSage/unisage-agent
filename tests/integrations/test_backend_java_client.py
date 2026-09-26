@@ -179,8 +179,17 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
     await client.get_conversation_messages(conversation_id="conv-1", authorization=None)
     await client.get_model_registry_version()
     await client.get_model_registry_snapshot()
+    await client.report_health(
+        credential_id="cred-1",
+        credential_revision=1,
+        snapshot_version=1,
+        error_type="TRANSIENT",
+        error_code="x",
+        message="x",
+        occurred_at="2026-09-26T00:00:00+00:00",
+    )
 
-    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 5
+    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 6
 
 
 @pytest.mark.asyncio
@@ -311,6 +320,45 @@ async def test_get_model_registry_version_returns_int() -> None:
 
 
 @pytest.mark.asyncio
+async def test_report_health_posts_expected_body_shape() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["authorization"] = request.headers.get("authorization")
+        seen["parsed_body"] = _json.loads(request.read())
+        return httpx.Response(200, json={"applied": True})
+
+    client = _client_with(handler)
+
+    result = await client.report_health(
+        credential_id="cred-1",
+        credential_revision=3,
+        snapshot_version=42,
+        error_type="TRANSIENT",
+        error_code="RateLimitError:429",
+        message="rate limited",
+        occurred_at="2026-09-26T00:00:00+00:00",
+    )
+
+    assert seen["method"] == "POST"
+    assert seen["url_path"] == "/internal/model-registry/credentials/cred-1/health"
+    assert seen["authorization"] is None
+    assert seen["parsed_body"] == {
+        "credentialRevision": 3,
+        "snapshotVersion": 42,
+        "errorType": "TRANSIENT",
+        "errorCode": "RateLimitError:429",
+        "message": "rate limited",
+        "occurredAt": "2026-09-26T00:00:00+00:00",
+    }
+    assert result == {"applied": True}
+
+
+@pytest.mark.asyncio
 async def test_get_model_registry_snapshot_returns_raw_payload() -> None:
     payload = {
         "version": 7,
@@ -422,6 +470,32 @@ async def test_get_model_registry_version_rejects_redirect(status_code: int) -> 
 
     with pytest.raises(BackendJavaRedirectError):
         await client.get_model_registry_version()
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_report_health_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.report_health(
+            credential_id="cred-1",
+            credential_revision=1,
+            snapshot_version=1,
+            error_type="PERMANENT",
+            error_code="x",
+            message="x",
+            occurred_at="2026-09-26T00:00:00+00:00",
+        )
 
     assert call_count == 1
 

@@ -297,6 +297,43 @@ class BackendJavaClient:
         result = await self._request("GET", "/internal/model-registry/snapshot", authorization=None)
         return dict(result) if result else {}
 
+    async def report_health(
+        self,
+        *,
+        credential_id: str,
+        credential_revision: int,
+        snapshot_version: int,
+        error_type: Literal["TRANSIENT", "PERMANENT"],
+        error_code: str,
+        message: str,
+        occurred_at: str,
+    ) -> dict[str, Any]:
+        """`POST /internal/model-registry/credentials/{id}/health` (plan.md "Internal
+        API contract" endpoint #3) - called by `app.core.model_router` after a
+        provider-call failure. `message` must already be redacted
+        (`app.core.redaction.safe_error_message`) before it reaches this method; this
+        client does not redact anything itself.
+
+        No secret in the response. No `Authorization` is sent, matching every other
+        `/internal/**` call this client makes.
+        """
+
+        body = {
+            "credentialRevision": credential_revision,
+            "snapshotVersion": snapshot_version,
+            "errorType": error_type,
+            "errorCode": error_code,
+            "message": message,
+            "occurredAt": occurred_at,
+        }
+        result = await self._request(
+            "POST",
+            f"/internal/model-registry/credentials/{credential_id}/health",
+            authorization=None,
+            json_body=body,
+        )
+        return dict(result) if result else {}
+
     async def get_conversation_messages(
         self,
         *,
