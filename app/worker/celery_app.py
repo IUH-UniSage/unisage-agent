@@ -14,6 +14,7 @@ from app.core.events import publish_ingestion_event
 from app.core.logging_config import configure_logging
 from app.core.model_registry import init_model_registry
 from app.core.redaction import safe_error_message
+from app.core.registry_subscriber import start_thread_registry_subscriber
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
@@ -70,6 +71,10 @@ def _load_model_registry_on_worker_start(**kwargs: Any) -> None:
 
     del kwargs
     asyncio.run(init_model_registry())
+    # Task 8: same hot-reload as the FastAPI side, but as a daemon thread running its own
+    # event loop - this prefork worker process has no asyncio loop of its own to schedule
+    # tasks on. No-op when MODEL_REGISTRY_ENABLED=false.
+    start_thread_registry_subscriber()
 
 
 @celery_app.task(name="beat_heartbeat", ignore_result=True)
