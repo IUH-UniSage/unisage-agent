@@ -26,9 +26,6 @@ from tests.llm_mocks import (
     make_sync_llm_model,
 )
 
-settings.APP_INTERNAL_SECRET_KEY = "test-internal-secret"
-
-
 def _in_memory_sqlite_engine_and_sessions() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     """Build a fresh in-memory SQLite engine and a session factory bound to it.
 
@@ -47,15 +44,23 @@ def _in_memory_sqlite_engine_and_sessions() -> tuple[AsyncEngine, async_sessionm
 
 
 @pytest.fixture
-def client() -> Generator[TestClient, None, None]:
+def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     """Create a test client with `get_db_session` backed by an in-memory SQLite DB.
 
     Sends `X-Internal-Secret` by default on every request so tests don't need
     to know about the API-Gateway-only access gate individually. The session
     is real (not `None`) so endpoints that persist a side effect (e.g. the
     chunking-draft resume feature) work end-to-end within a single test.
+
+    Overrides the secret via `monkeypatch` (function-scoped, auto-restored)
+    rather than assigning to the shared `settings` singleton at module import
+    time - the latter used to leak into any other test module collected in
+    the same pytest session (including tests/e2e's integration suite, which
+    needs `settings.APP_INTERNAL_SECRET_KEY` to hold the real harness secret
+    it was given via env var, not this fixture's fake one).
     """
 
+    monkeypatch.setattr(settings, "APP_INTERNAL_SECRET_KEY", "test-internal-secret")
     engine, session_factory = _in_memory_sqlite_engine_and_sessions()
     tables_ready = False
 
