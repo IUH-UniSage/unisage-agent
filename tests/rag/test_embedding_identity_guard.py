@@ -69,7 +69,9 @@ def _identity(**overrides: Any) -> EmbeddingIndexIdentity:
     return EmbeddingIndexIdentity(**values)
 
 
-def _snapshot(identity: EmbeddingIndexIdentity | None, *, version: int = 1) -> ModelRegistrySnapshot:
+def _snapshot(
+    identity: EmbeddingIndexIdentity | None, *, version: int = 1
+) -> ModelRegistrySnapshot:
     return ModelRegistrySnapshot(
         version=version, generated_at=None, purposes={}, embedding_index_identity=identity
     )
@@ -155,7 +157,9 @@ def test_matching_fingerprint_promotes_and_returns_identity_key() -> None:
     )
 
     assert probe.call_count == 1
-    assert key == identity_key("openai", "text-embedding-3-small", None, "https://api.openai.com/v1", _DIMENSION)
+    assert key == identity_key(
+        "openai", "text-embedding-3-small", None, "https://api.openai.com/v1", _DIMENSION
+    )
 
 
 def test_mismatched_fingerprint_refuses_after_measuring() -> None:
@@ -211,7 +215,9 @@ def test_empty_collection_bootstraps_identity_on_201() -> None:
     put_kwargs = backend_client.put_embedding_index_identity.call_args.kwargs
     assert put_kwargs["established_by"] == "first-upsert"
     assert put_kwargs["dimension"] == _DIMENSION
-    assert key == identity_key("openai", "text-embedding-3-small", None, "https://api.openai.com/v1", _DIMENSION)
+    assert key == identity_key(
+        "openai", "text-embedding-3-small", None, "https://api.openai.com/v1", _DIMENSION
+    )
 
 
 def test_empty_collection_lost_race_reconciles_on_matching_winner() -> None:
@@ -219,7 +225,9 @@ def test_empty_collection_lost_race_reconciles_on_matching_winner() -> None:
     client = _qdrant_client_stub(has_points=False, dimension=None)
     backend_client = MagicMock()
     backend_client.put_embedding_index_identity = AsyncMock(
-        side_effect=BackendJavaHTTPError("PUT", "/x", 409, {"error": "EMBEDDING_INDEX_IDENTITY_EXISTS"})
+        side_effect=BackendJavaHTTPError(
+            "PUT", "/x", 409, {"error": "EMBEDDING_INDEX_IDENTITY_EXISTS"}
+        )
     )
     backend_client.get_embedding_index_identity = AsyncMock(
         return_value={
@@ -240,7 +248,9 @@ def test_empty_collection_lost_race_reconciles_on_matching_winner() -> None:
         backend_client=backend_client,
     )
 
-    assert key == identity_key("openai", "text-embedding-3-small", None, "https://api.openai.com/v1", _DIMENSION)
+    assert key == identity_key(
+        "openai", "text-embedding-3-small", None, "https://api.openai.com/v1", _DIMENSION
+    )
 
 
 def test_empty_collection_lost_race_refuses_on_mismatched_winner() -> None:
@@ -248,7 +258,9 @@ def test_empty_collection_lost_race_refuses_on_mismatched_winner() -> None:
     client = _qdrant_client_stub(has_points=False, dimension=None)
     backend_client = MagicMock()
     backend_client.put_embedding_index_identity = AsyncMock(
-        side_effect=BackendJavaHTTPError("PUT", "/x", 409, {"error": "EMBEDDING_INDEX_IDENTITY_EXISTS"})
+        side_effect=BackendJavaHTTPError(
+            "PUT", "/x", 409, {"error": "EMBEDDING_INDEX_IDENTITY_EXISTS"}
+        )
     )
     backend_client.get_embedding_index_identity = AsyncMock(
         return_value={
