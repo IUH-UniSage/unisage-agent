@@ -25,6 +25,13 @@ source in `app/integrations/backend_java_client.py`) would propagate
 straight out of `run_and_persist`, skip the sentinel put, and leave the SSE
 generator's `while True: token = await queue.get()` waiting forever - the
 client's connection would then never see `event: done` and never close.
+
+Task 11 (plan.md "SSE error contract") adds one more thing to that same
+outer `finally`'s neighborhood: when `run_graph(...)` raises, an `ErrorItem`
+describing it is put onto `queue` immediately BEFORE the `DoneItem`
+sentinel - still inside the same outer `try`, so it's put exactly once, and
+still before the unconditional `finally` puts `DoneItem` - `event: error`
+never has a chance to arrive after `event: done`.
 """
 
 import logging
@@ -34,13 +41,42 @@ from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.graph_trace import GraphTrace
+from app.core.model_router import NoAvailableCredentialError
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import async_session_factory
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.stream_error_codes import (
+    LLM_STREAM_INTERRUPTED,
+    LLM_UNAVAILABLE,
+    MESSAGES,
+    RETRYABLE,
+)
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 
 logger = logging.getLogger(__name__)
+
+
+def _error_item_for(exc: Exception, *, streamed_any: bool) -> ErrorItem:
+    """Maps a graph-execution failure to the `event: error` payload.
+
+    `NoAvailableCredentialError` only ever surfaces before any chunk of the
+    generation/ticket-fallback response streamed (`stream_agent_text()`
+    raises it uncaught, and it can only originate there) - so it always maps
+    to `LLM_UNAVAILABLE` regardless of `streamed_any`. Every other exception
+    that reaches here either happened after a chunk already streamed (the
+    "no retry past this point" boundary in `stream_agent_text()`) or before
+    any chunk streamed for a non-credential-exhaustion reason - both map to
+    `LLM_STREAM_INTERRUPTED`, the only other non-reserved code the wire
+    contract defines.
+    """
+
+    if isinstance(exc, NoAvailableCredentialError):
+        code = LLM_UNAVAILABLE
+    else:
+        code = LLM_STREAM_INTERRUPTED
+    return ErrorItem(code=code, message=MESSAGES[code], retryable=RETRYABLE[code])
 
 
 async def run_and_persist(
@@ -52,7 +88,7 @@ async def run_and_persist(
     client_ip: str | None = None,
     graph_input: GraphInput,
     models: GraphModels,
-    queue: "Queue[str | None]",
+    queue: "Queue[QueueItem]",
     session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
 ) -> None:
     """Run the graph, stream tokens into `queue`, always finalize.
@@ -62,9 +98,9 @@ async def run_and_persist(
     because this task must keep running after the HTTP request that started
     it may have already finished or been cancelled.
 
-    Always ends by putting `None` (end-of-stream sentinel) onto `queue` in
-    an outer `finally` wrapping the entire function body, and always
-    attempts Java's `PATCH /messages/{id}` with the final status - so
+    Always ends by putting a `DoneItem` (end-of-stream sentinel) onto
+    `queue` in an outer `finally` wrapping the entire function body, and
+    always attempts Java's `PATCH /messages/{id}` with the final status - so
     neither a graph exception, an unexpected exception from the Java call,
     nor a cancelled SSE consumer can skip the sentinel.
     """
@@ -73,7 +109,7 @@ async def run_and_persist(
 
     async def sink(token: str) -> None:
         accumulated.append(token)
-        await queue.put(token)
+        await queue.put(TokenItem(token))
 
     trace = GraphTrace(
         conversation_id=conversation_id,
@@ -85,12 +121,13 @@ async def run_and_persist(
     status: Literal["COMPLETED", "ERROR"]
     response_text: str
     graph_output = None
+    error_item: ErrorItem | None = None
     try:
         try:
             graph_output = await run_graph(graph_input, models, sink, trace)
             response_text = graph_output.response_text
             status = "COMPLETED"
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "graph execution failed for conversation_id=%s, message_id=%s",
                 conversation_id,
@@ -98,6 +135,7 @@ async def run_and_persist(
             )
             response_text = "".join(accumulated)
             status = "ERROR"
+            error_item = _error_item_for(exc, streamed_any=bool(accumulated))
 
         try:
             await java_client.update_message(
@@ -137,4 +175,6 @@ async def run_and_persist(
                     conversation_id,
                 )
     finally:
-        await queue.put(None)
+        if error_item is not None:
+            await queue.put(error_item)
+        await queue.put(DoneItem())
