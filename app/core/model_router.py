@@ -51,6 +51,7 @@ from typing import Any, Protocol
 
 import redis.asyncio as redis_asyncio
 
+from app.core.alerting import alert_credential_failure
 from app.core.config import settings
 from app.core.llm_error_classifier import ErrorType, classify_llm_error
 from app.core.model_registry import CredentialConfig, active_credentials_for
@@ -279,6 +280,12 @@ class ModelRouter:
             key = _state_key(credential.id, credential.revision)
             if not await self._is_blocked(key):
                 return credential
+        await alert_credential_failure(
+            None,
+            "NO_AVAILABLE_CREDENTIAL",
+            f"Every credential for purpose={purpose!r} is cooling down or excluded",
+            purpose=purpose,
+        )
         raise NoAvailableCredentialError(purpose)
 
     async def record_failure(
@@ -287,6 +294,7 @@ class ModelRouter:
         exc: Exception,
         *,
         snapshot_version: int,
+        purpose: str | None = None,
     ) -> None:
         """Records one provider-call failure for `credential` and reports it to
         `backend-java`.
@@ -298,13 +306,21 @@ class ModelRouter:
         this call is in flight (or before it's even made) can never make the health
         report carry a newer value than what was actually active when the failure
         occurred.
+
+        `purpose` is optional and only used to enrich a PERMANENT alert's message -
+        callers that don't have it handy (or don't care about alerting context) can
+        omit it.
         """
 
         error_type = classify_llm_error(exc)
         key = _state_key(credential.id, credential.revision)
+        message = safe_error_message(exc, credential.api_key)
 
         if error_type is ErrorType.PERMANENT:
             await self._mark(key, self._excluded_ttl_seconds)
+            await alert_credential_failure(
+                credential, "PERMANENT", message, purpose=purpose
+            )
         else:
             ttl = _extract_retry_after_seconds(exc) or self._default_cooldown_seconds
             await self._mark(key, ttl)
@@ -316,7 +332,7 @@ class ModelRouter:
                 snapshot_version=snapshot_version,
                 error_type=error_type.value,
                 error_code=_error_code_for(exc),
-                message=safe_error_message(exc, credential.api_key),
+                message=message,
                 occurred_at=datetime.now(UTC).isoformat(),
             )
         except Exception:
@@ -354,8 +370,14 @@ async def get_next_credential(purpose: str) -> CredentialConfig:
 
 
 async def record_failure(
-    credential: CredentialConfig, exc: Exception, *, snapshot_version: int
+    credential: CredentialConfig,
+    exc: Exception,
+    *,
+    snapshot_version: int,
+    purpose: str | None = None,
 ) -> None:
     """Convenience wrapper around `get_default_router().record_failure()`."""
 
-    await get_default_router().record_failure(credential, exc, snapshot_version=snapshot_version)
+    await get_default_router().record_failure(
+        credential, exc, snapshot_version=snapshot_version, purpose=purpose
+    )

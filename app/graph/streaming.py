@@ -98,7 +98,7 @@ async def stream_agent_text(
                 # exactly (immediate propagation).
                 raise
             await failover_router.record_failure(
-                active_credential, exc, snapshot_version=snapshot_version
+                active_credential, exc, snapshot_version=snapshot_version, purpose=purpose
             )
             # Raises `NoAvailableCredentialError` if every credential for
             # `purpose` is cooling down/excluded - left uncaught here, it

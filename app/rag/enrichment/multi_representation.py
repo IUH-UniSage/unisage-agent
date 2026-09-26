@@ -105,7 +105,9 @@ class MultiRepresentationEnricher:
                 result = self._call_and_parse(chunk, resolved_model, resolved_client)
             except Exception as exc:
                 asyncio.run(
-                    model_router.record_failure(credential, exc, snapshot_version=snapshot_version)
+                    model_router.record_failure(
+                        credential, exc, snapshot_version=snapshot_version, purpose="EXTRACTION"
+                    )
                 )
                 is_fallback = True
                 continue
@@ -136,6 +138,7 @@ class MultiRepresentationEnricher:
                         f"multi-representation response for chunk {chunk.chunk_index}"
                     ),
                     snapshot_version=snapshot_version,
+                    purpose="EXTRACTION",
                 )
             )
             is_fallback = True

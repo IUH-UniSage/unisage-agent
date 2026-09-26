@@ -214,10 +214,16 @@ def test_malformed_response_on_fallback_credential_reported_permanent(
     recorded_calls: list[tuple[CredentialConfig, Exception, int]] = []
 
     async def spy_record_failure(
-        credential: CredentialConfig, exc: Exception, *, snapshot_version: int
+        credential: CredentialConfig,
+        exc: Exception,
+        *,
+        snapshot_version: int,
+        purpose: str | None = None,
     ) -> None:
         recorded_calls.append((credential, exc, snapshot_version))
-        await real_record_failure(credential, exc, snapshot_version=snapshot_version)
+        await real_record_failure(
+            credential, exc, snapshot_version=snapshot_version, purpose=purpose
+        )
 
     monkeypatch.setattr(model_router_module, "record_failure", spy_record_failure)
 
