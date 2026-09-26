@@ -38,13 +38,6 @@ class Settings(BaseSettings):
     # schema/tables, no cross-service FK.
     DB_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5433/unisage_agent_db"
 
-    # --- OPENAI_: the LLM/embedding provider. Shared by ingestion (chunk
-    # enrichment, embedding) and chat (classification/HyDE/generation) - kept
-    # under its own vendor prefix rather than forced into CHAT_/INGEST_. ---
-    OPENAI_API_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-4o-mini"
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
-
     # --- MINIO_: object storage for ingested source files ---
     MINIO_ENDPOINT: str = "localhost:9000"
     MINIO_ACCESS_KEY: str = ""
@@ -62,12 +55,14 @@ class Settings(BaseSettings):
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
     # Set true only when Python <-> Java is actually TLS/mTLS or an encrypted private network.
     INTERNAL_NETWORK_ENCRYPTED: bool = False
-    # Rollout flag (plan.md "Cutover khỏi cấu hình .env tĩnh"): false keeps the old
-    # OPENAI_*-from-.env path alive; true means the model registry snapshot from Java is the
-    # only source of provider credentials, and startup fails loudly if it has no ACTIVE CHAT
-    # credential. Flip once the registry is seeded and stable in an environment - never both
-    # at once, there is no "read registry, fall back to .env" middle state.
-    MODEL_REGISTRY_ENABLED: bool = False
+    # Rollout flag (plan.md "Cutover khỏi cấu hình .env tĩnh"): the model registry snapshot
+    # from Java is now the only source of provider credentials - there is no `.env` fallback
+    # path left in the code to fall back to. Startup fails loudly if the snapshot has no
+    # ACTIVE CHAT credential. Kept as a flag (rather than deleted outright) only so a process
+    # can be started with the registry deliberately not loaded (e.g. a unit-test process, or
+    # a deploy step that hasn't seeded credentials yet) - flipping it off does not resurrect
+    # any static-credential behavior, it just means every provider call site raises.
+    MODEL_REGISTRY_ENABLED: bool = True
     # Hot-reload poll fallback (plan.md "Hot-reload consistency", Task 8): every process
     # independently re-checks `/internal/model-registry/version` on this interval regardless of
     # whether Redis pub/sub is connected or a message was dropped, so it self-heals within this
@@ -105,7 +100,6 @@ class Settings(BaseSettings):
 
     # --- INGEST_: only ever read at document-ingestion time (chunking,
     # enrichment) - never during a chat turn ---
-    INGEST_MULTI_REP_LLM_MODEL: str = "gpt-4o-mini"
     INGEST_MULTI_REP_QUESTION_COUNT: int = 3
     INGEST_SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800

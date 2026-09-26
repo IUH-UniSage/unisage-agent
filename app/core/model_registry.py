@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 class ModelRegistryError(Exception):
-    """Raised when the registry snapshot can't be loaded, or is missing something startup requires."""
+    """Raised when the registry snapshot can't be loaded, or is missing something startup
+    requires."""
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,38 @@ def get_current_snapshot() -> ModelRegistrySnapshot | None:
     return _current_snapshot
 
 
+def active_credentials_for(purpose: str) -> tuple[CredentialConfig, ...]:
+    """ACTIVE credentials for one purpose from the current snapshot - empty tuple if no
+    snapshot has been loaded yet (registry disabled, or called before startup's
+    `init_model_registry()` ran)."""
+
+    snapshot = get_current_snapshot()
+    return snapshot.credentials_for(purpose) if snapshot else ()
+
+
+def require_top_priority_credential(purpose: str) -> CredentialConfig:
+    """The highest-priority (lowest `priority` number, `None` sorts last) ACTIVE credential for
+    `purpose`, or raise `ModelRegistryError` if none exists.
+
+    Never a `.env` fallback (plan.md "Cutover khỏi cấu hình `.env` tĩnh") - every provider call
+    site (`get_graph_models()`, `OpenAIEmbedder`, `MultiRepresentationEnricher`) shares this one
+    function instead of each re-implementing "pick a credential or fail loudly". No auto-failover
+    here (Task 5's explicit scope for CHAT; EMBEDDING never gets one at all per plan.md - the
+    unique partial index guarantees at most one ACTIVE EMBEDDING row exists, so "top priority"
+    picking among one row is a no-op there) - just the single top-priority pick.
+    """
+
+    credentials = active_credentials_for(purpose)
+    if not credentials:
+        raise ModelRegistryError(
+            f"Model registry has no ACTIVE {purpose} credential - refusing to fall back to "
+            "any static .env credential."
+        )
+    return min(
+        credentials, key=lambda credential: (credential.priority is None, credential.priority)
+    )
+
+
 def set_current_snapshot(snapshot: ModelRegistrySnapshot) -> None:
     """The hot-reload swap (plan.md "Hot-reload consistency", Task 8) — a single reference
     reassignment of the module-level global, nothing more.
@@ -153,15 +186,18 @@ def set_current_snapshot(snapshot: ModelRegistrySnapshot) -> None:
     _current_snapshot = snapshot
 
 
-async def init_model_registry(client: BackendJavaClient | None = None) -> ModelRegistrySnapshot | None:
+async def init_model_registry(
+    client: BackendJavaClient | None = None,
+) -> ModelRegistrySnapshot | None:
     """Load the registry snapshot once — call this from FastAPI's lifespan and from Celery's
     `worker_process_init` (see `app.worker.celery_app`), never from a request/task handler.
 
-    Returns `None` and leaves the old `.env`-based path untouched when
-    `settings.MODEL_REGISTRY_ENABLED` is `false` (the rollout flag, plan.md "Cutover khỏi cấu hình
-    `.env` tĩnh"). When the flag is `true`, this raises `ModelRegistryError` — and the caller is
-    expected to let that fail startup — if the snapshot has no ACTIVE CHAT credential; there is no
-    silent fallback to `.env` once the flag is on.
+    There is no `.env`-based credential path left anywhere in this codebase (plan.md "Cutover
+    khỏi cấu hình `.env` tĩnh") — `MODEL_REGISTRY_ENABLED` only controls whether THIS function
+    fetches a snapshot at all. Returns `None` and does nothing when it's `false` (meant for a
+    process that's deliberately started without one, e.g. most unit tests). When it's `true`
+    (the default), this raises `ModelRegistryError` — and the caller is expected to let that
+    fail startup — if the snapshot has no ACTIVE CHAT credential.
     """
 
     global _current_snapshot

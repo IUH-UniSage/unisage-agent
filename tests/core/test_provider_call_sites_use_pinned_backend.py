@@ -22,14 +22,55 @@ went through the pinned backend, not what a real provider would answer.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
+import app.core.model_registry as model_registry
 from app.api.deps import get_graph_models
+from app.core.model_registry import parse_snapshot
 from app.core.ssrf_guard import PinnedNetworkBackend, PinnedNetworkBackendSync
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.schemas.ingestion import Chunk, RegionType
+
+
+def _credential(purpose_id: str, model_name: str) -> dict[str, Any]:
+    return {
+        "id": purpose_id,
+        "revision": 1,
+        "sourceType": "CLOUD_API",
+        "provider": "openai",
+        "modelName": model_name,
+        "apiBaseUrl": "https://api.openai.com/v1",
+        "apiKey": "sk-test-not-real",
+        "priority": 1,
+        "maxRpm": 500,
+    }
+
+
+_SNAPSHOT_PAYLOAD: dict[str, Any] = {
+    "version": 1,
+    "generatedAt": "2026-09-25T03:00:00Z",
+    "purposes": {
+        "CHAT": [_credential("chat-cred", "gpt-4o-mini")],
+        "EMBEDDING": [_credential("embed-cred", "text-embedding-3-small")],
+        "EXTRACTION": [_credential("extract-cred", "gpt-4o-mini")],
+    },
+    "embeddingIndexIdentity": None,
+}
+
+
+@pytest.fixture(autouse=True)
+def _registry_snapshot_with_every_purpose() -> Any:
+    """Every provider call site this file drives a real request through
+    (`OpenAIEmbedder`, `MultiRepresentationEnricher`, `get_graph_models()`) now resolves its
+    model/key/base URL from the registry snapshot, not `.env` - so this file needs one loaded,
+    all pointed at `api.openai.com` to match the `connect_tcp` host assertions below."""
+
+    model_registry._current_snapshot = parse_snapshot(_SNAPSHOT_PAYLOAD)
+    yield
+    model_registry._current_snapshot = None
 
 
 @pytest.fixture
