@@ -92,6 +92,19 @@ class Settings(BaseSettings):
     # to a couple seconds so `test_model_registry_smoke.py` doesn't wait 15s+ for
     # a tick.
     CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS: int = 15
+    # Verify-before-active claim loop (plan.md "Verification lifecycle"): how often Beat wakes
+    # it up on its own, independent of the verification-requested pub/sub nudge below - this is
+    # the backstop that guarantees a queued job eventually gets claimed even if every publish is
+    # missed. The integration harness may shorten this the same way it shortens the heartbeat.
+    MODEL_REGISTRY_VERIFICATION_INTERVAL_SECONDS: float = 15.0
+    # Channel backend-java publishes to right after committing a new/superseded verification job
+    # (plan.md "Contract files dùng chung" -> Verification lifecycle step 1) - distinct from
+    # MODEL_REGISTRY_CHANNEL (config/version changes), since this one only ever means "there may
+    # be a job to claim", never carries a version to compare.
+    MODEL_REGISTRY_VERIFICATION_CHANNEL: str = "model-registry:verification-requested"
+    # Max jobs claimed per run of the verify loop - small on purpose, since each claimed job
+    # makes one live provider call (up to 15s) sequentially before the next.
+    MODEL_REGISTRY_VERIFICATION_CLAIM_LIMIT: int = 5
 
     # --- QDRANT_: the vector store ---
     QDRANT_HOST: str = "localhost"

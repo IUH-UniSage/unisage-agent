@@ -396,6 +396,66 @@ class BackendJavaClient:
         )
         return dict(result) if result else {}
 
+    async def claim_verifications(self, *, limit: int) -> list[dict[str, Any]]:
+        """`POST /internal/model-registry/verifications/claim?limit=N` (plan.md "Internal API
+        contract" endpoint #4) - claims up to `limit` queued/lease-expired verification jobs,
+        each with a freshly-minted `leaseToken`. The response carries each job's candidate
+        credential in plaintext - callers must not log or repr the raw list this returns.
+
+        No `Authorization` is sent, matching every other `/internal/**` call this client makes.
+        """
+
+        result = await self._request(
+            "POST",
+            "/internal/model-registry/verifications/claim",
+            authorization=None,
+            params={"limit": limit},
+        )
+        return list(result) if result else []
+
+    async def post_verification_result(
+        self,
+        *,
+        job_id: str,
+        lease_token: str,
+        result_type: Literal["OK", "TRANSIENT", "PERMANENT"],
+        error_code: str | None = None,
+        message: str | None = None,
+        embedding_dimension: int | None = None,
+        embedding_fingerprint: list[float] | None = None,
+    ) -> dict[str, Any]:
+        """`POST /internal/model-registry/verifications/{jobId}/result` (plan.md "Internal API
+        contract" endpoint #5) - reports the outcome of trying `job_id`'s candidate credential.
+
+        `lease_token` must be the exact token from the matching `claim_verifications` entry -
+        Java rejects a stale/mismatched one with `409` (raised here as `BackendJavaHTTPError`
+        with `status_code == 409`; callers must not retry that case, see plan.md "Verification
+        lifecycle"). `message` must already be redacted (`app.core.redaction.safe_error_message`)
+        before it reaches this method - this client does not redact anything itself.
+        `embedding_dimension`/`embedding_fingerprint` are only meaningful for an EMBEDDING
+        candidate's `OK` result.
+
+        No `Authorization` is sent, matching every other `/internal/**` call this client makes.
+        """
+
+        body: dict[str, Any] = {"leaseToken": lease_token, "resultType": result_type}
+        if error_code is not None:
+            body["errorCode"] = error_code
+        if message is not None:
+            body["message"] = message
+        if embedding_dimension is not None:
+            body["embeddingDimension"] = embedding_dimension
+        if embedding_fingerprint is not None:
+            body["embeddingFingerprint"] = embedding_fingerprint
+
+        result = await self._request(
+            "POST",
+            f"/internal/model-registry/verifications/{job_id}/result",
+            authorization=None,
+            json_body=body,
+        )
+        return dict(result) if result else {}
+
     async def get_conversation_messages(
         self,
         *,

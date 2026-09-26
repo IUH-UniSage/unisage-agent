@@ -166,6 +166,10 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
             return httpx.Response(200, json={"version": 1})
         if request.url.path.endswith("/snapshot"):
             return httpx.Response(200, json={"version": 1, "purposes": {}})
+        if request.url.path.endswith("/verifications/claim"):
+            return httpx.Response(200, json=[])
+        if "/verifications/" in request.url.path and request.url.path.endswith("/result"):
+            return httpx.Response(200, json={"applied": True, "duplicate": False})
         return httpx.Response(200, json={"id": "msg-1", "status": "COMPLETED"})
 
     client = _client_with(handler)
@@ -199,8 +203,12 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
         fingerprint=[0.1, 0.2, 0.3, 0.4],
         established_by="bootstrap-cli",
     )
+    await client.claim_verifications(limit=5)
+    await client.post_verification_result(
+        job_id="job-1", lease_token="lease-1", result_type="OK"
+    )
 
-    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 8
+    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 10
 
 
 @pytest.mark.asyncio
@@ -490,6 +498,151 @@ async def test_get_model_registry_snapshot_returns_raw_payload() -> None:
     assert await client.get_model_registry_snapshot() == payload
 
 
+@pytest.mark.asyncio
+async def test_claim_verifications_sends_limit_param_and_returns_list() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "jobId": "job-1",
+                    "leaseToken": "lease-1",
+                    "attempt": 1,
+                    "leaseUntil": "2026-09-26T00:01:00",
+                    "credential": {
+                        "chatModelId": "cm-1",
+                        "modelPurpose": "CHAT",
+                        "sourceType": "CLOUD_API",
+                        "provider": "openai",
+                        "modelName": "gpt-4o-mini",
+                        "modelSourceRef": None,
+                        "apiBaseUrl": "https://api.openai.com/v1",
+                        "apiKey": "sk-secret",
+                        "maxRpm": 500,
+                    },
+                }
+            ],
+        )
+
+    client = _client_with(handler)
+
+    result = await client.claim_verifications(limit=5)
+
+    assert seen["method"] == "POST"
+    assert seen["url_path"] == "/internal/model-registry/verifications/claim"
+    assert seen["params"] == {"limit": "5"}
+    assert result == [
+        {
+            "jobId": "job-1",
+            "leaseToken": "lease-1",
+            "attempt": 1,
+            "leaseUntil": "2026-09-26T00:01:00",
+            "credential": {
+                "chatModelId": "cm-1",
+                "modelPurpose": "CHAT",
+                "sourceType": "CLOUD_API",
+                "provider": "openai",
+                "modelName": "gpt-4o-mini",
+                "modelSourceRef": None,
+                "apiBaseUrl": "https://api.openai.com/v1",
+                "apiKey": "sk-secret",
+                "maxRpm": 500,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_claim_verifications_returns_empty_list_when_nothing_to_claim() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    client = _client_with(handler)
+
+    assert await client.claim_verifications(limit=5) == []
+
+
+@pytest.mark.asyncio
+async def test_post_verification_result_posts_expected_body_shape() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["parsed_body"] = _json.loads(request.read())
+        return httpx.Response(200, json={"applied": True, "duplicate": False})
+
+    client = _client_with(handler)
+
+    result = await client.post_verification_result(
+        job_id="job-1",
+        lease_token="lease-1",
+        result_type="PERMANENT",
+        error_code="AuthenticationError:401",
+        message="invalid api key",
+    )
+
+    assert seen["method"] == "POST"
+    assert seen["url_path"] == "/internal/model-registry/verifications/job-1/result"
+    assert seen["parsed_body"] == {
+        "leaseToken": "lease-1",
+        "resultType": "PERMANENT",
+        "errorCode": "AuthenticationError:401",
+        "message": "invalid api key",
+    }
+    assert result == {"applied": True, "duplicate": False}
+
+
+@pytest.mark.asyncio
+async def test_post_verification_result_includes_embedding_fields_when_given() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["parsed_body"] = _json.loads(request.read())
+        return httpx.Response(200, json={"applied": True, "duplicate": False})
+
+    client = _client_with(handler)
+
+    await client.post_verification_result(
+        job_id="job-2",
+        lease_token="lease-2",
+        result_type="OK",
+        embedding_dimension=3,
+        embedding_fingerprint=[0.1, 0.2, 0.3],
+    )
+
+    assert seen["parsed_body"] == {
+        "leaseToken": "lease-2",
+        "resultType": "OK",
+        "embeddingDimension": 3,
+        "embeddingFingerprint": [0.1, 0.2, 0.3],
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_verification_result_raises_http_error_on_409_lease_lost() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"error": "VERIFICATION_LEASE_LOST"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaHTTPError) as exc_info:
+        await client.post_verification_result(
+            job_id="job-1", lease_token="stale-token", result_type="OK"
+        )
+
+    assert exc_info.value.status_code == 409
+
+
 # ── never follow a redirect from Java — every method that hits it ──────────
 
 _REDIRECT_STATUSES = [301, 302, 307, 308]
@@ -653,6 +806,44 @@ async def test_put_embedding_index_identity_rejects_redirect(status_code: int) -
             dimension=2,
             fingerprint=[0.1, 0.2, 0.3, 0.4],
             established_by="bootstrap-cli",
+        )
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_claim_verifications_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.claim_verifications(limit=5)
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_post_verification_result_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.post_verification_result(
+            job_id="job-1", lease_token="lease-1", result_type="OK"
         )
 
     assert call_count == 1
