@@ -50,13 +50,18 @@ class ErrorType(str, Enum):
 _QUOTA_EXHAUSTION_MARKERS = (
     "insufficient_quota",
     "quota_exceeded",
-    "resource_exhausted",
+    "quota exceeded",
     "billing_hard_limit_reached",
     "billing_not_active",
     "exceeded_quota",
     "exceeded your current quota",
     "out of credit",
 )
+# Deliberately NOT included: Google's "RESOURCE_EXHAUSTED" status — the Gemini API returns that
+# same status for both an actual out-of-quota 429 and a plain short-term rate limit (there's no
+# separate status enum value for the two), so treating it as a quota signal on its own would
+# make every Google rate limit PERMANENT. Google 429s are distinguished by the marker phrases
+# above appearing in `exc.message`/`exc.details`, same as any other provider's message text.
 
 
 def _text_signals_quota_exhaustion(text: str) -> bool:
@@ -151,12 +156,13 @@ def classify_llm_error(exc: Exception) -> ErrorType:
     # --- google-genai SDK (`google` provider, `GoogleModel`/`GoogleProvider`) — no dedicated
     # AuthenticationError/RateLimitError subclasses; every failure is `errors.APIError` (or its
     # `ClientError`/`ServerError` subclasses), differentiated by `exc.code` (the HTTP status, an
-    # int) and `exc.status` (the provider's own string, e.g. "RESOURCE_EXHAUSTED" for a
-    # quota-exhausted 429 — the SDK's own `_get_status` already unwraps this from the response
-    # body for us, so `exc.status`/`exc.message` are checked directly; `exc.details` is included
-    # too as a fallback in case a future response shape moves the signal there instead). ---
+    # int). `exc.status` (e.g. "RESOURCE_EXHAUSTED") is Google's own status enum, already
+    # unwrapped from the response body by the SDK's `_get_status` — but it's the *same* value
+    # for a quota-exhausted 429 and a plain rate-limited 429, so it isn't passed as a quota
+    # signal here; `exc.message`/`exc.details` (which carry the actual free-text explanation)
+    # are what `_classify_by_status_code` checks for a quota marker instead. ---
     if isinstance(exc, google_errors.APIError):
-        return _classify_by_status_code(exc.code, exc.status, exc.message, exc.details)
+        return _classify_by_status_code(exc.code, exc.message, exc.details)
 
     # --- mistralai SDK (`mistral` provider) — `MistralError`/`SDKError` expose `status_code`
     # (int) directly, but `exc.body` is a raw *string* (the response text), not a dict — the
