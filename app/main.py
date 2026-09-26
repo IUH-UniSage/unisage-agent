@@ -14,6 +14,7 @@ from app.core.exceptions import UniSageException
 from app.core.logging_config import configure_logging
 from app.core.middleware import request_logging_middleware
 from app.core.model_registry import init_model_registry
+from app.core.registry_subscriber import start_asyncio_registry_subscriber
 from app.rag.chunking.table_row import TableStructureError
 
 # Sets the root format, silences noisy/secret-leaking third-party loggers
@@ -35,7 +36,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # raises (and is deliberately left uncaught, failing startup) if there is no ACTIVE
     # CHAT credential. Hot-reload (Task 7) is out of scope here.
     await init_model_registry()
+    # Task 8: hot-reload the cached snapshot without a restart - subscribes to Java's
+    # after-commit pub/sub signal and independently polls /version as a self-healing
+    # fallback (plan.md "Hot-reload consistency"). No-op when the flag above is off.
+    subscriber = start_asyncio_registry_subscriber()
     yield
+    await subscriber.stop()
     logger.info("Shutting down %s", settings.APP_NAME)
 
 
