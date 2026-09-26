@@ -188,8 +188,19 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
         message="x",
         occurred_at="2026-09-26T00:00:00+00:00",
     )
+    await client.get_embedding_index_identity(collection="unisage_chunks")
+    await client.put_embedding_index_identity(
+        collection="unisage_chunks",
+        provider="openai",
+        model_name="text-embedding-3-small",
+        model_source_ref=None,
+        api_base_url="https://api.openai.com/v1",
+        dimension=2,
+        fingerprint=[0.1, 0.2, 0.3, 0.4],
+        established_by="bootstrap-cli",
+    )
 
-    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 6
+    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 8
 
 
 @pytest.mark.asyncio
@@ -359,6 +370,108 @@ async def test_report_health_posts_expected_body_shape() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_embedding_index_identity_returns_none_on_404() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    client = _client_with(handler)
+
+    assert await client.get_embedding_index_identity(collection="unisage_chunks") is None
+
+
+@pytest.mark.asyncio
+async def test_get_embedding_index_identity_returns_payload() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/model-registry/embedding-index/unisage_chunks/identity"
+        assert request.headers.get("authorization") is None
+        return httpx.Response(
+            200,
+            json={
+                "provider": "openai",
+                "modelName": "text-embedding-3-small",
+                "modelSourceRef": None,
+                "apiBaseUrl": "https://api.openai.com/v1",
+                "dimension": 2,
+                "fingerprint": [0.1, 0.2, 0.3, 0.4],
+            },
+        )
+
+    client = _client_with(handler)
+
+    result = await client.get_embedding_index_identity(collection="unisage_chunks")
+
+    assert result == {
+        "provider": "openai",
+        "modelName": "text-embedding-3-small",
+        "modelSourceRef": None,
+        "apiBaseUrl": "https://api.openai.com/v1",
+        "dimension": 2,
+        "fingerprint": [0.1, 0.2, 0.3, 0.4],
+    }
+
+
+@pytest.mark.asyncio
+async def test_put_embedding_index_identity_posts_expected_body_shape() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["parsed_body"] = _json.loads(request.read())
+        return httpx.Response(201, json={"established": True})
+
+    client = _client_with(handler)
+
+    result = await client.put_embedding_index_identity(
+        collection="unisage_chunks",
+        provider="openai",
+        model_name="text-embedding-3-small",
+        model_source_ref=None,
+        api_base_url="https://api.openai.com/v1",
+        dimension=2,
+        fingerprint=[0.1, 0.2, 0.3, 0.4],
+        established_by="first-upsert",
+    )
+
+    assert seen["method"] == "PUT"
+    assert seen["url_path"] == "/internal/model-registry/embedding-index/unisage_chunks/identity"
+    assert seen["parsed_body"] == {
+        "provider": "openai",
+        "modelName": "text-embedding-3-small",
+        "modelSourceRef": None,
+        "apiBaseUrl": "https://api.openai.com/v1",
+        "dimension": 2,
+        "fingerprint": [0.1, 0.2, 0.3, 0.4],
+        "establishedBy": "first-upsert",
+    }
+    assert result == {"established": True}
+
+
+@pytest.mark.asyncio
+async def test_put_embedding_index_identity_raises_http_error_on_409() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"error": "EMBEDDING_INDEX_IDENTITY_EXISTS"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaHTTPError) as exc_info:
+        await client.put_embedding_index_identity(
+            collection="unisage_chunks",
+            provider="openai",
+            model_name="text-embedding-3-small",
+            model_source_ref=None,
+            api_base_url="https://api.openai.com/v1",
+            dimension=2,
+            fingerprint=[0.1, 0.2, 0.3, 0.4],
+            established_by="bootstrap-cli",
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_get_model_registry_snapshot_returns_raw_payload() -> None:
     payload = {
         "version": 7,
@@ -495,6 +608,51 @@ async def test_report_health_rejects_redirect(status_code: int) -> None:
             error_code="x",
             message="x",
             occurred_at="2026-09-26T00:00:00+00:00",
+        )
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_get_embedding_index_identity_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.get_embedding_index_identity(collection="unisage_chunks")
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_put_embedding_index_identity_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.put_embedding_index_identity(
+            collection="unisage_chunks",
+            provider="openai",
+            model_name="text-embedding-3-small",
+            model_source_ref=None,
+            api_base_url="https://api.openai.com/v1",
+            dimension=2,
+            fingerprint=[0.1, 0.2, 0.3, 0.4],
+            established_by="bootstrap-cli",
         )
 
     assert call_count == 1
