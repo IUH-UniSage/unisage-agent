@@ -112,12 +112,26 @@ services:
       JWT_SECRET: "unisage-integration-test-jwt-secret-not-for-real-use"
       CORS_ALLOWED_ORIGINS: "http://localhost:3000"
       MODEL_REGISTRY_URL_ALLOWLIST: "fake-llm-provider,fake-provider.test"
+      # Task 0.5 seeder (ModelRegistryIntegrationSeeder) points every seeded
+      # CHAT/EMBEDDING/EXTRACTION credential's apiBaseUrl here instead of its
+      # localhost default - relaxed binding maps this env var to the property
+      # app.model-registry.integration-seed.fake-provider-base-url. Host must
+      # also be in MODEL_REGISTRY_URL_ALLOWLIST above or SsrfGuard rejects it
+      # at credential-creation time.
+      APP_MODEL_REGISTRY_INTEGRATION_SEED_FAKE_PROVIDER_BASE_URL: "http://fake-llm-provider:8000/v1"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       minio:
+        condition: service_started
+      # Seeder (CommandLineRunner, runs at Spring Boot startup) creates
+      # credentials pointing at fake-llm-provider - its SsrfGuard check
+      # resolves that hostname via Docker DNS, which only has an entry once
+      # the container exists. Needs to at least be started, not necessarily
+      # healthy (no healthcheck defined on fake-llm-provider).
+      fake-llm-provider:
         condition: service_started
     healthcheck:
       # Best-effort liveness only, NOT "seed finished" - actuator's raw
