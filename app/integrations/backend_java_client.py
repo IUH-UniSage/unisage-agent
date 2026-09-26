@@ -275,6 +275,28 @@ class BackendJavaClient:
         )
         return dict(result) if result is not None else {}
 
+    async def get_model_registry_version(self) -> int:
+        """`GET /internal/model-registry/version` (plan.md "Internal API contract" endpoint #2).
+
+        No secret in the response - used for the periodic hot-reload poll (Task 7, out of
+        scope here). No `Authorization` is sent: `/internal/**` grants on
+        `X-Internal-Secret` + caller IP alone, never on a JWT.
+        """
+
+        result = await self._request("GET", "/internal/model-registry/version", authorization=None)
+        return int(result["version"]) if result else 0
+
+    async def get_model_registry_snapshot(self) -> dict[str, Any]:
+        """`GET /internal/model-registry/snapshot` (plan.md "Internal API contract" endpoint #1) -
+        the only source of provider credentials for this service once the registry is enabled
+        (plan.md "Cutover khỏi cấu hình .env tĩnh"). The response carries plaintext API keys -
+        callers must parse it into `app.core.model_registry.ModelRegistrySnapshot` immediately
+        and never log or repr the raw dict this returns.
+        """
+
+        result = await self._request("GET", "/internal/model-registry/snapshot", authorization=None)
+        return dict(result) if result else {}
+
     async def get_conversation_messages(
         self,
         *,

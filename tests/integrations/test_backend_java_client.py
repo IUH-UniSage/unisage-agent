@@ -162,6 +162,10 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.headers.get("x-internal-secret"))
+        if request.url.path.endswith("/version"):
+            return httpx.Response(200, json={"version": 1})
+        if request.url.path.endswith("/snapshot"):
+            return httpx.Response(200, json={"version": 1, "purposes": {}})
         return httpx.Response(200, json={"id": "msg-1", "status": "COMPLETED"})
 
     client = _client_with(handler)
@@ -173,8 +177,10 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
         message_id="msg-1", conversation_id="conv-1", content="answer", status="COMPLETED"
     )
     await client.get_conversation_messages(conversation_id="conv-1", authorization=None)
+    await client.get_model_registry_version()
+    await client.get_model_registry_snapshot()
 
-    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 3
+    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 5
 
 
 @pytest.mark.asyncio
@@ -292,6 +298,37 @@ async def test_unwraps_java_api_response_envelope() -> None:
     assert result == {"id": "msg-1"}
 
 
+@pytest.mark.asyncio
+async def test_get_model_registry_version_returns_int() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/internal/model-registry/version")
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json={"version": 42})
+
+    client = _client_with(handler)
+
+    assert await client.get_model_registry_version() == 42
+
+
+@pytest.mark.asyncio
+async def test_get_model_registry_snapshot_returns_raw_payload() -> None:
+    payload = {
+        "version": 7,
+        "generatedAt": "2026-09-25T03:00:00Z",
+        "purposes": {"CHAT": [{"id": "c1", "apiKey": "sk-secret"}], "EMBEDDING": [], "EXTRACTION": []},
+        "embeddingIndexIdentity": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/internal/model-registry/snapshot")
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json=payload)
+
+    client = _client_with(handler)
+
+    assert await client.get_model_registry_snapshot() == payload
+
+
 # ── never follow a redirect from Java — every method that hits it ──────────
 
 _REDIRECT_STATUSES = [301, 302, 307, 308]
@@ -351,6 +388,42 @@ async def test_get_conversation_messages_rejects_redirect(status_code: int) -> N
 
     with pytest.raises(BackendJavaRedirectError):
         await client.get_conversation_messages(conversation_id="conv-1")
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_get_model_registry_snapshot_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.get_model_registry_snapshot()
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_get_model_registry_version_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.get_model_registry_version()
+
+    assert call_count == 1
 
 
 def test_client_never_follows_redirects_by_default() -> None:
