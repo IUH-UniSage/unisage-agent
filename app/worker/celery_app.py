@@ -10,6 +10,7 @@ from celery import Celery
 from celery.signals import worker_process_init
 from kombu import Queue
 
+from app.core.alerting import alert_credential_failure
 from app.core.config import settings
 from app.core.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.events import publish_ingestion_event
@@ -287,6 +288,17 @@ def _report_embedding_provider_failure(exc: EmbeddingProviderError) -> None:
         cause = exc.__cause__
         error_type = classify_llm_error(cause) if cause is not None else ErrorType.TRANSIENT
 
+    reason = safe_error_message(exc, credential.api_key)
+    # Embedding never auto-fails-over, so this job ends FAILED regardless of whether the
+    # underlying cause classifies as TRANSIENT or PERMANENT - unlike CHAT/EXTRACTION, there is
+    # no retry-with-a-different-credential path here that could still recover on its own, so
+    # the "don't alert on a self-recovering TRANSIENT" exception doesn't apply.
+    asyncio.run(
+        alert_credential_failure(
+            credential, "EMBEDDING_PROVIDER_FAILURE", reason, purpose="EMBEDDING"
+        )
+    )
+
     try:
         asyncio.run(
             BackendJavaClient().report_health(
@@ -295,7 +307,7 @@ def _report_embedding_provider_failure(exc: EmbeddingProviderError) -> None:
                 snapshot_version=snapshot.version,
                 error_type=error_type.value,
                 error_code=type(exc.__cause__ or exc).__name__,
-                message=safe_error_message(exc, credential.api_key),
+                message=reason,
                 occurred_at=datetime.now(UTC).isoformat(),
             )
         )
