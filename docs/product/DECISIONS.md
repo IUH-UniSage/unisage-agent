@@ -234,6 +234,22 @@ biết đổi provider/model có nghĩa là "không gian vector khác", nhất l
 
 Luật nằm ở: `PRODUCT.md` › Source of truth, Objects, Glossary (embedding identity guard).
 
+### Vì sao danh sách `llmProvider` không gồm mọi provider mà `pydantic-ai` hỗ trợ?
+
+SSRF guard là điều kiện bắt buộc trước khi gọi bất kỳ URL nào lấy từ registry — không có ngoại lệ
+"tạm chấp nhận rồi hardening sau". Guard đó hoạt động bằng cách pin socket layer của một
+`httpx.AsyncClient`/`httpx.Client` cụ thể, nên một provider chỉ được thêm vào danh sách khi SDK của
+nó thực sự nhận client đó qua tham số khởi tạo.
+
+Từng kiểm và loại: `anthropic` — SDK hiện tại chỉ nhận `httpx2.AsyncClient` (một package HTTP client
+khác hẳn `httpx`), nên không có cách gắn transport đã pin vào nó; `xai` — SDK của xAI dùng gRPC,
+không tồn tại một HTTP client nào để pin; `deepseek` — SDK chấp nhận `httpx.AsyncClient` bình
+thường, nhưng constructor cố định sẵn base URL, không nhận `base_url` theo từng credential như
+cách factory hiện tại dựng client. Google (Gemini), Groq, Mistral đều đã thử thật và nhận đúng
+client đã pin, nên được thêm vào cùng OpenAI.
+
+Luật nằm ở: `PRODUCT.md` › Business rules.
+
 ### Vì sao verify credential đi theo chiều Python gọi Java (pull), không phải Java gọi Python (push)?
 
 Thiết kế ban đầu định để Java, sau khi SA nhập credential mới, gọi thẳng sang Python để nhờ thử
