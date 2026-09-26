@@ -53,8 +53,12 @@ _SNAPSHOT_PAYLOAD: dict[str, Any] = {
     "embeddingIndexIdentity": {
         "provider": "openai",
         "modelName": "text-embedding-3-small",
-        "dimension": 1536,
-        "fingerprint": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
+        "modelSourceRef": None,
+        "apiBaseUrl": "https://api.openai.com/v1",
+        "dimension": 2,
+        # Flat - matches Java's `InternalEmbeddingIndexIdentityResponse.fingerprint` (a single
+        # Float[], not a nested array): 3 probes x dimension 2.
+        "fingerprint": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
     },
 }
 
@@ -107,7 +111,8 @@ def test_parse_snapshot_embedding_index_identity_present() -> None:
     identity = snapshot.embedding_index_identity
     assert identity is not None
     assert identity.provider == "openai"
-    assert identity.dimension == 1536
+    assert identity.api_base_url == "https://api.openai.com/v1"
+    assert identity.dimension == 2
     assert identity.fingerprint == ((0.1, 0.2), (0.3, 0.4), (0.5, 0.6))
 
 

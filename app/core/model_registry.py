@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any
 
 from app.core.config import settings
+from app.core.llm.embedding_probe import unflatten_fingerprint
 from app.integrations.backend_java_client import BackendJavaClient
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,8 @@ class EmbeddingIndexIdentity:
 
     provider: str | None
     model_name: str | None
+    model_source_ref: str | None
+    api_base_url: str | None
     dimension: int | None
     fingerprint: tuple[tuple[float, ...], ...] | None
 
@@ -96,14 +99,21 @@ def _parse_credential(raw: dict[str, Any]) -> CredentialConfig:
 def _parse_identity(raw: dict[str, Any] | None) -> EmbeddingIndexIdentity | None:
     if raw is None:
         return None
+    # Java's `InternalEmbeddingIndexIdentityResponse.fingerprint` is a flat `Float[]` (one
+    # concatenated array, PROBE_SENTENCES-count * dimension long) - never a nested array. Split
+    # it back into one vector per probe here so callers (the embedding identity guard) get the
+    # same per-probe-vector shape `app.core.llm.embedding_probe.measure_fingerprint` produces.
     fingerprint_raw = raw.get("fingerprint")
-    fingerprint = (
-        tuple(tuple(vector) for vector in fingerprint_raw) if fingerprint_raw is not None else None
-    )
+    dimension = raw.get("dimension")
+    fingerprint = None
+    if fingerprint_raw is not None and dimension is not None:
+        fingerprint = unflatten_fingerprint(fingerprint_raw, int(dimension))
     return EmbeddingIndexIdentity(
         provider=raw.get("provider"),
         model_name=raw.get("modelName"),
-        dimension=raw.get("dimension"),
+        model_source_ref=raw.get("modelSourceRef"),
+        api_base_url=raw.get("apiBaseUrl"),
+        dimension=dimension,
         fingerprint=fingerprint,
     )
 
