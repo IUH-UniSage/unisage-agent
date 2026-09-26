@@ -82,6 +82,37 @@ def make_gated_streaming_llm_model(tokens: Sequence[str], gate: asyncio.Event) -
     return FunctionModel(stream_function=stream_function)
 
 
+def make_streaming_llm_model_that_fails_after(
+    tokens: Sequence[str], exc: Exception, *, delay_before_raise: float = 0.15
+) -> FunctionModel:
+    """Like `make_streaming_llm_model`, but raises `exc` right after yielding
+    every entry in `tokens` (which may be empty, for "fails before any
+    chunk") - for exercising `stream_agent_text()`'s before-vs-after-first-
+    chunk failover boundary (todo.md Task 11).
+
+    When `tokens` is non-empty, sleeps `delay_before_raise` seconds before
+    raising - `pydantic_ai`'s `stream_text(delta=True)` debounces/groups
+    deltas by 0.1s by default (`debounce_by`), so a synchronous
+    yield-then-raise with no real await in between can let the exception
+    abort the underlying async generator before the debounced group ever
+    flushes any text to the caller - which would make a chunk that WAS
+    yielded look, from `stream_agent_text()`'s perspective, like it never
+    streamed at all. The delay (> the 0.1s default) guarantees a genuine
+    flush happens first, matching what a real provider actually does when a
+    connection drops mid-response."""
+
+    async def stream_function(
+        _messages: list[ModelMessage], _agent_info: AgentInfo
+    ) -> AsyncIterator[str]:
+        for token in tokens:
+            yield token
+        if tokens:
+            await asyncio.sleep(delay_before_raise)
+        raise exc
+
+    return FunctionModel(stream_function=stream_function)
+
+
 def make_sync_llm_model(text: str) -> FunctionModel:
     """Build a `FunctionModel` whose `run()`/`run_sync()` returns `text` as one response."""
 
