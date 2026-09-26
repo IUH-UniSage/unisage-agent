@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic_ai.models import Model
 
+from app.core.model_registry import CredentialConfig
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
@@ -17,12 +18,21 @@ class GraphModels:
     (so tests can pass `pydantic_ai.models.function.FunctionModel` doubles,
     see tests/llm_mocks.py, instead of hitting a real provider) plus the
     retrieval service (so tests can inject a fake Qdrant client/embedder
-    instead of hitting the network)."""
+    instead of hitting the network).
+
+    `generation_credential`/`snapshot_version` are optional and only used by
+    `stream_agent_text()`'s Task 11 pre-first-chunk failover for the two
+    streaming nodes (generation, ticket fallback) that use `generation` -
+    `None` (the default, and what every test double above still passes)
+    disables failover for that call and preserves the exact pre-Task-11
+    behavior (a failure propagates immediately)."""
 
     classification: Model | str
     query_transformation: Model | str
     generation: Model | str
     retrieval: RetrievalServiceProtocol
+    generation_credential: CredentialConfig | None = None
+    snapshot_version: int | None = None
 
 
 @dataclass

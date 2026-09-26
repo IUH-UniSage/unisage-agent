@@ -258,6 +258,9 @@ async def _run_advisory_flow(
             confirmed_metadata=confirmed_metadata,
             history=graph_input.history,
             token_sink=token_sink,
+            purpose="CHAT",
+            credential=models.generation_credential,
+            snapshot_version=models.snapshot_version,
         )
         return GraphOutput(
             response_text=fallback_text,
@@ -286,6 +289,9 @@ async def _run_advisory_flow(
         trace=trace,
         advisory_tasks=[task for task, _mode in advisory_tasks],
         sub_queries=sub_query_questions,
+        purpose="CHAT",
+        credential=models.generation_credential,
+        snapshot_version=models.snapshot_version,
     )
     return GraphOutput(
         response_text=generation_result.response_text,

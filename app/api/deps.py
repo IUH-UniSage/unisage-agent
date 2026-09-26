@@ -11,7 +11,7 @@ from app.core.exceptions import (
     MissingTrustedContextException,
 )
 from app.core.llm.provider_models import build_model
-from app.core.model_registry import require_top_priority_credential
+from app.core.model_registry import get_current_snapshot, require_top_priority_credential
 from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
@@ -57,12 +57,15 @@ def get_graph_models() -> GraphModels:
 
     credential = require_top_priority_credential("CHAT")
     model = build_model(credential)
+    snapshot = get_current_snapshot()
 
     return GraphModels(
         classification=model,
         query_transformation=model,
         generation=model,
         retrieval=RetrievalService(),
+        generation_credential=credential,
+        snapshot_version=snapshot.version if snapshot is not None else None,
     )
 
 
