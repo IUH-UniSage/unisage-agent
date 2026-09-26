@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # or the registry's key sweep could clobber each other's keys.
     REDIS_URL: str = "redis://localhost:6379/0"
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
+    # Slack Incoming Webhook URL for operational alerts. Empty by default -
+    # not every environment has Slack configured, and that's a normal,
+    # expected state rather than a misconfiguration.
+    SLACK_APIKEY_ALERT_WEBHOOK_URL: str = ""
     # Set true only when Python <-> Java is actually TLS/mTLS or an encrypted private network.
     INTERNAL_NETWORK_ENCRYPTED: bool = False
     # Rollout flag (plan.md "Cutover khỏi cấu hình .env tĩnh"): the model registry snapshot
