@@ -334,6 +334,68 @@ class BackendJavaClient:
         )
         return dict(result) if result else {}
 
+    async def get_embedding_index_identity(self, *, collection: str) -> dict[str, Any] | None:
+        """`GET /internal/model-registry/embedding-index/{collection}/identity` (plan.md
+        "Internal API contract" endpoint #6) - the identity currently registered for `collection`,
+        or `None` if none has been established yet (Java answers with an empty 404 body for that
+        case, which this unwraps into `None` rather than raising).
+
+        No secret in the response - no `Authorization` is sent, matching every other
+        `/internal/**` call this client makes.
+        """
+
+        try:
+            result = await self._request(
+                "GET",
+                f"/internal/model-registry/embedding-index/{collection}/identity",
+                authorization=None,
+            )
+        except BackendJavaHTTPError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        return dict(result) if result else None
+
+    async def put_embedding_index_identity(
+        self,
+        *,
+        collection: str,
+        provider: str,
+        model_name: str,
+        model_source_ref: str | None,
+        api_base_url: str | None,
+        dimension: int,
+        fingerprint: list[float],
+        established_by: str,
+    ) -> dict[str, Any]:
+        """`PUT /internal/model-registry/embedding-index/{collection}/identity` (plan.md
+        "Internal API contract" endpoint #7) - only-if-absent, called by the bootstrap CLI
+        (`established_by="bootstrap-cli"`) or by the first ingest batch into an empty collection
+        (`established_by="first-upsert"`).
+
+        Raises `BackendJavaHTTPError` with `status_code == 409` when an identity already exists
+        for `collection` - callers must then `get_embedding_index_identity` and compare rather
+        than treat this as a generic failure (plan.md "Embedding identity guard": "đã có → 409
+        `EMBEDDING_INDEX_IDENTITY_EXISTS`, không bao giờ ghi đè").
+        """
+
+        body = {
+            "provider": provider,
+            "modelName": model_name,
+            "modelSourceRef": model_source_ref,
+            "apiBaseUrl": api_base_url,
+            "dimension": dimension,
+            "fingerprint": fingerprint,
+            "establishedBy": established_by,
+        }
+        result = await self._request(
+            "PUT",
+            f"/internal/model-registry/embedding-index/{collection}/identity",
+            authorization=None,
+            json_body=body,
+        )
+        return dict(result) if result else {}
+
     async def get_conversation_messages(
         self,
         *,
