@@ -24,6 +24,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+import groq
 import openai
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
@@ -132,6 +133,17 @@ def classify_llm_error(exc: Exception) -> ErrorType:
         # `exc.body` here is already the unwrapped inner `error` object (openai's own
         # `_make_status_error` does `body.get("error", body)` before constructing the
         # exception), so `exc.body.get("code")` is directly e.g. `"insufficient_quota"`.
+        return _classify_by_status_code(exc.status_code, exc.body)
+
+    # --- groq SDK (`groq` provider) — a distinct exception hierarchy from openai's despite
+    # mirroring its class names and shape; `groq.AuthenticationError` is not `openai.AuthenticationError`. ---
+    if isinstance(exc, groq.APIConnectionError):
+        return ErrorType.TRANSIENT
+    if isinstance(exc, groq.APIStatusError):
+        # Unlike openai, groq's `_make_status_error` does NOT unwrap the body — `exc.body` is
+        # the raw `{"error": {...}}` JSON, so a quota code (if any) is nested under
+        # `exc.body["error"]["code"]`. `_dict_signals_quota_exhaustion` checks both the top
+        # level and a nested "error" key, so no groq-specific unwrapping is needed here.
         return _classify_by_status_code(exc.status_code, exc.body)
 
     return ErrorType.TRANSIENT
