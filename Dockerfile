@@ -16,6 +16,16 @@ COPY pyproject.toml uv.lock ./
 # other three roles isn't worth the duplication for a test-only image.
 RUN uv sync --frozen --extra dev
 
+# Bakes the cl100k_base BPE file into the image at build time (this stage has
+# normal internet access) so nothing at container runtime needs to reach
+# openaipublic.blob.core.windows.net - the integration harness's network is
+# intentionally DNS/egress-restricted (SSRF guard, rebinding-dns resolver),
+# and app/rag/chunking/semantic.py loads this encoding at import time, which
+# would otherwise fail every role built from this image (gunicorn, celery
+# worker/beat, test-runner) before it ever got to serve a request.
+ENV TIKTOKEN_CACHE_DIR=/app/.tiktoken_cache
+RUN /app/.venv/bin/python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+
 COPY app ./app
 COPY tests ./tests
 COPY alembic.ini ./alembic.ini

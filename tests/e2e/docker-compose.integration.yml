@@ -94,6 +94,7 @@ services:
     build:
       context: ../../../backend-java
     environment:
+      SPRING_APPLICATION_NAME: "Unisage_Assistant"
       SERVER_PORT: "8401"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -110,6 +111,16 @@ services:
       # other profile (backend-java fails startup if it does - see todo.md).
       SPRING_PROFILES_ACTIVE: integration
       JWT_SECRET: "unisage-integration-test-jwt-secret-not-for-real-use"
+      JWT_ACCESS_TOKEN_EXPIRATION: "86400000"
+      JWT_REFRESH_TOKEN_EXPIRATION: "2592000000"
+      DEFAULT_SUPERADMIN_PASS: "123123"
+      DEFAULT_INGESTADMIN_PASS: "123123"
+      DEFAULT_USER_PASS: "123123"
+      APP_ENCRYPTION_KEY: "it-integration-app-encryption-key-0123456789abcdef"
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_BUCKET: unisage-documents
       CORS_ALLOWED_ORIGINS: "http://localhost:3000"
       MODEL_REGISTRY_URL_ALLOWLIST: "fake-llm-provider,fake-provider.test"
       # Task 0.5 seeder (ModelRegistryIntegrationSeeder) points every seeded
@@ -136,15 +147,22 @@ services:
     healthcheck:
       # Best-effort liveness only, NOT "seed finished" - actuator's raw
       # endpoints are locked down (application.properties) and this repo does
-      # not have an unauthenticated probe route yet. Accepts wget exit 0 (2xx)
-      # or 8 (server answered with a non-2xx status) as "the JVM is up and
-      # answering HTTP" - see README.md's backend-java section for why this
-      # can't yet mean "seeded" and what to change once the reset endpoint lands.
+      # not have an unauthenticated probe route yet. Actuator's aggregate
+      # health is expected to be DOWN (503) at this point in startup - it
+      # includes GatewayHealthIndicator/AgentHealthIndicator, and those
+      # services depend on backend-java being healthy first, so requiring a
+      # 2xx here would deadlock. The image's wget is BusyBox's (Alpine base),
+      # which - unlike GNU wget - always exits 1 on any non-2xx HTTP status,
+      # so the exit-code check this used to use (0 or 8) never distinguished
+      # "answered with an error" from "unreachable". Grepping wget -S's
+      # stderr for a status line does: it only appears once a real HTTP
+      # response came back, so "the JVM is up and answering HTTP" still holds
+      # regardless of the aggregate DOWN status - see README.md's
+      # backend-java section for what to change once the reset endpoint
+      # lands and a real "seeded" signal is wanted instead.
       test:
         - "CMD-SHELL"
-        - >-
-          wget -q -O /dev/null http://127.0.0.1:8401/api/v1/actuator/health;
-          code=$$?; [ $$code -eq 0 -o $$code -eq 8 ]
+        - "wget -q -S -O /dev/null http://127.0.0.1:8401/api/v1/actuator/health 2>&1 | grep -q 'HTTP/'"
       interval: 3s
       timeout: 3s
       retries: 40
