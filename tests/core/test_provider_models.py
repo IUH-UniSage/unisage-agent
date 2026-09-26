@@ -4,12 +4,17 @@ the native PydanticAI (Model, Provider) pair that builds it (ADR 0005, plan.md T
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
+from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.provider_models import UnsupportedProviderError, build_model
 from app.core.model_registry import CredentialConfig
+from app.core.ssrf_guard import PinnedNetworkBackend
 
 
 def _credential(**overrides: object) -> CredentialConfig:
@@ -82,3 +87,63 @@ def test_provider_gets_ssrf_pinned_http_client_kwarg() -> None:
     model = build_model(_credential())
 
     assert isinstance(model.provider, OpenAIProvider)
+
+
+@pytest.fixture
+def connect_tcp_spy(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int]]:
+    """Spies on `PinnedNetworkBackend.connect_tcp` - see
+    tests/core/test_provider_call_sites_use_pinned_backend.py for the full rationale. Raising
+    immediately means no real socket ever opens; this file only cares whether a request attempt
+    reaches the pinned backend at all.
+    """
+
+    calls: list[tuple[str, int]] = []
+
+    async def _spy(self: PinnedNetworkBackend, host: str, port: int, **kwargs: object) -> object:
+        calls.append((host, port))
+        raise RuntimeError("blocked by test spy - no real socket opened")
+
+    monkeypatch.setattr(PinnedNetworkBackend, "connect_tcp", _spy)
+    return calls
+
+
+def _drive_one_request(httpx_client: object) -> None:
+    async def _make_one_request() -> None:
+        async with httpx_client:  # type: ignore[attr-defined]
+            await httpx_client.get("/")  # type: ignore[attr-defined]
+
+    with pytest.raises(Exception):  # noqa: B017
+        asyncio.run(_make_one_request())
+
+
+def test_google_provider_builds_google_model() -> None:
+    credential = _credential(
+        provider="google",
+        model_name="gemini-2.0-flash",
+        api_base_url="https://generativelanguage.googleapis.com",
+    )
+
+    model = build_model(credential)
+
+    assert isinstance(model, GoogleModel)
+    assert isinstance(model.provider, GoogleProvider)
+    assert model.model_name == "gemini-2.0-flash"
+
+
+def test_google_provider_http_client_reaches_pinned_backend(
+    connect_tcp_spy: list[tuple[str, int]],
+) -> None:
+    credential = _credential(
+        provider="google",
+        model_name="gemini-2.0-flash",
+        api_base_url="https://generativelanguage.googleapis.com",
+    )
+
+    model = build_model(credential)
+    assert isinstance(model.provider, GoogleProvider)
+    httpx_client = model.provider.client._api_client._http_options.httpx_async_client  # type: ignore[attr-defined]
+
+    _drive_one_request(httpx_client)
+
+    assert connect_tcp_spy, "GoogleProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    assert all(host == "generativelanguage.googleapis.com" for host, _ in connect_tcp_spy)

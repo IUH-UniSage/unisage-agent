@@ -11,7 +11,10 @@ candidate credential's `Model` the same way.
 from __future__ import annotations
 
 from pydantic_ai.models import Model
+from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers import Provider
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client
@@ -19,9 +22,16 @@ from app.core.model_registry import CredentialConfig
 
 _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 
-# credential.provider -> (Model class, Provider class). Both are native PydanticAI classes the
-# Task 0.2 spike confirmed accept `http_client=<httpx.AsyncClient>` so the SSRF guard can be
-# threaded through.
+# credential.provider -> (Model class, Provider class). Every entry here was confirmed
+# empirically (not from docs) to accept `http_client=<httpx.AsyncClient>` on its own `Provider`
+# constructor and to actually store that exact object as the transport its SDK client dispatches
+# requests through — the same test the Task 0.2/Task 5 spikes ran for OpenAI/Anthropic, rerun here
+# for each provider below against the pydantic-ai/SDK versions actually resolved on this branch
+# (pydantic-ai 2.49.0):
+#   - "google" (`GoogleProvider`, backed by `google-genai`'s `Client`): accepts a plain
+#     `httpx.AsyncClient` and stores it at `client._api_client._http_options.httpx_async_client`.
+#     It emits a `PydanticAIDeprecationWarning` ("use `httpx2.AsyncClient` instead") but does not
+#     raise - same non-fatal deprecation OpenAI's own path already carries.
 #
 # "anthropic" is deliberately NOT here, even though ADR 0005 assumed it would use the same
 # http_client= mechanism as OpenAI ("... AnthropicProvider, ... dùng cùng cơ chế http_client=").
@@ -40,8 +50,9 @@ _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 # `http_client.py`, with its own redirect/TLS/rebinding/proxy test suite — out of this task's
 # scope). Until that exists, a credential with provider="anthropic" raises
 # `UnsupportedProviderError` rather than silently skipping the guard.
-_PROVIDER_MAP: dict[str, tuple[type[Model], type[OpenAIProvider]]] = {
+_PROVIDER_MAP: dict[str, tuple[type[Model], type[Provider]]] = {
     "openai": (OpenAIChatModel, OpenAIProvider),
+    "google": (GoogleModel, GoogleProvider),
 }
 
 
