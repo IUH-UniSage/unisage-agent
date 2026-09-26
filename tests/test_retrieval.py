@@ -34,7 +34,7 @@ def _embedder_returning(vector: list[float]) -> OpenAIEmbedder:
     fake_openai_client.embeddings.create.return_value = MagicMock(
         data=[MagicMock(embedding=vector)]
     )
-    return OpenAIEmbedder(client=fake_openai_client)
+    return OpenAIEmbedder(model="text-embedding-3-small", client=fake_openai_client)
 
 
 def test_retrieve_embeds_query_and_maps_qdrant_points_to_retrieved_chunks() -> None:

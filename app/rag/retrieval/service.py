@@ -33,8 +33,9 @@ class RetrievalService:
 
     `client`/`embedder` are built lazily on first use, not at construction
     time, so constructing a `RetrievalService()` never requires a reachable
-    Qdrant or `OPENAI_API_KEY` - only actually calling `retrieve` does. This
-    is what lets tests inject fakes for both without touching the network.
+    Qdrant or a loaded model registry snapshot - only actually calling
+    `retrieve` does. This is what lets tests inject fakes for both without
+    touching the network.
     """
 
     client: QdrantClient | None = None
