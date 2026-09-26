@@ -24,6 +24,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+import google.genai.errors as google_errors
 import groq
 import openai
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
@@ -145,5 +146,15 @@ def classify_llm_error(exc: Exception) -> ErrorType:
         # `exc.body["error"]["code"]`. `_dict_signals_quota_exhaustion` checks both the top
         # level and a nested "error" key, so no groq-specific unwrapping is needed here.
         return _classify_by_status_code(exc.status_code, exc.body)
+
+    # --- google-genai SDK (`google` provider, `GoogleModel`/`GoogleProvider`) — no dedicated
+    # AuthenticationError/RateLimitError subclasses; every failure is `errors.APIError` (or its
+    # `ClientError`/`ServerError` subclasses), differentiated by `exc.code` (the HTTP status, an
+    # int) and `exc.status` (the provider's own string, e.g. "RESOURCE_EXHAUSTED" for a
+    # quota-exhausted 429 — the SDK's own `_get_status` already unwraps this from the response
+    # body for us, so `exc.status`/`exc.message` are checked directly; `exc.details` is included
+    # too as a fallback in case a future response shape moves the signal there instead). ---
+    if isinstance(exc, google_errors.APIError):
+        return _classify_by_status_code(exc.code, exc.status, exc.message, exc.details)
 
     return ErrorType.TRANSIENT
