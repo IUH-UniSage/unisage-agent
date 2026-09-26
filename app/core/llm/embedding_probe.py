@@ -1,5 +1,4 @@
-"""Fixed probe sentences for the embedding identity guard — plan.md "Embedding identity guard",
-todo.md Task 13.
+"""Fixed probe sentences for the embedding identity guard — plan.md "Embedding identity guard".
 
 Embedding a small, fixed set of sentences and comparing the resulting vectors ("fingerprint")
 catches a silent provider-side model swap that a `provider`/`modelName`/`dimension` string/int
