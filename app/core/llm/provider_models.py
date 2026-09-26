@@ -60,6 +60,19 @@ _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 # `http_client.py`, with its own redirect/TLS/rebinding/proxy test suite — out of this task's
 # scope). Until that exists, a credential with provider="anthropic" raises
 # `UnsupportedProviderError` rather than silently skipping the guard.
+#
+# Two more providers with a native pydantic-ai `Model`/`Provider` pair were checked and rejected,
+# without adding a second HTTP stack (also out of scope):
+#   - "xai" (`XaiProvider`, `pydantic_ai.providers.xai`): its native SDK (`xai-sdk`) is gRPC, not
+#     HTTP at all - the constructor has no `http_client=` parameter of any kind (plain httpx,
+#     httpx2, or otherwise) to inject the pinned transport into.
+#   - "deepseek" (`DeepSeekProvider`, `pydantic_ai.providers.deepseek`): its underlying transport
+#     *is* the OpenAI SDK and does accept a plain `httpx.AsyncClient` (same as "openai" above), but
+#     its constructor has no `base_url` parameter at all (`base_url` is a hardcoded property
+#     pointing at DeepSeek's own API) - it doesn't fit `build_model()`'s uniform
+#     `provider_cls(base_url=..., api_key=..., http_client=...)` call without a SELF_HOSTED-style
+#     special case. Left out as a scoping decision, not an SSRF one; picking it back up just needs
+#     that one branch added to `build_model()`.
 _PROVIDER_MAP: dict[str, tuple[type[Model], type[Provider]]] = {
     "openai": (OpenAIChatModel, OpenAIProvider),
     "google": (GoogleModel, GoogleProvider),
