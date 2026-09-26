@@ -27,6 +27,7 @@ from typing import Any
 import google.genai.errors as google_errors
 import groq
 import openai
+from mistralai.client.errors import MistralError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from app.core.ssrf_guard import SsrfBlockedError
@@ -156,5 +157,12 @@ def classify_llm_error(exc: Exception) -> ErrorType:
     # too as a fallback in case a future response shape moves the signal there instead). ---
     if isinstance(exc, google_errors.APIError):
         return _classify_by_status_code(exc.code, exc.status, exc.message, exc.details)
+
+    # --- mistralai SDK (`mistral` provider) — `MistralError`/`SDKError` expose `status_code`
+    # (int) directly, but `exc.body` is a raw *string* (the response text), not a dict — the
+    # SDK never parses it into a structured `code` field the way openai/groq do. Quota
+    # exhaustion can only be recognized by substring-matching that text (and `exc.message`). ---
+    if isinstance(exc, MistralError):
+        return _classify_by_status_code(exc.status_code, exc.body, exc.message)
 
     return ErrorType.TRANSIENT
