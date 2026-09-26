@@ -70,8 +70,13 @@ def build_provider_http_client(credential: ProviderConnectionInfo) -> httpx.Asyn
         ssl_context=_build_ssl_context(),
         network_backend=network_backend,
     )
-    transport = httpx.AsyncHTTPTransport()
-    transport._pool = pool  # noqa: SLF001 - httpx doesn't expose network_backend injection publicly
+    # trust_env=False here too: `transport._pool` gets replaced with `pool` right below, so the
+    # default pool httpx.AsyncHTTPTransport() builds internally is always discarded — but building
+    # it still runs httpx's own create_ssl_context(trust_env=True) first, which reads $SSL_CERT_FILE
+    # and can raise on a malformed value before that discard ever happens. Passing False here skips
+    # that read entirely rather than relying on the discard to make it harmless.
+    transport = httpx.AsyncHTTPTransport(trust_env=False)
+    transport._pool = pool
 
     return httpx.AsyncClient(
         base_url=credential.api_base_url,
@@ -94,8 +99,11 @@ def build_provider_http_client_sync(credential: ProviderConnectionInfo) -> httpx
         ssl_context=_build_ssl_context(),
         network_backend=network_backend,
     )
-    transport = httpx.HTTPTransport()
-    transport._pool = pool  # noqa: SLF001 - httpx doesn't expose network_backend injection publicly
+    # See the async factory's matching comment: trust_env=False here avoids httpx's own
+    # create_ssl_context(trust_env=True) reading $SSL_CERT_FILE while building the transport's
+    # default (immediately-discarded) pool.
+    transport = httpx.HTTPTransport(trust_env=False)
+    transport._pool = pool
 
     return httpx.Client(
         base_url=credential.api_base_url,
