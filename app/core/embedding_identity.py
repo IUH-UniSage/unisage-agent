@@ -1,4 +1,4 @@
-"""Embedding identity guard — plan.md "Embedding identity guard", todo.md Task 13.
+"""Embedding identity guard — plan.md "Embedding identity guard".
 
 Refuses to embed (ingest OR query-time retrieval) with an ACTIVE EMBEDDING credential whose
 identity doesn't match the vector space already established for the Qdrant collection. Two
@@ -44,7 +44,7 @@ class EmbeddingIdentityMismatchError(EmbeddingProviderError):
     terminal — never fall back, never use the credential anyway. This is exactly the "detect and
     stop" failure mode plan.md's "Embedding identity guard" exists for; an operator needs to
     resolve this (register the correct identity, or re-index) before ingest/retrieval can run
-    again — Task 15 wires the actual alert, this only guarantees the log signal exists.
+    again — alerting on this is a separate concern; this only guarantees the log signal exists.
     """
 
 
@@ -52,11 +52,12 @@ def identity_key(
     provider: str, model_name: str, source_ref: str | None, api_base_url: str | None, dimension: int
 ) -> str:
     """Hash of the identity actually used for one embedding write — attached to every Qdrant
-    point's payload as `embedding_identity_key` (todo.md Task 13) so operators can later audit
-    which vectors came from which identity."""
+    point's payload as `embedding_identity_key` so operators can later audit which vectors came
+    from which identity."""
 
     raw = "|".join(
-        str(part) for part in (provider, model_name, source_ref or "", api_base_url or "", dimension)
+        str(part)
+        for part in (provider, model_name, source_ref or "", api_base_url or "", dimension)
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -84,7 +85,7 @@ def _measure(embed_probe: Callable[[list[str]], list[list[float]]]) -> Embedding
         return measure_fingerprint(embed_probe)
     except EmbeddingProviderError:
         raise
-    except Exception as exc:  # noqa: BLE001 - reclassified into the one embedding error type
+    except Exception as exc:
         raise EmbeddingProviderError(f"embedding identity probe failed: {exc}") from exc
 
 
@@ -121,7 +122,7 @@ def ensure_embedding_identity(
                 "embedding identity guard: collection '%s' already has vectors but no "
                 "embedding identity is registered - refusing to embed. Run "
                 "`python -m app.tools.register_embedding_index_identity` before enabling the "
-                "registry for embedding (Task 15 alert pending).",
+                "registry for embedding (no automatic alert wired up yet).",
                 settings.QDRANT_COLLECTION,
             )
             raise EmbeddingIdentityMismatchError(
@@ -137,7 +138,7 @@ def ensure_embedding_identity(
         logger.error(
             "embedding identity guard: ACTIVE EMBEDDING credential (provider=%s, model=%s) does "
             "not match the collection's registered identity (provider=%s, model=%s) - refusing "
-            "to embed (Task 15 alert pending).",
+            "to embed (no automatic alert wired up yet).",
             credential.provider,
             credential.model_name,
             identity.provider,
@@ -155,7 +156,7 @@ def ensure_embedding_identity(
     ):
         logger.error(
             "embedding identity guard: registered identity dimension=%s does not match "
-            "collection '%s''s actual configured dimension=%s (Task 15 alert pending).",
+            "collection '%s''s actual configured dimension=%s (no automatic alert wired up yet).",
             identity.dimension,
             settings.QDRANT_COLLECTION,
             collection_dimension,
@@ -176,7 +177,7 @@ def ensure_embedding_identity(
                 "embedding identity guard: measured fingerprint for the ACTIVE EMBEDDING "
                 "credential does not match collection '%s''s registered fingerprint - the "
                 "provider may have silently swapped models behind the same name/dimension "
-                "(Task 15 alert pending).",
+                "(no automatic alert wired up yet).",
                 settings.QDRANT_COLLECTION,
             )
             raise EmbeddingIdentityMismatchError(
@@ -203,8 +204,8 @@ def _bootstrap_identity(
     bj_client: BackendJavaClient,
 ) -> str:
     """Collection is empty and no identity is registered yet — the first ingest batch of the
-    currently-running job establishes it itself (plan.md "Khởi tạo danh tính index", todo.md
-    Task 13): measure the fingerprint from the credential actually being used, then PUT it.
+    currently-running job establishes it itself (plan.md "Khởi tạo danh tính index"): measure
+    the fingerprint from the credential actually being used, then PUT it.
     201 -> proceed. 409 -> someone else won the race (another worker, possibly on a different
     snapshot); GET and compare - match -> proceed, mismatch -> job FAILED, nothing upserted.
     """

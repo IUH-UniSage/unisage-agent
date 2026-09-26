@@ -37,8 +37,8 @@ class EmbeddingProviderError(Exception):
     """Raised when the ACTIVE EMBEDDING credential itself is unusable — the actual provider call
     failed (auth/connection/rate-limit/...), there is no ACTIVE EMBEDDING credential at all, or
     the embedding identity guard (`app.core.embedding_identity`) refused to use it. Embedding
-    never auto-fails-over (plan.md "Embedding identity guard" / todo.md Task 13) — there is no
-    other credential to route to, so this is always terminal for the job. Every caller
+    never auto-fails-over (plan.md "Embedding identity guard") — there is no other credential to
+    route to, so this is always terminal for the job. Every caller
     (`OpenAIEmbedder.embed`, and transitively `app.worker.celery_app.embed_chunks` and
     `app.rag.retrieval.service.RetrievalService`) must let this escape uncaught rather than
     treat it as a per-chunk data problem.

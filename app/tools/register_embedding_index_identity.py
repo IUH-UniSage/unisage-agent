@@ -1,6 +1,6 @@
 """Bootstrap CLI — registers the embedding identity of an EXISTING Qdrant collection before the
-model registry is trusted for embedding (plan.md "Embedding identity guard" / todo.md Task 13's
-mandatory rollout step).
+model registry is trusted for embedding (plan.md "Embedding identity guard" — a mandatory
+rollout step).
 
 Run once, by hand, with the OLD `.env` embedding configuration, BEFORE flipping
 `MODEL_REGISTRY_ENABLED=true` for embedding:
