@@ -12,7 +12,9 @@ from app.core.config import settings
 from app.rag.vectorstore.qdrant_store import (
     ChunkPoint,
     build_access_filter,
+    collection_has_points,
     ensure_collection,
+    get_collection_dimension,
     search_chunks,
     upsert_chunk,
 )
@@ -42,6 +44,45 @@ def test_ensure_collection_is_idempotent_when_already_present() -> None:
     ensure_collection(client)
 
     client.create_collection.assert_not_called()
+
+
+def test_get_collection_dimension_returns_none_when_collection_missing() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = False
+
+    assert get_collection_dimension(client) is None
+
+
+def test_get_collection_dimension_reads_content_vector_size() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    content_params = MagicMock(size=1536)
+    client.get_collection.return_value.config.params.vectors = {
+        "content_vector": content_params,
+        "summary_vector": MagicMock(size=1536),
+        "questions_vector": MagicMock(size=1536),
+    }
+
+    assert get_collection_dimension(client) == 1536
+
+
+def test_collection_has_points_false_when_collection_missing() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = False
+
+    assert collection_has_points(client) is False
+
+
+def test_collection_has_points_reflects_points_count() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    client.get_collection.return_value.points_count = 0
+
+    assert collection_has_points(client) is False
+
+    client.get_collection.return_value.points_count = 5
+
+    assert collection_has_points(client) is True
 
 
 def test_upsert_chunk_builds_expected_payload_and_vector_shape() -> None:
@@ -97,9 +138,37 @@ def test_upsert_chunk_builds_expected_payload_and_vector_shape() -> None:
         "has_header": False,
         "header_source": None,
         "chunking_version": "legacy",
+        "embedding_identity_key": None,
         "structure_confidence": None,
         "parse_warnings": [],
     }
+
+
+def test_upsert_chunk_carries_embedding_identity_key_when_set() -> None:
+    client = MagicMock()
+    point = ChunkPoint(
+        point_id="doc-1:0",
+        document_id="doc-1",
+        object_key="docs/handbook.pdf",
+        chunk_id="doc-1:0",
+        content="chunk text",
+        summary="a summary",
+        questions=["Q1?", "Q2?"],
+        department="CNTT",
+        access_level=2,
+        category="HOC_VU",
+        region_type="text",
+        content_vector=[0.1, 0.2],
+        summary_vector=[0.3, 0.4],
+        questions_vector=[0.5, 0.6],
+        embedding_identity_key="abc123",
+    )
+
+    upsert_chunk(client, point)
+
+    _, kwargs = client.upsert.call_args
+    (upserted_point,) = kwargs["points"]
+    assert upserted_point.payload["embedding_identity_key"] == "abc123"
 
 
 def test_upsert_chunk_carries_structural_metadata_fields_when_set() -> None:
