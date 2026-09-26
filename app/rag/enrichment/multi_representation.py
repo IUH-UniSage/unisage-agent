@@ -6,14 +6,11 @@ from openai import OpenAI
 
 from app.core.config import settings
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
+from app.core.model_registry import require_top_priority_credential
 from app.rag.prompting.loader import get_templates
 from app.schemas.ingestion import Chunk
 
 logger = logging.getLogger(__name__)
-
-# Static .env-sourced credential for now — registry-driven provider selection
-# (per-purpose base URL/provider from the model registry snapshot) is Task 5/9's job.
-_OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 
 @dataclass(frozen=True)
@@ -28,9 +25,16 @@ class EnrichedChunk:
 
 @dataclass(frozen=True)
 class MultiRepresentationEnricher:
-    """Add a summary + hypothetical questions to a chunk via one LLM call."""
+    """Add a summary + hypothetical questions to a chunk via one LLM call.
 
-    model: str = field(default_factory=lambda: settings.INGEST_MULTI_REP_LLM_MODEL)
+    Model name, API key and base URL come from the model registry's ACTIVE EXTRACTION
+    credential (plan.md "Cutover khỏi cấu hình `.env` tĩnh") - never `.env`. Both are resolved
+    lazily on first `enrich()` call, not at construction time - mirrors `OpenAIEmbedder`; tests
+    inject `model`/`client` directly to skip the registry entirely (see
+    tests/test_multi_representation.py).
+    """
+
+    model: str | None = None
     question_count: int = field(default_factory=lambda: settings.INGEST_MULTI_REP_QUESTION_COUNT)
     client: OpenAI | None = None
 
@@ -39,14 +43,21 @@ class MultiRepresentationEnricher:
         result with a logged warning rather than raising, so one bad chunk doesn't
         kill the whole embedding batch."""
 
-        client = self.client or OpenAI(
-            api_key=settings.OPENAI_API_KEY,
-            http_client=build_provider_http_client_sync(
-                ProviderConnectionInfo(api_base_url=_OPENAI_API_BASE_URL)
-            ),
-        )
+        model = self.model
+        client = self.client
+        if model is None or client is None:
+            credential = require_top_priority_credential("EXTRACTION")
+            model = model or credential.model_name or ""
+            client = client or OpenAI(
+                api_key=credential.api_key,
+                base_url=credential.api_base_url or None,
+                http_client=build_provider_http_client_sync(
+                    ProviderConnectionInfo(api_base_url=credential.api_base_url or "")
+                ),
+            )
+
         response = client.chat.completions.create(
-            model=self.model,
+            model=model,
             messages=[
                 {
                     "role": "system",
