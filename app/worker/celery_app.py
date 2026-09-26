@@ -23,6 +23,8 @@ from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
+from app.worker.verification_subscriber import start_thread_verification_subscriber
+from app.worker.verification_tasks import run_verification_batch, try_acquire_verification_lock
 
 # Same redaction filter + noisy-logger silencing as the API process (see
 # app/main.py) - Celery worker/beat is a separate process that never imports
@@ -61,6 +63,13 @@ celery_app.conf.beat_schedule = {
         "task": "beat_heartbeat",
         "schedule": settings.CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS,
     },
+    # Verify-before-active claim loop (plan.md "Verification lifecycle") - the backstop that
+    # guarantees a queued job eventually gets claimed even if the verification-requested
+    # pub/sub nudge (see worker_process_init below) is missed entirely.
+    "model-registry-verify-pending": {
+        "task": "verify_pending_credentials",
+        "schedule": settings.MODEL_REGISTRY_VERIFICATION_INTERVAL_SECONDS,
+    },
 }
 
 
@@ -79,6 +88,10 @@ def _load_model_registry_on_worker_start(**kwargs: Any) -> None:
     # event loop - this prefork worker process has no asyncio loop of its own to schedule
     # tasks on. No-op when MODEL_REGISTRY_ENABLED=false.
     start_thread_registry_subscriber()
+    # Verify-before-active: wakes the claim loop immediately on a verification-requested
+    # message instead of waiting for the next Beat tick. Only the Celery worker process needs
+    # this - the FastAPI process never runs verification. No-op when MODEL_REGISTRY_ENABLED=false.
+    start_thread_verification_subscriber()
 
 
 @celery_app.task(name="beat_heartbeat", ignore_result=True)
@@ -91,6 +104,28 @@ def beat_heartbeat() -> None:
         client.close()
     except Exception:
         logger.exception("Beat heartbeat failed to write to Redis")
+
+
+@celery_app.task(name="verify_pending_credentials", ignore_result=True)
+def verify_pending_credentials() -> None:
+    """Claims and verifies pending model-registry credentials (plan.md "Verification
+    lifecycle") - triggered by Beat on a schedule and by an immediate wake-up on the
+    verification-requested channel (see `worker_process_init` above), always through this
+    same task so the Redis lock below is the only thing that needs to serialize them.
+
+    Deliberately takes **no arguments** and returns nothing: the claimed candidate
+    credentials (plaintext API keys) live only in local variables inside
+    `run_verification_batch()`'s call stack for the duration of this one run, and never cross
+    the Celery broker or result backend (plan.md "Secret redaction").
+    """
+
+    if not try_acquire_verification_lock():
+        logger.info("verify_pending_credentials: another run already holds the lock, skipping")
+        return
+    try:
+        asyncio.run(run_verification_batch())
+    except Exception:
+        logger.exception("verify_pending_credentials: run_verification_batch failed")
 
 
 @celery_app.task(bind=True, name="embed_chunks")
