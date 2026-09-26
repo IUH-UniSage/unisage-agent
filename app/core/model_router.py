@@ -353,7 +353,9 @@ async def get_next_credential(purpose: str) -> CredentialConfig:
     return await get_default_router().get_next_credential(purpose)
 
 
-async def record_failure(credential: CredentialConfig, exc: Exception, *, snapshot_version: int) -> None:
+async def record_failure(
+    credential: CredentialConfig, exc: Exception, *, snapshot_version: int
+) -> None:
     """Convenience wrapper around `get_default_router().record_failure()`."""
 
     await get_default_router().record_failure(credential, exc, snapshot_version=snapshot_version)

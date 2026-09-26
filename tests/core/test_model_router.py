@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 import httpx2
 import openai
 import pytest
@@ -19,7 +18,6 @@ import pytest
 import app.core.model_registry as model_registry
 from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.model_router import ModelRouter, NoAvailableCredentialError, _state_key
-
 
 # ── fixtures / test doubles ─────────────────────────────────────────────────
 
@@ -159,7 +157,9 @@ def _permanent_error() -> openai.AuthenticationError:
     return openai.AuthenticationError("bad key", response=response, body=body)
 
 
-def _router(*, clock: _Clock | None = None, redis_client: Any = None) -> tuple[ModelRouter, FakeBackendClient]:
+def _router(
+    *, clock: _Clock | None = None, redis_client: Any = None
+) -> tuple[ModelRouter, FakeBackendClient]:
     backend = FakeBackendClient()
     if redis_client is None and clock is not None:
         redis_client = FakeAsyncRedis(clock)
@@ -400,7 +400,9 @@ async def test_health_report_uses_snapshot_version_captured_at_failure_not_later
     # *before* the failure is actually reported.
     _set_snapshot(version=99, chat=(cred_a,))
 
-    await router.record_failure(cred_a, _permanent_error(), snapshot_version=snapshot_version_at_failure)
+    await router.record_failure(
+        cred_a, _permanent_error(), snapshot_version=snapshot_version_at_failure
+    )
 
     assert len(backend.calls) == 1
     assert backend.calls[0]["snapshot_version"] == 5
