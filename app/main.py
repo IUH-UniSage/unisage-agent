@@ -13,6 +13,7 @@ from app.core.error_codes import ErrorCode
 from app.core.exceptions import UniSageException
 from app.core.logging_config import configure_logging
 from app.core.middleware import request_logging_middleware
+from app.core.model_registry import init_model_registry
 from app.rag.chunking.table_row import TableStructureError
 
 # Sets the root format, silences noisy/secret-leaking third-party loggers
@@ -29,6 +30,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     del app
     logger.info("Starting %s in [%s] mode", settings.APP_NAME, settings.APP_ENV)
+    # plan.md "Cutover khỏi cấu hình .env tĩnh": one-time load of the model registry
+    # snapshot from backend-java. No-op when MODEL_REGISTRY_ENABLED=false; when true,
+    # raises (and is deliberately left uncaught, failing startup) if there is no ACTIVE
+    # CHAT credential. Hot-reload (Task 7) is out of scope here.
+    await init_model_registry()
     yield
     logger.info("Shutting down %s", settings.APP_NAME)
 

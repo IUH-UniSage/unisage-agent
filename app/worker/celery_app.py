@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import uuid
@@ -5,11 +6,13 @@ from typing import Any
 
 import redis
 from celery import Celery
+from celery.signals import worker_process_init
 from kombu import Queue
 
 from app.core.config import settings
 from app.core.events import publish_ingestion_event
 from app.core.logging_config import configure_logging
+from app.core.model_registry import init_model_registry
 from app.core.redaction import safe_error_message
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
@@ -54,6 +57,19 @@ celery_app.conf.beat_schedule = {
         "schedule": settings.CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS,
     },
 }
+
+
+@worker_process_init.connect
+def _load_model_registry_on_worker_start(**kwargs: Any) -> None:
+    """Mirrors `app.main`'s lifespan load (plan.md "Cutover khỏi cấu hình .env tĩnh") — each
+    prefork worker process gets its own snapshot, since it doesn't share memory with gunicorn
+    workers or other worker processes. No-op when `MODEL_REGISTRY_ENABLED=false`; when true, an
+    uncaught `ModelRegistryError` here is deliberately fatal (Celery aborts the worker process
+    that raised out of a bootstep signal), same fail-loud contract as the FastAPI side.
+    """
+
+    del kwargs
+    asyncio.run(init_model_registry())
 
 
 @celery_app.task(name="beat_heartbeat", ignore_result=True)

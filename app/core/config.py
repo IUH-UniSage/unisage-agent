@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
     # Set true only when Python <-> Java is actually TLS/mTLS or an encrypted private network.
     INTERNAL_NETWORK_ENCRYPTED: bool = False
+    # Rollout flag (plan.md "Cutover khỏi cấu hình .env tĩnh"): false keeps the old
+    # OPENAI_*-from-.env path alive; true means the model registry snapshot from Java is the
+    # only source of provider credentials, and startup fails loudly if it has no ACTIVE CHAT
+    # credential. Flip once the registry is seeded and stable in an environment - never both
+    # at once, there is no "read registry, fall back to .env" middle state.
+    MODEL_REGISTRY_ENABLED: bool = False
 
     # --- CELERY_: Celery's own broker/result-backend, isolated from REDIS_URL's
     # DB 0 (see above) so a broker purge/flush never touches registry state and
