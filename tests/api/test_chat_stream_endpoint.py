@@ -124,10 +124,20 @@ def _clear_extra_overrides() -> Iterator[None]:
     app.dependency_overrides.pop(get_graph_models, None)
 
 
-def test_missing_conversation_id_is_a_validation_error(client: TestClient) -> None:
+def test_missing_conversation_id_is_a_validation_error(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
     """This project's global RequestValidationError handler maps every
     validation failure to `ErrorCode.VALIDATION_ERROR` (HTTP 400), not
-    FastAPI's default 422 - see app/main.py's validation_exception_handler."""
+    FastAPI's default 422 - see app/main.py's validation_exception_handler.
+
+    `get_graph_models` is still overridden here even though the model is never used: FastAPI
+    resolves route dependencies before it finishes evaluating body validation, so a dependency
+    that raises (the real one does, with no registry loaded in tests) would surface as an
+    unhandled 500 instead of the clean 400 this test is actually about.
+    """
+
+    _override_models(mock_graph_models)
 
     response = client.post("/api/v1/chat/stream", json={"message": "hi"})
 
