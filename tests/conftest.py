@@ -1,5 +1,12 @@
 import asyncio
+import os
 from collections.abc import AsyncGenerator, Callable, Generator, Sequence
+
+# Must run before `app.core.config` is imported anywhere (including transitively, via
+# `from app.main import app` below) - the default unit-test run has no live backend-java to load
+# a snapshot from, and `MODEL_REGISTRY_ENABLED` now defaults to true. `setdefault` so the
+# integration harness (which sets this explicitly to exercise the real registry) is unaffected.
+os.environ.setdefault("MODEL_REGISTRY_ENABLED", "false")
 
 import pytest
 import pytest_asyncio
@@ -25,6 +32,7 @@ from tests.llm_mocks import (
     make_streaming_llm_model,
     make_sync_llm_model,
 )
+
 
 def _in_memory_sqlite_engine_and_sessions() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     """Build a fresh in-memory SQLite engine and a session factory bound to it.
