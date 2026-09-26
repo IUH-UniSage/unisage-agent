@@ -23,15 +23,18 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+import app.core.embedding_identity as embedding_identity
 import app.core.model_registry as model_registry
 from app.api.deps import get_graph_models
 from app.core.model_registry import parse_snapshot
 from app.core.ssrf_guard import PinnedNetworkBackend, PinnedNetworkBackendSync
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
+from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk, RegionType
 
 
@@ -71,6 +74,28 @@ def _registry_snapshot_with_every_purpose() -> Any:
     model_registry._current_snapshot = parse_snapshot(_SNAPSHOT_PAYLOAD)
     yield
     model_registry._current_snapshot = None
+
+
+@pytest.fixture(autouse=True)
+def _empty_qdrant_collection_no_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`OpenAIEmbedder` now runs the embedding identity guard
+    (`app.core.embedding_identity.ensure_embedding_identity`) before it ever calls the provider -
+    which otherwise talks to whatever real Qdrant collection happens to be configured in this
+    environment. This file only cares about the provider call site reaching the pinned network
+    backend, not about identity-guard behavior (that's `tests/rag/test_embedding_identity_guard.
+    py`), so it fakes an empty collection with no identity registered yet: the guard's bootstrap
+    path then measures a fingerprint by calling `embed_probe` - the real provider call - which is
+    exactly the call this file's `connect_tcp` spies are watching for."""
+
+    monkeypatch.setattr(qdrant_store, "get_client", lambda: MagicMock())
+    monkeypatch.setattr(qdrant_store, "collection_has_points", lambda client: False)
+    monkeypatch.setattr(qdrant_store, "get_collection_dimension", lambda client: None)
+    # The guard's "already verified" cache is process-global and keyed by
+    # (credential.id, revision, snapshot.version) - this file reuses the same ids/version
+    # across runs, so a prior test (in this file or elsewhere in the suite) having already
+    # passed the guard for "embed-cred" would let this test's embed() skip straight past the
+    # provider call the connect_tcp spy is watching for.
+    embedding_identity.reset_verified_cache_for_tests()
 
 
 @pytest.fixture
