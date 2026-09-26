@@ -1,6 +1,10 @@
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from app.core.llm_error_classifier import EmbeddingProviderError
+from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot
 from app.worker.celery_app import celery_app, embed_chunks
 
 celery_app.conf.update(
@@ -127,6 +131,74 @@ def test_embed_chunks_records_per_chunk_failure_without_aborting_batch(
     assert result["results"][0]["status"] == "FAILED"
     assert result["results"][1]["status"] == "SUCCESS"
     assert mock_qdrant_store.upsert_chunk.call_count == 1
+
+
+@patch("app.worker.celery_app.publish_ingestion_event")
+@patch("app.worker.celery_app.BackendJavaClient")
+@patch("app.worker.celery_app.qdrant_store")
+@patch("app.worker.celery_app.MultiRepresentationEnricher")
+@patch("app.worker.celery_app.OpenAIEmbedder")
+def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    mock_backend_client_cls: MagicMock,
+    mock_publish: MagicMock,
+) -> None:
+    """A provider-level embedding failure (todo.md Task 13a) is not a per-chunk data problem -
+    it must escape the loop entirely: no third chunk gets embedded, no `completed` event is
+    published (only `failed`), and the task itself ends up FAILED rather than SUCCESS."""
+
+    credential = CredentialConfig(
+        id="embed-cred",
+        revision=1,
+        source_type="CLOUD_API",
+        provider="openai",
+        model_name="text-embedding-3-small",
+        api_base_url="https://api.openai.com/v1",
+        priority=1,
+        max_rpm=500,
+        api_key="sk-test",
+    )
+    mock_embedder = mock_embedder_cls.return_value
+    mock_embedder.embed.side_effect = [
+        [[0.1], [0.2], [0.3]],
+        EmbeddingProviderError("provider auth failed", credential=credential),
+    ]
+    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
+        summary="a summary", questions=["Q1?", "Q2?"]
+    )
+    mock_qdrant_store.get_client.return_value = MagicMock()
+    mock_backend_client_cls.return_value.report_health = AsyncMock(return_value={"applied": True})
+
+    with patch(
+        "app.worker.celery_app.get_current_snapshot",
+        return_value=ModelRegistrySnapshot(
+            version=1, generated_at=None, purposes={}, embedding_index_identity=None
+        ),
+    ), pytest.raises(EmbeddingProviderError):
+        embed_chunks.apply(
+            args=(
+                "doc-1",
+                "docs/handbook.pdf",
+                [_chunk_payload(0), _chunk_payload(1), _chunk_payload(2)],
+                "CNTT",
+                2,
+            )
+        )
+
+    # Only 2 embed() calls happened - chunk 2 (index 2) was never reached.
+    assert mock_embedder.embed.call_count == 2
+    assert mock_qdrant_store.upsert_chunk.call_count == 1
+
+    published_types = [call.args[0]["type"] for call in mock_publish.call_args_list]
+    assert "completed" not in published_types
+    assert "failed" in published_types
+
+    mock_backend_client_cls.return_value.report_health.assert_awaited_once()
+    health_kwargs = mock_backend_client_cls.return_value.report_health.call_args.kwargs
+    assert health_kwargs["credential_id"] == "embed-cred"
+    assert health_kwargs["error_type"] == "TRANSIENT"
 
 
 @patch("app.worker.celery_app.qdrant_store")
