@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # credential. Flip once the registry is seeded and stable in an environment - never both
     # at once, there is no "read registry, fall back to .env" middle state.
     MODEL_REGISTRY_ENABLED: bool = False
+    # Hot-reload poll fallback (plan.md "Hot-reload consistency", Task 8): every process
+    # independently re-checks `/internal/model-registry/version` on this interval regardless of
+    # whether Redis pub/sub is connected or a message was dropped, so it self-heals within this
+    # many seconds no matter what. The integration harness may shorten this the same way it
+    # shortens CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS.
+    MODEL_REGISTRY_POLL_INTERVAL_SECONDS: float = 30.0
 
     # --- CELERY_: Celery's own broker/result-backend, isolated from REDIS_URL's
     # DB 0 (see above) so a broker purge/flush never touches registry state and

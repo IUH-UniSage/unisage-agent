@@ -135,6 +135,24 @@ def get_current_snapshot() -> ModelRegistrySnapshot | None:
     return _current_snapshot
 
 
+def set_current_snapshot(snapshot: ModelRegistrySnapshot) -> None:
+    """The hot-reload swap (plan.md "Hot-reload consistency", Task 8) — a single reference
+    reassignment of the module-level global, nothing more.
+
+    This is the whole trick: `ModelRegistrySnapshot` is `frozen`, and CPython's GIL makes a
+    single name rebind atomic, so a request that already called `get_current_snapshot()` and
+    is holding the old object keeps seeing consistent (if stale) data for the rest of its
+    lifetime — it never observes a half-updated snapshot, and it is never mutated out from
+    under it. The caller (`app.core.registry_subscriber`) is responsible for only calling this
+    with a snapshot whose `version` is newer than the current one and for serializing calls
+    (its own lock) so two concurrent reloads don't race pointlessly; this function itself does
+    no version check and no locking — it is deliberately just the swap.
+    """
+
+    global _current_snapshot
+    _current_snapshot = snapshot
+
+
 async def init_model_registry(client: BackendJavaClient | None = None) -> ModelRegistrySnapshot | None:
     """Load the registry snapshot once — call this from FastAPI's lifespan and from Celery's
     `worker_process_init` (see `app.worker.celery_app`), never from a request/task handler.
