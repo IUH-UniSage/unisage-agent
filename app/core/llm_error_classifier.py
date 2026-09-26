@@ -33,6 +33,15 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from app.core.ssrf_guard import SsrfBlockedError
 
 
+class MalformedExtractionResponseError(Exception):
+    """Raised by a caller (never by a provider SDK itself) when a credential's response parsed
+    fine at the transport level but didn't match the shape the caller actually needed - e.g. a
+    fallback EXTRACTION credential's JSON missing the expected keys (see
+    `app/rag/enrichment/multi_representation.py`). Always PERMANENT: a credential that returns
+    the wrong shape isn't a transient blip, it needs SA attention rather than an automatic retry
+    against the exact same credential."""
+
+
 class ErrorType(str, Enum):
     """Mirrors the Java-side `CredentialHealthErrorType` enum's two values and their meaning —
     same names, separate enum, since nothing here is serialized directly to that Java type
@@ -116,6 +125,8 @@ def classify_llm_error(exc: Exception) -> ErrorType:
     if isinstance(exc, SsrfBlockedError):
         # A credential whose apiBaseUrl resolves into a blocked range: no amount of retrying
         # changes where that URL points.
+        return ErrorType.PERMANENT
+    if isinstance(exc, MalformedExtractionResponseError):
         return ErrorType.PERMANENT
 
     # --- PydanticAI's own wrapping layer (ADR 0005) — checked before any raw SDK type, since a

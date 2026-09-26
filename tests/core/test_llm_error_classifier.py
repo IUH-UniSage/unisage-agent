@@ -23,7 +23,11 @@ import pytest
 from mistralai.client.errors import SDKError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from app.core.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.llm_error_classifier import (
+    ErrorType,
+    MalformedExtractionResponseError,
+    classify_llm_error,
+)
 from app.core.ssrf_guard import SsrfBlockedError
 
 
@@ -45,6 +49,12 @@ def _mistral_response(status_code: int, *, text: str) -> httpx.Response:
 class TestSsrfBlocked:
     def test_ssrf_blocked_is_always_permanent(self) -> None:
         exc = SsrfBlockedError("RESOLVED_IP_BLOCKED", host="169.254.169.254")
+        assert classify_llm_error(exc) == ErrorType.PERMANENT
+
+
+class TestMalformedExtractionResponse:
+    def test_malformed_extraction_response_is_always_permanent(self) -> None:
+        exc = MalformedExtractionResponseError("missing summary/questions keys")
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
 

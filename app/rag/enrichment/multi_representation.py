@@ -8,6 +8,7 @@ from openai import OpenAI
 from app.core import model_router
 from app.core.config import settings
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
+from app.core.llm_error_classifier import MalformedExtractionResponseError
 from app.core.model_registry import CredentialConfig, get_current_snapshot
 from app.rag.prompting.loader import get_templates
 from app.schemas.ingestion import Chunk
@@ -23,30 +24,6 @@ class EnrichedChunk:
     chunk: Chunk
     summary: str
     questions: list[str]
-
-
-class MalformedExtractionResponseError(Exception):
-    """Raised locally (never by a provider SDK) when a FALLBACK EXTRACTION credential's
-    response fails the same summary/questions shape check as the primary credential -
-    reported to `model_router.record_failure()` (todo.md Task 12, point 4) so it counts
-    against that credential's circuit-breaker state instead of `enrich()` silently handing
-    a malformed result to the ingest pipeline.
-
-    Never raised for the PRIMARY (first) attempt - that case keeps the pre-existing
-    "log + return empty" behavior (see `enrich()`'s docstring for why), since a malformed
-    response from the one credential everyone is normally using is "this one chunk had a
-    bad day", not evidence that credential is broken.
-
-    Known gap, flagged rather than silently patched (todo.md Task 12 explicitly puts
-    `app.core.llm_error_classifier` out of this task's scope - "call them, don't modify
-    their logic"): `classify_llm_error()` has no `isinstance` branch for this exception
-    type, so it falls through to its own documented "unrecognized -> TRANSIENT" default
-    rather than todo.md's literal "PERMANENT" wording. The failure is still reported
-    (Java gets a health ping, and the credential is put in cooldown) and - regardless of
-    how it's classified - `enrich()`'s loop never retries the SAME credential again within
-    one call, so the practical effect (move to a different credential) holds either way;
-    only the *durability* of the exclusion (TTL length) is affected.
-    """
 
 
 @dataclass(frozen=True)
