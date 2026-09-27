@@ -20,6 +20,7 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from qdrant_client import QdrantClient
 
@@ -77,7 +78,18 @@ def reset_verified_cache_for_tests() -> None:
 
 
 def _run_async(coro):
-    return asyncio.run(coro)
+    """Runs `coro` to completion from this deliberately-sync module (both
+    `embed_chunks`/Celery and `OpenAIEmbedder.embed()`/the sync chunking
+    pipeline call into this file synchronously).
+    """
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 def _measure(embed_probe: Callable[[list[str]], list[list[float]]]) -> EmbeddingFingerprint:
