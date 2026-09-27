@@ -2,17 +2,16 @@ import json
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import settings
 from app.core.exceptions import (
     DepartmentAccessDeniedException,
     InsufficientDocumentPermissionException,
     InvalidTrustedContextException,
     MissingTrustedContextException,
 )
+from app.core.llm.provider_models import build_model
+from app.core.model_registry import get_current_snapshot, require_top_priority_credential
 from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
@@ -48,22 +47,25 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 def get_graph_models() -> GraphModels:
     """FastAPI dependency: the 3 LLM-backed nodes' models for the streaming graph.
 
-    Overridden in tests with `pydantic_ai.models.function.FunctionModel`
-    doubles (see tests/llm_mocks.py). Production builds a real `OpenAIChatModel`
-    with `settings.OPENAI_API_KEY` passed explicitly - a bare `"openai:<name>"`
-    string instead relies on pydantic_ai reading `OPENAI_API_KEY` from the OS
-    environment, which `.env` alone does not set.
+    Overridden in tests with `pydantic_ai.models.function.FunctionModel` doubles (see
+    tests/llm_mocks.py). Production builds from the highest-priority ACTIVE CHAT credential in
+    the snapshot `init_model_registry()` already loaded at startup (plan.md "Cutover khỏi cấu
+    hình `.env` tĩnh") — no failover yet (Task 5's explicit scope), no re-fetch here (hot-reload
+    is Task 7), and never a `.env` fallback if the snapshot has no CHAT credential: that raises,
+    it does not paper over the gap.
     """
 
-    model = OpenAIChatModel(
-        settings.OPENAI_MODEL,
-        provider=OpenAIProvider(api_key=settings.OPENAI_API_KEY),
-    )
+    credential = require_top_priority_credential("CHAT")
+    model = build_model(credential)
+    snapshot = get_current_snapshot()
+
     return GraphModels(
         classification=model,
         query_transformation=model,
         generation=model,
         retrieval=RetrievalService(),
+        generation_credential=credential,
+        snapshot_version=snapshot.version if snapshot is not None else None,
     )
 
 

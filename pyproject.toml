@@ -14,7 +14,7 @@ dependencies = [
     "gunicorn>=22.0.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
-    "pydantic-ai-slim[openai,anthropic]>=1.0.0",
+    "pydantic-ai-slim[anthropic,google,groq,mistral,openai]>=1.0.0",
     "pydantic-graph>=1.80.0",
     "sqlalchemy[asyncio]>=2.0.35",
     "alembic>=1.13.0",
@@ -23,7 +23,10 @@ dependencies = [
     "tiktoken>=0.7.0",
     "orjson>=3.10.0",
     "python-dotenv>=1.0.0",
-    "httpx>=0.27.0",
+    "httpx>=0.28.1,<0.29",
+    # Direct dep (not just httpx's transitive one) — PinnedNetworkBackend overrides
+    # connect_tcp, which is not public API httpcore promises to keep stable across minors.
+    "httpcore>=1.0.9,<1.1",
     "pymupdf4llm>=0.0.1",
     "minio>=7.2.0",
     "celery[redis]>=5.4.0",
@@ -45,7 +48,18 @@ dev = [
     "mypy>=1.13.0",
     "types-openpyxl>=3.1.0",
     "aiosqlite>=0.20.0",
+    "dnslib>=0.9.23,<1.0",
+    "cryptography>=43.0.0",
+    "docker>=7.1.0",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires the docker-compose.integration.yml stack (Java + Postgres + Redis + Celery + fake LLM provider) - see tests/e2e/README.md. Excluded from the default run.",
+]
+# Default run stays hermetic (no live Java/Redis/Celery needed) - integration
+# tests opt in explicitly via `pytest -m integration`.
+addopts = "-m 'not integration'"
 
 [tool.setuptools.packages.find]
 where = ["."]

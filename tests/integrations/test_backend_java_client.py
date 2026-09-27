@@ -11,6 +11,7 @@ from app.integrations.backend_java_client import (
     BackendJavaClient,
     BackendJavaConnectionError,
     BackendJavaHTTPError,
+    BackendJavaRedirectError,
 )
 
 
@@ -161,6 +162,14 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.headers.get("x-internal-secret"))
+        if request.url.path.endswith("/version"):
+            return httpx.Response(200, json={"version": 1})
+        if request.url.path.endswith("/snapshot"):
+            return httpx.Response(200, json={"version": 1, "purposes": {}})
+        if request.url.path.endswith("/verifications/claim"):
+            return httpx.Response(200, json=[])
+        if "/verifications/" in request.url.path and request.url.path.endswith("/result"):
+            return httpx.Response(200, json={"applied": True, "duplicate": False})
         return httpx.Response(200, json={"id": "msg-1", "status": "COMPLETED"})
 
     client = _client_with(handler)
@@ -172,8 +181,34 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
         message_id="msg-1", conversation_id="conv-1", content="answer", status="COMPLETED"
     )
     await client.get_conversation_messages(conversation_id="conv-1", authorization=None)
+    await client.get_model_registry_version()
+    await client.get_model_registry_snapshot()
+    await client.report_health(
+        credential_id="cred-1",
+        credential_revision=1,
+        snapshot_version=1,
+        error_type="TRANSIENT",
+        error_code="x",
+        message="x",
+        occurred_at="2026-09-26T00:00:00+00:00",
+    )
+    await client.get_embedding_index_identity(collection="unisage_chunks")
+    await client.put_embedding_index_identity(
+        collection="unisage_chunks",
+        provider="openai",
+        model_name="text-embedding-3-small",
+        model_source_ref=None,
+        api_base_url="https://api.openai.com/v1",
+        dimension=2,
+        fingerprint=[0.1, 0.2, 0.3, 0.4],
+        established_by="bootstrap-cli",
+    )
+    await client.claim_verifications(limit=5)
+    await client.post_verification_result(
+        job_id="job-1", lease_token="lease-1", result_type="OK"
+    )
 
-    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 3
+    assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 10
 
 
 @pytest.mark.asyncio
@@ -289,3 +324,531 @@ async def test_unwraps_java_api_response_envelope() -> None:
     result = await client.create_message(conversation_id="conv-1", role="USER", content="hi")
 
     assert result == {"id": "msg-1"}
+
+
+@pytest.mark.asyncio
+async def test_get_model_registry_version_returns_int() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/internal/model-registry/version")
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json={"version": 42})
+
+    client = _client_with(handler)
+
+    assert await client.get_model_registry_version() == 42
+
+
+@pytest.mark.asyncio
+async def test_report_health_posts_expected_body_shape() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["authorization"] = request.headers.get("authorization")
+        seen["parsed_body"] = _json.loads(request.read())
+        return httpx.Response(200, json={"applied": True})
+
+    client = _client_with(handler)
+
+    result = await client.report_health(
+        credential_id="cred-1",
+        credential_revision=3,
+        snapshot_version=42,
+        error_type="TRANSIENT",
+        error_code="RateLimitError:429",
+        message="rate limited",
+        occurred_at="2026-09-26T00:00:00+00:00",
+    )
+
+    assert seen["method"] == "POST"
+    assert seen["url_path"] == "/internal/model-registry/credentials/cred-1/health"
+    assert seen["authorization"] is None
+    assert seen["parsed_body"] == {
+        "credentialRevision": 3,
+        "snapshotVersion": 42,
+        "errorType": "TRANSIENT",
+        "errorCode": "RateLimitError:429",
+        "message": "rate limited",
+        "occurredAt": "2026-09-26T00:00:00+00:00",
+    }
+    assert result == {"applied": True}
+
+
+@pytest.mark.asyncio
+async def test_get_embedding_index_identity_returns_none_on_404() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    client = _client_with(handler)
+
+    assert await client.get_embedding_index_identity(collection="unisage_chunks") is None
+
+
+@pytest.mark.asyncio
+async def test_get_embedding_index_identity_returns_payload() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/model-registry/embedding-index/unisage_chunks/identity"
+        assert request.headers.get("authorization") is None
+        return httpx.Response(
+            200,
+            json={
+                "provider": "openai",
+                "modelName": "text-embedding-3-small",
+                "modelSourceRef": None,
+                "apiBaseUrl": "https://api.openai.com/v1",
+                "dimension": 2,
+                "fingerprint": [0.1, 0.2, 0.3, 0.4],
+            },
+        )
+
+    client = _client_with(handler)
+
+    result = await client.get_embedding_index_identity(collection="unisage_chunks")
+
+    assert result == {
+        "provider": "openai",
+        "modelName": "text-embedding-3-small",
+        "modelSourceRef": None,
+        "apiBaseUrl": "https://api.openai.com/v1",
+        "dimension": 2,
+        "fingerprint": [0.1, 0.2, 0.3, 0.4],
+    }
+
+
+@pytest.mark.asyncio
+async def test_put_embedding_index_identity_posts_expected_body_shape() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["parsed_body"] = _json.loads(request.read())
+        return httpx.Response(201, json={"established": True})
+
+    client = _client_with(handler)
+
+    result = await client.put_embedding_index_identity(
+        collection="unisage_chunks",
+        provider="openai",
+        model_name="text-embedding-3-small",
+        model_source_ref=None,
+        api_base_url="https://api.openai.com/v1",
+        dimension=2,
+        fingerprint=[0.1, 0.2, 0.3, 0.4],
+        established_by="first-upsert",
+    )
+
+    assert seen["method"] == "PUT"
+    assert seen["url_path"] == "/internal/model-registry/embedding-index/unisage_chunks/identity"
+    assert seen["parsed_body"] == {
+        "provider": "openai",
+        "modelName": "text-embedding-3-small",
+        "modelSourceRef": None,
+        "apiBaseUrl": "https://api.openai.com/v1",
+        "dimension": 2,
+        "fingerprint": [0.1, 0.2, 0.3, 0.4],
+        "establishedBy": "first-upsert",
+    }
+    assert result == {"established": True}
+
+
+@pytest.mark.asyncio
+async def test_put_embedding_index_identity_raises_http_error_on_409() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"error": "EMBEDDING_INDEX_IDENTITY_EXISTS"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaHTTPError) as exc_info:
+        await client.put_embedding_index_identity(
+            collection="unisage_chunks",
+            provider="openai",
+            model_name="text-embedding-3-small",
+            model_source_ref=None,
+            api_base_url="https://api.openai.com/v1",
+            dimension=2,
+            fingerprint=[0.1, 0.2, 0.3, 0.4],
+            established_by="bootstrap-cli",
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_get_model_registry_snapshot_returns_raw_payload() -> None:
+    payload = {
+        "version": 7,
+        "generatedAt": "2026-09-25T03:00:00Z",
+        "purposes": {"CHAT": [{"id": "c1", "apiKey": "sk-secret"}], "EMBEDDING": [], "EXTRACTION": []},
+        "embeddingIndexIdentity": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/internal/model-registry/snapshot")
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json=payload)
+
+    client = _client_with(handler)
+
+    assert await client.get_model_registry_snapshot() == payload
+
+
+@pytest.mark.asyncio
+async def test_claim_verifications_sends_limit_param_and_returns_list() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "jobId": "job-1",
+                    "leaseToken": "lease-1",
+                    "attempt": 1,
+                    "leaseUntil": "2026-09-26T00:01:00",
+                    "credential": {
+                        "chatModelId": "cm-1",
+                        "modelPurpose": "CHAT",
+                        "sourceType": "CLOUD_API",
+                        "provider": "openai",
+                        "modelName": "gpt-4o-mini",
+                        "modelSourceRef": None,
+                        "apiBaseUrl": "https://api.openai.com/v1",
+                        "apiKey": "sk-secret",
+                        "maxRpm": 500,
+                    },
+                }
+            ],
+        )
+
+    client = _client_with(handler)
+
+    result = await client.claim_verifications(limit=5)
+
+    assert seen["method"] == "POST"
+    assert seen["url_path"] == "/internal/model-registry/verifications/claim"
+    assert seen["params"] == {"limit": "5"}
+    assert result == [
+        {
+            "jobId": "job-1",
+            "leaseToken": "lease-1",
+            "attempt": 1,
+            "leaseUntil": "2026-09-26T00:01:00",
+            "credential": {
+                "chatModelId": "cm-1",
+                "modelPurpose": "CHAT",
+                "sourceType": "CLOUD_API",
+                "provider": "openai",
+                "modelName": "gpt-4o-mini",
+                "modelSourceRef": None,
+                "apiBaseUrl": "https://api.openai.com/v1",
+                "apiKey": "sk-secret",
+                "maxRpm": 500,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_claim_verifications_returns_empty_list_when_nothing_to_claim() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    client = _client_with(handler)
+
+    assert await client.claim_verifications(limit=5) == []
+
+
+@pytest.mark.asyncio
+async def test_post_verification_result_posts_expected_body_shape() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["parsed_body"] = _json.loads(request.read())
+        return httpx.Response(200, json={"applied": True, "duplicate": False})
+
+    client = _client_with(handler)
+
+    result = await client.post_verification_result(
+        job_id="job-1",
+        lease_token="lease-1",
+        result_type="PERMANENT",
+        error_code="AuthenticationError:401",
+        message="invalid api key",
+    )
+
+    assert seen["method"] == "POST"
+    assert seen["url_path"] == "/internal/model-registry/verifications/job-1/result"
+    assert seen["parsed_body"] == {
+        "leaseToken": "lease-1",
+        "resultType": "PERMANENT",
+        "errorCode": "AuthenticationError:401",
+        "message": "invalid api key",
+    }
+    assert result == {"applied": True, "duplicate": False}
+
+
+@pytest.mark.asyncio
+async def test_post_verification_result_includes_embedding_fields_when_given() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["parsed_body"] = _json.loads(request.read())
+        return httpx.Response(200, json={"applied": True, "duplicate": False})
+
+    client = _client_with(handler)
+
+    await client.post_verification_result(
+        job_id="job-2",
+        lease_token="lease-2",
+        result_type="OK",
+        embedding_dimension=3,
+        embedding_fingerprint=[0.1, 0.2, 0.3],
+    )
+
+    assert seen["parsed_body"] == {
+        "leaseToken": "lease-2",
+        "resultType": "OK",
+        "embeddingDimension": 3,
+        "embeddingFingerprint": [0.1, 0.2, 0.3],
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_verification_result_raises_http_error_on_409_lease_lost() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"error": "VERIFICATION_LEASE_LOST"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaHTTPError) as exc_info:
+        await client.post_verification_result(
+            job_id="job-1", lease_token="stale-token", result_type="OK"
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+# ── never follow a redirect from Java — every method that hits it ──────────
+
+_REDIRECT_STATUSES = [301, 302, 307, 308]
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_create_message_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.create_message(conversation_id="conv-1", role="USER", content="hi")
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_update_message_rejects_redirect(status_code: int) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.update_message(
+            message_id="msg-1", conversation_id="conv-1", content="x", status="COMPLETED"
+        )
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_create_conversation_rejects_redirect(status_code: int) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.create_conversation()
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_get_conversation_messages_rejects_redirect(status_code: int) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.get_conversation_messages(conversation_id="conv-1")
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_get_model_registry_snapshot_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.get_model_registry_snapshot()
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_get_model_registry_version_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.get_model_registry_version()
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_report_health_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.report_health(
+            credential_id="cred-1",
+            credential_revision=1,
+            snapshot_version=1,
+            error_type="PERMANENT",
+            error_code="x",
+            message="x",
+            occurred_at="2026-09-26T00:00:00+00:00",
+        )
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_get_embedding_index_identity_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.get_embedding_index_identity(collection="unisage_chunks")
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_put_embedding_index_identity_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.put_embedding_index_identity(
+            collection="unisage_chunks",
+            provider="openai",
+            model_name="text-embedding-3-small",
+            model_source_ref=None,
+            api_base_url="https://api.openai.com/v1",
+            dimension=2,
+            fingerprint=[0.1, 0.2, 0.3, 0.4],
+            established_by="bootstrap-cli",
+        )
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_claim_verifications_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.claim_verifications(limit=5)
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize("status_code", _REDIRECT_STATUSES)
+@pytest.mark.asyncio
+async def test_post_verification_result_rejects_redirect(status_code: int) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(status_code, headers={"Location": "https://evil.test/steal"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaRedirectError):
+        await client.post_verification_result(
+            job_id="job-1", lease_token="lease-1", result_type="OK"
+        )
+
+    assert call_count == 1
+
+
+def test_client_never_follows_redirects_by_default() -> None:
+    client = BackendJavaClient(base_url="http://java.test")
+    assert client._client().follow_redirects is False

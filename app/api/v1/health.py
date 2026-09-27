@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from collections.abc import Awaitable
 from typing import Any
@@ -10,6 +11,7 @@ from qdrant_client import QdrantClient
 from sqlalchemy import text
 
 from app.core.config import settings
+from app.core.model_registry import get_current_snapshot
 from app.database.session import async_session_factory
 from app.schemas.common import ApiResponse
 
@@ -99,11 +101,26 @@ async def health_check() -> ApiResponse[dict[str, Any]]:
     }
     overall = "healthy" if all(c["status"] == "up" for c in components.values()) else "unhealthy"
 
+    # No secret in here (mirrors plan.md's "Internal API contract" endpoint #2, GET /version -
+    # "Không" trả secret) - just which worker process answered and what registry version it has
+    # cached. Task 8's hot-reload swaps this process-local cache without a request payload of
+    # its own to observe, so the cross-repo test that asserts "every gunicorn/Celery worker
+    # picked up the new version" (todo.md Task 8, "assert qua X-Worker-Pid") reads it from here:
+    # hit this endpoint repeatedly across `gunicorn -w N` workers and see every PID converge on
+    # the same version within the poll interval.
+    snapshot = get_current_snapshot()
+    model_registry_status = {
+        "enabled": settings.MODEL_REGISTRY_ENABLED,
+        "version": snapshot.version if snapshot is not None else None,
+        "worker_pid": os.getpid(),
+    }
+
     return ApiResponse.success(
         {
             "status": overall,
             "service": settings.APP_NAME,
             "environment": settings.APP_ENV,
             "components": components,
+            "model_registry": model_registry_status,
         }
     )

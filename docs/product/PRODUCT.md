@@ -29,13 +29,21 @@ tiết và các khoảng trống đã biết.
   tự giải mã JWT.
 - **`unisage-backend` (Java)** — chủ sở hữu conversation/message, xác thực người dùng, phân quyền
   department/access_level. `unisage-agent` gọi ngược sang Java (`BackendJavaClient`) để tạo/cập nhật
-  message, không bao giờ tự lưu nội dung hội thoại.
+  message, không bao giờ tự lưu nội dung hội thoại. Từ Model Registry (2026-09), Java cũng là chủ sở
+  hữu duy nhất của cấu hình model LLM (`ChatModel`) — `unisage-agent` không có UI/API nào để tự đăng
+  ký hay sửa model, chỉ đọc.
+- **Super Admin (SA)** — đăng ký/sửa/xoá `ChatModel` (provider, key, base URL, vai trò CHAT/EMBEDDING/
+  EXTRACTION) qua `unisage-web`, gọi `unisage-backend`. Không gọi thẳng `unisage-agent`.
 - **Người vận hành/triển khai** — chỉnh biến môi trường, chạy migration, tạo lại Qdrant collection khi
-  hình dạng payload đổi.
+  hình dạng payload đổi; từ Model Registry còn phải chạy lệnh bootstrap danh tính embedding
+  (`register_embedding_index_identity`) trước khi bật registry cho collection đã có sẵn vector.
 - **Người viết prompt** — chỉnh nội dung `prompt_templates/`, `known_metadata_fields.json`; đổi hành
   vi của một node LLM mà không đụng logic Python.
 - **System (graph orchestrator)** — chạy graph 11 node theo đúng flow_design, tự quyết dừng ở đâu
   (fast path, off-topic, fallback, hay sinh câu trả lời); không ai can thiệp giữa chừng một lượt chat.
+- **Model registry verifier (Celery Beat + worker, `unisage-agent`)** — định kỳ claim job verify
+  credential mới do SA nhập, gọi thử provider, báo kết quả về Java. Không tự quyết trạng thái
+  credential — chỉ Java chuyển trạng thái (xem `ChatModel` trong Objects).
 
 ## Objects
 
@@ -46,9 +54,13 @@ tiết và các khoảng trống đã biết.
 | `PendingClarification` | `unisage-agent` (Postgres, 1 dòng/conversation) | một vòng "cần hỏi thêm" đang mở: `missing_fields`, `options`, `retry_count`, `origin_node`, `original_query`. `None` = không có gì đang treo |
 | `confirmed_metadata` | `unisage-agent` (Postgres, cùng bảng) | thuộc tính sinh viên **tự khai**, tích luỹ qua hội thoại (VD hệ đào tạo, khoá). Không bao giờ dùng để mở rộng quyền đọc tài liệu — chỉ để chọn đúng nhánh quy định khi trả lời |
 | Document / Chunk (ingest) | `unisage-agent` (Postgres draft) + Qdrant (đã embed) | `DocumentProcessLog.current_step`: `PENDING` → `CHUNKED` → `EMBEDDING` → (kết thúc, dòng bị xoá); `DocumentChunk` là bản nháp trước khi client duyệt và gọi embed |
-| Chunk point (Qdrant) | `unisage-agent` | payload gồm `department`, `access_level`, `is_public`, 3 vector (`content`/`summary`/`questions`) + metadata cấu trúc (trang, heading, bảng) |
+| Chunk point (Qdrant) | `unisage-agent` | payload gồm `department`, `access_level`, `is_public`, `embedding_identity_key`, 3 vector (`content`/`summary`/`questions`) + metadata cấu trúc (trang, heading, bảng) |
 | `RetrievedChunk` | ranh giới retrieval → generation | điểm số đã chuẩn hoá `[0,1]`, nguồn, trang, `source_locator` |
 | Citation | sinh ra ở `GenerationSynthesisNode` | chỉ dựng từ `RetrievedChunk` thật sự được LLM trích `[n]`, không bao giờ do LLM tự bịa nguồn |
+| `ChatModel` (model registry) | `unisage-backend` | credential + cấu hình 1 model LLM, gắn 1 trong 3 `modelPurpose` (`CHAT`/`EMBEDDING`/`EXTRACTION`). Vòng đời: `PENDING → ACTIVE/INACTIVE/DISABLED`, độc lập với `isActive` (soft-delete). Chỉ row `is_active = true AND status = 'ACTIVE'` được dùng để gọi provider |
+| `chat_model_verifications` (job verify) | `unisage-backend` | 1 job/lần SA tạo hoặc sửa credential ứng viên; `unisage-agent` claim (pull), verify, báo kết quả. 7 trạng thái, xem Glossary |
+| `embedding_index_identity` | `unisage-backend` | danh tính (provider/model/dimension/fingerprint) của vector đang nằm trong 1 collection Qdrant; bất biến sau khi tạo (`INSERT ... ON CONFLICT DO NOTHING`, trigger chặn UPDATE/DELETE) |
+| Model registry snapshot | dựng ở `unisage-backend`, cache ở `unisage-agent` (RAM mỗi worker) | toàn bộ `ChatModel` ACTIVE theo purpose + `version`; `unisage-agent` không tự lưu bản lâu dài, poll/reload qua Redis pub/sub |
 
 ## Source of truth
 
@@ -67,6 +79,16 @@ tiết và các khoảng trống đã biết.
   Qdrant là nguồn cho nội dung đã index; Postgres draft không bị xoá ngay (dùng để đối chiếu
   `chunking_version` khi phát hiện chunk cũ theo sơ đồ lỗi thời).
 - **File gốc: MinIO, dùng chung với `backend-java`.** `unisage-agent` không sở hữu bucket riêng.
+- **Cấu hình model LLM (provider/key/base URL): chỉ `unisage-backend`, bảng `chat_models`.**
+  `unisage-agent` không còn đọc `.env` (`OPENAI_API_KEY`/`OPENAI_MODEL`/...) làm nguồn credential khi
+  registry bật — nó đọc snapshot từ Java qua API nội bộ `/api/v1/internal/model-registry/**`, cache
+  trong RAM mỗi worker process, và tự đảo bản cache khi Java báo `version` mới qua Redis pub/sub. Java
+  không bao giờ gọi provider LLM thay Python.
+- **Danh tính của vector embedding đang nằm trong Qdrant: bảng `embedding_index_identity` ở
+  `unisage-backend`, không phải cấu hình credential đang ACTIVE.** Vẫn đúng kể cả khi không có
+  credential EMBEDDING nào ACTIVE. Mọi đường có thể đổi embedding model đang chạy (rotate, activate,
+  swap) phải so khớp danh tính này trước khi áp dụng — lệch thì chặn, không bao giờ âm thầm đổi vector
+  space.
 
 ## Business rules
 
@@ -101,6 +123,27 @@ tiết và các khoảng trống đã biết.
   không mang đúng `X-Internal-Secret` bị từ chối ở tầng router, trước khi chạm route handler nào.
 - **Mọi lỗi trả về mang một `code` ổn định**, mirror `ErrorCode.java` bên `unisage-backend` — client có
   thể dùng chung một bảng tra mã lỗi cho cả hai backend.
+- **Embedding model không bao giờ tự động failover hay tự động đổi.** Failover tự động chỉ áp cho CHAT
+  và EXTRACTION. Đổi embedding model (kể cả cùng số chiều) đưa vector vào không gian ngữ nghĩa khác —
+  một lỗi âm thầm không có cách nào tự phục hồi. Tại một thời điểm chỉ đúng 1 credential EMBEDDING
+  ACTIVE (ép bằng unique index DB); lỗi thì dừng ingest job và báo Super Admin, không tự chuyển sang
+  model khác.
+- **Endpoint `/api/v1/internal/model-registry/**` của Java không bao giờ trả secret ra ngoài đường
+  nội bộ.** Xác thực bằng `X-Internal-Secret` (không qua JWT/RBAC); Gateway chặn mọi request từ ngoài
+  tới path này ở tầng filter sớm nhất, trước cả xử lý JWT. Mọi response của namespace này mang
+  `Cache-Control: no-store`.
+- **`unisage-agent` không tự expose endpoint "nội bộ" nào cho registry.** Gateway gắn
+  `X-Internal-Secret` cho mọi request `/api/v1/ai/**` đi qua nó, nên một endpoint "nội bộ" ở Python
+  thực chất ai qua Gateway cũng gọi được — không phải hàng rào thật. Verify credential luôn đi theo
+  chiều Python gọi Java (pull), không có chiều ngược lại.
+- **Danh sách `llmProvider` được phép tạo (`openai`, `google`, `groq`, `mistral`, cộng
+  `SELF_HOSTED` cho server tương thích OpenAI) chỉ gồm provider đã chứng minh nhận được HTTP
+  client đã pin SSRF của Python — không phải mọi provider mà `pydantic-ai` hỗ trợ.** `anthropic`
+  chưa vào danh sách vì SDK của nó chỉ nhận `httpx2.AsyncClient`, khác hẳn client `httpx` đang
+  dùng để pin; `xai` không có client HTTP nào để pin (SDK dùng gRPC); `deepseek` cố định sẵn base
+  URL nên không khớp cách factory hiện tại truyền `base_url` theo credential. Java và Python giữ
+  đúng cùng danh sách này — SA không thể tạo được một credential mà Python chắc chắn không dùng
+  được.
 
 ## Glossary
 
@@ -122,6 +165,20 @@ tiết và các khoảng trống đã biết.
   thì ai cũng đọc được, không phân biệt phòng ban hay `access_level`.
 - **wildcard department (`*`)** — một entry `department_access` với `department_id = "*"` cấp
   `access_level` của nó cho **mọi** phòng ban, không chỉ một.
+- **model registry snapshot** — toàn bộ `ChatModel` đang `ACTIVE` (theo `CHAT`/`EMBEDDING`/
+  `EXTRACTION`), kèm key plaintext và `version`, do Java tổng hợp qua
+  `GET /internal/model-registry/snapshot`. `unisage-agent` cache trong RAM, không ghi xuống đĩa/DB.
+- **verification job** — 1 lần Python thử gọi provider bằng credential ứng viên SA vừa nhập, để Java
+  quyết có promote (áp dụng) hay không. 7 trạng thái: `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`,
+  `SUPERSEDED` (bị thay bởi thay đổi mới hơn trước khi verify xong), `CANCELLED`,
+  `REINDEX_REQUIRED` (chỉ EMBEDDING — ứng viên dùng được nhưng đổi danh tính vector, cần re-index
+  trước khi áp dụng).
+- **staged credential rotation** — sửa credential của một `ChatModel` đang ACTIVE không ghi thẳng vào
+  row; giá trị mới nằm ở verification job dưới dạng ứng viên, row cũ (và Python) vẫn dùng credential
+  cũ cho tới khi ứng viên verify xong và được promote — tránh downtime khi SA đổi key.
+- **embedding identity guard** — cơ chế chặn mọi đường có thể đổi embedding model đang chạy (rotate,
+  activate, swap) nếu ứng viên không khớp danh tính (`embedding_index_identity`) của vector đang nằm
+  trong Qdrant; khớp thì cho qua, lệch thì job kết thúc ở `REINDEX_REQUIRED`.
 
 ## Human decisions
 
@@ -152,6 +209,9 @@ nhiều, hoặc chunk đúng lấy được nhưng xếp sai thứ hạng), ph�
   báo "đang phát triển", chưa gọi Calculator Tool hay lấy dữ liệu điểm sinh viên.
 - Không có kho lưu trữ hội thoại lâu dài riêng của mình.
 - Không tạo phòng ban/quyền hạn — đọc từ `department_access` do Gateway bơm, không tự định nghĩa.
+- Không tự đăng ký hay sửa cấu hình model LLM — đó là việc của Super Admin qua `unisage-backend`.
+- Không tự động đổi embedding model dưới bất kỳ hình thức nào — luôn cần re-index có chủ đích, ngoài
+  scope của registry.
 
 ## Open
 

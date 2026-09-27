@@ -85,6 +85,9 @@ def _load_all_templates() -> PromptTemplates:
         agent_multi_query_decomposer=_load_yaml_template(agents / "multi_query_decomposer.yaml"),
         agent_calculation_extractor=_load_yaml_template(agents / "calculation_extractor.yaml"),
         agent_reranker_compressor=_load_yaml_template(agents / "reranker_compressor.yaml"),
+        agent_multi_representation_enricher=_load_yaml_template(
+            agents / "multi_representation_enricher.yaml"
+        ),
         header=_load_yaml_template(common / "header.yaml"),
         academic_metadata=_load_yaml_template(common / "academic_metadata.yaml"),
         history_message=_load_yaml_template(common / "history_message.yaml"),

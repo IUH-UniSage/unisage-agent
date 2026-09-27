@@ -5,13 +5,14 @@ from typing import Any
 
 from pydantic_ai.models import Model
 
+from app.core.model_registry import CredentialConfig
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.security import AcademicSecurityContext
 
 
-@dataclass(frozen=True)
+@dataclass
 class GraphModels:
     """The graph's injected dependencies: the 3 LLM-backed nodes' models
     (so tests can pass `pydantic_ai.models.function.FunctionModel` doubles,
@@ -23,6 +24,8 @@ class GraphModels:
     query_transformation: Model | str
     generation: Model | str
     retrieval: RetrievalServiceProtocol
+    generation_credential: CredentialConfig | None = None
+    snapshot_version: int | None = None
 
 
 @dataclass

@@ -10,6 +10,9 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
+from app.core.model_registry import CredentialConfig
+from app.core.model_router import ModelRouter
+from app.graph.streaming import AgentFactory, FailoverCallback, run_agent_text_with_failover
 from app.rag.prompting import append_recent_history, get_templates
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
@@ -126,8 +129,29 @@ async def classify_intent(
     message: str,
     *,
     history: Sequence[HistoryMessage] = (),
+    purpose: str | None = None,
+    credential: CredentialConfig | None = None,
+    snapshot_version: int | None = None,
+    agent_factory: AgentFactory | None = None,
+    router: ModelRouter | None = None,
+    on_failover: FailoverCallback | None = None,
 ) -> IntentClassification:
-    """`history` lets a short follow-up be classified in context."""
+    """`history` lets a short follow-up be classified in context.
 
-    result = await agent.run(append_recent_history(message, history))
-    return parse_classification(result.output or "", message)
+    `purpose`/`credential`/`snapshot_version`/`agent_factory`/`router`/
+    `on_failover` are the same opt-in failover wiring as
+    `run_agent_text_with_failover()` - omitted (the default), a provider
+    failure propagates immediately, same as before.
+    """
+
+    output = await run_agent_text_with_failover(
+        agent,
+        append_recent_history(message, history),
+        purpose=purpose,
+        credential=credential,
+        snapshot_version=snapshot_version,
+        agent_factory=agent_factory,
+        router=router,
+        on_failover=on_failover,
+    )
+    return parse_classification(output, message)

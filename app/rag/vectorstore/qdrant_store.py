@@ -52,6 +52,36 @@ def ensure_collection(client: QdrantClient) -> None:
     )
 
 
+def get_collection_dimension(client: QdrantClient) -> int | None:
+    """The configured vector size of the collection's named vectors, or `None` if the
+    collection doesn't exist yet. All 3 named vectors (`_VECTOR_NAMES`) are always created with
+    the same size (`ensure_collection`), so reading `content_vector`'s is representative — used
+    by the embedding identity guard (`app.core.embedding_identity`) to sanity-check a registered
+    identity's `dimension` against what the collection is actually configured with."""
+
+    if not client.collection_exists(settings.QDRANT_COLLECTION):
+        return None
+    info = client.get_collection(settings.QDRANT_COLLECTION)
+    vectors_config = info.config.params.vectors
+    if isinstance(vectors_config, dict):
+        content_params = vectors_config.get(_VECTOR_NAMES[0])
+        return content_params.size if content_params is not None else None
+    # A collection with a single unnamed vector (shouldn't happen for this collection, but
+    # `VectorParams` is a valid non-dict shape for the SDK type) — defensive fallback.
+    return vectors_config.size if vectors_config is not None else None
+
+
+def collection_has_points(client: QdrantClient) -> bool:
+    """True if the collection exists and already holds at least one point — used by the
+    embedding identity guard to decide whether an empty collection may self-bootstrap its
+    identity, or whether a collection with vectors but no registered identity must be refused."""
+
+    if not client.collection_exists(settings.QDRANT_COLLECTION):
+        return False
+    info = client.get_collection(settings.QDRANT_COLLECTION)
+    return bool(info.points_count)
+
+
 def build_access_filter(security: AcademicSecurityContext) -> models.Filter:
     """Permission pre-filter, built only from the JWT-verified
     `department_access` (never from self-declared `confirmed_metadata`).
@@ -118,6 +148,7 @@ class ChunkPoint:
     chunking_version: str = "legacy"
     structure_confidence: float | None = None
     parse_warnings: list[str] = field(default_factory=list)
+    embedding_identity_key: str | None = None
 
 
 def search_chunks(
@@ -276,6 +307,7 @@ def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:
                     "chunking_version": point.chunking_version,
                     "structure_confidence": point.structure_confidence,
                     "parse_warnings": point.parse_warnings,
+                    "embedding_identity_key": point.embedding_identity_key,
                 },
             )
         ],

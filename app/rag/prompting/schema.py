@@ -21,6 +21,7 @@ class PromptTemplates:
     agent_multi_query_decomposer: str
     agent_calculation_extractor: str
     agent_reranker_compressor: str
+    agent_multi_representation_enricher: str
 
     # Common components
     header: str

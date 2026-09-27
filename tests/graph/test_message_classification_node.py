@@ -1,10 +1,13 @@
 import json
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from app.core.model_registry import CredentialConfig
+from app.core.model_router import ModelRouter
 from app.graph.nodes.message_classification import (
     MAX_TASKS,
     build_classification_agent,
@@ -188,6 +191,96 @@ async def test_classify_intent_sends_recent_history_with_message() -> None:
     assert classification.tasks[0].intent == "academic_advisory"
     assert seen_prompts[-1].startswith(message)
     assert "tổ hợp toán, vật lý xét được ngành nào" in seen_prompts[-1]
+
+
+class _FakeRedis:
+    """No-expiry stand-in for `redis.asyncio.Redis` - a key marked once stays
+    marked for the test's lifetime, same shape as
+    `tests/api/test_chat_stream_errors.py`'s fixture."""
+
+    def __init__(self) -> None:
+        self._blocked: set[str] = set()
+
+    async def set(self, name: str, _value: Any, *, ex: int | None = None) -> Any:
+        del ex
+        self._blocked.add(name)
+        return True
+
+    async def exists(self, name: str) -> int:
+        return 1 if name in self._blocked else 0
+
+    async def aclose(self) -> Any:
+        return None
+
+
+class _FakeBackendClient:
+    def __init__(self) -> None:
+        self.reports: list[dict[str, Any]] = []
+
+    async def report_health(self, **kwargs: Any) -> None:
+        self.reports.append(kwargs)
+
+
+def _credential(credential_id: str, priority: int) -> CredentialConfig:
+    return CredentialConfig(
+        id=credential_id,
+        revision=1,
+        source_type="CLOUD_API",
+        provider="google",
+        model_name="gemini-2.5-flash",
+        api_base_url="https://generativelanguage.googleapis.com",
+        priority=priority,
+        max_rpm=60,
+        api_key="key",
+    )
+
+
+@pytest.mark.asyncio
+async def test_classify_intent_fails_over_to_the_next_credential_on_a_transient_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider error before MessageClassificationNode's `agent.run()`
+    returns must trigger the same failover `stream_agent_text()` gives the
+    streaming nodes - this closes the gap where classification/query
+    transformation crashed the whole graph run on a transient error instead
+    of trying the next ACTIVE credential (no `stream_agent_text` "already
+    streamed" boundary applies here: a plain `agent.run()` either returns
+    fully or raises)."""
+
+    primary = _credential("cred-primary", priority=1)
+    fallback = _credential("cred-fallback", priority=2)
+    router = ModelRouter(redis_client=_FakeRedis(), backend_client=_FakeBackendClient())
+    monkeypatch.setattr(
+        "app.core.model_router.active_credentials_for", lambda purpose: [primary, fallback]
+    )
+
+    def failing_function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        raise RuntimeError("primary down")
+
+    fallback_payload = _payload(_task("academic_advisory", _MESSAGE, "SINGLE"))
+
+    def fallback_function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=fallback_payload)])
+
+    def fake_build_model(credential: CredentialConfig) -> FunctionModel:
+        assert credential.id == fallback.id
+        return FunctionModel(fallback_function)
+
+    monkeypatch.setattr("app.graph.streaming.build_model", fake_build_model)
+
+    agent = build_classification_agent(FunctionModel(failing_function))
+
+    classification = await classify_intent(
+        agent,
+        _MESSAGE,
+        purpose="CHAT",
+        credential=primary,
+        snapshot_version=1,
+        agent_factory=build_classification_agent,
+        router=router,
+    )
+
+    assert classification.tasks[0].query == _MESSAGE
 
 
 @pytest.mark.asyncio

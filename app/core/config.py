@@ -1,5 +1,11 @@
-from pydantic import Field
+from urllib.parse import urlsplit
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_INTERNAL_SECRET = "unisage-internal-secret-key-2026"
+_MIN_INTERNAL_SECRET_LENGTH = 32
+_DEV_ONLY_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
 
 
 class Settings(BaseSettings):
@@ -32,15 +38,8 @@ class Settings(BaseSettings):
     # schema/tables, no cross-service FK.
     DB_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5433/unisage_agent_db"
 
-    # --- OPENAI_: the LLM/embedding provider. Shared by ingestion (chunk
-    # enrichment, embedding) and chat (classification/HyDE/generation) - kept
-    # under its own vendor prefix rather than forced into CHAT_/INGEST_. ---
-    OPENAI_API_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-4o-mini"
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
-
     # --- MINIO_: object storage for ingested source files ---
-    MINIO_ENDPOINT: str = "localhost:9000"
+    MINIO_ENDPOINT: str = "localhost:9100"
     MINIO_ACCESS_KEY: str = ""
     MINIO_SECRET_KEY: str = ""
     MINIO_BUCKET: str = "unisage-documents"
@@ -48,8 +47,68 @@ class Settings(BaseSettings):
 
     # --- Single-var external systems: naming the system is enough on its
     # own, a prefix group of one adds nothing ---
+    # DB 0 only - registry/circuit-breaker/lock/event use (key prefix `mr:`).
+    # Celery's own broker/backend use their own DBs below - see plan.md's "Hot-reload
+    # consistency": the three were sharing this one DB, which meant a Celery `purge`
+    # or the registry's key sweep could clobber each other's keys.
     REDIS_URL: str = "redis://localhost:6379/0"
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
+    # Slack Incoming Webhook URL for operational alerts. Empty by default -
+    # not every environment has Slack configured, and that's a normal,
+    # expected state rather than a misconfiguration.
+    SLACK_APIKEY_ALERT_WEBHOOK_URL: str = ""
+    # Set true only when Python <-> Java is actually TLS/mTLS or an encrypted private network.
+    INTERNAL_NETWORK_ENCRYPTED: bool = False
+    # Rollout flag (plan.md "Cutover khỏi cấu hình .env tĩnh"): the model registry snapshot
+    # from Java is now the only source of provider credentials - there is no `.env` fallback
+    # path left in the code to fall back to. Startup fails loudly if the snapshot has no
+    # ACTIVE CHAT credential. Kept as a flag (rather than deleted outright) only so a process
+    # can be started with the registry deliberately not loaded (e.g. a unit-test process, or
+    # a deploy step that hasn't seeded credentials yet) - flipping it off does not resurrect
+    # any static-credential behavior, it just means every provider call site raises.
+    MODEL_REGISTRY_ENABLED: bool = True
+    # Hot-reload poll fallback (plan.md "Hot-reload consistency", Task 8): every process
+    # independently re-checks `/internal/model-registry/version` on this interval regardless of
+    # whether Redis pub/sub is connected or a message was dropped, so it self-heals within this
+    # many seconds no matter what. The integration harness may shorten this the same way it
+    # shortens CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS.
+    MODEL_REGISTRY_POLL_INTERVAL_SECONDS: float = 30.0
+
+    # --- CELERY_: Celery's own broker/result-backend, isolated from REDIS_URL's
+    # DB 0 (see above) so a broker purge/flush never touches registry state and
+    # vice versa. DB 1/2 by convention, not enforced - point these at whatever DB
+    # you like, just not DB 0. ---
+    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+    # Prefix for every Celery queue name this service declares. The integration
+    # harness (tests/e2e/) sets a fresh prefix per run (e.g. `it-<uuid8>`) so its
+    # fixture can `celery purge -Q <prefix>-<queue>` without ever touching another
+    # run's or another service's queue.
+    CELERY_QUEUE_PREFIX: str = "unisage"
+    # Redis pub/sub channel the Java side publishes `{"version": N}` to after a
+    # registry-affecting commit (plan.md "Hot-reload consistency" - "Publish after
+    # commit"). Pub/sub isn't namespaced by DB, so the channel name itself is what
+    # separates one harness run's Java from another's.
+    MODEL_REGISTRY_CHANNEL: str = "model-registry:updates"
+    # How often Celery Beat's own heartbeat task runs - the one thing this task's
+    # integration harness needs Beat to visibly do before Task 8 gives it a real
+    # verify-poll schedule to run. The harness's integration profile overrides this
+    # to a couple seconds so `test_model_registry_smoke.py` doesn't wait 15s+ for
+    # a tick.
+    CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS: int = 15
+    # Verify-before-active claim loop (plan.md "Verification lifecycle"): how often Beat wakes
+    # it up on its own, independent of the verification-requested pub/sub nudge below - this is
+    # the backstop that guarantees a queued job eventually gets claimed even if every publish is
+    # missed. The integration harness may shorten this the same way it shortens the heartbeat.
+    MODEL_REGISTRY_VERIFICATION_INTERVAL_SECONDS: float = 15.0
+    # Channel backend-java publishes to right after committing a new/superseded verification job
+    # (plan.md "Contract files dùng chung" -> Verification lifecycle step 1) - distinct from
+    # MODEL_REGISTRY_CHANNEL (config/version changes), since this one only ever means "there may
+    # be a job to claim", never carries a version to compare.
+    MODEL_REGISTRY_VERIFICATION_CHANNEL: str = "model-registry:verification-requested"
+    # Max jobs claimed per run of the verify loop - small on purpose, since each claimed job
+    # makes one live provider call (up to 15s) sequentially before the next.
+    MODEL_REGISTRY_VERIFICATION_CLAIM_LIMIT: int = 5
 
     # --- QDRANT_: the vector store ---
     QDRANT_HOST: str = "localhost"
@@ -58,7 +117,6 @@ class Settings(BaseSettings):
 
     # --- INGEST_: only ever read at document-ingestion time (chunking,
     # enrichment) - never during a chat turn ---
-    INGEST_MULTI_REP_LLM_MODEL: str = "gpt-4o-mini"
     INGEST_MULTI_REP_QUESTION_COUNT: int = 3
     INGEST_SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800
@@ -84,6 +142,34 @@ class Settings(BaseSettings):
     # existing behavior; flip off in .env if the false positives outweigh
     # the (rare) real misses it exists to catch.
     CHAT_ALLOW_REPAIR_JSON: bool = True
+
+    @model_validator(mode="after")
+    def _validate_production_safety(self) -> "Settings":
+        if self.APP_ENV != "production":
+            return self
+
+        if (
+            not self.APP_INTERNAL_SECRET_KEY
+            or self.APP_INTERNAL_SECRET_KEY == _DEFAULT_INTERNAL_SECRET
+            or len(self.APP_INTERNAL_SECRET_KEY) < _MIN_INTERNAL_SECRET_LENGTH
+        ):
+            raise ValueError(
+                f"APP_INTERNAL_SECRET_KEY must be a non-default value with at least "
+                f"{_MIN_INTERNAL_SECRET_LENGTH} characters when APP_ENV=production"
+            )
+
+        parsed = urlsplit(self.BACKEND_JAVA_BASE_URL)
+        if parsed.scheme == "http" and not self.INTERNAL_NETWORK_ENCRYPTED:
+            raise ValueError(
+                "BACKEND_JAVA_BASE_URL is http:// but INTERNAL_NETWORK_ENCRYPTED is not "
+                "true; production requires TLS/mTLS or an encrypted private network"
+            )
+        if parsed.hostname in _DEV_ONLY_HOSTS:
+            raise ValueError(
+                f"BACKEND_JAVA_BASE_URL host '{parsed.hostname}' is dev-only; "
+                "production must point at a real internal service name"
+            )
+        return self
 
 
 settings = Settings()

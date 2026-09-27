@@ -1,5 +1,12 @@
 import asyncio
+import os
 from collections.abc import AsyncGenerator, Callable, Generator, Sequence
+
+# Must run before `app.core.config` is imported anywhere (including transitively, via
+# `from app.main import app` below) - the default unit-test run has no live backend-java to load
+# a snapshot from, and `MODEL_REGISTRY_ENABLED` now defaults to true. `setdefault` so the
+# integration harness (which sets this explicitly to exercise the real registry) is unaffected.
+os.environ.setdefault("MODEL_REGISTRY_ENABLED", "false")
 
 import pytest
 import pytest_asyncio
@@ -13,6 +20,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
+import app.core.alerting as alerting_module
 from app.api.deps import get_session_factory
 from app.core.config import settings
 from app.database.models import Base
@@ -25,8 +33,6 @@ from tests.llm_mocks import (
     make_streaming_llm_model,
     make_sync_llm_model,
 )
-
-settings.APP_INTERNAL_SECRET_KEY = "test-internal-secret"
 
 
 def _in_memory_sqlite_engine_and_sessions() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
@@ -46,16 +52,45 @@ def _in_memory_sqlite_engine_and_sessions() -> tuple[AsyncEngine, async_sessionm
     return engine, async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_slack_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same "no live external service in the default test run" rule as the
+    in-memory SQLite engine above, applied to Slack: `app.core.alerting`
+    calls the real `send_slack_alert()` (a live HTTP POST to whatever
+    `SLACK_APIKEY_ALERT_WEBHOOK_URL` is configured in the environment/`.env`)
+    unless a test explicitly monkeypatches it - several tests that exercise a
+    PERMANENT/NO_AVAILABLE_CREDENTIAL failure path (`test_model_router.py`,
+    `test_chat_stream_errors.py`) didn't, so running the suite on a machine
+    with a real webhook configured actually posted test alerts to that
+    channel. Autouse here so no test file has to remember this; a test that
+    wants to assert on what got sent (`test_alerting.py`) still overrides
+    this with its own `monkeypatch.setattr(alerting, "send_slack_alert", ...)`
+    inside the test - that later patch simply wins for that one test."""
+
+    async def _noop(payload: object) -> None:
+        del payload
+
+    monkeypatch.setattr(alerting_module, "send_slack_alert", _noop)
+
+
 @pytest.fixture
-def client() -> Generator[TestClient, None, None]:
+def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     """Create a test client with `get_db_session` backed by an in-memory SQLite DB.
 
     Sends `X-Internal-Secret` by default on every request so tests don't need
     to know about the API-Gateway-only access gate individually. The session
     is real (not `None`) so endpoints that persist a side effect (e.g. the
     chunking-draft resume feature) work end-to-end within a single test.
+
+    Overrides the secret via `monkeypatch` (function-scoped, auto-restored)
+    rather than assigning to the shared `settings` singleton at module import
+    time - the latter used to leak into any other test module collected in
+    the same pytest session (including tests/e2e's integration suite, which
+    needs `settings.APP_INTERNAL_SECRET_KEY` to hold the real harness secret
+    it was given via env var, not this fixture's fake one).
     """
 
+    monkeypatch.setattr(settings, "APP_INTERNAL_SECRET_KEY", "test-internal-secret")
     engine, session_factory = _in_memory_sqlite_engine_and_sessions()
     tables_ready = False
 

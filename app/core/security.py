@@ -1,3 +1,5 @@
+import hmac
+
 from fastapi import Header
 
 from app.core.config import settings
@@ -13,5 +15,5 @@ async def verify_internal_secret(x_internal_secret: str | None = Header(default=
     `app/security.py`.
     """
 
-    if not x_internal_secret or x_internal_secret != settings.APP_INTERNAL_SECRET_KEY:
+    if not x_internal_secret or not hmac.compare_digest(x_internal_secret, settings.APP_INTERNAL_SECRET_KEY):
         raise InvalidInternalSecretException()

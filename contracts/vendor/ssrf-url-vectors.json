@@ -1,0 +1,29 @@
+{
+  "syntax": [
+    { "url": "https://u:p@api.openai.com/v1", "accept": false, "reason": "USERINFO_NOT_ALLOWED" },
+    { "url": "https://@api.openai.com", "accept": false, "reason": "USERINFO_NOT_ALLOWED" },
+    { "url": "https://api.openai.com/v1?x=1", "accept": false, "reason": "QUERY_NOT_ALLOWED" },
+    { "url": "https://api.openai.com/v1#f", "accept": false, "reason": "FRAGMENT_NOT_ALLOWED" },
+    { "url": "https://api.openai.com:0/v1", "accept": false, "reason": "PORT_OUT_OF_RANGE" },
+    { "url": "https://api.openai.com:65536", "accept": false, "reason": "PORT_OUT_OF_RANGE" },
+    { "url": "https://api.openai.com:/v1", "accept": true, "reason": "empty port segment treated as unspecified" },
+    { "url": "https://api.openai.com:8a/v1", "accept": false, "reason": "PORT_NOT_NUMERIC" },
+    { "url": "ftp://h/", "accept": false, "reason": "SCHEME_NOT_ALLOWED" },
+    { "url": "file:///etc/passwd", "accept": false, "reason": "SCHEME_NOT_ALLOWED" },
+    { "url": "gopher://h/", "accept": false, "reason": "SCHEME_NOT_ALLOWED" },
+    { "url": "https://api.openai.com/v1\n", "accept": false, "reason": "CONTROL_CHAR_OR_WHITESPACE" },
+    { "url": "https://api.open ai.com", "accept": false, "reason": "CONTROL_CHAR_OR_WHITESPACE" },
+    { "url": "https://api.openai.com\\@evil.com/", "accept": false, "reason": "CONTROL_CHAR_OR_WHITESPACE" },
+    { "url": "https://ex%00ample.com", "accept": false, "reason": "URL_SYNTAX_INVALID" },
+    { "url": "https://xn--.com", "accept": false, "reason": "HOST_IDNA_INVALID" },
+    { "url": "https://münchen.de/v1", "accept": true, "reason": "valid IDNA, converted to A-label for later steps" },
+    { "url": "https://api.openai.com./v1", "accept": true, "reason": "trailing dot stripped before allowlist check" }
+  ],
+  "resolvedIpBlocked": [
+    "127.0.0.1", "2130706433", "0x7f.1", "[::1]", "[::ffff:127.0.0.1]",
+    "169.254.169.254", "10.0.0.1", "100.64.0.1", "[fd00::1]", "metadata.google.internal"
+  ],
+  "resolvedIpAllowed": [
+    "api.openai.com"
+  ]
+}

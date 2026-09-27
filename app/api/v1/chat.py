@@ -25,6 +25,7 @@ from app.database.repositories.clarification_state import ClarificationStateRepo
 from app.database.session import get_db_session
 from app.graph.nodes.greeting import is_first_turn
 from app.graph.nodes.security_context import parse_security_headers
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import (
@@ -141,20 +142,32 @@ def _usage_limit_errors(body: object) -> dict[str, str]:
     }
 
 
-async def _sse_token_generator(queue: "asyncio.Queue[str | None]") -> AsyncGenerator[str, None]:
-    """Reads tokens from `queue` until the end-of-stream sentinel (`None`).
+async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenerator[str, None]:
+    """Reads items from `queue` until the end-of-stream sentinel (`DoneItem`).
 
     Deliberately does nothing else - no graph execution, no Java calls. This
     is the piece Starlette cancels on client disconnect; `run_and_persist`,
     which does the real work, runs in an independent `asyncio.create_task()`
     and is never awaited here.
+
+    Per plan.md "SSE error contract": `event: done` is always the last event
+    emitted, no matter what was queued before it - the loop below only ever
+    breaks on `DoneItem`, so every `TokenItem`/`ErrorItem` queued ahead of it
+    is drained and emitted first. `run_and_persist` only ever queues at most
+    one `ErrorItem`, immediately before its own `DoneItem` put, so `event:
+    error` (when present) always immediately precedes `event: done` and no
+    `event: token` can ever follow it.
     """
 
     while True:
-        token = await queue.get()
-        if token is None:
+        item = await queue.get()
+        if isinstance(item, DoneItem):
             break
-        yield f"event: token\ndata: {json.dumps(token, ensure_ascii=False)}\n\n"
+        if isinstance(item, TokenItem):
+            yield f"event: token\ndata: {json.dumps(item.text, ensure_ascii=False)}\n\n"
+        elif isinstance(item, ErrorItem):
+            payload = {"code": item.code, "message": item.message, "retryable": item.retryable}
+            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
     yield "event: done\ndata: {}\n\n"
 
 
@@ -260,7 +273,7 @@ async def chat_stream_endpoint(
         history=history,
     )
 
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
     task = asyncio.create_task(
         run_and_persist(
             java_client=java_client,

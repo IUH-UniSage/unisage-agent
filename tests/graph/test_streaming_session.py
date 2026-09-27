@@ -7,8 +7,11 @@ import pytest
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.model_router import NoAvailableCredentialError
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED, LLM_UNAVAILABLE
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
@@ -55,7 +58,7 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
     java_client = BackendJavaClient(
         base_url="http://java.test", transport=httpx.MockTransport(handler)
     )
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
 
     class _SessionCtx:
         async def __aenter__(self) -> AsyncSession:
@@ -82,10 +85,11 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
 
     tokens = []
     while True:
-        token = await queue.get()
-        if token is None:
+        item = await queue.get()
+        if isinstance(item, DoneItem):
             break
-        tokens.append(token)
+        assert isinstance(item, TokenItem)
+        tokens.append(item.text)
     assert tokens == [OFF_TOPIC_TEMPLATE]
 
 
@@ -112,7 +116,7 @@ async def test_run_and_persist_patches_error_on_graph_exception(
     java_client = BackendJavaClient(
         base_url="http://java.test", transport=httpx.MockTransport(handler)
     )
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
 
     class _SessionCtx:
         async def __aenter__(self) -> AsyncSession:
@@ -133,8 +137,13 @@ async def test_run_and_persist_patches_error_on_graph_exception(
     )
 
     assert patched["body"]["status"] == "ERROR"
-    # end-of-stream sentinel still arrives even though the graph failed.
-    assert await queue.get() is None
+    # An error item is pushed immediately before the end-of-stream sentinel
+    # whenever the graph raised.
+    error_item = await queue.get()
+    assert isinstance(error_item, ErrorItem)
+    assert error_item.code == LLM_STREAM_INTERRUPTED
+    assert error_item.retryable is True
+    assert isinstance(await queue.get(), DoneItem)
 
 
 @pytest.mark.asyncio
@@ -149,7 +158,7 @@ async def test_run_and_persist_persists_clarification_state_on_success(
     java_client = BackendJavaClient(
         base_url="http://java.test", transport=httpx.MockTransport(handler)
     )
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
 
     class _SessionCtx:
         async def __aenter__(self) -> AsyncSession:
@@ -204,7 +213,7 @@ async def test_queue_sentinel_still_arrives_when_java_patch_raises_unexpected_er
         base_url="http://java.test",
         transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={})),
     )
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
 
     class _SessionCtx:
         async def __aenter__(self) -> AsyncSession:
@@ -225,7 +234,7 @@ async def test_queue_sentinel_still_arrives_when_java_patch_raises_unexpected_er
     )
 
     async def _drain_to_sentinel() -> None:
-        while await queue.get() is not None:
+        while not isinstance(await queue.get(), DoneItem):
             pass
 
     await asyncio.wait_for(_drain_to_sentinel(), timeout=2.0)
@@ -262,7 +271,7 @@ async def test_run_and_persist_sends_citations_when_graph_produced_them(
     java_client = BackendJavaClient(
         base_url="http://java.test", transport=httpx.MockTransport(handler)
     )
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
 
     class _SessionCtx:
         async def __aenter__(self) -> AsyncSession:
@@ -283,3 +292,50 @@ async def test_run_and_persist_sends_citations_when_graph_produced_them(
     )
 
     assert patched["body"]["citations"] == [citation]
+
+
+@pytest.mark.asyncio
+async def test_run_and_persist_reports_llm_unavailable_when_credentials_exhausted(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`NoAvailableCredentialError` (every CHAT credential cooling down/excluded
+    before any chunk streamed) must map to `LLM_UNAVAILABLE`, not the generic
+    `LLM_STREAM_INTERRUPTED` code."""
+
+    async def _boom(*_args: object, **_kwargs: object) -> None:
+        raise NoAvailableCredentialError("CHAT")
+
+    monkeypatch.setattr("app.graph.streaming_session.run_graph", _boom)
+
+    java_client = BackendJavaClient(
+        base_url="http://java.test",
+        transport=httpx.MockTransport(lambda _r: httpx.Response(200, json={"id": "msg-2"})),
+    )
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
+
+    class _SessionCtx:
+        async def __aenter__(self) -> AsyncSession:
+            return db_session
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    await run_and_persist(
+        java_client=java_client,
+        conversation_id="conv-1",
+        assistant_message_id="msg-2",
+        authorization=None,
+        graph_input=_graph_input(),
+        models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        queue=queue,
+        session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
+    )
+
+    error_item = await queue.get()
+    assert isinstance(error_item, ErrorItem)
+    assert error_item.code == LLM_UNAVAILABLE
+    assert error_item.retryable is False
+    assert isinstance(await queue.get(), DoneItem)
