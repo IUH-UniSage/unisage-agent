@@ -17,9 +17,25 @@ request did:
 
 import logging
 
+from pydantic_ai.models import Model
+
 from app.core.config import settings
 
 logger = logging.getLogger("unisage.graph")
+
+_NO_MODEL = "-"
+
+
+def _model_name(model: Model | str | None) -> str:
+    """`GraphModels`' fields are `Model | str` (a test double may pass a plain
+    string), and most nodes don't call an LLM at all - normalizes all three
+    cases to what's worth putting in a log line."""
+
+    if model is None:
+        return _NO_MODEL
+    if isinstance(model, str):
+        return model
+    return model.model_name
 
 
 class GraphTrace:
@@ -38,10 +54,11 @@ class GraphTrace:
         self._user_id = user_id or "guest"
         self._client_ip = client_ip or "-"
 
-    def node(self, name: str) -> None:
+    def node(self, name: str, *, model: Model | str | None = None) -> None:
         logger.info(
-            "node=%s conversation_id=%s message_id=%s user_id=%s ip=%s",
+            "node=%s model=%s conversation_id=%s message_id=%s user_id=%s ip=%s",
             name,
+            _model_name(model),
             self._conversation_id,
             self._message_id,
             self._user_id,

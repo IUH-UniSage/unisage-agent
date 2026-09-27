@@ -47,7 +47,7 @@ _EMBEDDING_PURPOSE = "EMBEDDING"
 # re-queuing it (TRANSIENT) or ends FAILED (PERMANENT), never by looping in this function.
 _PROVIDER_CALL_TIMEOUT_SECONDS = 15.0
 _MINIMAL_COMPLETION_PROMPT = "Reply with a single short word."
-_MINIMAL_COMPLETION_MAX_TOKENS = 5
+_MINIMAL_COMPLETION_MAX_TOKENS = 512
 
 # Submitting a result to Java is idempotent on Java's side (duplicate submissions of the same
 # leaseToken are a no-op) - safe to retry a network failure with the exact same token.
@@ -121,7 +121,9 @@ async def _run_minimal_completion(credential: CredentialConfig) -> None:
     await asyncio.wait_for(
         agent.run(
             _MINIMAL_COMPLETION_PROMPT,
-            model_settings=ModelSettings(max_tokens=_MINIMAL_COMPLETION_MAX_TOKENS),
+            model_settings=ModelSettings(
+                max_tokens=_MINIMAL_COMPLETION_MAX_TOKENS, thinking=False
+            ),
         ),
         timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
     )
@@ -219,9 +221,20 @@ async def _submit_result(
 async def _verify_one_job(job: dict[str, Any], *, client: BackendJavaClient) -> None:
     job_id = str(job["jobId"])
     lease_token = str(job["leaseToken"])
+    attempt = job.get("attempt")
     candidate = job["credential"]
     credential = _credential_from_candidate(candidate)
     purpose = candidate.get("modelPurpose")
+
+    logger.info(
+        "verification job %s: verifying chat_model %s (%s, provider=%s, model=%s, attempt %s)",
+        job_id,
+        credential.id,
+        purpose,
+        credential.provider,
+        credential.model_name,
+        attempt,
+    )
 
     try:
         if purpose == _EMBEDDING_PURPOSE:
@@ -237,10 +250,25 @@ async def _verify_one_job(job: dict[str, Any], *, client: BackendJavaClient) -> 
         else:
             await _run_minimal_completion(credential)
             await _submit_result(client, job_id=job_id, lease_token=lease_token, result_type="OK")
+        logger.info(
+            "verification job %s: chat_model %s attempt %s succeeded",
+            job_id,
+            credential.id,
+            attempt,
+        )
     except Exception as exc:  # noqa: BLE001 - classified below, never re-raised bare
         error_type = classify_llm_error(exc)
         result_type = "TRANSIENT" if error_type is ErrorType.TRANSIENT else "PERMANENT"
         message = safe_error_message(exc, credential.api_key)
+        logger.warning(
+            "verification job %s: chat_model %s attempt %s failed (%s) - %s: %s",
+            job_id,
+            credential.id,
+            attempt,
+            result_type,
+            _error_code_for(exc),
+            message,
+        )
         if result_type == "PERMANENT":
             # PERMANENT always ends this job FAILED on the Java side (plan.md's
             # verification lifecycle table), so Python knows for certain at this point
@@ -288,6 +316,16 @@ async def run_verification_batch(
     )
 
     jobs = await resolved_client.claim_verifications(limit=resolved_limit)
+    if jobs:
+        logger.info(
+            "verification batch: claimed %d job(s): %s",
+            len(jobs),
+            ", ".join(
+                f"{job.get('jobId')}(chat_model={job.get('credential', {}).get('chatModelId')}, "
+                f"attempt={job.get('attempt')})"
+                for job in jobs
+            ),
+        )
     for job in jobs:
         try:
             await _verify_one_job(job, client=resolved_client)

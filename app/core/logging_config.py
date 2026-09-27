@@ -68,12 +68,23 @@ class SecretRedactionFilter(logging.Filter):
             message = record.getMessage()
         except Exception:  # pragma: no cover - defensive, malformed % args
             message = str(record.msg)
-        record.msg = redact(message)
+        # truncate=False: same reasoning as the traceback branch below - a
+        # local console log line isn't bounded storage. This specifically
+        # matters for `graph_trace.py`'s debug-only prompt dump
+        # (APP_DEBUG=true's whole reason to exist is inspecting the full
+        # prepared_context/academic_metadata blocks), which the 500-char cap
+        # was silently truncating mid-word.
+        record.msg = redact(message, truncate=False)
         record.args = None
 
         if record.exc_info:
             raw_traceback = "".join(traceback.format_exception(*record.exc_info))
-            record.exc_text = redact(raw_traceback)
+            # truncate=False: this is a local console log line, not bounded
+            # storage (DB/Slack/HTTP response) - the 500-char cap `redact()`
+            # applies by default for those exists so a request body can't
+            # blow up storage, but on a traceback it just chops off the
+            # exception type/message that's almost always at the very end.
+            record.exc_text = redact(raw_traceback, truncate=False)
             # Clear exc_info so the handler's default Formatter doesn't also
             # render the raw (unredacted) traceback from it — exc_text above
             # is what actually gets appended to the output once set.
@@ -81,7 +92,7 @@ class SecretRedactionFilter(logging.Filter):
 
         stack_info = getattr(record, "stack_info", None)
         if stack_info:
-            record.stack_info = redact(str(stack_info))
+            record.stack_info = redact(str(stack_info), truncate=False)
 
         return True
 

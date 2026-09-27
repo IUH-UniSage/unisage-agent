@@ -37,8 +37,8 @@ _QUERY_PARAM = re.compile(r"""(?i)([?&])(key|api_key|token)=[^&\s"'#]*""")
 _URL_USERINFO = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@")
 
 
-def redact(text: str | None, known_secret: str | None = None) -> str:
-    """Redacts `text` and truncates to 500 chars.
+def redact(text: str | None, known_secret: str | None = None, *, truncate: bool = True) -> str:
+    """Redacts `text` and, by default, truncates to 500 chars.
 
     Args:
         text: raw text that may contain a secret (exception message, response
@@ -47,9 +47,17 @@ def redact(text: str | None, known_secret: str | None = None) -> str:
             processed, or `None`/blank if not applicable. Redacted first,
             along with any of its substrings of length >= 8 — the strongest,
             format-independent layer.
+        truncate: `False` skips the 500-char cap. The cap exists for text
+            destined for bounded storage (a DB column, a Slack payload, an
+            HTTP response) — every such call site keeps the default. A local
+            console log line isn't bounded storage; truncating a multi-line
+            traceback there just throws away the exception type/message that
+            usually sits at the very end, which is the opposite of what
+            logging it was for (`logging_config.py`'s `SecretRedactionFilter`
+            passes `truncate=False` for exactly this reason).
 
     Returns:
-        Redacted text, truncated to 500 chars. Never `None`.
+        Redacted text, truncated to 500 chars unless `truncate=False`. Never `None`.
     """
 
     if not text:
@@ -60,7 +68,7 @@ def redact(text: str | None, known_secret: str | None = None) -> str:
         result = _redact_known_secret(result, known_secret)
     result = _redact_patterns(result)
 
-    if len(result) > _MAX_LENGTH:
+    if truncate and len(result) > _MAX_LENGTH:
         result = result[:_MAX_LENGTH]
     return result
 
