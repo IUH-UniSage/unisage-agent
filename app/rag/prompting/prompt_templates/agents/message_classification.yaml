@@ -23,11 +23,13 @@ template: |
 
   ## Decision Rules
   1. CÂU NỐI TIẾP: nếu tin nhắn là câu hỏi ngắn/nối tiếp (VD: "sao không có ngành X?", "còn khóa 2024 thì sao?", "vậy ngành Y thì sao?") và lịch sử hội thoại đang nói về một chủ đề học vụ, thì phân loại theo chủ đề đó - TUYỆT ĐỐI không coi là `off_topic` chỉ vì tin nhắn đứng riêng thiếu ngữ cảnh.
+  1b. CÂU LÀM RÕ: tin nhắn bắt đầu bằng cụm làm rõ ý ("ý tôi là...", "ý em là...", "tôi muốn hỏi...", "ý mình là...") LUÔN kế thừa nhãn của câu hỏi/chủ đề ngay trước đó trong lịch sử (trừ khi câu trả lời trước đó chính là lời từ chối off_topic) - KHÔNG BAO GIỜ tự nó là `off_topic`, vì bản chất nó chỉ đang làm rõ lại một câu hỏi đã hỏi trước đó, không phải một chủ đề mới.
   2. Ưu tiên `academic_*` nếu tin nhắn có BẤT KỲ liên quan nào tới học vụ, tuyển sinh, ngành học, môn học của Nhà trường.
   3. Chỉ trả `off_topic` khi CHẮC CHẮN nội dung không liên quan gì đến Nhà trường, kể cả khi xét cùng lịch sử hội thoại - dù đó là câu hỏi kiến thức phổ thông (VD: "Python là gì?") hay một chủ đề bất kỳ khác.
   4. Tin nhắn ngắn, mơ hồ nhưng thiên về học vụ → `academic_advisory`.
   5. Câu chào ở lượt thứ 2 trở đi không kèm câu hỏi → `social_chat`; nếu kèm câu hỏi học vụ → phân loại theo câu hỏi.
   6. Câu hỏi so sánh 2+ thực thể học vụ (2 ngành, 2 hệ đào tạo...), và tin nhắn có 2+ câu hỏi CÙNG nhãn `academic_advisory` (dù không liên quan nhau), đều KHÔNG tách task - luôn gộp vào một task `academic_advisory` duy nhất.
+  7. PHÂN BIỆT `academic_advisory` vs `academic_calculation`: hỏi một ĐƠN GIÁ/MỨC THU đã có sẵn trong văn bản (giá 1 tín chỉ, học phí 1 năm, mức học bổng...) là TRA CỨU → `academic_advisory`, dù câu hỏi có chữ số hay đơn vị tính. Chỉ là `academic_calculation` khi người dùng đưa SỐ LIỆU CỤ THỂ và yêu cầu TÍNH RA một con số mới bằng phép toán (nhân/cộng/trừ/chia) trên số liệu đó, VD "18 tín chỉ thì tốn bao nhiêu" (phải nhân số tín chỉ với đơn giá), "tính GPA giúp em" (phải tính trung bình có trọng số). Hỏi lại/làm rõ về ĐƠN GIÁ 1 tín chỉ sau khi đã hỏi về học phí vẫn là `academic_advisory`, không phải `academic_calculation`.
 
   ## Output
   Trả về CHÍNH XÁC một object JSON, không thêm chữ, giải thích hay markdown code fence bao quanh:
@@ -62,3 +64,15 @@ template: |
 
   User: "1+1 bằng mấy?"
   Output: {"tasks": [{"intent": "off_topic", "query": "1+1 bằng mấy?", "routing_mode": null}], "confidence": 0.9}
+
+  Lịch sử: "- Trợ lý: Mức thu học phí hệ Đại học chính quy năm học 2025-2026: Khối Kinh tế ... Khối Công nghệ ... Đây là mức học phí dành cho khóa tuyển sinh năm học 2025-2026."
+  User: "1 tín chỉ"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "Học phí 1 tín chỉ là bao nhiêu?", "routing_mode": "SINGLE"}], "confidence": 0.85}
+  (Đây là hỏi lại đơn giá 1 tín chỉ đã có trong văn bản - TRA CỨU, không phải yêu cầu tính toán, dù có chữ "tín chỉ".)
+
+  Lịch sử:
+  "- Người dùng: 1 tín chỉ
+  - Trợ lý: Phần tính toán (GPA, tín chỉ, học phí) hiện đang được phát triển nên mình chưa tính giúp bạn được..."
+  User: "ý tôi là chi phí 1 tín chỉ"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "Chi phí 1 tín chỉ là bao nhiêu?", "routing_mode": "SINGLE"}], "confidence": 0.85}
+  (Câu làm rõ "ý tôi là..." kế thừa đúng chủ đề học phí đang hỏi - luôn academic_advisory, tuyệt đối không off_topic dù câu trả lời liền trước có vẻ như bị từ chối.)
