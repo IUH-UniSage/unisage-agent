@@ -304,6 +304,120 @@ async def test_error_before_first_chunk_falls_back_transparently(
 
 
 @pytest.mark.asyncio
+async def test_leading_empty_chunk_does_not_block_failover(
+    fake_router: ModelRouter,
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A thinking-model provider (Gemini 3) can emit an empty/marker delta
+    before any real text - `stream_agent_text()` used to treat ANY yielded
+    chunk (including "") as "already streamed", permanently blocking
+    failover for a request the user never actually saw output for. This is
+    the same scenario as `test_error_before_first_chunk_falls_back_transparently`
+    except the failing model yields one empty token first."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    cred_primary = _credential("cred-primary", priority=1)
+    cred_fallback = _credential("cred-fallback", priority=2)
+    _set_snapshot(version=1, chat=(cred_primary, cred_fallback))
+
+    failing_model = make_streaming_llm_model_that_fails_after([""], RuntimeError("primary down"))
+    fallback_model = make_streaming_llm_model(["x", "y", "z"])
+
+    def fake_build_model(credential: CredentialConfig) -> FunctionModel:
+        assert credential.id == cred_fallback.id
+        return fallback_model
+
+    monkeypatch.setattr("app.graph.streaming.build_model", fake_build_model)
+
+    models = _models_with_generation(
+        failing_model,
+        query_transformation=mock_sync_llm_model,
+        credential=cred_primary,
+        snapshot_version=1,
+        chunks=[_DUMMY_CHUNK],
+    )
+
+    java_client, patched = _java_client()
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
+
+    await run_and_persist(
+        java_client=java_client,
+        conversation_id="conv-1",
+        assistant_message_id="msg-2",
+        authorization=None,
+        graph_input=_graph_input(),
+        models=models,
+        queue=queue,
+        session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
+    )
+
+    items = await _drain(queue)
+    assert not any(isinstance(item, ErrorItem) for item in items)
+    tokens = [item.text for item in items if isinstance(item, TokenItem)]
+    assert "".join(tokens) == "xyz"
+    assert patched["body"]["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_error_after_first_chunk_still_marks_the_credential_failed(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past the point of no return, this call can't retry (see
+    `test_error_after_first_chunk_emits_error_then_done_no_tokens_after`),
+    but the credential must still be marked/reported so the *next* request
+    picks a different one instead of hitting the same failing credential
+    again - the exact "lượt sau vẫn chọn gemini 3.8" gap this closes."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    cred = _credential("cred-1", priority=1)
+    _set_snapshot(version=1, chat=(cred,))
+
+    class _FakeBackendClient:
+        def __init__(self) -> None:
+            self.reports: list[dict[str, Any]] = []
+
+        async def report_health(self, **kwargs: Any) -> None:
+            self.reports.append(kwargs)
+
+    backend_client = _FakeBackendClient()
+    router = ModelRouter(redis_client=_FakeRedis(), backend_client=backend_client)
+    monkeypatch.setattr(model_router_module, "_default_router", router)
+    monkeypatch.setattr(model_registry, "_current_snapshot", None)
+
+    generation = make_streaming_llm_model_that_fails_after(["a", "b"], RuntimeError("boom"))
+    models = _models_with_generation(
+        generation,
+        query_transformation=mock_sync_llm_model,
+        credential=cred,
+        snapshot_version=1,
+        chunks=[_DUMMY_CHUNK],
+    )
+
+    java_client, _patched = _java_client()
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
+
+    await run_and_persist(
+        java_client=java_client,
+        conversation_id="conv-1",
+        assistant_message_id="msg-2",
+        authorization=None,
+        graph_input=_graph_input(),
+        models=models,
+        queue=queue,
+        session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
+    )
+
+    await _drain(queue)
+
+    assert len(backend_client.reports) == 1
+    assert backend_client.reports[0]["credential_id"] == cred.id
+
+
+@pytest.mark.asyncio
 async def test_error_before_first_chunk_credential_exhausted_is_llm_unavailable(
     fake_router: ModelRouter,
     mock_sync_llm_model: Callable[[str], FunctionModel],

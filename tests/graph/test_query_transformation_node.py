@@ -1,9 +1,12 @@
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from app.core.model_registry import CredentialConfig
+from app.core.model_router import ModelRouter
 from app.graph.nodes.query_transformation import (
     SubQuery,
     build_decomposer_agent,
@@ -77,6 +80,91 @@ async def test_transform_query_appends_recent_history_without_citation_markers()
     assert "Mức thu là ... đồng" in prompt
     assert "60.000.000" not in prompt
     assert "[1]" not in prompt
+
+
+class _FakeRedis:
+    """No-expiry stand-in for `redis.asyncio.Redis` - a key marked once stays
+    marked for the test's lifetime, same shape as
+    `tests/api/test_chat_stream_errors.py`'s fixture."""
+
+    def __init__(self) -> None:
+        self._blocked: set[str] = set()
+
+    async def set(self, name: str, _value: Any, *, ex: int | None = None) -> Any:
+        del ex
+        self._blocked.add(name)
+        return True
+
+    async def exists(self, name: str) -> int:
+        return 1 if name in self._blocked else 0
+
+    async def aclose(self) -> Any:
+        return None
+
+
+class _FakeBackendClient:
+    def __init__(self) -> None:
+        self.reports: list[dict[str, Any]] = []
+
+    async def report_health(self, **kwargs: Any) -> None:
+        self.reports.append(kwargs)
+
+
+def _credential(credential_id: str, priority: int) -> CredentialConfig:
+    return CredentialConfig(
+        id=credential_id,
+        revision=1,
+        source_type="CLOUD_API",
+        provider="google",
+        model_name="gemini-2.5-flash",
+        api_base_url="https://generativelanguage.googleapis.com",
+        priority=priority,
+        max_rpm=60,
+        api_key="key",
+    )
+
+
+@pytest.mark.asyncio
+async def test_transform_query_fails_over_to_the_next_credential_on_a_transient_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same gap this closes for classification (see
+    test_message_classification_node.py) applies to QueryTransformationNode's
+    HyDE call: a transient provider error before `agent.run()` returns must
+    retry with the next ACTIVE credential instead of crashing the graph run."""
+
+    primary = _credential("cred-primary", priority=1)
+    fallback = _credential("cred-fallback", priority=2)
+    router = ModelRouter(redis_client=_FakeRedis(), backend_client=_FakeBackendClient())
+    monkeypatch.setattr(
+        "app.core.model_router.active_credentials_for", lambda purpose: [primary, fallback]
+    )
+
+    def failing_function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        raise RuntimeError("primary down")
+
+    def fallback_function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content="hyde doc from fallback")])
+
+    def fake_build_model(credential: CredentialConfig) -> FunctionModel:
+        assert credential.id == fallback.id
+        return FunctionModel(fallback_function)
+
+    monkeypatch.setattr("app.graph.streaming.build_model", fake_build_model)
+
+    agent = build_query_transformation_agent(FunctionModel(failing_function))
+
+    hyde = await transform_query(
+        agent,
+        "Sinh viên năm cuối có được miễn GDQP không?",
+        purpose="CHAT",
+        credential=primary,
+        snapshot_version=1,
+        agent_factory=build_query_transformation_agent,
+        router=router,
+    )
+
+    assert hyde == "hyde doc from fallback"
 
 
 def _echo_first_line_model() -> FunctionModel:

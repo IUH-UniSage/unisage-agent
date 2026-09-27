@@ -12,20 +12,13 @@ from app.schemas.clarification import PendingClarification
 from app.schemas.security import AcademicSecurityContext
 
 
-@dataclass(frozen=True)
+@dataclass
 class GraphModels:
     """The graph's injected dependencies: the 3 LLM-backed nodes' models
     (so tests can pass `pydantic_ai.models.function.FunctionModel` doubles,
     see tests/llm_mocks.py, instead of hitting a real provider) plus the
     retrieval service (so tests can inject a fake Qdrant client/embedder
-    instead of hitting the network).
-
-    `generation_credential`/`snapshot_version` are optional and only used by
-    `stream_agent_text()`'s Task 11 pre-first-chunk failover for the two
-    streaming nodes (generation, ticket fallback) that use `generation` -
-    `None` (the default, and what every test double above still passes)
-    disables failover for that call and preserves the exact pre-Task-11
-    behavior (a failure propagates immediately)."""
+    instead of hitting the network)."""
 
     classification: Model | str
     query_transformation: Model | str

@@ -16,7 +16,10 @@ mocks.
 from collections.abc import Sequence
 from dataclasses import replace
 
+from pydantic_ai.models import Model
+
 from app.core.graph_trace import GraphTrace
+from app.core.model_registry import CredentialConfig
 from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
@@ -36,13 +39,32 @@ from app.graph.nodes.security_context import (
     resolve_clarification_guard,
 )
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
-from app.graph.streaming import TokenSink
+from app.graph.streaming import FailoverCallback, TokenSink
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.rag.prompting.citations import build_citations
 from app.schemas.clarification import PendingClarification
 from app.schemas.intent import ClassifiedTask, RoutingMode
 
 _ORIGIN_NODE_QUERY_TRANSFORMATION = "QueryTransformationNode"
+
+
+def _make_failover_applier(models: GraphModels) -> FailoverCallback:
+    """`models.classification`/`query_transformation`/`generation` are all
+    built from the SAME top-priority CHAT credential once at request start
+    (see `get_graph_models()`) - without this, a credential failing in node
+    03 leaves nodes 06/10/11 still holding the dead credential, forcing each
+    to independently rediscover the same failure (see `streaming.py`'s
+    `on_failover` docstring for the full rationale). Mutating `models` in
+    place here is what makes a failover in an early node visible to every
+    node that runs after it in the SAME request."""
+
+    def _apply(credential: CredentialConfig, model: Model | str) -> None:
+        models.generation_credential = credential
+        models.classification = model
+        models.query_transformation = model
+        models.generation = model
+
+    return _apply
 
 
 async def run_graph(
@@ -83,10 +105,17 @@ async def run_graph(
         )
 
     # MessageClassificationNode.
-    trace.node("03_MessageClassificationNode")
+    trace.node("03_MessageClassificationNode", model=models.classification)
     classification_agent = build_classification_agent(models.classification)
     classification = await classify_intent(
-        classification_agent, graph_input.user_message, history=graph_input.history
+        classification_agent,
+        graph_input.user_message,
+        history=graph_input.history,
+        purpose="CHAT",
+        credential=models.generation_credential,
+        snapshot_version=models.snapshot_version,
+        agent_factory=build_classification_agent,
+        on_failover=_make_failover_applier(models),
     )
 
     # IntentRoutingNode (deterministic).
@@ -218,13 +247,19 @@ async def _run_advisory_flow(
     question = question or graph_input.user_message
 
     # QueryTransformationNode: HyDE per SINGLE task, decomposer per MULTI task.
-    trace.node("06_QueryTransformationNode")
+    trace.node("06_QueryTransformationNode", model=models.query_transformation)
     sub_queries = await transform_tasks(
         build_query_transformation_agent(models.query_transformation),
         advisory_tasks,
         decomposer_agent=build_decomposer_agent(models.query_transformation),
         confirmed_metadata=confirmed_metadata,
         history=graph_input.history,
+        purpose="CHAT",
+        credential=models.generation_credential,
+        snapshot_version=models.snapshot_version,
+        hyde_agent_factory=build_query_transformation_agent,
+        decomposer_agent_factory=build_decomposer_agent,
+        on_failover=_make_failover_applier(models),
     )
     for sub_query in sub_queries:
         trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
@@ -249,7 +284,7 @@ async def _run_advisory_flow(
 
     if not rerank_result.has_valid_context:
         # TicketFallbackNode (streaming).
-        trace.node("11_TicketFallbackNode")
+        trace.node("11_TicketFallbackNode", model=models.generation)
         fallback_agent = build_ticket_fallback_agent(models.generation)
         fallback_text = await run_ticket_fallback(
             fallback_agent,
@@ -261,6 +296,7 @@ async def _run_advisory_flow(
             purpose="CHAT",
             credential=models.generation_credential,
             snapshot_version=models.snapshot_version,
+            on_failover=_make_failover_applier(models),
         )
         return GraphOutput(
             response_text=fallback_text,
@@ -270,7 +306,7 @@ async def _run_advisory_flow(
         )
 
     # GenerationSynthesisNode (streaming).
-    trace.node("10_GenerationSynthesisNode")
+    trace.node("10_GenerationSynthesisNode", model=models.generation)
     generation_agent = build_generation_agent(models.generation)
     sub_query_questions = (
         [sub_query.question for sub_query in sub_queries] if len(sub_queries) > 1 else None
@@ -292,6 +328,7 @@ async def _run_advisory_flow(
         purpose="CHAT",
         credential=models.generation_credential,
         snapshot_version=models.snapshot_version,
+        on_failover=_make_failover_applier(models),
     )
     return GraphOutput(
         response_text=generation_result.response_text,

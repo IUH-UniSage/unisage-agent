@@ -33,7 +33,7 @@ from pydantic_ai.models import Model
 from app.core.config import settings
 from app.core.graph_trace import GraphTrace
 from app.core.model_registry import CredentialConfig
-from app.graph.streaming import TokenSink, stream_agent_text
+from app.graph.streaming import FailoverCallback, TokenSink, stream_agent_text
 from app.rag.prompting import (
     build_json_repair_prompt,
     build_multi_intent_prompt,
@@ -177,6 +177,7 @@ async def run_generation_synthesis(
     purpose: str | None = None,
     credential: CredentialConfig | None = None,
     snapshot_version: int | None = None,
+    on_failover: FailoverCallback | None = None,
 ) -> GenerationResult:
     # A single HyDE question uses the advisory frame; several sub-queries
     # (a decomposed comparison, or several different questions in one
@@ -216,6 +217,7 @@ async def run_generation_synthesis(
         credential=credential,
         snapshot_version=snapshot_version,
         agent_factory=build_generation_agent,
+        on_failover=on_failover,
     )
     if settings.CHAT_ALLOW_REPAIR_JSON:
         full_text = await _repair_missing_ask_form(
