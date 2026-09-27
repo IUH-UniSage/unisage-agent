@@ -1,11 +1,17 @@
 """Slack alerting for the model registry's failure conditions (plan.md's alerting
 story) — the single place `send_slack_alert()` gets called from.
 
-Trigger conditions (each wired at the module that already knows the failure is
-final, never by adding new polling elsewhere):
+Trigger conditions (each wired at the module that already knows the failure
+happened, never by adding new polling elsewhere):
 
-- A PERMANENT provider-call failure recorded by `model_router.record_failure()`
-  (the credential just got excluded by the circuit breaker).
+- Every provider-call failure recorded by `model_router.record_failure()` — both
+  PERMANENT (the credential just got excluded by the circuit breaker) and TRANSIENT
+  (a 503/high-demand/rate-limit blip that the circuit breaker will retry after a
+  cooldown). This used to be PERMANENT-only; changed by product decision (spec.md
+  "Slack alerting") because a human should hear about a provider outage the first
+  time it happens, not only after the circuit breaker gives up on the credential
+  entirely — the 15-minute debounce below is what keeps this from flooding the
+  channel during a sustained blip, not withholding the alert in the first place.
 - `model_router.NoAvailableCredentialError` — every credential for a purpose is
   cooling down or excluded.
 - An embedding job aborted by `EmbeddingProviderError`/`EmbeddingIdentityMismatchError`
@@ -15,11 +21,6 @@ final, never by adding new polling elsewhere):
   the job FAILED on the Java side (see `app.worker.verification_tasks` for the
   documented gap: a TRANSIENT result cannot be alerted from here, because Java's claim
   response never tells Python `maxAttempts`, only the current `attempt`).
-
-A TRANSIENT failure with retries/attempts left is never alerted — that is the entire
-point of "auto-recovers, no human needed yet", and a flood of Slack messages during a
-routine transient blip would be worse than the silent-failure problem this feature
-exists to fix.
 
 **Debounce**: same alert scope (a specific credential, or a purpose when there is no
 single credential to blame — the exhaustion case) + same incident type → at most one
@@ -75,6 +76,14 @@ class _RedisLike(Protocol):
 
 def _debounce_key(scope_id: str, incident_type: str) -> str:
     return f"{_KEY_PREFIX}:{scope_id}:{incident_type}"
+
+
+def _credential_label(credential: CredentialConfig) -> str:
+    """Nickname + id when there's a nickname, else just the id - a bare UUID
+    in a Slack message forces whoever reads it to go cross-reference the
+    admin UI just to know which credential failed."""
+
+    return f"{credential.display_name} ({credential.id})" if credential.display_name else credential.id
 
 
 def _scope_id(credential: CredentialConfig | None, purpose: str | None) -> str:
@@ -134,22 +143,80 @@ async def _should_alert(
             pass
 
 
+_ALERT_COLOR = "#E01E5A"  # Slack's own "danger" red - every incident type this
+# module sends is a failure condition worth a red card, so this isn't varied
+# per incident_type (see the module docstring's "Trigger conditions" list).
+
+
 def _format_message(
     credential: CredentialConfig | None,
     incident_type: str,
     reason: str,
     purpose: str | None,
 ) -> str:
+    """Plain-text fallback for notification previews/screen readers - Slack
+    requires a top-level `text` even when `blocks`/`attachments` carry the
+    actual rendered card (see `_build_slack_payload`)."""
+
     lines = [f"[Model Registry] {incident_type}"]
     if purpose:
         lines.append(f"Purpose: {purpose}")
     if credential is not None:
         lines.append(f"Provider: {credential.provider or 'unknown'}")
         lines.append(f"Model: {credential.model_name or 'unknown'}")
-        lines.append(f"Credential: {credential.id}")
+        lines.append(f"Credential: {_credential_label(credential)}")
     lines.append(f"Reason: {reason}")
     lines.append(f"Time: {datetime.now(UTC).isoformat()}")
     return "\n".join(lines)
+
+
+def _build_slack_payload(
+    credential: CredentialConfig | None,
+    incident_type: str,
+    reason: str,
+    purpose: str | None,
+) -> dict[str, Any]:
+    """A Block Kit card wrapped in a colored `attachments` entry (the classic
+    attachment's `color` bar is still the only way to get a colored left
+    border on a Block Kit card) - each field on its own line instead of one
+    run-on paragraph, matching the plan's "khó phân từng message dính nhau"
+    fix request."""
+
+    fields = []
+    if purpose:
+        fields.append({"type": "mrkdwn", "text": f"*Purpose:*\n{purpose}"})
+    if credential is not None:
+        fields.append({"type": "mrkdwn", "text": f"*Provider:*\n{credential.provider or 'unknown'}"})
+        fields.append({"type": "mrkdwn", "text": f"*Model:*\n{credential.model_name or 'unknown'}"})
+        fields.append({"type": "mrkdwn", "text": f"*Credential:*\n{_credential_label(credential)}"})
+    fields.append(
+        {"type": "mrkdwn", "text": f"*Time:*\n{datetime.now(UTC).isoformat()}"}
+    )
+
+    return {
+        "text": _format_message(credential, incident_type, reason, purpose),
+        "attachments": [
+            {
+                "color": _ALERT_COLOR,
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": f"⚠️ Model Registry — {incident_type}",
+                            "emoji": True,
+                        },
+                    },
+                    {
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": f"`{reason}`"}],
+                    },
+                    {"type": "divider"},
+                    {"type": "section", "fields": fields},
+                ],
+            }
+        ],
+    }
 
 
 async def alert_credential_failure(
@@ -169,7 +236,7 @@ async def alert_credential_failure(
             "every credential for a purpose is exhausted" case, which has no single
             credential to blame.
         incident_type: a short, stable string identifying the kind of incident
-            (e.g. `"PERMANENT"`, `"NO_AVAILABLE_CREDENTIAL"`,
+            (e.g. `"PERMANENT"`, `"TRANSIENT"`, `"NO_AVAILABLE_CREDENTIAL"`,
             `"EMBEDDING_PROVIDER_FAILURE"`, `"VERIFICATION_FAILED_PERMANENT"`) — this
             is half of the debounce key, so the same credential failing two
             different ways alerts independently for each.
@@ -186,10 +253,10 @@ async def alert_credential_failure(
         if not await _should_alert(scope_id, incident_type, redis_client=redis_client):
             return
 
-        message = _format_message(credential, incident_type, reason, purpose)
         known_secret = credential.api_key if credential is not None else None
-        message = redact(message, known_secret)
-        await send_slack_alert(message)
+        redacted_reason = redact(reason, known_secret)
+        payload = _build_slack_payload(credential, incident_type, redacted_reason, purpose)
+        await send_slack_alert(payload)
     except Exception:
         logger.warning(
             "alert_credential_failure: failed to send alert for incident_type=%s",

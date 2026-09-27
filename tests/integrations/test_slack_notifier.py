@@ -23,7 +23,7 @@ async def test_send_slack_alert_posts_expected_json_body(
     with patch.object(
         httpx.AsyncClient, "post", new=AsyncMock(return_value=mock_response)
     ) as mock_post:
-        await send_slack_alert("something went wrong")
+        await send_slack_alert({"text": "something went wrong"})
 
     args, kwargs = mock_post.call_args
     assert args[0] == "https://hooks.slack.test/x"
@@ -41,7 +41,7 @@ async def test_send_slack_alert_logs_and_returns_on_non_2xx(
     )
     with patch.object(httpx.AsyncClient, "post", new=AsyncMock(return_value=mock_response)):
         with caplog.at_level("WARNING"):
-            result = await send_slack_alert("something went wrong")
+            result = await send_slack_alert({"text": "something went wrong"})
 
     assert result is None
     assert "400" in caplog.text
@@ -59,7 +59,7 @@ async def test_send_slack_alert_logs_and_returns_on_network_error(
         new=AsyncMock(side_effect=httpx.ConnectError("connection refused")),
     ):
         with caplog.at_level("WARNING"):
-            result = await send_slack_alert("something went wrong")
+            result = await send_slack_alert({"text": "something went wrong"})
 
     assert result is None
     assert "network error" in caplog.text.lower()
@@ -73,7 +73,7 @@ async def test_send_slack_alert_is_noop_when_webhook_url_unset(
 
     with patch.object(httpx.AsyncClient, "post", new=AsyncMock()) as mock_post:
         with caplog.at_level("INFO"):
-            result = await send_slack_alert("something went wrong")
+            result = await send_slack_alert({"text": "something went wrong"})
 
     mock_post.assert_not_called()
     assert result is None

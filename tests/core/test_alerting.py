@@ -10,6 +10,7 @@ recorder, and Redis is a hand-rolled fake (same spirit as `test_model_router.py`
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -171,10 +172,10 @@ async def test_same_credential_two_incident_types_both_alert_independently(
 async def test_message_never_contains_the_credentials_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sent: list[str] = []
+    sent: list[dict[str, Any]] = []
 
-    async def fake_send(message: str) -> None:
-        sent.append(message)
+    async def fake_send(payload: dict[str, Any]) -> None:
+        sent.append(payload)
 
     monkeypatch.setattr(alerting, "send_slack_alert", fake_send)
     secret = "sk-canary-secret-value-1234567890"
@@ -189,8 +190,11 @@ async def test_message_never_contains_the_credentials_api_key(
     )
 
     assert len(sent) == 1
-    assert secret not in sent[0]
-    assert "[REDACTED]" in sent[0]
+    # The whole Block Kit payload, not just the plain-text `text` fallback -
+    # the secret must never survive anywhere in it (blocks/attachments included).
+    serialized = json.dumps(sent[0])
+    assert secret not in serialized
+    assert "[REDACTED]" in serialized
 
 
 @pytest.mark.asyncio
@@ -270,9 +274,16 @@ async def test_model_router_permanent_failure_calls_alert(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_model_router_transient_failure_never_calls_alert(
+async def test_model_router_transient_failure_also_calls_alert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Product decision (spec.md "Slack alerting"): a TRANSIENT failure alerts
+    too, not just PERMANENT - a human should hear about a provider blip the
+    first time it happens, not only once the circuit breaker gives up on the
+    credential entirely. The 15-minute debounce (tested elsewhere in this
+    file) is what keeps a sustained blip from flooding the channel, not
+    withholding the alert in the first place."""
+
     from app.core import model_router as model_router_module
 
     alert_mock = AsyncMock()
@@ -292,7 +303,11 @@ async def test_model_router_transient_failure_never_calls_alert(
         credential, ConnectionError("connect timed out"), snapshot_version=1, purpose="CHAT"
     )
 
-    alert_mock.assert_not_awaited()
+    alert_mock.assert_awaited_once()
+    args, kwargs = alert_mock.await_args
+    assert args[0] is credential
+    assert args[1] == "TRANSIENT"
+    assert kwargs["purpose"] == "CHAT"
 
 
 @pytest.mark.asyncio

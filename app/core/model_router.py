@@ -307,9 +307,18 @@ class ModelRouter:
         report carry a newer value than what was actually active when the failure
         occurred.
 
-        `purpose` is optional and only used to enrich a PERMANENT alert's message -
+        `purpose` is optional and only used to enrich the alert's message -
         callers that don't have it handy (or don't care about alerting context) can
         omit it.
+
+        Every failure alerts, PERMANENT and TRANSIENT alike (product decision,
+        superseding the original "TRANSIENT never alerts" design - see spec.md
+        "Slack alerting"): a human should hear about a 503/high-demand blip the
+        first time it happens, not only once the circuit breaker gives up on the
+        credential entirely. This does not reintroduce the flood the original
+        design was avoiding - `alert_credential_failure`'s own 15-minute debounce
+        (per credential + incident type) still collapses a burst of the same
+        transient error into one Slack message.
         """
 
         error_type = classify_llm_error(exc)
@@ -318,12 +327,13 @@ class ModelRouter:
 
         if error_type is ErrorType.PERMANENT:
             await self._mark(key, self._excluded_ttl_seconds)
-            await alert_credential_failure(
-                credential, "PERMANENT", message, purpose=purpose
-            )
         else:
             ttl = _extract_retry_after_seconds(exc) or self._default_cooldown_seconds
             await self._mark(key, ttl)
+
+        await alert_credential_failure(
+            credential, error_type.value, message, purpose=purpose
+        )
 
         try:
             await self._backend_client.report_health(

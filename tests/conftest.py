@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
+import app.core.alerting as alerting_module
 from app.api.deps import get_session_factory
 from app.core.config import settings
 from app.database.models import Base
@@ -49,6 +50,27 @@ def _in_memory_sqlite_engine_and_sessions() -> tuple[AsyncEngine, async_sessionm
         connect_args={"check_same_thread": False},
     )
     return engine, async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_slack_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same "no live external service in the default test run" rule as the
+    in-memory SQLite engine above, applied to Slack: `app.core.alerting`
+    calls the real `send_slack_alert()` (a live HTTP POST to whatever
+    `SLACK_APIKEY_ALERT_WEBHOOK_URL` is configured in the environment/`.env`)
+    unless a test explicitly monkeypatches it - several tests that exercise a
+    PERMANENT/NO_AVAILABLE_CREDENTIAL failure path (`test_model_router.py`,
+    `test_chat_stream_errors.py`) didn't, so running the suite on a machine
+    with a real webhook configured actually posted test alerts to that
+    channel. Autouse here so no test file has to remember this; a test that
+    wants to assert on what got sent (`test_alerting.py`) still overrides
+    this with its own `monkeypatch.setattr(alerting, "send_slack_alert", ...)`
+    inside the test - that later patch simply wins for that one test."""
+
+    async def _noop(payload: object) -> None:
+        del payload
+
+    monkeypatch.setattr(alerting_module, "send_slack_alert", _noop)
 
 
 @pytest.fixture

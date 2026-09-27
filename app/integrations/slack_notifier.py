@@ -1,6 +1,6 @@
 """Slack Incoming Webhook client for operational alerts.
 
-Posts a plain text message to a Slack Incoming Webhook URL
+Posts a JSON payload to a Slack Incoming Webhook URL
 (`settings.SLACK_APIKEY_ALERT_WEBHOOK_URL`). This is operator-configured
 infrastructure config, the same trust tier as `BACKEND_JAVA_BASE_URL` or
 `REDIS_URL` - not a URL a service admin controls dynamically - so this
@@ -13,11 +13,12 @@ that fails to send must not take down whatever main flow triggered it. A
 missing webhook URL specifically is logged as a no-op, not an error: not
 every environment has Slack configured, and that's expected.
 
-What message text to send and when to call this is decided elsewhere -
-this client only knows how to POST one.
+What payload to send and when to call this is decided elsewhere
+(`app.core.alerting`) - this client only knows how to POST one.
 """
 
 import logging
+from typing import Any
 
 import httpx
 
@@ -26,8 +27,10 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def send_slack_alert(message: str) -> None:
-    """POST `message` as `{"text": message}` to the Slack webhook URL.
+async def send_slack_alert(payload: dict[str, Any]) -> None:
+    """POST `payload` (a Slack Incoming Webhook JSON body - `text` plus,
+    typically, `blocks`/`attachments` for the rich Block Kit card) to the
+    Slack webhook URL.
 
     Never raises. Logs and returns on any failure, including an unconfigured
     webhook URL.
@@ -40,7 +43,7 @@ async def send_slack_alert(message: str) -> None:
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(webhook_url, json={"text": message})
+            response = await client.post(webhook_url, json=payload)
     except httpx.RequestError as exc:
         logger.warning("Slack alert failed - network error: %s", exc)
         return

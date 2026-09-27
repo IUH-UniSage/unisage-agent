@@ -49,6 +49,10 @@ class CredentialConfig:
     priority: int | None
     max_rpm: int | None
     api_key: str = field(repr=False)
+    # Operator-chosen label, or None - purely a display aid (e.g. failover log lines),
+    # never read for routing/verification decisions. Last, with a default, so every
+    # existing positional/keyword construction site (tests especially) keeps working.
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,7 @@ def _parse_credential(raw: dict[str, Any]) -> CredentialConfig:
         priority=raw.get("priority"),
         max_rpm=raw.get("maxRpm"),
         api_key=raw.get("apiKey") or "",
+        display_name=raw.get("displayName"),
     )
 
 
