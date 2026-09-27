@@ -127,6 +127,23 @@ async def test_get_conversation_messages_sends_limit_param_when_given() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_conversation_messages_context_sends_context_flag_only() -> None:
+    """Prompt history asks Java for `context=true` and no `limit`, so the admin
+    setting `chat.max_history_messages` alone decides the window (UNISAGE-94)."""
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=[])
+
+    client = _client_with(handler)
+
+    await client.get_conversation_messages(conversation_id="conv-1", context=True)
+
+    assert seen["params"] == {"context": "true"}
+
+
+@pytest.mark.asyncio
 async def test_get_conversation_messages_empty_history_returns_empty_list() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[])

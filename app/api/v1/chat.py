@@ -41,21 +41,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)])
 
-# Capped independently of backend-java's own app.message.max-history (default
-# 20, used by GET /messages/conversation/{id} for the frontend's history
-# list) - this is specifically how many prior turns get folded into the
-# generation prompt as raw <history_message> context, not how many the UI
-# shows. Configurable via CHAT_HISTORY_MESSAGE_LIMIT (see app/core/config.py).
-_HISTORY_MESSAGE_LIMIT = settings.CHAT_HISTORY_MESSAGE_LIMIT
-
-
 async def _load_history(
     java_client: BackendJavaClient,
     *,
     conversation_id: str,
     authorization: str | None,
 ) -> list[HistoryMessage]:
-    """The last `_HISTORY_MESSAGE_LIMIT` messages BEFORE this turn (called
+    """The last N messages BEFORE this turn, N being the admin setting
+    `chat.max_history_messages` that Java applies for `context=True` (called
     prior to persisting this turn's own USER message, so the list never
     includes it - `user_query` already carries that separately). Drops any
     row that isn't a real, finished message (e.g. a STREAMING placeholder
@@ -64,7 +57,7 @@ async def _load_history(
     actually said."""
 
     raw_messages = await java_client.get_conversation_messages(
-        conversation_id=conversation_id, limit=_HISTORY_MESSAGE_LIMIT, authorization=authorization
+        conversation_id=conversation_id, context=True, authorization=authorization
     )
     return [
         HistoryMessage(role=message["role"], content=message["content"])
@@ -190,7 +183,7 @@ async def chat_stream_endpoint(
     must survive a client disconnect):
 
     1. Ask Java for this conversation's message count (first-turn detection)
-       and its last `_HISTORY_MESSAGE_LIMIT` messages (raw `<history_message>`
+       and its last `chat.max_history_messages` messages (raw `<history_message>`
        context for the prompt - see `_load_history`), both BEFORE this turn's
        own USER message exists.
     2. Call Java `POST /messages` (role=USER) FIRST, synchronously, still

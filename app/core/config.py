@@ -126,7 +126,6 @@ class Settings(BaseSettings):
     CHAT_CLARIFICATION_MAX_RETRY: int = 2
     CHAT_RETRIEVAL_MAX_CHUNKS: int = 8
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70
-    CHAT_HISTORY_MESSAGE_LIMIT: int = 15
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
 
