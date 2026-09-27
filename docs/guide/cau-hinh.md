@@ -146,7 +146,6 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `CHAT_CLARIFICATION_MAX_RETRY` | `2` | Clarification Guard (SecurityContextExtractionNode): số lần hỏi lại tối đa cho một field trước khi buộc trả lời an toàn theo hướng "so sánh phương án" thay vì hỏi tiếp mãi |
 | `CHAT_RETRIEVAL_MAX_CHUNKS` | `8` | Số chunk tối đa trả về sau RetrievalFilteringNode, trước khi qua ngưỡng rerank |
 | `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở PostRetrievalRerankNode. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |
-| `CHAT_HISTORY_MESSAGE_LIMIT` | `15` | Số tin nhắn gần nhất đưa vào `<history_message>` của prompt sinh câu trả lời |
 | `CHAT_MAX_SUB_QUERIES` | `3` | Số câu hỏi con tối đa khi decomposer tách một câu so sánh (task `MULTI`); tối thiểu 2. Mỗi câu hỏi con tốn thêm một lần embedding + tìm Qdrant, và chia nhỏ quota chunk của RetrievalFilteringNode |
 | `CHAT_ALLOW_REPAIR_JSON` | `True` | Bật/tắt lệnh gọi LLM sửa lỗi lần 2 khi câu trả lời quên khối `ask_user_form` bắt buộc (`generation_synthesis.py::_repair_missing_ask_form`). Heuristic phát hiện có lỗ hổng biết trước (câu mời đặt điều kiện ở cuối câu, kiểu "..., nếu bạn cần...", không bị nhận diện là câu không ràng buộc) khiến lần gọi sửa đôi khi bịa ra một form không ai hỏi. Tắt thì bỏ hẳn lần gọi sửa: một form thật sự bị quên sẽ không được vá, nhưng không bao giờ bịa form giả |
 

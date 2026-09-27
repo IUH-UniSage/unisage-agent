@@ -461,19 +461,26 @@ class BackendJavaClient:
         *,
         conversation_id: str,
         limit: int | None = None,
+        context: bool = False,
         authorization: str | None = None,
     ) -> list[dict[str, Any]]:
-        """`GET /messages/conversation/{id}?limit=N`.
+        """`GET /messages/conversation/{id}?limit=N&context=true`.
 
-        `limit` is optional and always capped server-side by Java's own
-        `MAX_MESSAGE_HISTORY` regardless of what's requested here.
+        `context=True` asks for prompt context: Java caps it at the admin
+        setting `chat.max_history_messages` (System Settings), so that
+        setting - not a local env var - decides how much history the model
+        sees. Without it Java returns the whole history (or the last `limit`).
         """
 
-        params = {"limit": limit} if limit is not None else None
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if context:
+            params["context"] = "true"
         result = await self._request(
             "GET",
             f"/messages/conversation/{conversation_id}",
             authorization=authorization,
-            params=params,
+            params=params or None,
         )
         return list(result) if result is not None else []
