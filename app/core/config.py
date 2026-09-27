@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     DB_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5433/unisage_agent_db"
 
     # --- MINIO_: object storage for ingested source files ---
-    MINIO_ENDPOINT: str = "localhost:9000"
+    MINIO_ENDPOINT: str = "localhost:9100"
     MINIO_ACCESS_KEY: str = ""
     MINIO_SECRET_KEY: str = ""
     MINIO_BUCKET: str = "unisage-documents"
