@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     # the (rare) real misses it exists to catch.
     CHAT_ALLOW_REPAIR_JSON: bool = True
 
+    # --- Cost tracking & budget (plan.md "Cost Tracking + Budget Management") ---
+    # Used by app/core/cost_calculator.py's estimate() when LiteLLM has no price
+    # for a model - a conservative non-zero placeholder so budget reservation
+    # never silently estimates $0 for an unpriced model.
+    BUDGET_RESERVATION_FALLBACK_USD: float = 0.05
+
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":
         if self.APP_ENV != "production":
