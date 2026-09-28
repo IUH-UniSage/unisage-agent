@@ -147,6 +147,8 @@ class Settings(BaseSettings):
     # for a model - a conservative non-zero placeholder so budget reservation
     # never silently estimates $0 for an unpriced model.
     BUDGET_RESERVATION_FALLBACK_USD: float = 0.05
+    # How often Beat runs drain_usage_outbox (plan.md Task 7).
+    USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS: float = 5.0
 
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":

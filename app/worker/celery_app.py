@@ -14,7 +14,7 @@ from app.core.alerting import alert_credential_failure
 from app.core.config import settings
 from app.core.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.events import publish_ingestion_event
-from app.core.llm_error_classifier import ErrorType, EmbeddingProviderError, classify_llm_error
+from app.core.llm_error_classifier import EmbeddingProviderError, ErrorType, classify_llm_error
 from app.core.logging_config import configure_logging
 from app.core.model_registry import get_current_snapshot, init_model_registry
 from app.core.redaction import safe_error_message
@@ -24,6 +24,7 @@ from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
+from app.worker.usage_outbox_tasks import drain_usage_outbox_once
 from app.worker.verification_subscriber import start_thread_verification_subscriber
 from app.worker.verification_tasks import run_verification_batch, try_acquire_verification_lock
 
@@ -70,6 +71,13 @@ celery_app.conf.beat_schedule = {
     "model-registry-verify-pending": {
         "task": "verify_pending_credentials",
         "schedule": settings.MODEL_REGISTRY_VERIFICATION_INTERVAL_SECONDS,
+    },
+    # Cost Tracking outbox drain (plan.md Task 7) - moves UsageRecorder payloads from
+    # Redis to backend-java. Short interval on purpose: the outbox is the only thing
+    # standing between a Chat response and its cost ever reaching Java.
+    "usage-outbox-drain": {
+        "task": "drain_usage_outbox",
+        "schedule": settings.USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS,
     },
 }
 
@@ -127,6 +135,16 @@ def verify_pending_credentials() -> None:
         asyncio.run(run_verification_batch())
     except Exception:
         logger.exception("verify_pending_credentials: run_verification_batch failed")
+
+
+@celery_app.task(name="drain_usage_outbox", ignore_result=True)
+def drain_usage_outbox() -> None:
+    """Beat-scheduled - see `app.worker.usage_outbox_tasks.drain_usage_outbox_once`
+    for the actual logic (kept as a plain function there so tests call it directly)."""
+
+    result = drain_usage_outbox_once()
+    if result["sent"] or result["dead"]:
+        logger.info("drain_usage_outbox: sent=%d dead=%d", result["sent"], result["dead"])
 
 
 @celery_app.task(bind=True, name="embed_chunks")

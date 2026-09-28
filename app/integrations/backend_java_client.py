@@ -334,6 +334,21 @@ class BackendJavaClient:
         )
         return dict(result) if result else {}
 
+    async def ingest_usage_log(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """`POST /internal/usage-logs` (Cost Tracking plan.md "Internal API & bảo mật")
+        - called by the outbox drain worker (`app.worker.usage_outbox_tasks`), never
+        from the request path itself. `payload` is already the exact wire shape
+        `UsageRecorder.close()` built; this method sends it as-is.
+
+        Idempotent on Java's side via `requestId` - a retried send after a prior
+        4xx/5xx (still sitting in the outbox) is always safe to resend.
+        """
+
+        result = await self._request(
+            "POST", "/internal/usage-logs", authorization=None, json_body=payload
+        )
+        return dict(result) if result else {}
+
     async def get_embedding_index_identity(self, *, collection: str) -> dict[str, Any] | None:
         """`GET /internal/model-registry/embedding-index/{collection}/identity` (plan.md
         "Internal API contract" endpoint #6) - the identity currently registered for `collection`,
