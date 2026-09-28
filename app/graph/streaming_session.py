@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.graph_trace import GraphTrace
 from app.core.model_router import NoAvailableCredentialError
+from app.core.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import async_session_factory
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
@@ -88,6 +89,7 @@ async def run_and_persist(
     client_ip: str | None = None,
     graph_input: GraphInput,
     models: GraphModels,
+    usage_recorder: UsageRecorder,
     queue: "Queue[QueueItem]",
     session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
 ) -> None:
@@ -118,13 +120,17 @@ async def run_and_persist(
         client_ip=client_ip,
     )
 
-    status: Literal["COMPLETED", "ERROR"]
+    # Bound up front (not just declared) so `finally` below can always read it, even
+    # if `run_graph` raises something the inner `except Exception` doesn't catch
+    # (e.g. `asyncio.CancelledError`, a `BaseException`) - matches this module's own
+    # past bug (see module docstring) of "never skip the finally".
+    status: Literal["COMPLETED", "ERROR"] = "ERROR"
     response_text: str
     graph_output = None
     error_item: ErrorItem | None = None
     try:
         try:
-            graph_output = await run_graph(graph_input, models, sink, trace)
+            graph_output = await run_graph(graph_input, models, sink, trace, usage_recorder)
             response_text = graph_output.response_text
             status = "COMPLETED"
         except Exception as exc:
@@ -175,6 +181,13 @@ async def run_and_persist(
                     conversation_id,
                 )
     finally:
+        # Closes exactly once here regardless of which path above ran - success,
+        # graph exception, or (since this whole function keeps running independently
+        # of the SSE response per the module docstring) a client disconnect.
+        # UsageRecorder's status vocabulary (SUCCESS/ERROR/PARTIAL) isn't Java
+        # message status (COMPLETED/ERROR/STREAMING) - map explicitly, don't pass
+        # `status` through as-is.
+        await usage_recorder.close(status="SUCCESS" if status == "COMPLETED" else "ERROR")
         if error_item is not None:
             await queue.put(error_item)
         await queue.put(DoneItem())

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -21,6 +22,7 @@ from app.core.exceptions import (
 )
 from app.core.sanitizer import sanitize_input_text
 from app.core.security import verify_internal_secret
+from app.core.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import get_db_session
 from app.graph.nodes.greeting import is_first_turn
@@ -220,7 +222,7 @@ async def chat_stream_endpoint(
     )
 
     try:
-        await java_client.create_message(
+        user_message = await java_client.create_message(
             conversation_id=request.conversation_id,
             role="USER",
             content=clean_message,
@@ -248,6 +250,18 @@ async def chat_stream_endpoint(
         raise BackendJavaUnavailableException() from exc
 
     assistant_message_id = str(assistant_message["id"])
+    user_message_id = str(user_message["id"])
+
+    request_id = str(uuid.uuid4())
+    usage_recorder = UsageRecorder(
+        request_id=request_id,
+        purpose="CHAT",
+        conversation_id=request.conversation_id,
+        user_message_id=user_message_id,
+        assistant_message_id=assistant_message_id,
+        user_id=security.user_id,
+        guest_ip=client_ip if security.is_guest else None,
+    )
 
     clarification_repo = ClarificationStateRepository(db_session)
     pending_clarification = await clarification_repo.get_pending_clarification(
@@ -276,6 +290,7 @@ async def chat_stream_endpoint(
             client_ip=client_ip,
             graph_input=graph_input,
             models=models,
+            usage_recorder=usage_recorder,
             queue=queue,
             session_factory=session_factory,
         )

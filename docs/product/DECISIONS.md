@@ -295,21 +295,26 @@ Luật nằm ở: `PRODUCT.md` › Glossary (staged credential rotation).
 
 Chi tiết đầy đủ nằm ở
 `backend-java/changes/23-09-2026-Cost-Tracking-Budget-Management/plan.md`. Mục
-này là kết quả spike Task 0: bảng "nguồn usage" cho 4 loại call, xác nhận hook
-duy nhất cho attempt, và vì sao dùng `litellm` chỉ để định giá.
+này là kết quả spike Task 0 (bảng dưới), **đã cập nhật ở Task 6** khi implement
+thật phát hiện `result.usage()` sai — trong bản `pydantic-ai-slim` đang dùng,
+`usage` là **property** (`result.usage`, không gọi hàm) trên cả
+`AgentRunResult` (non-streaming) lẫn `StreamedRunResult` (streaming); gọi như
+hàm ném `TypeError: 'RunUsage' object is not callable` — bắt bằng test thật
+(`tests/graph/test_message_classification_node.py` đỏ ngay), không chỉ đọc
+tài liệu PydanticAI.
 
 ### Bảng nguồn usage theo loại call
 
 | Loại call | Nơi gọi LLM | Cách lấy usage | Provider/model/`chatModelId` thực tế (sau failover) | Latency |
 |---|---|---|---|---|
-| Chat (non-streaming: classification, query transformation) | `run_agent_text_with_failover()` (`app/graph/streaming.py:173-222`), `agent.run(prompt)` | `result = await active_agent.run(prompt)` → `result.usage()` (PydanticAI `RunUsage`: `input_tokens`/`output_tokens`/`cache_read_tokens`). **Hiện bị bỏ qua** — chỉ `result.output` được đọc (dòng 197-198) | Biến local `active_credential` tại đúng vòng lặp `while True` đang chạy (dòng 191-222) — không phải credential lúc bắt đầu request | Đo bằng `time.monotonic()` quanh `await active_agent.run(prompt)`, hiện chưa có |
-| Chat (streaming: generation synthesis, ticket fallback) | `stream_agent_text()` (`app/graph/streaming.py:62-171`), `agent.run_stream(prompt)` | `result.usage()` gọi **bên trong** `async with active_agent.run_stream(prompt) as result:` (dòng 114), ngay sau vòng `async for chunk in result.stream_text(delta=True):` kết thúc (dòng 125), **trước** khi thoát context manager ở dòng 126 — PydanticAI chốt usage khi stream hoàn tất, không phải sau khi context exit | Biến local `active_credential` trong cùng vòng lặp (dòng 106-171) | Đo bằng `time.monotonic()` quanh khối `try:`/`async with` (dòng 113-126), hiện chưa có |
-| Embedding | `OpenAIEmbedder._call_provider()` (`app/rag/embeddings/openai_embedder.py:140-153`), `client.embeddings.create(...)` (dòng 146), raw OpenAI SDK — **chưa migrate sang PydanticAI/model_router** | `response.usage.prompt_tokens` (`response = client.embeddings.create(...)`, dòng 146) — **hiện bị bỏ qua**, chỉ `response.data[*].embedding` được đọc. Nhiều batch/1 lần `embed()` → phải cộng dồn usage qua các batch | `self.credential` (property, dòng 69-74), lấy 1 lần từ `require_top_priority_credential("EMBEDDING")` — **không auto-failover** nên không có "sau failover" | Chưa đo, cần thêm quanh mỗi lần gọi `_call_provider()` |
-| Extraction (multi-representation) | `MultiRepresentationEnricher._call_and_parse()` (`app/rag/enrichment/multi_representation.py:160-191`), `client.chat.completions.create(...)` (dòng 167), raw OpenAI SDK — **chưa migrate** | `response.usage.prompt_tokens`/`completion_tokens` — hiện bị bỏ qua, chỉ `response.choices[0].message.content` được đọc | Biến local `credential`/`resolved_model` trong vòng lặp `while True:` (dòng 96-144), lấy từ `model_router.get_next_credential("EXTRACTION")` mỗi lần thử | Chưa đo, cần thêm quanh `_call_and_parse()` |
+| Chat (non-streaming: classification, query transformation) | `run_agent_text_with_failover()` (`app/graph/streaming.py`), `agent.run(prompt)` | `result = await active_agent.run(prompt)` → `result.usage` (property, PydanticAI `RunUsage`: `input_tokens`/`output_tokens`/`cache_read_tokens`). Đọc ngay khi thành công, trước khi trả `result.output` | Biến local `active_credential` tại đúng vòng lặp `while True` đang chạy — không phải credential lúc bắt đầu request | Đo bằng `time.monotonic()` quanh `await active_agent.run(prompt)`, truyền vào `on_attempt` (Task 6) |
+| Chat (streaming: generation synthesis, ticket fallback) | `stream_agent_text()` (`app/graph/streaming.py`), `agent.run_stream(prompt)` | `result.usage` (property) đọc **bên trong** `async with active_agent.run_stream(prompt) as result:`, ngay sau vòng `async for chunk in result.stream_text(delta=True):` kết thúc, **trước** khi thoát context manager — PydanticAI chốt usage khi stream hoàn tất, không phải sau khi context exit | Biến local `active_credential` trong cùng vòng lặp | Đo bằng `time.monotonic()` quanh khối `try:`/`async with`, truyền vào `on_attempt` (Task 6) |
+| Embedding | `OpenAIEmbedder._call_provider()` (`app/rag/embeddings/openai_embedder.py`), `client.embeddings.create(...)`, raw OpenAI SDK — **chưa migrate sang PydanticAI/model_router** | `response.usage.prompt_tokens` — **hiện vẫn bị bỏ qua** (Task 8 sẽ nối), chỉ `response.data[*].embedding` được đọc. Nhiều batch/1 lần `embed()` → phải cộng dồn usage qua các batch | `self.credential` (property), lấy 1 lần từ `require_top_priority_credential("EMBEDDING")` — **không auto-failover** nên không có "sau failover" | Chưa đo (Task 8), cần thêm quanh mỗi lần gọi `_call_provider()` |
+| Extraction (multi-representation) | `MultiRepresentationEnricher._call_and_parse()` (`app/rag/enrichment/multi_representation.py`), `client.chat.completions.create(...)`, raw OpenAI SDK — **chưa migrate** | `response.usage.prompt_tokens`/`completion_tokens` — hiện vẫn bị bỏ qua (Task 8 sẽ nối), chỉ `response.choices[0].message.content` được đọc | Biến local `credential`/`resolved_model` trong vòng lặp `while True:`, lấy từ `model_router.get_next_credential("EXTRACTION")` mỗi lần thử | Chưa đo (Task 8), cần thêm quanh `_call_and_parse()` |
 
 Embedding và Extraction hiện vẫn dùng OpenAI SDK trực tiếp (không phải PydanticAI
 `Agent`), nên hình dạng usage khác Chat (`response.usage.prompt_tokens` kiểu
-OpenAI SDK, không phải `result.usage()` kiểu PydanticAI `RunUsage`) —
+OpenAI SDK, không phải `result.usage` kiểu PydanticAI `RunUsage`) —
 `cost_calculator`/`UsageRecorder` (Task 5/6) phải chuẩn hoá 2 hình dạng này về
 cùng 1 kiểu trước khi gửi Java, không giả định mọi nơi đều là PydanticAI.
 

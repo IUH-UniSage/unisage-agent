@@ -23,13 +23,28 @@ omitted (the default), behavior is exactly what it was before Task 11/this
 helper existed - a failure propagates immediately, uncaught. This keeps every
 existing call site/test that hands in a bare `Model`/`FunctionModel` double,
 with no `model_router` wiring at all, working unchanged.
+
+`on_attempt` (Cost Tracking plan.md Task 0/6) is a second, independent
+opt-in callback: fired exactly once per attempt (every call to
+`agent.run()`/`run_stream()`, including one that fails and gets retried by
+failover), on BOTH the success and the failure path, with the credential
+actually used, the usage (`None` on failure), latency and status. It has no
+prerequisite on the failover kwargs being set - unlike `on_failover`, cost
+must still be recorded for a bare call with no retry wiring at all. There is
+no separate "before attempt" callback: the caller's `UsageRecorder` reads
+`time.monotonic()` itself right before invoking `agent.run()`/`run_stream()`
+in `on_attempt`'s SAME call - no separate hook is needed for that half
+because nothing about "before" needs anything failure/success-shaped.
 """
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
+from pydantic_ai.usage import RunUsage
 
 from app.core.llm.provider_models import build_model
 from app.core.model_registry import CredentialConfig
@@ -37,6 +52,33 @@ from app.core.model_router import ModelRouter, get_default_router
 from app.core.redaction import safe_error_message
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AttemptOutcome:
+    """One `on_attempt` callback firing - Cost Tracking plan.md Task 6."""
+
+    credential: CredentialConfig | None
+    attempt: int
+    status: str  # "SUCCESS" | "ERROR"
+    usage: RunUsage | None  # None on ERROR
+    latency_ms: int
+    error_code: str | None = None
+
+
+# Called once per attempt (success or failure) - see module docstring. Never raises: a
+# `UsageRecorder` callback that fails would take the whole graph down with it, so implementations
+# must swallow their own errors (logging, not raising).
+AttemptRecorder = Callable[[AttemptOutcome], None]
+
+
+def _safe_record_attempt(on_attempt: "AttemptRecorder | None", outcome: AttemptOutcome) -> None:
+    if on_attempt is None:
+        return
+    try:
+        on_attempt(outcome)
+    except Exception:
+        logger.exception("on_attempt callback raised - usage for this attempt was NOT recorded")
 
 
 def _credential_label(credential: CredentialConfig) -> str:
@@ -70,6 +112,7 @@ async def stream_agent_text(
     agent_factory: AgentFactory | None = None,
     router: ModelRouter | None = None,
     on_failover: FailoverCallback | None = None,
+    on_attempt: AttemptRecorder | None = None,
 ) -> str:
     """Run `agent.run_stream(prompt)`, forwarding every text delta to `token_sink`.
 
@@ -106,10 +149,12 @@ async def stream_agent_text(
     active_agent = agent
     active_credential = credential
     failover_router = router if router is not None else get_default_router()
+    attempt_index = 0
 
     while True:
         collected: list[str] = []
         streamed_any = False
+        started_at = time.monotonic()
         try:
             async with active_agent.run_stream(prompt) as result:
                 async for chunk in result.stream_text(delta=True):
@@ -123,8 +168,27 @@ async def stream_agent_text(
                         # would block a perfectly safe failover on a request
                         # the user never actually saw any output for.
                         streamed_any = True
+                # Usage is only final once the stream has been fully consumed -
+                # must be read here, still inside the `async with`, not after.
+                usage = result.usage
+            _safe_record_attempt(on_attempt, AttemptOutcome(
+                credential=active_credential,
+                attempt=attempt_index,
+                status="SUCCESS",
+                usage=usage,
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+            ))
             return "".join(collected)
         except Exception as exc:
+            latency_ms = int((time.monotonic() - started_at) * 1000)
+            _safe_record_attempt(on_attempt, AttemptOutcome(
+                credential=active_credential,
+                attempt=attempt_index,
+                status="ERROR",
+                usage=None,
+                latency_ms=latency_ms,
+                error_code=type(exc).__name__,
+            ))
             has_failover_wiring = not (
                 purpose is None
                 or active_credential is None
@@ -159,6 +223,7 @@ async def stream_agent_text(
             active_credential = await failover_router.get_next_credential(purpose)
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
+            attempt_index += 1
             logger.warning(
                 "stream_agent_text: credential %s failed (%s) before any output was "
                 "streamed - failing over to credential %s",
@@ -180,23 +245,41 @@ async def run_agent_text_with_failover(
     agent_factory: AgentFactory | None = None,
     router: ModelRouter | None = None,
     on_failover: FailoverCallback | None = None,
+    on_attempt: AttemptRecorder | None = None,
 ) -> str:
     """Runs `agent.run(prompt)`, returning `result.output or ""`, with the same
     opt-in failover wiring as `stream_agent_text()` - see the module docstring
     for why this needs no "already streamed" boundary.
 
-    `on_failover` - see `stream_agent_text()`'s docstring; same purpose here.
+    `on_failover`/`on_attempt` - see `stream_agent_text()`'s docstring; same purpose here.
     """
 
     active_agent = agent
     active_credential = credential
     failover_router = router if router is not None else get_default_router()
+    attempt_index = 0
 
     while True:
+        started_at = time.monotonic()
         try:
             result = await active_agent.run(prompt)
+            _safe_record_attempt(on_attempt, AttemptOutcome(
+                credential=active_credential,
+                attempt=attempt_index,
+                status="SUCCESS",
+                usage=result.usage,
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+            ))
             return result.output or ""
         except Exception as exc:
+            _safe_record_attempt(on_attempt, AttemptOutcome(
+                credential=active_credential,
+                attempt=attempt_index,
+                status="ERROR",
+                usage=None,
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                error_code=type(exc).__name__,
+            ))
             if (
                 purpose is None
                 or active_credential is None
@@ -211,6 +294,7 @@ async def run_agent_text_with_failover(
             active_credential = await failover_router.get_next_credential(purpose)
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
+            attempt_index += 1
             logger.warning(
                 "run_agent_text_with_failover: credential %s failed (%s) - failing over "
                 "to credential %s",

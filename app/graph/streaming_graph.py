@@ -20,6 +20,7 @@ from pydantic_ai.models import Model
 
 from app.core.graph_trace import GraphTrace
 from app.core.model_registry import CredentialConfig
+from app.core.usage_recorder import UsageRecorder
 from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
@@ -72,6 +73,7 @@ async def run_graph(
     models: GraphModels,
     token_sink: TokenSink,
     trace: GraphTrace,
+    usage_recorder: UsageRecorder,
 ) -> GraphOutput:
     # GreetingDetectionNode: fast path, no LLM.
     trace.node("01_GreetingDetectionNode")
@@ -99,6 +101,7 @@ async def run_graph(
             models,
             token_sink,
             trace,
+            usage_recorder,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
             advisory_tasks=_resume_advisory_tasks(graph_input, guard_result),
@@ -116,6 +119,7 @@ async def run_graph(
         snapshot_version=models.snapshot_version,
         agent_factory=build_classification_agent,
         on_failover=_make_failover_applier(models),
+        on_attempt=usage_recorder.bind("MessageClassificationNode"),
     )
 
     # IntentRoutingNode (deterministic).
@@ -162,6 +166,7 @@ async def run_graph(
         models,
         token_sink,
         trace,
+        usage_recorder,
         confirmed_metadata=confirmed_metadata,
         pending_clarification=pending_clarification,
         advisory_tasks=route_plan.advisory_tasks,
@@ -234,6 +239,7 @@ async def _run_advisory_flow(
     models: GraphModels,
     token_sink: TokenSink,
     trace: GraphTrace,
+    usage_recorder: UsageRecorder,
     *,
     confirmed_metadata: dict[str, str],
     pending_clarification: PendingClarification | None,
@@ -260,6 +266,7 @@ async def _run_advisory_flow(
         hyde_agent_factory=build_query_transformation_agent,
         decomposer_agent_factory=build_decomposer_agent,
         on_failover=_make_failover_applier(models),
+        on_attempt=usage_recorder.bind("QueryTransformationNode"),
     )
     for sub_query in sub_queries:
         trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
@@ -297,6 +304,7 @@ async def _run_advisory_flow(
             credential=models.generation_credential,
             snapshot_version=models.snapshot_version,
             on_failover=_make_failover_applier(models),
+            on_attempt=usage_recorder.bind("TicketFallbackNode"),
         )
         return GraphOutput(
             response_text=fallback_text,
@@ -329,6 +337,7 @@ async def _run_advisory_flow(
         credential=models.generation_credential,
         snapshot_version=models.snapshot_version,
         on_failover=_make_failover_applier(models),
+        on_attempt=usage_recorder.bind("GenerationSynthesisNode"),
     )
     return GraphOutput(
         response_text=generation_result.response_text,

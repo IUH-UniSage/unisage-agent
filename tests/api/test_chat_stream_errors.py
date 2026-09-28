@@ -30,6 +30,7 @@ from app.api.v1.chat import _sse_token_generator
 from app.core.config import settings
 from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.model_router import ModelRouter
+from app.core.usage_recorder import UsageRecorder
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED, LLM_UNAVAILABLE
 from app.graph.streaming_session import run_and_persist
@@ -209,6 +210,7 @@ async def test_error_after_first_chunk_emits_error_then_done_no_tokens_after(
         authorization=None,
         graph_input=_graph_input(),
         models=models,
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
     )
@@ -291,6 +293,7 @@ async def test_error_before_first_chunk_falls_back_transparently(
         authorization=None,
         graph_input=_graph_input(),
         models=models,
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
     )
@@ -349,6 +352,7 @@ async def test_leading_empty_chunk_does_not_block_failover(
         authorization=None,
         graph_input=_graph_input(),
         models=models,
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
     )
@@ -407,6 +411,7 @@ async def test_error_after_first_chunk_still_marks_the_credential_failed(
         authorization=None,
         graph_input=_graph_input(),
         models=models,
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
     )
@@ -447,6 +452,7 @@ async def test_error_before_first_chunk_credential_exhausted_is_llm_unavailable(
         authorization=None,
         graph_input=_graph_input(),
         models=models,
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
     )
@@ -513,6 +519,7 @@ async def test_no_response_ever_mixes_content_from_two_models(
         authorization=None,
         graph_input=_graph_input(),
         models=models,
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
     )
@@ -555,6 +562,7 @@ async def test_no_response_ever_mixes_content_from_two_models(
         authorization=None,
         graph_input=_graph_input(),
         models=models,
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(db_session),  # type: ignore[arg-type]
     )

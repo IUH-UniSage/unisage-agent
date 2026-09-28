@@ -8,6 +8,7 @@ from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.model_router import NoAvailableCredentialError
+from app.core.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
@@ -74,6 +75,7 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
         authorization="Bearer token",
         graph_input=_graph_input(),
         models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )
@@ -132,6 +134,7 @@ async def test_run_and_persist_patches_error_on_graph_exception(
         authorization=None,
         graph_input=_graph_input(),
         models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )
@@ -174,6 +177,7 @@ async def test_run_and_persist_persists_clarification_state_on_success(
         authorization=None,
         graph_input=_graph_input(),
         models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )
@@ -229,6 +233,7 @@ async def test_queue_sentinel_still_arrives_when_java_patch_raises_unexpected_er
         authorization=None,
         graph_input=_graph_input(),
         models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )
@@ -287,6 +292,7 @@ async def test_run_and_persist_sends_citations_when_graph_produced_them(
         authorization=None,
         graph_input=_graph_input(),
         models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )
@@ -330,6 +336,7 @@ async def test_run_and_persist_reports_llm_unavailable_when_credentials_exhauste
         authorization=None,
         graph_input=_graph_input(),
         models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
         queue=queue,
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )

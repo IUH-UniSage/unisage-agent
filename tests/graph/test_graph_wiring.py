@@ -8,6 +8,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.core.config import settings
 from app.core.graph_trace import GraphTrace
+from app.core.usage_recorder import UsageRecorder
 from app.graph.nodes.greeting import GREETING_TEMPLATE
 from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
@@ -21,6 +22,14 @@ from app.schemas.security import AcademicSecurityContext
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
+
+
+def _usage_recorder() -> UsageRecorder:
+    # A fresh instance per call - see the identical helper's docstring in
+    # tests/graph/test_calculation_node.py.
+    return UsageRecorder(request_id="test-request", purpose="CHAT")
+
+
 _DUMMY_CHUNK = RetrievedChunk(
     chunk_id="c1", content="dummy retrieved content", source="s", score=0.9
 )
@@ -99,7 +108,11 @@ async def test_greeting_fast_path_on_first_turn_no_llm_needed(
     tokens: list[str] = []
 
     result = await run_graph(
-        graph_input, _models(mock_sync_llm_model, mock_streaming_llm_model), _sink(tokens), _TRACE
+        graph_input,
+        _models(mock_sync_llm_model, mock_streaming_llm_model),
+        _sink(tokens),
+        _TRACE,
+        _usage_recorder(),
     )
 
     assert result.response_text == GREETING_TEMPLATE
@@ -124,6 +137,7 @@ async def test_social_chat_routes_to_static_template(
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="social_chat"),
         _sink(tokens),
         _TRACE,
+        _usage_recorder(),
     )
 
     assert result.response_text == SOCIAL_CHAT_TEMPLATE
@@ -147,6 +161,7 @@ async def test_off_topic_routes_to_static_template(
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="off_topic"),
         _sink(tokens),
         _TRACE,
+        _usage_recorder(),
     )
 
     assert result.response_text == OFF_TOPIC_TEMPLATE
@@ -174,6 +189,7 @@ async def test_academic_advisory_routes_through_full_rag_pipeline(
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="academic_advisory"),
         _sink(tokens),
         _TRACE,
+        _usage_recorder(),
     )
 
     assert result.response_text == "Câu trả lời cuối cùng [1]."
@@ -201,7 +217,7 @@ async def test_no_valid_context_falls_back_to_ticket(
         retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
     )
 
-    result = await run_graph(graph_input, models, _sink(tokens), _TRACE)
+    result = await run_graph(graph_input, models, _sink(tokens), _TRACE, _usage_recorder())
 
     assert result.used_ticket_fallback is True
     assert "chưa tìm thấy" in result.response_text.lower()
@@ -236,6 +252,7 @@ async def test_clarification_guard_match_skips_classification_and_resumes_adviso
         _models(mock_sync_llm_model, mock_streaming_llm_model, classification="off_topic"),
         _sink(tokens),
         _TRACE,
+        _usage_recorder(),
     )
 
     assert result.response_text == "Câu trả lời cuối cùng [1]."
@@ -278,7 +295,7 @@ async def test_resuming_clarification_retrieves_using_original_query_not_the_rep
         retrieval=retrieval,
     )
 
-    result = await run_graph(graph_input, models, _sink([]), _TRACE)
+    result = await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
 
     # `transform_query` folds `confirmed_metadata` onto the query before
     # retrieval (see `_fold_confirmed_metadata_into_query`), so assert on
@@ -321,6 +338,7 @@ async def test_advisory_turn_traces_nodes_with_flow_design_numbering(
             _models(mock_sync_llm_model, mock_streaming_llm_model),
             _sink([]),
             _TRACE,
+            _usage_recorder(),
         )
 
     assert _traced_nodes(caplog) == [
@@ -354,6 +372,7 @@ async def test_off_topic_turn_traces_node_05(
             _models(mock_sync_llm_model, mock_streaming_llm_model, classification="off_topic"),
             _sink([]),
             _TRACE,
+            _usage_recorder(),
         )
 
     assert _traced_nodes(caplog)[-1] == "05_OffTopicRejectNode"
@@ -407,7 +426,7 @@ async def test_one_multi_advisory_task_decomposed_into_sub_queries_uses_the_mult
         security=AcademicSecurityContext(),
     )
 
-    await run_graph(graph_input, models, _sink([]), _TRACE)
+    await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
 
     (prompt,) = seen_prompts
     assert "SQ1. Học phí ngành CNTT bao nhiêu?" in prompt
@@ -454,7 +473,7 @@ async def test_two_advisory_questions_use_the_multi_intent_frame(
         security=AcademicSecurityContext(),
     )
 
-    await run_graph(graph_input, models, _sink([]), _TRACE)
+    await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
 
     (prompt,) = seen_prompts
     assert "SQ1. Học phí ngành CNTT bao nhiêu?" in prompt
@@ -490,7 +509,7 @@ async def test_resuming_a_single_origin_task_folds_the_reply_into_its_query(
         retrieval=retrieval,
     )
 
-    await run_graph(graph_input, models, _sink([]), _TRACE)
+    await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
 
     (query,) = retrieval.queries
     assert query.startswith("học phí của ngành tôi học")
@@ -531,7 +550,7 @@ async def test_resuming_several_origin_tasks_reruns_each_on_its_own_query(
         retrieval=retrieval,
     )
 
-    await run_graph(graph_input, models, _sink([]), _TRACE)
+    await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
 
     assert len(retrieval.queries) == len(origin_tasks)
     for query, task in zip(retrieval.queries, origin_tasks, strict=True):
