@@ -291,6 +291,101 @@ provider thật, và không giải quyết được trường hợp Python đang
 
 Luật nằm ở: `PRODUCT.md` › Glossary (staged credential rotation).
 
+## Cost Tracking — nguồn usage/token
+
+Chi tiết đầy đủ nằm ở
+`backend-java/changes/23-09-2026-Cost-Tracking-Budget-Management/plan.md`. Mục
+này là kết quả spike Task 0: bảng "nguồn usage" cho 4 loại call, xác nhận hook
+duy nhất cho attempt, và vì sao dùng `litellm` chỉ để định giá.
+
+### Bảng nguồn usage theo loại call
+
+| Loại call | Nơi gọi LLM | Cách lấy usage | Provider/model/`chatModelId` thực tế (sau failover) | Latency |
+|---|---|---|---|---|
+| Chat (non-streaming: classification, query transformation) | `run_agent_text_with_failover()` (`app/graph/streaming.py:173-222`), `agent.run(prompt)` | `result = await active_agent.run(prompt)` → `result.usage()` (PydanticAI `RunUsage`: `input_tokens`/`output_tokens`/`cache_read_tokens`). **Hiện bị bỏ qua** — chỉ `result.output` được đọc (dòng 197-198) | Biến local `active_credential` tại đúng vòng lặp `while True` đang chạy (dòng 191-222) — không phải credential lúc bắt đầu request | Đo bằng `time.monotonic()` quanh `await active_agent.run(prompt)`, hiện chưa có |
+| Chat (streaming: generation synthesis, ticket fallback) | `stream_agent_text()` (`app/graph/streaming.py:62-171`), `agent.run_stream(prompt)` | `result.usage()` gọi **bên trong** `async with active_agent.run_stream(prompt) as result:` (dòng 114), ngay sau vòng `async for chunk in result.stream_text(delta=True):` kết thúc (dòng 125), **trước** khi thoát context manager ở dòng 126 — PydanticAI chốt usage khi stream hoàn tất, không phải sau khi context exit | Biến local `active_credential` trong cùng vòng lặp (dòng 106-171) | Đo bằng `time.monotonic()` quanh khối `try:`/`async with` (dòng 113-126), hiện chưa có |
+| Embedding | `OpenAIEmbedder._call_provider()` (`app/rag/embeddings/openai_embedder.py:140-153`), `client.embeddings.create(...)` (dòng 146), raw OpenAI SDK — **chưa migrate sang PydanticAI/model_router** | `response.usage.prompt_tokens` (`response = client.embeddings.create(...)`, dòng 146) — **hiện bị bỏ qua**, chỉ `response.data[*].embedding` được đọc. Nhiều batch/1 lần `embed()` → phải cộng dồn usage qua các batch | `self.credential` (property, dòng 69-74), lấy 1 lần từ `require_top_priority_credential("EMBEDDING")` — **không auto-failover** nên không có "sau failover" | Chưa đo, cần thêm quanh mỗi lần gọi `_call_provider()` |
+| Extraction (multi-representation) | `MultiRepresentationEnricher._call_and_parse()` (`app/rag/enrichment/multi_representation.py:160-191`), `client.chat.completions.create(...)` (dòng 167), raw OpenAI SDK — **chưa migrate** | `response.usage.prompt_tokens`/`completion_tokens` — hiện bị bỏ qua, chỉ `response.choices[0].message.content` được đọc | Biến local `credential`/`resolved_model` trong vòng lặp `while True:` (dòng 96-144), lấy từ `model_router.get_next_credential("EXTRACTION")` mỗi lần thử | Chưa đo, cần thêm quanh `_call_and_parse()` |
+
+Embedding và Extraction hiện vẫn dùng OpenAI SDK trực tiếp (không phải PydanticAI
+`Agent`), nên hình dạng usage khác Chat (`response.usage.prompt_tokens` kiểu
+OpenAI SDK, không phải `result.usage()` kiểu PydanticAI `RunUsage`) —
+`cost_calculator`/`UsageRecorder` (Task 5/6) phải chuẩn hoá 2 hình dạng này về
+cùng 1 kiểu trước khi gửi Java, không giả định mọi nơi đều là PydanticAI.
+
+### Vì sao không có "1 hook duy nhất trước/sau mỗi attempt" sẵn có — và quyết định mở rộng chỗ nào?
+
+Trước Cost Tracking, `model_router`/`streaming.py` chỉ cần biết "attempt này
+lỗi hay không" để quyết định failover — nên hook duy nhất tồn tại là
+`record_failure()` (sau khi lỗi) và `on_failover` (sau khi đã chọn được
+credential thay thế), cả hai đều chỉ chạy trên **nhánh lỗi**. Không có hook nào
+chạy sau một attempt **thành công** — usage/latency của attempt thành công đơn
+giản là bị vứt đi ngay tại chỗ (`result.output`/`response.data` được đọc,
+`result`/`response` bị bỏ qua ngay sau).
+
+Quyết định (thực hiện ở Task 6, không phải Task 0): **không thêm hook thứ hai**
+— mở rộng trực tiếp 2 hàm `stream_agent_text()`/`run_agent_text_with_failover()`
+đã là điểm hội tụ duy nhất của mọi lệnh gọi PydanticAI (module docstring của
+`streaming.py` đã khẳng định đây là "ONLY place" gọi `run_stream()`). Thêm
+tham số `on_attempt` (keyword-only, cùng nhóm với `on_failover`), gọi ở
+**cả 2 nhánh** (`return` thành công và `except` trước khi raise/failover), với
+đủ trường Cost cần: `credential` (→ `chatModelId`/provider/model snapshot),
+`attempt` (đếm từ 0), usage (khi thành công) hoặc `None` (khi lỗi), latency đo
+bằng `time.monotonic()` quanh đúng lệnh gọi provider, `status`
+(SUCCESS/ERROR). Vì cả 2 hàm dùng chung 1 vòng `while True:`, "trước mỗi
+attempt" chính là đầu mỗi vòng lặp — không cần callback riêng, `UsageRecorder`
+(Task 6) tự đặt mốc `time.monotonic()` ngay trước dòng gọi `agent.run(...)`/
+`run_stream(...)` trong closure truyền vào qua `on_attempt`.
+
+Đã cân và loại: thêm `UsageRecorder` như một tham số length riêng đi xuyên qua
+`Agent`/PydanticAI (yêu cầu sửa hợp đồng của thư viện ngoài) · dùng
+`contextvars` để "ngầm" ghi nhận attempt (khó test, khó theo dõi luồng dữ liệu
+hơn một tham số tường minh).
+
+Embedding/Extraction (raw OpenAI SDK) không dùng `stream_agent_text`/
+`run_agent_text_with_failover`, nên Task 8 thêm đo lường **tại chỗ** quanh
+`_call_provider()`/`_call_and_parse()` — không cố dùng chung 1 hook với Chat vì
+2 đường này còn khác cả hình dạng response.
+
+### Vì sao `litellm` chỉ dùng để định giá, và vì sao cần ép `LITELLM_LOCAL_MODEL_COST_MAP=True`?
+
+ADR 0005 (Dynamic Model Registry) đã chốt: không dùng LiteLLM SDK làm đường gọi
+provider (model native PydanticAI mới nhận được `http_client=` đã pin theo
+SSRF guard). Cost Tracking chỉ cần `litellm.completion_cost()`/
+`litellm.cost_per_token()` để tra bảng giá tĩnh theo tên model — 2 hàm test
+được bằng cách spy `socket.socket.connect`.
+
+Spike phát hiện: **`import litellm` mặc định vẫn có thể phát sinh network
+call thật** — không phải trong `cost_per_token()` khi model đã biết (0 call),
+mà trong `get_model_cost_map()` (`litellm/litellm_core_utils/get_model_cost_map.py`),
+chạy lúc `import litellm` và mỗi khi gặp model lạ: nó `httpx.get()` tới
+`https://raw.githubusercontent.com/BerriAI/litellm/.../model_prices_and_context_window.json`
+để cập nhật bảng giá mới nhất, kể cả retry nền bằng thread riêng nếu lần đầu
+thất bại. Set `LITELLM_LOCAL_MODEL_COST_MAP=True` **trước khi import** tắt
+hẳn đường mạng này — package tự dùng bản JSON đóng gói sẵn
+(`model_prices_and_context_window_backup.json`), đã verify bằng test spy
+socket: 0 network call kể cả khi gọi với model không tồn tại trong bảng giá
+(`BadRequestError` được raise, không fetch mạng).
+
+Vì đây là yêu cầu bắt buộc cho SSRF/"factory duy nhất" của ADR 0005 (không
+được có bất kỳ code Python nào mở kết nối mạng ngoài factory đã pin), quyết
+định: `app/core/cost_calculator.py` (module duy nhất được whitelist
+`import litellm`, xem plan Cost Tracking "Vòng 4") tự set
+`os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")` **ngay dòng
+đầu module, trước `import litellm`** — không chỉ dựa vào `.env`, vì `.env`
+có thể bị xoá/quên khi deploy và hậu quả là một network call âm thầm lọt qua
+factory duy nhất. `.env.example` vẫn thêm biến này để tài liệu hoá, nhưng
+code không tin tưởng nó là nguồn duy nhất.
+
+Đã cân và loại: whitelist domain GitHub raw content vào
+`MODEL_REGISTRY_URL_ALLOWLIST` của SSRF guard (mở rộng phạm vi allowlist chỉ
+để phục vụ một thư viện phụ trợ, không phải đường gọi provider — không đáng)
+· vá `litellm.get_model_cost_map` bằng monkeypatch (giòn hơn set 1 env var, dễ
+gãy khi litellm đổi nội bộ).
+
+Luật nằm ở: `backend-java/changes/23-09-2026-Cost-Tracking-Budget-Management/plan.md`
+› Overview, Architecture Decisions.
+
 ## Cấu hình
 
 ### Vì sao mỗi biến môi trường mang một tiền tố theo nhóm (`APP_`, `DB_`, `CHAT_`, `INGEST_`...) thay vì một `env_prefix` riêng cho từng class `BaseSettings`?
