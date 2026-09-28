@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic_ai.models import Model
 
-from app.core.model_registry import CredentialConfig
+from app.core.registry.model_registry import CredentialConfig
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification

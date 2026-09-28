@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.exceptions import ChunkingConfigException
+from app.core.errors.exceptions import ChunkingConfigException
 from app.rag.chunking.recursive import RecursiveChunker
 from app.rag.ingestion.table_aware_parser import ParsedRegion
 from app.schemas.ingestion import RegionType

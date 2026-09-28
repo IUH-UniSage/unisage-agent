@@ -10,15 +10,19 @@ from celery import Celery
 from celery.signals import worker_process_init
 from kombu import Queue
 
-from app.core.alerting import alert_credential_failure
 from app.core.config import settings
-from app.core.embedding_identity import EmbeddingIdentityMismatchError
-from app.core.events import publish_ingestion_event
-from app.core.llm_error_classifier import EmbeddingProviderError, ErrorType, classify_llm_error
-from app.core.logging_config import configure_logging
-from app.core.model_registry import get_current_snapshot, init_model_registry
-from app.core.redaction import safe_error_message
-from app.core.registry_subscriber import start_thread_registry_subscriber
+from app.core.errors.llm_error_classifier import (
+    EmbeddingProviderError,
+    ErrorType,
+    classify_llm_error,
+)
+from app.core.observability.alerting import alert_credential_failure
+from app.core.observability.events import publish_ingestion_event
+from app.core.observability.logging_config import configure_logging
+from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
+from app.core.registry.model_registry import get_current_snapshot, init_model_registry
+from app.core.registry.registry_subscriber import start_thread_registry_subscriber
+from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
@@ -283,7 +287,7 @@ def embed_chunks(
 
 def _report_embedding_provider_failure(exc: EmbeddingProviderError) -> None:
     """Best-effort health report to `backend-java`, same shape CHAT/EXTRACTION
-    failures already report via `app.core.model_router`. A credential
+    failures already report via `app.core.registry.model_router`. A credential
     identity mismatch is always `PERMANENT` (retrying never fixes a wrong model/provider); any
     other embedding provider failure is classified from its underlying cause the same way
     `model_router` classifies CHAT/EXTRACTION failures.

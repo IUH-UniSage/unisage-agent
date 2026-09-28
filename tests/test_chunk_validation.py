@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.exceptions import ChunkValidationException
+from app.core.errors.exceptions import ChunkValidationException
 from app.rag.chunking.validation import validate_chunks
 from app.schemas.ingestion import Chunk, HeaderSource, RegionType, SourceLocator, SourceType
 

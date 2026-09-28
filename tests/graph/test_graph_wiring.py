@@ -7,8 +7,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.core.config import settings
-from app.core.graph_trace import GraphTrace
-from app.core.usage_recorder import UsageRecorder
+from app.core.observability.graph_trace import GraphTrace
+from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.greeting import GREETING_TEMPLATE
 from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE

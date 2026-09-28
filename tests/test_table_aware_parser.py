@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.core.exceptions import UnsupportedFileTypeException
+from app.core.errors.exceptions import UnsupportedFileTypeException
 from app.rag.ingestion.table_aware_parser import _markdown_row_cells, split_regions
 from app.schemas.ingestion import RegionType, SourceType
 from tests.fixtures.documents import (

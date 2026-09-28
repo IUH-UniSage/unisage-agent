@@ -10,9 +10,9 @@ Run once, by hand, with the OLD `.env` embedding configuration, BEFORE flipping
 It measures the fingerprint of the credential that actually produced the vectors already sitting
 in `settings.QDRANT_COLLECTION`, reads that collection's configured vector dimension, and calls
 `PUT /internal/model-registry/embedding-index/{collection}/identity` (only-if-absent — a second
-run, or a run after `app.core.embedding_identity`'s own first-upsert bootstrap already won the
-race, gets a 409 and this tool reads it back and confirms it matches rather than treating that as
-an error).
+run, or a run after `app.core.registry.embedding_identity`'s own first-upsert bootstrap already
+won the race, gets a 409 and this tool reads it back and confirms it matches rather than treating
+that as an error).
 
 Credential source — deliberately NOT `app.core.config.Settings`
 -----------------------------------------------------------------
@@ -45,7 +45,7 @@ from app.core.llm.embedding_probe import (
     unflatten_fingerprint,
 )
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
-from app.core.logging_config import configure_logging
+from app.core.observability.logging_config import configure_logging
 from app.integrations.backend_java_client import BackendJavaClient, BackendJavaHTTPError
 from app.rag.vectorstore import qdrant_store
 
@@ -113,7 +113,8 @@ def main(argv: list[str] | None = None) -> int:
             f"Collection '{args.collection}' does not exist yet - nothing to register an "
             "identity against. This tool is only for an EXISTING collection that already has "
             "vectors from a pre-registry credential; an empty collection establishes its own "
-            "identity on the first ingest batch instead (see app.core.embedding_identity).",
+            "identity on the first ingest batch instead "
+            "(see app.core.registry.embedding_identity).",
             file=sys.stderr,
         )
         return 1

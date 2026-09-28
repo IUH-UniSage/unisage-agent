@@ -145,7 +145,7 @@ class Settings(BaseSettings):
     # Must match backend-java's app.timezone: DAILY/MONTHLY budget periodKeys are cut
     # in this zone.
     APP_TIMEZONE: str = "Asia/Ho_Chi_Minh"
-    # Used by app/core/cost_calculator.py's estimate() when LiteLLM has no price
+    # Used by app/core/usage/cost_calculator.py's estimate() when LiteLLM has no price
     # for a model - a conservative non-zero placeholder so budget reservation
     # never silently estimates $0 for an unpriced model.
     BUDGET_RESERVATION_FALLBACK_USD: float = 0.05

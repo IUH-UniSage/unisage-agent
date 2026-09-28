@@ -9,7 +9,7 @@ this client never sends a separate service secret.
 This client bypasses the API Gateway and talks to `backend-java` directly
 (`settings.BACKEND_JAVA_BASE_URL`), so it also always sends
 `X-Internal-Secret` (the same shared-secret gate this service itself
-enforces on its own inbound endpoints via `app/core/security.py`) - Java
+enforces on its own inbound endpoints via `app/core/security/security.py`) - Java
 uses this to (a) authenticate the caller as `unisage-agent` itself, and (b)
 decide whether to trust an accompanying `X-Guest-Session-Token` header for
 the guest-conversation ownership check, since Python is the one calling
@@ -290,7 +290,7 @@ class BackendJavaClient:
         """`GET /internal/model-registry/snapshot` - the only source of provider
         credentials for this service once the registry is enabled. The response
         carries plaintext API keys - callers must parse it into
-        `app.core.model_registry.ModelRegistrySnapshot` immediately and never log or
+        `app.core.registry.model_registry.ModelRegistrySnapshot` immediately and never log or
         repr the raw dict this returns.
         """
 
@@ -316,9 +316,9 @@ class BackendJavaClient:
         occurred_at: str,
     ) -> dict[str, Any]:
         """`POST /internal/model-registry/credentials/{id}/health` - called by
-        `app.core.model_router` after a provider-call failure. `message` must already
+        `app.core.registry.model_router` after a provider-call failure. `message` must already
         be redacted
-        (`app.core.redaction.safe_error_message`) before it reaches this method; this
+        (`app.core.security.redaction.safe_error_message`) before it reaches this method; this
         client does not redact anything itself.
 
         No secret in the response. No `Authorization` is sent, matching every other
@@ -450,7 +450,7 @@ class BackendJavaClient:
         `lease_token` must be the exact token from the matching `claim_verifications` entry -
         Java rejects a stale/mismatched one with `409` (raised here as `BackendJavaHTTPError`
         with `status_code == 409`; callers must not retry that case). `message` must already
-        be redacted (`app.core.redaction.safe_error_message`)
+        be redacted (`app.core.security.redaction.safe_error_message`)
         before it reaches this method - this client does not redact anything itself.
         `embedding_dimension`/`embedding_fingerprint` are only meaningful for an EMBEDDING
         candidate's `OK` result.

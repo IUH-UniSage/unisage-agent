@@ -10,8 +10,8 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
-from app.core.model_registry import CredentialConfig
-from app.core.model_router import ModelRouter
+from app.core.registry.model_registry import CredentialConfig
+from app.core.registry.model_router import ModelRouter
 from app.graph.streaming import (
     AgentFactory,
     AttemptRecorder,

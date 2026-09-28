@@ -1,4 +1,4 @@
-"""Tests for `app.core.alerting` — debounce/redaction behavior, and one test per
+"""Tests for `app.core.observability.alerting` — debounce/redaction behavior, and one test per
 wiring point proving `alert_credential_failure` is actually called from the site that
 knows a failure is PERMANENT/exhausted, not just that the function works in isolation.
 
@@ -16,11 +16,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import app.core.alerting as alerting
-import app.core.model_registry as model_registry
-from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.model_router import ModelRouter, NoAvailableCredentialError
-from app.core.ssrf_guard import SsrfBlockedError
+import app.core.observability.alerting as alerting
+import app.core.registry.model_registry as model_registry
+from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
+from app.core.registry.model_router import ModelRouter, NoAvailableCredentialError
+from app.core.security.ssrf_guard import SsrfBlockedError
 
 # ── shared fixtures / test doubles ──────────────────────────────────────────
 
@@ -236,21 +236,29 @@ async def test_no_available_credential_has_no_single_credential_but_still_deboun
         None, "NO_AVAILABLE_CREDENTIAL", "exhausted", purpose="CHAT", redis_client=redis_client
     )
     await alerting.alert_credential_failure(
-        None, "NO_AVAILABLE_CREDENTIAL", "exhausted again", purpose="CHAT", redis_client=redis_client
+        None,
+        "NO_AVAILABLE_CREDENTIAL",
+        "exhausted again",
+        purpose="CHAT",
+        redis_client=redis_client,
     )
     await alerting.alert_credential_failure(
-        None, "NO_AVAILABLE_CREDENTIAL", "exhausted", purpose="EXTRACTION", redis_client=redis_client
+        None,
+        "NO_AVAILABLE_CREDENTIAL",
+        "exhausted",
+        purpose="EXTRACTION",
+        redis_client=redis_client,
     )
 
     assert len(sent) == 2  # CHAT collapses to one, EXTRACTION is a separate scope
 
 
-# ── wiring: app.core.model_router ───────────────────────────────────────────
+# ── wiring: app.core.registry.model_router ───────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_model_router_permanent_failure_calls_alert(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.core import model_router as model_router_module
+    from app.core.registry import model_router as model_router_module
 
     alert_mock = AsyncMock()
     monkeypatch.setattr(model_router_module, "alert_credential_failure", alert_mock)
@@ -284,7 +292,7 @@ async def test_model_router_transient_failure_also_calls_alert(
     file) is what keeps a sustained blip from flooding the channel, not
     withholding the alert in the first place."""
 
-    from app.core import model_router as model_router_module
+    from app.core.registry import model_router as model_router_module
 
     alert_mock = AsyncMock()
     monkeypatch.setattr(model_router_module, "alert_credential_failure", alert_mock)
@@ -314,7 +322,7 @@ async def test_model_router_transient_failure_also_calls_alert(
 async def test_model_router_exhaustion_calls_alert_with_no_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.core import model_router as model_router_module
+    from app.core.registry import model_router as model_router_module
 
     alert_mock = AsyncMock()
     monkeypatch.setattr(model_router_module, "alert_credential_failure", alert_mock)
@@ -347,7 +355,7 @@ def test_embed_chunks_calls_alert_on_embedding_provider_error(
     mock_backend_client_cls: MagicMock,
     mock_publish: MagicMock,
 ) -> None:
-    from app.core.llm_error_classifier import EmbeddingProviderError
+    from app.core.errors.llm_error_classifier import EmbeddingProviderError
     from app.worker.celery_app import celery_app, embed_chunks
 
     celery_app.conf.update(

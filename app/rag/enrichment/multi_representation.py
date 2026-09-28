@@ -7,12 +7,12 @@ from dataclasses import dataclass, field
 
 from openai import OpenAI
 
-from app.core import model_router
 from app.core.config import settings
+from app.core.errors.llm_error_classifier import MalformedExtractionResponseError
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
-from app.core.llm_error_classifier import MalformedExtractionResponseError
-from app.core.model_registry import CredentialConfig, get_current_snapshot
-from app.core.usage_recorder import UsageRecorder
+from app.core.registry import model_router
+from app.core.registry.model_registry import CredentialConfig, get_current_snapshot
+from app.core.usage.usage_recorder import UsageRecorder
 from app.rag.prompting.loader import get_templates
 from app.schemas.ingestion import Chunk
 
@@ -40,7 +40,7 @@ class MultiRepresentationEnricher:
     tests/test_multi_representation.py).
 
     When resolving from the registry, credential selection and failover go through
-    `app.core.model_router` - the same circuit breaker CHAT streaming already uses -
+    `app.core.registry.model_router` - the same circuit breaker CHAT streaming already uses -
     never a second, home-grown cooldown/exclusion mechanism. Every attempt
     (primary and every fallback) builds its `OpenAI` client through the same SSRF-guarded
     `build_provider_http_client_sync()` factory.

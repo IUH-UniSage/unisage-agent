@@ -8,11 +8,11 @@ Two independent protections live here:
     stray `logging.getLogger("openai").setLevel(logging.DEBUG)` elsewhere, or
     a library's own default, can't leak an `Authorization` header into the log
     stream. `settings.APP_DEBUG` only controls this service's *own* verbose
-    output (see `app/core/graph_trace.py`'s prompt dump) — it must never raise
+    output (see `app/core/observability/graph_trace.py`'s prompt dump) — it must never raise
     these levels back up.
   - `SecretRedactionFilter`, attached to every handler on the root logger
     (not to the root *logger* object itself — see note below), runs
-    `app.core.redaction.redact` over every record's formatted message *and*
+    `app.core.security.redaction.redact` over every record's formatted message *and*
     its exception traceback (`exc_info`) / `stack_info` before that handler
     writes it out — the last line of defense for anything that slips past the
     level cap above or a `safe_error_message()` call site a developer forgot.
@@ -35,7 +35,7 @@ from __future__ import annotations
 import logging
 import traceback
 
-from app.core.redaction import redact
+from app.core.security.redaction import redact
 
 # Silenced because they can log request headers/bodies (may contain the
 # provider API key) at DEBUG — plan.md "Secret redaction".
@@ -106,7 +106,9 @@ def configure_logging() -> None:
     root between calls (as pytest's logging plugin does) still gets covered
     on the next call, unlike a one-shot "already configured" guard would."""
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
 
     for handler in logging.getLogger().handlers:
         if not any(isinstance(existing, SecretRedactionFilter) for existing in handler.filters):

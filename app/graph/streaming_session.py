@@ -40,9 +40,9 @@ from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.graph_trace import GraphTrace
-from app.core.model_router import NoAvailableCredentialError
-from app.core.usage_recorder import UsageRecorder
+from app.core.observability.graph_trace import GraphTrace
+from app.core.registry.model_router import NoAvailableCredentialError
+from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import async_session_factory
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem

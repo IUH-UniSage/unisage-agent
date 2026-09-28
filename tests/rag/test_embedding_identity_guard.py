@@ -1,5 +1,4 @@
-"""`app.core.embedding_identity.ensure_embedding_identity` — plan.md "Embedding identity guard",
-todo.md Task 13b.
+"""`app.core.registry.embedding_identity.ensure_embedding_identity`.
 
 Every case that refuses (mismatch, or vectors-but-no-identity) is proven with a call-count
 assertion on the probe callable, not just "an exception was raised" — the acceptance criterion is
@@ -14,14 +13,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.core.embedding_identity import (
+from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.registry.embedding_identity import (
     EmbeddingIdentityMismatchError,
     ensure_embedding_identity,
     identity_key,
     reset_verified_cache_for_tests,
 )
-from app.core.llm_error_classifier import EmbeddingProviderError
-from app.core.model_registry import CredentialConfig, EmbeddingIndexIdentity, ModelRegistrySnapshot
+from app.core.registry.model_registry import (
+    CredentialConfig,
+    EmbeddingIndexIdentity,
+    ModelRegistrySnapshot,
+)
 from app.integrations.backend_java_client import BackendJavaHTTPError
 
 _DIMENSION = 3

@@ -16,7 +16,7 @@ import certifi
 import httpcore
 import httpx
 
-from app.core.ssrf_guard import PinnedNetworkBackend, PinnedNetworkBackendSync
+from app.core.security.ssrf_guard import PinnedNetworkBackend, PinnedNetworkBackendSync
 
 
 class ProviderRedirectRejectedError(Exception):
@@ -62,7 +62,7 @@ def build_provider_http_client(credential: ProviderConnectionInfo) -> httpx.Asyn
     `follow_redirects=False` plus an event hook: every 3xx becomes `ProviderRedirectRejectedError`
     rather than something a caller could accidentally read the body of. The transport's
     `network_backend` is `PinnedNetworkBackend`, so every connection this client makes resolves
-    once and connects to that verified IP — see `app/core/ssrf_guard.py`.
+    once and connects to that verified IP — see `app/core/security/ssrf_guard.py`.
     """
 
     network_backend = PinnedNetworkBackend(allowlist=credential.allowlisted_hosts)

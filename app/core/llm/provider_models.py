@@ -22,7 +22,7 @@ from pydantic_ai.providers.mistral import MistralProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client
-from app.core.model_registry import CredentialConfig
+from app.core.registry.model_registry import CredentialConfig
 
 _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 
@@ -52,11 +52,11 @@ _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 # type-hint-only mismatch: `AnthropicProvider(api_key=..., http_client=httpx.AsyncClient())` ->
 # "Invalid `http_client` argument; `httpx.AsyncClient` is from the `httpx` package, but this SDK
 # uses `httpx2`."). `build_provider_http_client()` (app/core/llm/http_client.py) only ever builds
-# a plain `httpx.AsyncClient` backed by httpcore's `PinnedNetworkBackend` (app/core/ssrf_guard.py)
-# — there is no SSRF-pinned client this module can hand to `AnthropicProvider` today. Wiring
-# "anthropic" in here anyway would mean either constructing an *unpinned* httpx2 client (an SSRF
-# hole — never acceptable per plan.md "SSRF guard is a gate") or building a second,
-# httpcore2-based `PinnedNetworkBackend` equivalent (a change to `app/core/ssrf_guard.py`/
+# a plain `httpx.AsyncClient` backed by httpcore's `PinnedNetworkBackend`
+# (app/core/security/ssrf_guard.py) — there is no SSRF-pinned client this module can hand to
+# `AnthropicProvider` today. Wiring "anthropic" in here anyway would mean either constructing an
+# *unpinned* httpx2 client (an SSRF hole — never acceptable) or building a second,
+# httpcore2-based `PinnedNetworkBackend` equivalent (a change to `app/core/security/ssrf_guard.py`/
 # `http_client.py`, with its own redirect/TLS/rebinding/proxy test suite — out of this task's
 # scope). Until that exists, a credential with provider="anthropic" raises
 # `UnsupportedProviderError` rather than silently skipping the guard.

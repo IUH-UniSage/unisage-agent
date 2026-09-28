@@ -3,7 +3,7 @@
 failure) to a Chat response. The Celery drain worker that moves items from here to
 Java (`drain_usage_outbox` task) is a separate piece, not implemented by this module.
 
-Same "degrade, don't crash the caller" posture as `app/core/alerting.py`, but the
+Same "degrade, don't crash the caller" posture as `app/core/observability/alerting.py`, but the
 failure here is logged at ERROR (not WARNING): a lost alert is just silence, a lost
 usage payload is unrecoverable cost data for that request.
 """

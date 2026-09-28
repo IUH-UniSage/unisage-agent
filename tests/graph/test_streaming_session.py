@@ -7,8 +7,8 @@ import pytest
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.model_router import NoAvailableCredentialError
-from app.core.usage_recorder import UsageRecorder
+from app.core.registry.model_router import NoAvailableCredentialError
+from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem

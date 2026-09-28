@@ -6,8 +6,8 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from app.core.model_registry import CredentialConfig
-from app.core.model_router import ModelRouter
+from app.core.registry.model_registry import CredentialConfig
+from app.core.registry.model_router import ModelRouter
 from app.graph.nodes.message_classification import (
     MAX_TASKS,
     build_classification_agent,
@@ -251,7 +251,7 @@ async def test_classify_intent_fails_over_to_the_next_credential_on_a_transient_
     fallback = _credential("cred-fallback", priority=2)
     router = ModelRouter(redis_client=_FakeRedis(), backend_client=_FakeBackendClient())
     monkeypatch.setattr(
-        "app.core.model_router.active_credentials_for", lambda purpose: [primary, fallback]
+        "app.core.registry.model_router.active_credentials_for", lambda purpose: [primary, fallback]
     )
 
     def failing_function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:

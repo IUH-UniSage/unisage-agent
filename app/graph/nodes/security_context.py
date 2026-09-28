@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from fastapi import Header
 
-from app.core.exceptions import InvalidTrustedContextException
+from app.core.errors.exceptions import InvalidTrustedContextException
 from app.schemas.clarification import PendingClarification
 from app.schemas.intent import ClassifiedTask
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry

@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-import app.core.usage_outbox as usage_outbox_module
-from app.core.model_registry import CredentialConfig
-from app.core.usage_recorder import UsageRecorder
+import app.core.usage.usage_outbox as usage_outbox_module
+from app.core.registry.model_registry import CredentialConfig
+from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.streaming import AttemptOutcome
 
 

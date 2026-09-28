@@ -6,7 +6,7 @@ Drives `run_and_persist` + `_sse_token_generator` directly (same level as
 `tests/graph/test_streaming_session.py`) rather than the full HTTP
 endpoint, so the queue's typed items and the exact SSE bytes can both be
 asserted without an extra ASGI layer in the way. No live Redis/backend-java
-anywhere here: `app.core.model_router`'s process-wide default router is
+anywhere here: `app.core.registry.model_router`'s process-wide default router is
 swapped for one backed by hand-rolled fakes (same spirit as
 `tests/core/test_model_router.py`), and `app.graph.streaming.build_model` is
 monkeypatched so a "fallback credential" resolves to a `FunctionModel`
@@ -23,13 +23,13 @@ import pytest
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.model_registry as model_registry
-import app.core.model_router as model_router_module
+import app.core.registry.model_registry as model_registry
+import app.core.registry.model_router as model_router_module
 from app.api.v1.chat import _sse_token_generator
 from app.core.config import settings
-from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.model_router import ModelRouter
-from app.core.usage_recorder import UsageRecorder
+from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
+from app.core.registry.model_router import ModelRouter
+from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED, LLM_UNAVAILABLE
 from app.graph.streaming_session import run_and_persist

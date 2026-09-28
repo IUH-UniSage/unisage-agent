@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from qdrant_client import QdrantClient
 
-from app.core.exceptions import DocumentChunksNotFoundException
+from app.core.errors.exceptions import DocumentChunksNotFoundException
 from app.database.repositories.chunk import ChunkPageDTO, ChunkRepository
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import IndexedChunk

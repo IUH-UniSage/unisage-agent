@@ -26,7 +26,7 @@ from app.core.llm.http_client import (
     ProviderRedirectRejectedError,
     build_provider_http_client_sync,
 )
-from app.core.ssrf_guard import PinnedNetworkBackendSync
+from app.core.security.ssrf_guard import PinnedNetworkBackendSync
 
 BLOCKED_TARGET = "169.254.169.254"
 

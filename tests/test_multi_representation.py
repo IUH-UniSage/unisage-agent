@@ -4,11 +4,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import app.core.model_registry as model_registry
-import app.core.model_router as model_router_module
-import app.core.usage_outbox as usage_outbox_module
-from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.model_router import ModelRouter, NoAvailableCredentialError
+import app.core.registry.model_registry as model_registry
+import app.core.registry.model_router as model_router_module
+import app.core.usage.usage_outbox as usage_outbox_module
+from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
+from app.core.registry.model_router import ModelRouter, NoAvailableCredentialError
 from app.rag.enrichment.multi_representation import (
     MalformedExtractionResponseError,
     MultiRepresentationEnricher,

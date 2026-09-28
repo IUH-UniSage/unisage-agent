@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import tiktoken
 
 from app.core.config import settings
-from app.core.exceptions import ChunkingConfigException
+from app.core.errors.exceptions import ChunkingConfigException
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.embeddings.provider import EmbeddingProvider
 from app.rag.ingestion.table_aware_parser import ParsedRegion

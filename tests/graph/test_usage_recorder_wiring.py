@@ -14,13 +14,13 @@ import pytest
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.model_registry as model_registry
-import app.core.model_router as model_router_module
-import app.core.usage_outbox as usage_outbox_module
+import app.core.registry.model_registry as model_registry
+import app.core.registry.model_router as model_router_module
+import app.core.usage.usage_outbox as usage_outbox_module
 from app.core.config import settings
-from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.model_router import ModelRouter
-from app.core.usage_recorder import UsageRecorder
+from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
+from app.core.registry.model_router import ModelRouter
+from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.queue_items import QueueItem
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
@@ -76,8 +76,9 @@ def captured_outbox(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         captured.append(json.loads(json.dumps(payload)))
 
     monkeypatch.setattr(usage_outbox_module, "enqueue_usage_payload", _fake_enqueue)
-    # UsageRecorder.close() does `from app.core.usage_outbox import enqueue_usage_payload` as a
-    # LOCAL import - patching the module attribute above is what that import sees at call time.
+    # UsageRecorder.close() does
+    # `from app.core.usage.usage_outbox import enqueue_usage_payload` as a LOCAL import -
+    # patching the module attribute above is what that import sees at call time.
     return captured
 
 

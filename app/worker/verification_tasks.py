@@ -26,14 +26,14 @@ from openai import OpenAI
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
-from app.core.alerting import alert_credential_failure
 from app.core.config import settings
+from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
 from app.core.llm.embedding_probe import EmbeddingFingerprint, measure_fingerprint
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 from app.core.llm.provider_models import build_model
-from app.core.llm_error_classifier import ErrorType, classify_llm_error
-from app.core.model_registry import CredentialConfig
-from app.core.redaction import safe_error_message
+from app.core.observability.alerting import alert_credential_failure
+from app.core.registry.model_registry import CredentialConfig
+from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import (
     BackendJavaClient,
     BackendJavaConnectionError,
@@ -71,7 +71,9 @@ def try_acquire_verification_lock(redis_url: str | None = None) -> bool:
     try:
         conn = redis.Redis.from_url(redis_url or settings.REDIS_URL)
         try:
-            return bool(conn.set(VERIFICATION_LOCK_KEY, "1", nx=True, ex=VERIFICATION_LOCK_TTL_SECONDS))
+            return bool(
+                conn.set(VERIFICATION_LOCK_KEY, "1", nx=True, ex=VERIFICATION_LOCK_TTL_SECONDS)
+            )
         finally:
             conn.close()
     except Exception:
@@ -83,7 +85,7 @@ def try_acquire_verification_lock(redis_url: str | None = None) -> bool:
 
 def _credential_from_candidate(candidate: dict[str, Any]) -> CredentialConfig:
     """Builds a `CredentialConfig` from one claim response entry's `credential` object -
-    same field names `app.core.model_registry._parse_credential` reads off the snapshot,
+    same field names `app.core.registry.model_registry._parse_credential` reads off the snapshot,
     minus `revision` (a candidate under verification has none yet meaningful to attach to a
     health report, and nothing here sends one)."""
 
@@ -102,7 +104,7 @@ def _credential_from_candidate(candidate: dict[str, Any]) -> CredentialConfig:
 
 def _error_code_for(exc: Exception) -> str:
     """A short, non-secret-bearing code for the result's `errorCode` field - same shape
-    `app.core.model_router._error_code_for` uses for health reports."""
+    `app.core.registry.model_router._error_code_for` uses for health reports."""
 
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int):
@@ -121,9 +123,7 @@ async def _run_minimal_completion(credential: CredentialConfig) -> None:
     await asyncio.wait_for(
         agent.run(
             _MINIMAL_COMPLETION_PROMPT,
-            model_settings=ModelSettings(
-                max_tokens=_MINIMAL_COMPLETION_MAX_TOKENS, thinking=False
-            ),
+            model_settings=ModelSettings(max_tokens=_MINIMAL_COMPLETION_MAX_TOKENS, thinking=False),
         ),
         timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
     )
@@ -256,7 +256,7 @@ async def _verify_one_job(job: dict[str, Any], *, client: BackendJavaClient) -> 
             credential.id,
             attempt,
         )
-    except Exception as exc:  # noqa: BLE001 - classified below, never re-raised bare
+    except Exception as exc:
         error_type = classify_llm_error(exc)
         result_type = "TRANSIENT" if error_type is ErrorType.TRANSIENT else "PERMANENT"
         message = safe_error_message(exc, credential.api_key)

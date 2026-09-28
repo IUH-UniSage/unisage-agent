@@ -19,8 +19,8 @@ never Celery's broker/backend DBs) under key prefix `mr:cb:` so every worker pro
 agrees. When Redis is unreachable, the router degrades to **per-process, in-memory**
 state instead of raising — each worker may then make a locally-inconsistent decision,
 which is the accepted tradeoff (todo.md: "degrade, không crash"). This mirrors the
-try/log/swallow-on-Redis-failure pattern already used by `app.core.events` (Celery
-worker publishing ingestion progress) and `app.core.registry_subscriber` (a dropped
+try/log/swallow-on-Redis-failure pattern already used by `app.core.observability.events` (Celery
+worker publishing ingestion progress) and `app.core.registry.registry_subscriber` (a dropped
 pub/sub connection is logged and retried, never fatal).
 
 The router always reports health to Java (`report_health`) on failure — TRANSIENT and
@@ -51,11 +51,11 @@ from typing import Any, Protocol
 
 import redis.asyncio as redis_asyncio
 
-from app.core.alerting import alert_credential_failure
 from app.core.config import settings
-from app.core.llm_error_classifier import ErrorType, classify_llm_error
-from app.core.model_registry import CredentialConfig, active_credentials_for
-from app.core.redaction import safe_error_message
+from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.observability.alerting import alert_credential_failure
+from app.core.registry.model_registry import CredentialConfig, active_credentials_for
+from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import BackendJavaClient
 
 logger = logging.getLogger(__name__)
@@ -331,9 +331,7 @@ class ModelRouter:
             ttl = _extract_retry_after_seconds(exc) or self._default_cooldown_seconds
             await self._mark(key, ttl)
 
-        await alert_credential_failure(
-            credential, error_type.value, message, purpose=purpose
-        )
+        await alert_credential_failure(credential, error_type.value, message, purpose=purpose)
 
         try:
             await self._backend_client.report_health(

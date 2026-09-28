@@ -11,7 +11,7 @@ from qdrant_client import QdrantClient
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.model_registry import get_current_snapshot
+from app.core.registry.model_registry import get_current_snapshot
 from app.database.session import async_session_factory
 from app.schemas.common import ApiResponse
 

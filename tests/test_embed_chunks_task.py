@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.core.llm_error_classifier import EmbeddingProviderError
-from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot
+from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot
 from app.worker.celery_app import celery_app, embed_chunks
 
 celery_app.conf.update(
@@ -171,12 +171,15 @@ def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
     mock_qdrant_store.get_client.return_value = MagicMock()
     mock_backend_client_cls.return_value.report_health = AsyncMock(return_value={"applied": True})
 
-    with patch(
-        "app.worker.celery_app.get_current_snapshot",
-        return_value=ModelRegistrySnapshot(
-            version=1, generated_at=None, purposes={}, embedding_index_identity=None
+    with (
+        patch(
+            "app.worker.celery_app.get_current_snapshot",
+            return_value=ModelRegistrySnapshot(
+                version=1, generated_at=None, purposes={}, embedding_index_identity=None
+            ),
         ),
-    ), pytest.raises(EmbeddingProviderError):
+        pytest.raises(EmbeddingProviderError),
+    ):
         embed_chunks.apply(
             args=(
                 "doc-1",

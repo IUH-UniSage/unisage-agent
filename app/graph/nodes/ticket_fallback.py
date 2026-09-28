@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
-from app.core.model_registry import CredentialConfig
+from app.core.registry.model_registry import CredentialConfig
 from app.graph.streaming import AttemptRecorder, FailoverCallback, TokenSink, stream_agent_text
 from app.rag.prompting import build_ticket_fallback_prompt
 from app.schemas.chat_history import HistoryMessage

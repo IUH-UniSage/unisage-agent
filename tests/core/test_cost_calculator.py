@@ -3,8 +3,8 @@
 
 from decimal import Decimal
 
-from app.core import cost_calculator
-from app.core.cost_calculator import (
+from app.core.usage import cost_calculator
+from app.core.usage.cost_calculator import (
     COST_STATUS_FREE,
     COST_STATUS_PRICED,
     COST_STATUS_UNPRICED,
@@ -37,7 +37,9 @@ def test_calculate_actual_unpriced_model_falls_back_to_estimate(caplog) -> None:
 
     assert result.cost_status == COST_STATUS_UNPRICED
     assert result.cost_usd is None
-    assert result.estimated_cost_usd == Decimal(str(cost_calculator.settings.BUDGET_RESERVATION_FALLBACK_USD))
+    assert result.estimated_cost_usd == Decimal(
+        str(cost_calculator.settings.BUDGET_RESERVATION_FALLBACK_USD)
+    )
     assert "UNPRICED" in caplog.text or "no LiteLLM price" in caplog.text
 
 
@@ -60,21 +62,31 @@ def test_calculate_actual_self_hosted_is_free_without_calling_litellm(monkeypatc
 
 
 def test_estimate_priced_model() -> None:
-    value = estimate(model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=1000, max_output_tokens=500)
+    value = estimate(
+        model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=1000, max_output_tokens=500
+    )
 
     assert value > Decimal("0")
 
 
 def test_estimate_unpriced_model_uses_fallback() -> None:
     value = estimate(
-        model_name="totally-unknown-model-xyz", source_type="CLOUD_API", input_tokens=1000, max_output_tokens=500
+        model_name="totally-unknown-model-xyz",
+        source_type="CLOUD_API",
+        input_tokens=1000,
+        max_output_tokens=500,
     )
 
     assert value == Decimal(str(cost_calculator.settings.BUDGET_RESERVATION_FALLBACK_USD))
 
 
 def test_estimate_self_hosted_is_zero() -> None:
-    value = estimate(model_name="local-llama", source_type="SELF_HOSTED", input_tokens=1000, max_output_tokens=500)
+    value = estimate(
+        model_name="local-llama",
+        source_type="SELF_HOSTED",
+        input_tokens=1000,
+        max_output_tokens=500,
+    )
 
     assert value == Decimal("0")
 
@@ -111,8 +123,17 @@ def test_cost_per_token_never_opens_a_network_connection(monkeypatch) -> None:
 
     monkeypatch.setattr(socket.socket, "connect", spy_connect)
 
-    calculate_actual(model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=100, output_tokens=50)
-    calculate_actual(model_name="totally-unknown-model-xyz", source_type="CLOUD_API", input_tokens=100, output_tokens=50)
-    estimate(model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=100, max_output_tokens=50)
+    calculate_actual(
+        model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=100, output_tokens=50
+    )
+    calculate_actual(
+        model_name="totally-unknown-model-xyz",
+        source_type="CLOUD_API",
+        input_tokens=100,
+        output_tokens=50,
+    )
+    estimate(
+        model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=100, max_output_tokens=50
+    )
 
     assert calls == [], f"litellm made unexpected network connection(s): {calls}"

@@ -17,8 +17,8 @@ from pydantic_ai.providers.mistral import MistralProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.provider_models import UnsupportedProviderError, build_model
-from app.core.model_registry import CredentialConfig
-from app.core.ssrf_guard import PinnedNetworkBackend
+from app.core.registry.model_registry import CredentialConfig
+from app.core.security.ssrf_guard import PinnedNetworkBackend
 
 
 def _credential(**overrides: object) -> CredentialConfig:
@@ -149,7 +149,9 @@ def test_google_provider_http_client_reaches_pinned_backend(
 
     _drive_one_request(httpx_client)
 
-    assert connect_tcp_spy, "GoogleProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    assert connect_tcp_spy, (
+        "GoogleProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    )
     assert all(host == "generativelanguage.googleapis.com" for host, _ in connect_tcp_spy)
 
 
@@ -182,7 +184,9 @@ def test_groq_provider_http_client_reaches_pinned_backend(
 
     _drive_one_request(httpx_client)
 
-    assert connect_tcp_spy, "GroqProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    assert connect_tcp_spy, (
+        "GroqProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    )
     assert all(host == "api.groq.com" for host, _ in connect_tcp_spy)
 
 
@@ -215,5 +219,7 @@ def test_mistral_provider_http_client_reaches_pinned_backend(
 
     _drive_one_request(httpx_client)
 
-    assert connect_tcp_spy, "MistralProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    assert connect_tcp_spy, (
+        "MistralProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
+    )
     assert all(host == "api.mistral.ai" for host, _ in connect_tcp_spy)

@@ -13,13 +13,13 @@ import os
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
-import logging  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
-from decimal import Decimal  # noqa: E402
+import logging
+from dataclasses import dataclass
+from decimal import Decimal
 
-import litellm  # noqa: E402
+import litellm
 
-from app.core.config import settings  # noqa: E402
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,9 @@ class CostResult:
     cost_status: str
 
 
-def _cost_per_token(model_name: str, input_tokens: int, output_tokens: int, cached_tokens: int) -> Decimal | None:
+def _cost_per_token(
+    model_name: str, input_tokens: int, output_tokens: int, cached_tokens: int
+) -> Decimal | None:
     try:
         prompt_cost, completion_cost = litellm.cost_per_token(
             model=model_name,
@@ -66,23 +68,31 @@ def calculate_actual(
     """
 
     if source_type == SOURCE_TYPE_SELF_HOSTED:
-        return CostResult(cost_usd=Decimal("0"), estimated_cost_usd=Decimal("0"), cost_status=COST_STATUS_FREE)
+        return CostResult(
+            cost_usd=Decimal("0"), estimated_cost_usd=Decimal("0"), cost_status=COST_STATUS_FREE
+        )
 
     cost = _cost_per_token(model_name, input_tokens, output_tokens, cached_tokens)
     if cost is None:
-        logger.warning("cost_calculator: no LiteLLM price for model %r - marking UNPRICED", model_name)
+        logger.warning(
+            "cost_calculator: no LiteLLM price for model %r - marking UNPRICED", model_name
+        )
         fallback = estimate(
             model_name=model_name,
             source_type=source_type,
             input_tokens=input_tokens,
             max_output_tokens=output_tokens,
         )
-        return CostResult(cost_usd=None, estimated_cost_usd=fallback, cost_status=COST_STATUS_UNPRICED)
+        return CostResult(
+            cost_usd=None, estimated_cost_usd=fallback, cost_status=COST_STATUS_UNPRICED
+        )
 
     return CostResult(cost_usd=cost, estimated_cost_usd=cost, cost_status=COST_STATUS_PRICED)
 
 
-def estimate(*, model_name: str, source_type: str, input_tokens: int, max_output_tokens: int) -> Decimal:
+def estimate(
+    *, model_name: str, source_type: str, input_tokens: int, max_output_tokens: int
+) -> Decimal:
     """Upper-bound estimate for a Redis reservation, before the real call happens."""
 
     if source_type == SOURCE_TYPE_SELF_HOSTED:

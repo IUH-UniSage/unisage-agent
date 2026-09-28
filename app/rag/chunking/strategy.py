@@ -1,7 +1,7 @@
 from typing import Any, Protocol
 
 from app.core.config import settings
-from app.core.exceptions import StrategyFileTypeMismatchException
+from app.core.errors.exceptions import StrategyFileTypeMismatchException
 from app.rag.chunking.excel_rows import ExcelRowChunker
 from app.rag.chunking.markdown_aware import MarkdownAwareChunker
 from app.rag.chunking.recursive import RecursiveChunker

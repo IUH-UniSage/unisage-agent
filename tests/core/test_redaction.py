@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from app.core.redaction import redact
+from app.core.security.redaction import redact
 
 _VECTORS = json.loads(
-    (Path(__file__).resolve().parents[2] / "contracts" / "vendor" / "redaction-vectors.json").read_text(
-        encoding="utf-8"
-    )
+    (
+        Path(__file__).resolve().parents[2] / "contracts" / "vendor" / "redaction-vectors.json"
+    ).read_text(encoding="utf-8")
 )["vectors"]
 
 

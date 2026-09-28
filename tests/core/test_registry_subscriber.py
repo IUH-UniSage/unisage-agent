@@ -1,5 +1,5 @@
-"""`app.core.registry_subscriber` — Task 8's hot-reload: a pub/sub listener + independent
-poll, both funneling into the same atomic swap of `app.core.model_registry`'s cached
+"""`app.core.registry.registry_subscriber` — Task 8's hot-reload: a pub/sub listener + independent
+poll, both funneling into the same atomic swap of `app.core.registry.model_registry`'s cached
 snapshot.
 
 No live Redis anywhere here — a hand-rolled fake pub/sub connection (this repo has no
@@ -17,10 +17,10 @@ from typing import Any
 
 import pytest
 
-import app.core.model_registry as model_registry
-import app.core.registry_subscriber as registry_subscriber
-from app.core.model_registry import get_current_snapshot, parse_snapshot
-from app.core.registry_subscriber import (
+import app.core.registry.model_registry as model_registry
+import app.core.registry.registry_subscriber as registry_subscriber
+from app.core.registry.model_registry import get_current_snapshot, parse_snapshot
+from app.core.registry.registry_subscriber import (
     RegistrySubscriberHandle,
     _consume_pubsub_messages,
     _parse_version_message,

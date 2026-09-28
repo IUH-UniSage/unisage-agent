@@ -10,7 +10,7 @@ from app.api.deps import (
     require_department_membership,
     require_document_permission,
 )
-from app.core.exceptions import UniSageException
+from app.core.errors.exceptions import UniSageException
 
 app = FastAPI()
 

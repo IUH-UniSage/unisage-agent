@@ -1,4 +1,4 @@
-"""Tests for `app.core.model_router` — todo.md Task 10.
+"""Tests for `app.core.registry.model_router` — todo.md Task 10.
 
 No live Redis, no live `backend-java` anywhere in this file: Redis is a hand-rolled
 fake async client (this repo has no `fakeredis` dependency, matching
@@ -15,9 +15,9 @@ import httpx2
 import openai
 import pytest
 
-import app.core.model_registry as model_registry
-from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.model_router import ModelRouter, NoAvailableCredentialError, _state_key
+import app.core.registry.model_registry as model_registry
+from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
+from app.core.registry.model_router import ModelRouter, NoAvailableCredentialError, _state_key
 
 # ── fixtures / test doubles ─────────────────────────────────────────────────
 

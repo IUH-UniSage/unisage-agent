@@ -30,14 +30,14 @@ import openai
 from mistralai.client.errors import MistralError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from app.core.ssrf_guard import SsrfBlockedError
+from app.core.security.ssrf_guard import SsrfBlockedError
 
 
 class EmbeddingProviderError(Exception):
     """Raised when the ACTIVE EMBEDDING credential itself is unusable — the actual provider call
     failed (auth/connection/rate-limit/...), there is no ACTIVE EMBEDDING credential at all, or
-    the embedding identity guard (`app.core.embedding_identity`) refused to use it. Embedding
-    never auto-fails-over (plan.md "Embedding identity guard") — there is no other credential to
+    the embedding identity guard (`app.core.registry.embedding_identity`) refused to use
+    it. Embedding never auto-fails-over — there is no other credential to
     route to, so this is always terminal for the job. Every caller
     (`OpenAIEmbedder.embed`, and transitively `app.worker.celery_app.embed_chunks` and
     `app.rag.retrieval.service.RetrievalService`) must let this escape uncaught rather than
@@ -101,11 +101,21 @@ def _dict_signals_quota_exhaustion(body: dict[str, Any]) -> bool:
     # Different SDKs hand the 429 body to us at different nesting depths (see provider-specific
     # comments where each is wired below) — check both the top level and a nested "error" key
     # rather than assuming one shape.
-    candidates: list[Any] = [body.get("code"), body.get("status"), body.get("type"), body.get("message")]
+    candidates: list[Any] = [
+        body.get("code"),
+        body.get("status"),
+        body.get("type"),
+        body.get("message"),
+    ]
     nested = body.get("error")
     if isinstance(nested, dict):
-        candidates.extend([nested.get("code"), nested.get("status"), nested.get("type"), nested.get("message")])
-    return any(isinstance(candidate, str) and _text_signals_quota_exhaustion(candidate) for candidate in candidates)
+        candidates.extend(
+            [nested.get("code"), nested.get("status"), nested.get("type"), nested.get("message")]
+        )
+    return any(
+        isinstance(candidate, str) and _text_signals_quota_exhaustion(candidate)
+        for candidate in candidates
+    )
 
 
 def _quota_exhausted(*sources: object | None) -> bool:

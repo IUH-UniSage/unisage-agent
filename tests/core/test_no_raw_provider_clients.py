@@ -21,8 +21,8 @@ AST-scans every `.py` file under `app/` for:
   - Any `import litellm` / `from litellm import ...` anywhere in `app/` — ADR
     0005 rejected LiteLLM as the provider-calling SDK (couldn't inject a
     pinned transport), so it must never come back **as a way to call a
-    provider**. One narrow exception: `app/core/cost_calculator.py` (Cost
-    Tracking plan) is allowed to `import litellm` **only** to call
+    provider**. One narrow exception: `app/core/usage/cost_calculator.py` is
+    allowed to `import litellm` **only** to call
     `litellm.completion_cost()`/`litellm.cost_per_token()` for offline price
     lookups — those two functions read a static pricing table and (with
     `LITELLM_LOCAL_MODEL_COST_MAP=True`, which that module sets before the
@@ -48,10 +48,10 @@ _HTTPX_CLIENT_ALLOWED_FILES = {
     _APP_ROOT / "integrations" / "slack_notifier.py",
 }
 
-# Cost Tracking plan: the only file allowed to `import litellm`, and only for
-# offline price lookups — see module docstring.
+# The only file allowed to `import litellm`, and only for offline price
+# lookups — see module docstring.
 _LITELLM_IMPORT_ALLOWED_FILES = {
-    _APP_ROOT / "core" / "cost_calculator.py",
+    _APP_ROOT / "core" / "usage" / "cost_calculator.py",
 }
 
 # Functions that actually call a provider (network) — banned everywhere,
@@ -103,7 +103,7 @@ def _violations_in_file(path: Path) -> list[str]:
                 if path not in _LITELLM_IMPORT_ALLOWED_FILES:
                     violations.append(
                         f"{path}:{node.lineno}: `import litellm` is banned outside "
-                        "app/core/cost_calculator.py (ADR 0005)"
+                        "app/core/usage/cost_calculator.py (ADR 0005)"
                     )
             continue
 
@@ -128,7 +128,7 @@ def _violations_in_file(path: Path) -> list[str]:
             violations.append(
                 f"{path}:{node.lineno}: litellm.{func.attr}(...) calls a provider "
                 "over the network - banned everywhere, even in "
-                "app/core/cost_calculator.py (only completion_cost/cost_per_token "
+                "app/core/usage/cost_calculator.py (only completion_cost/cost_per_token "
                 "price lookups are allowed there)"
             )
             continue

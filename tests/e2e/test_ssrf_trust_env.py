@@ -24,7 +24,7 @@ from collections.abc import Iterator
 import pytest
 
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
-from app.core.ssrf_guard import PinnedNetworkBackendSync
+from app.core.security.ssrf_guard import PinnedNetworkBackendSync
 
 
 class _CountingProxyHandler(http.server.BaseHTTPRequestHandler):

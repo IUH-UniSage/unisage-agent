@@ -1,7 +1,6 @@
-"""`app.core.model_registry` — parses `GET /internal/model-registry/snapshot` into an in-memory
-frozen dataclass and gates startup (plan.md "Internal API contract" endpoint #1, "Cutover khỏi
-cấu hình `.env` tĩnh"). Java's real response shape is exercised against `httpx.MockTransport`,
-never a live Java instance.
+"""`app.core.registry.model_registry` — parses `GET /internal/model-registry/snapshot` into an
+in-memory frozen dataclass and gates startup. Java's real response shape is exercised against
+`httpx.MockTransport`, never a live Java instance.
 """
 
 from typing import Any
@@ -9,8 +8,8 @@ from typing import Any
 import httpx
 import pytest
 
-import app.core.model_registry as model_registry
-from app.core.model_registry import (
+import app.core.registry.model_registry as model_registry
+from app.core.registry.model_registry import (
     ModelRegistryError,
     get_current_snapshot,
     init_model_registry,
@@ -159,7 +158,9 @@ async def test_init_model_registry_noop_when_flag_disabled(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_init_model_registry_loads_and_caches_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_init_model_registry_loads_and_caches_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(model_registry.settings, "MODEL_REGISTRY_ENABLED", True)
 
     def handler(_request: httpx.Request) -> httpx.Response:

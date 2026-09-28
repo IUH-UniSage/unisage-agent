@@ -7,18 +7,18 @@ from typing import Any
 
 from openai import OpenAI
 
-from app.core.embedding_identity import ensure_embedding_identity
+from app.core.errors.llm_error_classifier import EmbeddingProviderError
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
-from app.core.llm_error_classifier import EmbeddingProviderError
-from app.core.model_registry import (
+from app.core.registry.embedding_identity import ensure_embedding_identity
+from app.core.registry.model_registry import (
     CredentialConfig,
     ModelRegistryError,
     active_credentials_for,
     get_current_snapshot,
     require_top_priority_credential,
 )
-from app.core.redaction import safe_error_message
-from app.core.usage_recorder import UsageRecorder
+from app.core.security.redaction import safe_error_message
+from app.core.usage.usage_recorder import UsageRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class OpenAIEmbedder:
     tests/test_embedding_provider.py, tests/test_retrieval.py).
 
     When `model`/`client` are resolved from the registry (not injected), every `embed()` call is
-    gated by `app.core.embedding_identity.ensure_embedding_identity` - this is the
+    gated by `app.core.registry.embedding_identity.ensure_embedding_identity` - this is the
     one chokepoint both ingest (`app.worker.celery_app.embed_chunks`) and
     query-time retrieval (`app.rag.retrieval.service.RetrievalService`, which builds its embedder
     from this same class) go through, so neither path can silently embed with a credential that
@@ -136,9 +136,7 @@ class OpenAIEmbedder:
 
         snapshot = get_current_snapshot()
         if snapshot is None:
-            raise EmbeddingProviderError(
-                "no model registry snapshot loaded", credential=credential
-            )
+            raise EmbeddingProviderError("no model registry snapshot loaded", credential=credential)
 
         model = credential.model_name or ""
         client = OpenAI(

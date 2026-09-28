@@ -9,8 +9,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.core.config import settings
-from app.core.graph_trace import GraphTrace
-from app.core.usage_recorder import UsageRecorder
+from app.core.observability.graph_trace import GraphTrace
+from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph

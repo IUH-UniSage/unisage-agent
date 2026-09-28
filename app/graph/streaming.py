@@ -47,9 +47,9 @@ from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage
 
 from app.core.llm.provider_models import build_model
-from app.core.model_registry import CredentialConfig
-from app.core.model_router import ModelRouter, get_default_router
-from app.core.redaction import safe_error_message
+from app.core.registry.model_registry import CredentialConfig
+from app.core.registry.model_router import ModelRouter, get_default_router
+from app.core.security.redaction import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,7 @@ def _credential_label(credential: CredentialConfig) -> str:
     without cross-referencing a UUID against the admin UI."""
 
     return credential.display_name or credential.id
+
 
 TokenSink = Callable[[str], Awaitable[None]]
 
@@ -171,24 +172,30 @@ async def stream_agent_text(
                 # Usage is only final once the stream has been fully consumed -
                 # must be read here, still inside the `async with`, not after.
                 usage = result.usage
-            _safe_record_attempt(on_attempt, AttemptOutcome(
-                credential=active_credential,
-                attempt=attempt_index,
-                status="SUCCESS",
-                usage=usage,
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-            ))
+            _safe_record_attempt(
+                on_attempt,
+                AttemptOutcome(
+                    credential=active_credential,
+                    attempt=attempt_index,
+                    status="SUCCESS",
+                    usage=usage,
+                    latency_ms=int((time.monotonic() - started_at) * 1000),
+                ),
+            )
             return "".join(collected)
         except Exception as exc:
             latency_ms = int((time.monotonic() - started_at) * 1000)
-            _safe_record_attempt(on_attempt, AttemptOutcome(
-                credential=active_credential,
-                attempt=attempt_index,
-                status="ERROR",
-                usage=None,
-                latency_ms=latency_ms,
-                error_code=type(exc).__name__,
-            ))
+            _safe_record_attempt(
+                on_attempt,
+                AttemptOutcome(
+                    credential=active_credential,
+                    attempt=attempt_index,
+                    status="ERROR",
+                    usage=None,
+                    latency_ms=latency_ms,
+                    error_code=type(exc).__name__,
+                ),
+            )
             has_failover_wiring = not (
                 purpose is None
                 or active_credential is None
@@ -263,23 +270,29 @@ async def run_agent_text_with_failover(
         started_at = time.monotonic()
         try:
             result = await active_agent.run(prompt)
-            _safe_record_attempt(on_attempt, AttemptOutcome(
-                credential=active_credential,
-                attempt=attempt_index,
-                status="SUCCESS",
-                usage=result.usage,
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-            ))
+            _safe_record_attempt(
+                on_attempt,
+                AttemptOutcome(
+                    credential=active_credential,
+                    attempt=attempt_index,
+                    status="SUCCESS",
+                    usage=result.usage,
+                    latency_ms=int((time.monotonic() - started_at) * 1000),
+                ),
+            )
             return result.output or ""
         except Exception as exc:
-            _safe_record_attempt(on_attempt, AttemptOutcome(
-                credential=active_credential,
-                attempt=attempt_index,
-                status="ERROR",
-                usage=None,
-                latency_ms=int((time.monotonic() - started_at) * 1000),
-                error_code=type(exc).__name__,
-            ))
+            _safe_record_attempt(
+                on_attempt,
+                AttemptOutcome(
+                    credential=active_credential,
+                    attempt=attempt_index,
+                    status="ERROR",
+                    usage=None,
+                    latency_ms=int((time.monotonic() - started_at) * 1000),
+                    error_code=type(exc).__name__,
+                ),
+            )
             if (
                 purpose is None
                 or active_credential is None

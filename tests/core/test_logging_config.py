@@ -7,7 +7,7 @@ import io
 import logging
 import sys
 
-from app.core.logging_config import SecretRedactionFilter, configure_logging
+from app.core.observability.logging_config import SecretRedactionFilter, configure_logging
 
 
 def _make_record(msg: str, *args: object, exc_info: tuple | None = None) -> logging.LogRecord:
@@ -23,7 +23,9 @@ def _make_record(msg: str, *args: object, exc_info: tuple | None = None) -> logg
 
 
 def test_filter_redacts_plain_message() -> None:
-    record = _make_record("failed calling provider: Authorization: Bearer sk-live-abcdefghij1234567890")
+    record = _make_record(
+        "failed calling provider: Authorization: Bearer sk-live-abcdefghij1234567890"
+    )
     assert SecretRedactionFilter().filter(record) is True
     assert record.getMessage() == "failed calling provider: [REDACTED]"
 

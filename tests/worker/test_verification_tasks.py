@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from app.core.llm.embedding_probe import EmbeddingFingerprint
-from app.core.ssrf_guard import SsrfBlockedError
+from app.core.security.ssrf_guard import SsrfBlockedError
 from app.integrations.backend_java_client import BackendJavaConnectionError, BackendJavaHTTPError
 from app.worker import verification_tasks
 
@@ -71,7 +71,9 @@ def _embedding_job(job_id: str = "job-2", lease_token: str = "lease-2") -> dict[
 
 
 @pytest.mark.asyncio
-async def test_success_path_submits_ok_with_matching_lease_token(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_success_path_submits_ok_with_matching_lease_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_completion(credential: Any) -> None:
         del credential
 
@@ -91,10 +93,14 @@ async def test_success_path_submits_ok_with_matching_lease_token(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_transient_provider_failure_submits_transient(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_transient_provider_failure_submits_transient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_completion(credential: Any) -> None:
         del credential
-        raise ConnectionError("connect timed out")  # unrecognized -> classify_llm_error fails open TRANSIENT
+        raise ConnectionError(
+            "connect timed out"
+        )  # unrecognized -> classify_llm_error fails open TRANSIENT
 
     monkeypatch.setattr(verification_tasks, "_run_minimal_completion", fake_completion)
 
@@ -105,7 +111,9 @@ async def test_transient_provider_failure_submits_transient(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_permanent_provider_failure_submits_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_permanent_provider_failure_submits_permanent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_completion(credential: Any) -> None:
         del credential
         raise SsrfBlockedError("blocked host")  # classify_llm_error always -> PERMANENT

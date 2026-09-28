@@ -31,8 +31,8 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from app.core.config import settings
-from app.core.graph_trace import GraphTrace
-from app.core.model_registry import CredentialConfig
+from app.core.observability.graph_trace import GraphTrace
+from app.core.registry.model_registry import CredentialConfig
 from app.graph.streaming import AttemptRecorder, FailoverCallback, TokenSink, stream_agent_text
 from app.rag.prompting import (
     build_json_repair_prompt,

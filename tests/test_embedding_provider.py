@@ -2,9 +2,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import app.core.model_registry as model_registry
-from app.core.embedding_identity import EmbeddingIdentityMismatchError, reset_verified_cache_for_tests
-from app.core.model_registry import parse_snapshot
+import app.core.registry.model_registry as model_registry
+from app.core.registry.embedding_identity import (
+    EmbeddingIdentityMismatchError,
+    reset_verified_cache_for_tests,
+)
+from app.core.registry.model_registry import parse_snapshot
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.embeddings.provider import EmbeddingProvider
 from app.rag.vectorstore import qdrant_store

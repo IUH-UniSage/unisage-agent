@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.exceptions import StrategyFileTypeMismatchException
+from app.core.errors.exceptions import StrategyFileTypeMismatchException
 from app.rag.chunking.strategy import dispatch
 from app.schemas.ingestion import ChunkingStrategyName, RegionType
 from tests.fixtures.documents import make_pdf_bytes, make_xlsx_bytes

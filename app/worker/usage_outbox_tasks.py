@@ -1,4 +1,4 @@
-"""Celery task draining `app.core.usage_outbox`'s Redis outbox to backend-java.
+"""Celery task draining `app.core.usage.usage_outbox`'s Redis outbox to backend-java.
 
 Runs on Beat every `USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS` (see `celery_app.py`'s
 `beat_schedule`). Uses a `SET NX EX` lock (same idiom as
@@ -21,7 +21,7 @@ from typing import Any
 import redis
 
 from app.core.config import settings
-from app.core.usage_outbox import OUTBOX_KEY
+from app.core.usage.usage_outbox import OUTBOX_KEY
 from app.integrations.backend_java_client import (
     BackendJavaClient,
     BackendJavaConnectionError,

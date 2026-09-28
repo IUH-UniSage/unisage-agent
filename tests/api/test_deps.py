@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 from pydantic_ai.models.openai import OpenAIChatModel
 
-import app.core.model_registry as model_registry
+import app.core.registry.model_registry as model_registry
 from app.api.deps import get_graph_models
 from app.core.config import settings
-from app.core.model_registry import ModelRegistryError, parse_snapshot
+from app.core.registry.model_registry import ModelRegistryError, parse_snapshot
 from app.rag.retrieval.service import RetrievalService
 
 

@@ -14,15 +14,15 @@ from app.api.deps import (
     get_session_factory,
 )
 from app.core.config import settings
-from app.core.exceptions import (
+from app.core.errors.exceptions import (
     BackendJavaUnavailableException,
     ConversationRejectedException,
     InvalidQueryException,
     UsageLimitExceededException,
 )
-from app.core.sanitizer import sanitize_input_text
-from app.core.security import verify_internal_secret
-from app.core.usage_recorder import UsageRecorder
+from app.core.security.sanitizer import sanitize_input_text
+from app.core.security.security import verify_internal_secret
+from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import get_db_session
 from app.graph.nodes.greeting import is_first_turn
@@ -42,6 +42,7 @@ from app.schemas.security import AcademicSecurityContext
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)])
+
 
 async def _load_history(
     java_client: BackendJavaClient,
@@ -79,7 +80,7 @@ _background_tasks: set[asyncio.Task[None]] = set()
 def _resolve_client_ip(http_request: Request, x_forwarded_for: str | None) -> str | None:
     """Best client IP available for this request, for trace/log correlation only.
 
-    Threaded into `GraphTrace` (see `app/core/graph_trace.py`) so each log
+    Threaded into `GraphTrace` (see `app/core/observability/graph_trace.py`) so each log
     line can be tied back to a caller - it is NOT sent to backend-java.
     Guest-conversation ownership there is now checked via
     `X-Guest-Session-Token` (see `_resolve_guest_session_token` below), not

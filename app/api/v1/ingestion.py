@@ -20,8 +20,7 @@ from app.api.deps import (
     require_document_permission,
 )
 from app.core.config import settings
-from app.core.events import ingestion_event_stream
-from app.core.exceptions import (
+from app.core.errors.exceptions import (
     DepartmentAccessDeniedException,
     EmbeddingChunkSetMismatchException,
     EmbeddingDraftLegacyException,
@@ -30,7 +29,8 @@ from app.core.exceptions import (
     IngestionJobNotFoundException,
     UniSageException,
 )
-from app.core.security import verify_internal_secret
+from app.core.observability.events import ingestion_event_stream
+from app.core.security.security import verify_internal_secret
 from app.database.models import DocumentProcessStep
 from app.database.repositories.ingestion_job import (
     DraftDTO,
@@ -276,7 +276,9 @@ async def ingestion_events(
     caller is granted access to.
     """
 
-    if not x_internal_secret or not hmac.compare_digest(x_internal_secret, settings.APP_INTERNAL_SECRET_KEY):
+    if not x_internal_secret or not hmac.compare_digest(
+        x_internal_secret, settings.APP_INTERNAL_SECRET_KEY
+    ):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     try:

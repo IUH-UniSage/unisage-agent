@@ -221,9 +221,7 @@ async def test_every_call_sends_x_internal_secret_header() -> None:
         established_by="bootstrap-cli",
     )
     await client.claim_verifications(limit=5)
-    await client.post_verification_result(
-        job_id="job-1", lease_token="lease-1", result_type="OK"
-    )
+    await client.post_verification_result(job_id="job-1", lease_token="lease-1", result_type="OK")
 
     assert seen == [settings.APP_INTERNAL_SECRET_KEY] * 10
 
@@ -407,7 +405,9 @@ async def test_get_embedding_index_identity_returns_none_on_404() -> None:
 @pytest.mark.asyncio
 async def test_get_embedding_index_identity_returns_payload() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/internal/model-registry/embedding-index/unisage_chunks/identity"
+        assert (
+            request.url.path == "/internal/model-registry/embedding-index/unisage_chunks/identity"
+        )
         assert request.headers.get("authorization") is None
         return httpx.Response(
             200,
@@ -501,7 +501,11 @@ async def test_get_model_registry_snapshot_returns_raw_payload() -> None:
     payload = {
         "version": 7,
         "generatedAt": "2026-09-25T03:00:00Z",
-        "purposes": {"CHAT": [{"id": "c1", "apiKey": "sk-secret"}], "EMBEDDING": [], "EXTRACTION": []},
+        "purposes": {
+            "CHAT": [{"id": "c1", "apiKey": "sk-secret"}],
+            "EMBEDDING": [],
+            "EXTRACTION": [],
+        },
         "embeddingIndexIdentity": None,
     }
 

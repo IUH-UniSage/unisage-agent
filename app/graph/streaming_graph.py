@@ -18,9 +18,9 @@ from dataclasses import replace
 
 from pydantic_ai.models import Model
 
-from app.core.graph_trace import GraphTrace
-from app.core.model_registry import CredentialConfig
-from app.core.usage_recorder import UsageRecorder
+from app.core.observability.graph_trace import GraphTrace
+from app.core.registry.model_registry import CredentialConfig
+from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting

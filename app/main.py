@@ -9,17 +9,17 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1 import chat, documents, health, ingestion
 from app.core.config import settings
-from app.core.error_codes import ErrorCode
-from app.core.exceptions import UniSageException
-from app.core.logging_config import configure_logging
-from app.core.middleware import request_logging_middleware
-from app.core.model_registry import init_model_registry
-from app.core.registry_subscriber import start_asyncio_registry_subscriber
+from app.core.errors.error_codes import ErrorCode
+from app.core.errors.exceptions import UniSageException
+from app.core.observability.logging_config import configure_logging
+from app.core.observability.middleware import request_logging_middleware
+from app.core.registry.model_registry import init_model_registry
+from app.core.registry.registry_subscriber import start_asyncio_registry_subscriber
 from app.rag.chunking.table_row import TableStructureError
 
 # Sets the root format, silences noisy/secret-leaking third-party loggers
 # (httpx/httpcore/openai/anthropic/...) and attaches the redaction filter that
-# scrubs every log record before it's written - see app/core/logging_config.py
+# scrubs every log record before it's written - see app/core/observability/logging_config.py
 # and plan.md "Secret redaction".
 configure_logging()
 logger = logging.getLogger(__name__)

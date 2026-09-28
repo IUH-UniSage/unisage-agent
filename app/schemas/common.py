@@ -31,7 +31,7 @@ class ApiResponse[T](BaseModel):
     `data`, `errors`), so the frontend can parse both services' responses with
     the same `readSuccessData`/`readApiResponse` utility. `code == 1000` means
     success, matching Java's `ApiResponse.success(...)`; any other value is an
-    error code from `app/core/error_codes.py`.
+    error code from `app/core/errors/error_codes.py`.
     """
 
     code: int

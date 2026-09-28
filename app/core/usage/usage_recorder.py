@@ -16,13 +16,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from app.core.cost_calculator import (
+from app.core.registry.model_registry import CredentialConfig
+from app.core.usage.cost_calculator import (
     COST_STATUS_FREE,
     COST_STATUS_PRICED,
     COST_STATUS_UNPRICED,
     calculate_actual,
 )
-from app.core.model_registry import CredentialConfig
 from app.graph.streaming import AttemptOutcome, AttemptRecorder
 
 logger = logging.getLogger(__name__)
@@ -259,7 +259,7 @@ class UsageRecorder:
             "lines": self._lines,
         }
 
-        from app.core.usage_outbox import (
+        from app.core.usage.usage_outbox import (
             enqueue_usage_payload,  # local import: avoids a cycle at module load
         )
 

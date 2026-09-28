@@ -1,14 +1,14 @@
-"""Architecture test — plan.md "Secret redaction": `str(exc)`/`repr(exc)` must
-never flow toward a DB column, Slack, or an HTTP call/response body. The one
-sanctioned way to turn a provider exception into such text is
-`app.core.redaction.safe_error_message()` (`app/core/redaction.py`).
+"""Architecture test — `str(exc)`/`repr(exc)` must never flow toward a DB
+column, Slack, or an HTTP call/response body. The one sanctioned way to turn a
+provider exception into such text is
+`app.core.security.redaction.safe_error_message()`
+(`app/core/security/redaction.py`).
 
 This is a **best-effort, approximate** AST scan, not a sound dataflow
 analysis — a pure syntax scan cannot fully prove where a string ends up once
 it's assigned to a variable, returned from a function, or passed through
 another layer of indirection. What it actually checks, scoped to
-`app/core/llm/`, `app/worker/`, and `app/integrations/` (plan.md's named
-surfaces):
+`app/core/llm/`, `app/worker/`, and `app/integrations/`:
 
   - Every `str(x)` / `repr(x)` call, where `x` is a name bound by an
     `except ... as x:` handler anywhere in the same file (approximate: not
@@ -17,8 +17,9 @@ surfaces):
     UNLESS it is:
       - a direct argument to a `logger.<level>(...)`/`log.<level>(...)` call
         (any object whose attribute is a standard logging method name) — the
-        logging.Filter in `app/core/logging_config.py` redacts these before
-        they reach a handler, so this is a separate, already-covered surface;
+        logging.Filter in `app/core/observability/logging_config.py` redacts
+        these before they reach a handler, so this is a separate,
+        already-covered surface;
       - a direct argument to `safe_error_message(...)`.
   - The same check for an exception name used inside an f-string
     (`f"...{exc}..."` / `f"...{exc!r}..."`), which stringifies it just as
@@ -45,9 +46,18 @@ _SCANNED_DIRS = (
     _APP_ROOT / "worker",
     _APP_ROOT / "integrations",
 )
-_REDACTION_MODULE = _APP_ROOT / "core" / "redaction.py"
+_REDACTION_MODULE = _APP_ROOT / "core" / "security" / "redaction.py"
 
-_LOGGING_METHOD_NAMES = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+_LOGGING_METHOD_NAMES = {
+    "debug",
+    "info",
+    "warning",
+    "warn",
+    "error",
+    "exception",
+    "critical",
+    "log",
+}
 
 
 def _iter_scanned_files() -> list[Path]:
@@ -116,7 +126,7 @@ def _violations_in_file(path: Path) -> list[str]:
                     violations.append(
                         f"{path}:{node.lineno}: {func.id}({node.args[0].id}) used outside "
                         "logging/safe_error_message() — route provider exceptions through "
-                        "app.core.redaction.safe_error_message() before they can reach "
+                        "app.core.security.redaction.safe_error_message() before they can reach "
                         "DB/Slack/HTTP"
                     )
             continue
@@ -127,7 +137,7 @@ def _violations_in_file(path: Path) -> list[str]:
                 violations.append(
                     f"{path}:{node.lineno}: f-string interpolates exception `{value.id}` "
                     "directly outside logging/safe_error_message() — route provider "
-                    "exceptions through app.core.redaction.safe_error_message() before "
+                    "exceptions through app.core.security.redaction.safe_error_message() before "
                     "they can reach DB/Slack/HTTP"
                 )
 

@@ -26,14 +26,23 @@ _CONTROL_OR_SPACE = re.compile(r"[\x00-\x1f\x7f\s]")
 _BLOCKED_NETWORKS = [
     ipaddress.ip_network(n)
     for n in (
-        "127.0.0.0/8", "::1/128",
-        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-        "169.254.0.0/16", "fe80::/10",
+        "127.0.0.0/8",
+        "::1/128",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "fe80::/10",
         "100.64.0.0/10",
         "fd00::/8",
-        "224.0.0.0/4", "ff00::/8",
+        "224.0.0.0/4",
+        "ff00::/8",
         "0.0.0.0/8",
-        "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+        "192.0.0.0/24",
+        "192.0.2.0/24",
+        "198.18.0.0/15",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
         "240.0.0.0/4",
     )
 ]
@@ -161,7 +170,7 @@ class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
     allowlist: frozenset[str] = field(default_factory=frozenset)
     _delegate: httpcore.AsyncNetworkBackend = field(default_factory=httpcore.AnyIOBackend)
 
-    async def connect_tcp(  # noqa: D102 - httpcore's own signature
+    async def connect_tcp(
         self,
         host: str,
         port: int,
@@ -179,14 +188,15 @@ class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
             socket_options=socket_options,
         )
 
-    async def connect_unix_socket(self, path, timeout=None, socket_options=None):  # noqa: D102
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
         raise NotImplementedError("Unix sockets are never used for provider calls")
 
 
 @dataclass
 class PinnedNetworkBackendSync(httpcore.NetworkBackend):
     """Sync counterpart of `PinnedNetworkBackend`, for provider call sites that are
-    themselves sync (Celery tasks — see `app/core/llm/http_client.py::build_provider_http_client_sync`).
+    themselves sync (Celery tasks — see
+    `app/core/llm/http_client.py::build_provider_http_client_sync`).
 
     `socket.getaddrinfo` already blocks the calling thread either way, so unlike the
     async version there's no event loop to protect by offloading to a thread — the
@@ -196,7 +206,7 @@ class PinnedNetworkBackendSync(httpcore.NetworkBackend):
     allowlist: frozenset[str] = field(default_factory=frozenset)
     _delegate: httpcore.NetworkBackend = field(default_factory=httpcore.SyncBackend)
 
-    def connect_tcp(  # noqa: D102 - httpcore's own signature
+    def connect_tcp(
         self,
         host: str,
         port: int,
@@ -213,5 +223,5 @@ class PinnedNetworkBackendSync(httpcore.NetworkBackend):
             socket_options=socket_options,
         )
 
-    def connect_unix_socket(self, path, timeout=None, socket_options=None):  # noqa: D102
+    def connect_unix_socket(self, path, timeout=None, socket_options=None):
         raise NotImplementedError("Unix sockets are never used for provider calls")

@@ -23,12 +23,12 @@ import pytest
 from mistralai.client.errors import SDKError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from app.core.llm_error_classifier import (
+from app.core.errors.llm_error_classifier import (
     ErrorType,
     MalformedExtractionResponseError,
     classify_llm_error,
 )
-from app.core.ssrf_guard import SsrfBlockedError
+from app.core.security.ssrf_guard import SsrfBlockedError
 
 
 def _openai_response(status_code: int, *, error: dict) -> httpx2.Response:
@@ -64,14 +64,25 @@ class TestOpenAI:
 
     def test_authentication_error_is_permanent(self) -> None:
         response = _openai_response(
-            401, error={"message": "Incorrect API key provided", "type": "invalid_request_error", "code": "invalid_api_key"}
+            401,
+            error={
+                "message": "Incorrect API key provided",
+                "type": "invalid_request_error",
+                "code": "invalid_api_key",
+            },
         )
-        exc = openai.AuthenticationError("Incorrect API key provided", response=response, body=response.json()["error"])
+        exc = openai.AuthenticationError(
+            "Incorrect API key provided", response=response, body=response.json()["error"]
+        )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_permission_denied_is_permanent(self) -> None:
-        response = _openai_response(403, error={"message": "Forbidden", "type": "invalid_request_error", "code": None})
-        exc = openai.PermissionDeniedError("Forbidden", response=response, body=response.json()["error"])
+        response = _openai_response(
+            403, error={"message": "Forbidden", "type": "invalid_request_error", "code": None}
+        )
+        exc = openai.PermissionDeniedError(
+            "Forbidden", response=response, body=response.json()["error"]
+        )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_rate_limit_with_insufficient_quota_is_permanent(self) -> None:
@@ -88,14 +99,21 @@ class TestOpenAI:
 
     def test_rate_limit_without_quota_code_is_transient(self) -> None:
         response = _openai_response(
-            429, error={"message": "Rate limit reached for requests", "type": "requests", "code": None}
+            429,
+            error={"message": "Rate limit reached for requests", "type": "requests", "code": None},
         )
-        exc = openai.RateLimitError("rate limited", response=response, body=response.json()["error"])
+        exc = openai.RateLimitError(
+            "rate limited", response=response, body=response.json()["error"]
+        )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
     def test_internal_server_error_is_transient(self) -> None:
-        response = _openai_response(500, error={"message": "The server had an error", "type": "server_error", "code": None})
-        exc = openai.InternalServerError("server error", response=response, body=response.json()["error"])
+        response = _openai_response(
+            500, error={"message": "The server had an error", "type": "server_error", "code": None}
+        )
+        exc = openai.InternalServerError(
+            "server error", response=response, body=response.json()["error"]
+        )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
     def test_api_connection_error_is_transient(self) -> None:
@@ -111,7 +129,9 @@ class TestOpenAI:
 
 class TestGroq:
     def test_authentication_error_is_permanent(self) -> None:
-        response = _groq_response(401, error={"message": "Invalid API Key", "type": "invalid_request_error"})
+        response = _groq_response(
+            401, error={"message": "Invalid API Key", "type": "invalid_request_error"}
+        )
         exc = groq.AuthenticationError("Invalid API Key", response=response, body=response.json())
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
@@ -122,11 +142,16 @@ class TestGroq:
             429, error={"message": "You have exceeded your current quota", "code": "quota_exceeded"}
         )
         exc = groq.RateLimitError("quota", response=response, body=response.json())
-        assert exc.body == {"error": {"message": "You have exceeded your current quota", "code": "quota_exceeded"}}
+        assert exc.body == {
+            "error": {"message": "You have exceeded your current quota", "code": "quota_exceeded"}
+        }
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_rate_limit_without_quota_code_is_transient(self) -> None:
-        response = _groq_response(429, error={"message": "Rate limit reached, please retry", "type": "rate_limit_exceeded"})
+        response = _groq_response(
+            429,
+            error={"message": "Rate limit reached, please retry", "type": "rate_limit_exceeded"},
+        )
         exc = groq.RateLimitError("rl", response=response, body=response.json())
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
@@ -143,25 +168,41 @@ class TestGroq:
 
 class TestGoogle:
     def test_permission_denied_is_permanent(self) -> None:
-        exc = google_errors.ClientError(401, {"error": {"status": "PERMISSION_DENIED", "message": "API key not valid"}})
+        exc = google_errors.ClientError(
+            401, {"error": {"status": "PERMISSION_DENIED", "message": "API key not valid"}}
+        )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_resource_exhausted_with_quota_message_is_permanent(self) -> None:
         # Google's own status string is "RESOURCE_EXHAUSTED" for *both* an out-of-quota 429 and
         # a plain rate-limited 429 - the distinguishing signal has to come from the message text.
         exc = google_errors.ClientError(
-            429, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded for quota metric 'requests'"}}
+            429,
+            {
+                "error": {
+                    "status": "RESOURCE_EXHAUSTED",
+                    "message": "Quota exceeded for quota metric 'requests'",
+                }
+            },
         )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_resource_exhausted_without_quota_message_is_transient(self) -> None:
         exc = google_errors.ClientError(
-            429, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "Rate limit exceeded, please retry after some time"}}
+            429,
+            {
+                "error": {
+                    "status": "RESOURCE_EXHAUSTED",
+                    "message": "Rate limit exceeded, please retry after some time",
+                }
+            },
         )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
     def test_server_error_is_transient(self) -> None:
-        exc = google_errors.ServerError(503, {"error": {"status": "UNAVAILABLE", "message": "model overloaded"}})
+        exc = google_errors.ServerError(
+            503, {"error": {"status": "UNAVAILABLE", "message": "model overloaded"}}
+        )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
 
@@ -200,35 +241,59 @@ class TestModelHTTPErrorWrapping:
     (`pydantic_ai/models/{openai,groq,mistral,google}.py`) actually re-raises as, per ADR 0005."""
 
     def test_401_is_permanent(self) -> None:
-        exc = ModelHTTPError(status_code=401, model_name="gpt-4o-mini", body={"code": "invalid_api_key", "message": "bad key"})
+        exc = ModelHTTPError(
+            status_code=401,
+            model_name="gpt-4o-mini",
+            body={"code": "invalid_api_key", "message": "bad key"},
+        )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_403_is_permanent(self) -> None:
-        exc = ModelHTTPError(status_code=403, model_name="gemini-1.5-flash", body={"message": "forbidden"})
+        exc = ModelHTTPError(
+            status_code=403, model_name="gemini-1.5-flash", body={"message": "forbidden"}
+        )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_429_with_openai_shaped_body_and_quota_code_is_permanent(self) -> None:
         # openai's model-native layer forwards the already-unwrapped inner error dict.
-        exc = ModelHTTPError(status_code=429, model_name="gpt-4o-mini", body={"code": "insufficient_quota", "message": "x"})
+        exc = ModelHTTPError(
+            status_code=429,
+            model_name="gpt-4o-mini",
+            body={"code": "insufficient_quota", "message": "x"},
+        )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_429_with_groq_shaped_body_and_quota_code_is_permanent(self) -> None:
         # groq's model-native layer forwards the raw, still-nested `{"error": {...}}` body.
-        exc = ModelHTTPError(status_code=429, model_name="llama-3.1-70b", body={"error": {"code": "rate_limit_exceeded"}})
+        exc = ModelHTTPError(
+            status_code=429,
+            model_name="llama-3.1-70b",
+            body={"error": {"code": "rate_limit_exceeded"}},
+        )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
         exc_quota = ModelHTTPError(
-            status_code=429, model_name="llama-3.1-70b", body={"error": {"code": "quota_exceeded", "message": "x"}}
+            status_code=429,
+            model_name="llama-3.1-70b",
+            body={"error": {"code": "quota_exceeded", "message": "x"}},
         )
         assert classify_llm_error(exc_quota) == ErrorType.PERMANENT
 
     def test_429_with_mistral_shaped_string_body_and_quota_text_is_permanent(self) -> None:
         # mistral's model-native layer forwards `e.body`, a raw string, not a dict.
-        exc = ModelHTTPError(status_code=429, model_name="mistral-small-latest", body="You exceeded your current quota")
+        exc = ModelHTTPError(
+            status_code=429,
+            model_name="mistral-small-latest",
+            body="You exceeded your current quota",
+        )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
     def test_429_plain_rate_limit_is_transient(self) -> None:
-        exc = ModelHTTPError(status_code=429, model_name="gpt-4o-mini", body={"code": None, "message": "too many requests"})
+        exc = ModelHTTPError(
+            status_code=429,
+            model_name="gpt-4o-mini",
+            body={"code": None, "message": "too many requests"},
+        )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
     def test_5xx_is_transient(self) -> None:
@@ -238,7 +303,9 @@ class TestModelHTTPErrorWrapping:
     def test_unrecognized_4xx_is_transient(self) -> None:
         # e.g. 400 bad request - not one of the acceptance criteria's explicit cases, so this
         # must fail open toward TRANSIENT rather than guessing PERMANENT.
-        exc = ModelHTTPError(status_code=400, model_name="gpt-4o-mini", body={"message": "invalid request"})
+        exc = ModelHTTPError(
+            status_code=400, model_name="gpt-4o-mini", body={"message": "invalid request"}
+        )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
 

@@ -1,11 +1,11 @@
-"""Tests for app/core/usage_outbox.py (enqueue side only; the Celery drain worker
+"""Tests for app/core/usage/usage_outbox.py (enqueue side only; the Celery drain worker
 is a separate piece, not covered here)."""
 
 from typing import Any
 
 import pytest
 
-from app.core.usage_outbox import OUTBOX_KEY, enqueue_usage_payload
+from app.core.usage.usage_outbox import OUTBOX_KEY, enqueue_usage_payload
 
 
 class _FakeRedis:
