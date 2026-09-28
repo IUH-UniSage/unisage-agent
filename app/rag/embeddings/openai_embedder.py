@@ -1,4 +1,7 @@
+import asyncio
 import logging
+import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +18,7 @@ from app.core.model_registry import (
     require_top_priority_credential,
 )
 from app.core.redaction import safe_error_message
+from app.core.usage_recorder import UsageRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +82,16 @@ class OpenAIEmbedder:
 
         Sent in as few requests as the endpoint's 2048-item cap allows
         (usually one).
+
+        Cost Tracking plan.md Task 8: one `embed()` call is one business request
+        (`purpose=EMBEDDING`, no conversation/message ids - plan.md "1 request = 1
+        batch embed"). Self-contained: builds and closes its own `UsageRecorder`,
+        so `app.worker.celery_app.embed_chunks` (the one production caller) needs
+        no changes. Only recorded when a registry credential was actually resolved
+        - a test that injects `model`/`client` directly (skipping the registry
+        entirely) has no credential to snapshot and records nothing, same as the
+        identity-probe call in `_resolve_from_registry` below, which never passes
+        a recorder at all.
         """
 
         if not texts:
@@ -91,7 +105,18 @@ class OpenAIEmbedder:
             model = self._resolved["model"]
             client = self._resolved["client"]
 
-        return self._call_provider(client, model, texts)
+        credential = self._resolved.get("credential")
+        if credential is None:
+            return self._call_provider(client, model, texts)
+
+        recorder = UsageRecorder(request_id=str(uuid.uuid4()), purpose="EMBEDDING")
+        status = "ERROR"
+        try:
+            vectors = self._call_provider(client, model, texts, usage_recorder=recorder)
+            status = "SUCCESS"
+            return vectors
+        finally:
+            asyncio.run(recorder.close(status=status))
 
     def _resolve_from_registry(self) -> None:
         embedding_credentials = active_credentials_for("EMBEDDING")
@@ -137,17 +162,61 @@ class OpenAIEmbedder:
         self._resolved["client"] = client
         self._resolved["identity_key"] = identity_key
 
-    def _call_provider(self, client: OpenAI, model: str, texts: list[str]) -> list[list[float]]:
+    def _call_provider(
+        self,
+        client: OpenAI,
+        model: str,
+        texts: list[str],
+        *,
+        usage_recorder: UsageRecorder | None = None,
+    ) -> list[list[float]]:
+        """`usage_recorder`, when given, gets exactly one line for this call (summed
+        across every 2048-item sub-batch it takes to embed `texts`) - `None` here
+        (the identity-probe call in `_resolve_from_registry`, and any test that
+        constructs this class with `model`/`client` injected directly) means no
+        line at all, not a line with zero tokens."""
+
         credential = self._resolved.get("credential")
+        started_at = time.monotonic()
         try:
             vectors: list[list[float]] = []
+            prompt_tokens = 0
             for start in range(0, len(texts), _MAX_INPUTS_PER_REQUEST):
                 batch = texts[start : start + _MAX_INPUTS_PER_REQUEST]
                 response = client.embeddings.create(model=model, input=batch)
                 vectors.extend(item.embedding for item in response.data)
+                if response.usage is not None:
+                    prompt_tokens += response.usage.prompt_tokens
+            if usage_recorder is not None:
+                usage_recorder.record(
+                    node_name="embed_batch",
+                    attempt=0,
+                    credential=credential,
+                    status="SUCCESS",
+                    input_tokens=prompt_tokens,
+                    latency_ms=int((time.monotonic() - started_at) * 1000),
+                )
             return vectors
         except EmbeddingProviderError:
+            if usage_recorder is not None:
+                usage_recorder.record(
+                    node_name="embed_batch",
+                    attempt=0,
+                    credential=credential,
+                    status="ERROR",
+                    latency_ms=int((time.monotonic() - started_at) * 1000),
+                    error_code="EmbeddingProviderError",
+                )
             raise
-        except Exception as exc:  # noqa: BLE001 - reclassified into the one embedding error type
+        except Exception as exc:
+            if usage_recorder is not None:
+                usage_recorder.record(
+                    node_name="embed_batch",
+                    attempt=0,
+                    credential=credential,
+                    status="ERROR",
+                    latency_ms=int((time.monotonic() - started_at) * 1000),
+                    error_code=type(exc).__name__,
+                )
             message = safe_error_message(exc, credential.api_key if credential else None)
             raise EmbeddingProviderError(message, credential=credential) from exc

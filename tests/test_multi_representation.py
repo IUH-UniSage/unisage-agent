@@ -6,6 +6,7 @@ import pytest
 
 import app.core.model_registry as model_registry
 import app.core.model_router as model_router_module
+import app.core.usage_outbox as usage_outbox_module
 from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.model_router import ModelRouter, NoAvailableCredentialError
 from app.rag.enrichment.multi_representation import (
@@ -15,10 +16,25 @@ from app.rag.enrichment.multi_representation import (
 from app.schemas.ingestion import Chunk, RegionType
 
 
+@pytest.fixture
+def captured_outbox(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    captured: list[dict[str, Any]] = []
+
+    async def _fake_enqueue(payload: dict[str, Any], *, redis_client: Any = None) -> None:
+        del redis_client
+        captured.append(json.loads(json.dumps(payload)))
+
+    monkeypatch.setattr(usage_outbox_module, "enqueue_usage_payload", _fake_enqueue)
+    return captured
+
+
 def _mock_client(content: str) -> MagicMock:
     client = MagicMock()
     client.chat.completions.create.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(content=content))]
+        choices=[MagicMock(message=MagicMock(content=content))],
+        # Real ints, not an auto-vivified MagicMock - the registry-resolved failover
+        # path (Cost Tracking Task 8) JSON-encodes this for the usage outbox.
+        usage=MagicMock(prompt_tokens=10, completion_tokens=5),
     )
     return client
 
@@ -160,7 +176,9 @@ def test_provider_failure_falls_back_to_next_extraction_credential(
     success_payload = json.dumps({"summary": "ok", "questions": ["Q1?", "Q2?", "Q3?"]})
     fallback_client = _mock_client(success_payload)
 
-    def fake_build_client(self: MultiRepresentationEnricher, credential: CredentialConfig) -> MagicMock:
+    def fake_build_client(
+        self: MultiRepresentationEnricher, credential: CredentialConfig
+    ) -> MagicMock:
         return failing_client if credential.id == "cred-primary" else fallback_client
 
     monkeypatch.setattr(MultiRepresentationEnricher, "_build_client", fake_build_client)
@@ -205,7 +223,9 @@ def test_malformed_response_on_fallback_credential_reported_permanent(
         "cred-fallback-good": good_client,
     }
 
-    def fake_build_client(self: MultiRepresentationEnricher, credential: CredentialConfig) -> MagicMock:
+    def fake_build_client(
+        self: MultiRepresentationEnricher, credential: CredentialConfig
+    ) -> MagicMock:
         return clients[credential.id]
 
     monkeypatch.setattr(MultiRepresentationEnricher, "_build_client", fake_build_client)
@@ -234,9 +254,7 @@ def test_malformed_response_on_fallback_credential_reported_permanent(
     assert enriched.questions == ["Q1?", "Q2?", "Q3?"]
 
     malformed_reports = [
-        (cred, exc)
-        for cred, exc, _version in recorded_calls
-        if cred.id == "cred-fallback-bad"
+        (cred, exc) for cred, exc, _version in recorded_calls if cred.id == "cred-fallback-bad"
     ]
     assert len(malformed_reports) == 1
     reported_credential, reported_exc = malformed_reports[0]
@@ -325,3 +343,99 @@ def test_snapshot_version_reported_is_the_one_captured_at_failure_not_a_later_dr
     assert len(backend.reports) == 1
     assert backend.reports[0]["credential_id"] == "cred-primary"
     assert backend.reports[0]["snapshot_version"] == 1
+
+
+# --- Cost Tracking plan.md Task 8: one enrich() call = one purpose=EXTRACTION request ---
+
+
+def test_enrich_success_records_one_line_with_purpose_extraction(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    _router, _backend = fake_router
+    cred = _credential("cred-1", priority=1)
+    _set_extraction_snapshot(version=1, extraction=(cred,))
+
+    success_payload = json.dumps({"summary": "ok", "questions": ["Q1?", "Q2?", "Q3?"]})
+    client = _mock_client(success_payload)
+    monkeypatch.setattr(
+        MultiRepresentationEnricher, "_build_client", lambda self, credential: client
+    )
+
+    enricher = MultiRepresentationEnricher(question_count=3)
+    enricher.enrich(_chunk())
+
+    assert len(captured_outbox) == 1
+    payload = captured_outbox[0]
+    assert payload["purpose"] == "EXTRACTION"
+    assert payload["conversationId"] is None
+    assert payload["userMessageId"] is None
+    assert payload["status"] == "SUCCESS"
+    assert len(payload["lines"]) == 1
+    line = payload["lines"][0]
+    assert line["nodeName"] == "multi_representation_enrich"
+    assert line["chatModelId"] == "cred-1"
+    assert line["inputTokens"] == 10
+    assert line["outputTokens"] == 5
+
+
+def test_enrich_failover_records_error_then_success_line_different_credentials(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    _router, _backend = fake_router
+    cred_primary = _credential("cred-primary", priority=1)
+    cred_fallback = _credential("cred-fallback", priority=2)
+    _set_extraction_snapshot(version=1, extraction=(cred_primary, cred_fallback))
+
+    failing_client = MagicMock()
+    failing_client.chat.completions.create.side_effect = RuntimeError("primary down")
+    success_payload = json.dumps({"summary": "ok", "questions": ["Q1?", "Q2?", "Q3?"]})
+    fallback_client = _mock_client(success_payload)
+
+    def fake_build_client(
+        self: MultiRepresentationEnricher, credential: CredentialConfig
+    ) -> MagicMock:
+        return failing_client if credential.id == "cred-primary" else fallback_client
+
+    monkeypatch.setattr(MultiRepresentationEnricher, "_build_client", fake_build_client)
+
+    enricher = MultiRepresentationEnricher(question_count=3)
+    enricher.enrich(_chunk())
+
+    assert len(captured_outbox) == 1
+    payload = captured_outbox[0]
+    assert payload["purpose"] == "EXTRACTION"
+    assert payload["conversationId"] is None
+    assert payload["userMessageId"] is None
+    # A failover recovered - the graph-level result succeeded, so the parent downgrades
+    # from what would be SUCCESS to PARTIAL because one line failed along the way.
+    assert payload["status"] == "PARTIAL"
+
+    lines = payload["lines"]
+    assert len(lines) == 2
+    assert lines[0]["status"] == "ERROR"
+    assert lines[0]["attempt"] == 0
+    assert lines[0]["chatModelId"] == "cred-primary"
+    assert lines[0]["errorCode"] == "RuntimeError"
+
+    assert lines[1]["status"] == "SUCCESS"
+    assert lines[1]["attempt"] == 1
+    assert lines[1]["chatModelId"] == "cred-fallback"
+    assert lines[1]["inputTokens"] == 10
+    assert lines[1]["outputTokens"] == 5
+
+
+def test_enrich_with_injected_client_records_nothing(captured_outbox: list[dict[str, Any]]) -> None:
+    """Test-injected model/client (no registry credential resolved) skips the
+    registry/router entirely - matches OpenAIEmbedder's identical precedent."""
+
+    success_payload = json.dumps({"summary": "ok", "questions": ["Q1?", "Q2?", "Q3?"]})
+    client = _mock_client(success_payload)
+    enricher = MultiRepresentationEnricher(model="gpt-4o-mini", client=client, question_count=3)
+
+    enricher.enrich(_chunk())
+
+    assert captured_outbox == []

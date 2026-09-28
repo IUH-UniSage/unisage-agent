@@ -22,6 +22,7 @@ from app.core.cost_calculator import (
     COST_STATUS_UNPRICED,
     calculate_actual,
 )
+from app.core.model_registry import CredentialConfig
 from app.graph.streaming import AttemptOutcome, AttemptRecorder
 
 logger = logging.getLogger(__name__)
@@ -63,10 +64,72 @@ class UsageRecorder:
     def _record_attempt(self, node_name: str, outcome: AttemptOutcome) -> None:
         # Called synchronously from inside streaming.py's own try/except, which
         # already wraps this in a catch-all - but a second layer here means a bug
-        # in THIS method can never propagate into the failover/streaming logic
-        # that called it, only lose the one line it was recording.
+        # in THIS method (including reading `outcome.usage`'s fields, which is why
+        # this whole method has its own try/except rather than relying on
+        # `record()`'s - that one starts too late to protect this extraction step)
+        # can never propagate into the failover/streaming logic that called it,
+        # only lose the one line it was recording.
         try:
-            self._lines.append(self._build_line(node_name, outcome))
+            usage = outcome.usage
+            input_tokens = usage.input_tokens if usage else 0
+            output_tokens = usage.output_tokens if usage else 0
+            cached_tokens = (usage.cache_read_tokens or 0) if usage else 0
+        except Exception:
+            logger.exception(
+                "UsageRecorder failed to read usage fields for node=%s - this line is LOST",
+                node_name,
+            )
+            return
+
+        self.record(
+            node_name=node_name,
+            attempt=outcome.attempt,
+            credential=outcome.credential,
+            status=outcome.status,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+            latency_ms=outcome.latency_ms,
+            error_code=outcome.error_code,
+        )
+
+    def record(
+        self,
+        *,
+        node_name: str,
+        attempt: int,
+        credential: CredentialConfig | None,
+        status: str,
+        latency_ms: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_tokens: int = 0,
+        error_code: str | None = None,
+    ) -> None:
+        """Records one line directly from plain token counts - used by Embedding/
+        Extraction (Task 8), which call the OpenAI SDK directly rather than through
+        `streaming.py`'s `on_attempt`/`AttemptOutcome` (PydanticAI-only machinery
+        `bind()` wraps). `_record_attempt()` above is the PydanticAI path; this is
+        the raw path both it and Task 8's call sites end up funneling into.
+
+        Never raises - a bug here must not take down the enrichment/embedding job
+        that called it, only lose the one line it was recording.
+        """
+
+        try:
+            self._lines.append(
+                self._build_line(
+                    node_name=node_name,
+                    attempt=attempt,
+                    credential=credential,
+                    status=status,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cached_tokens=cached_tokens,
+                    latency_ms=latency_ms,
+                    error_code=error_code,
+                )
+            )
         except Exception:
             logger.exception(
                 "UsageRecorder failed to record an attempt for node=%s - this line is LOST, "
@@ -74,8 +137,19 @@ class UsageRecorder:
                 node_name,
             )
 
-    def _build_line(self, node_name: str, outcome: AttemptOutcome) -> dict[str, Any]:
-        credential = outcome.credential
+    def _build_line(
+        self,
+        *,
+        node_name: str,
+        attempt: int,
+        credential: CredentialConfig | None,
+        status: str,
+        input_tokens: int,
+        output_tokens: int,
+        cached_tokens: int,
+        latency_ms: int,
+        error_code: str | None,
+    ) -> dict[str, Any]:
         occurred_at = _iso_z(datetime.now(UTC))
 
         if credential is None:
@@ -84,7 +158,7 @@ class UsageRecorder:
             return {
                 "seq": len(self._lines),
                 "nodeName": node_name,
-                "attempt": outcome.attempt,
+                "attempt": attempt,
                 "chatModelId": None,
                 "provider": None,
                 "modelName": None,
@@ -95,18 +169,13 @@ class UsageRecorder:
                 "costUsd": None,
                 "estimatedCostUsd": "0",
                 "costStatus": COST_STATUS_UNPRICED,
-                "latencyMs": outcome.latency_ms,
-                "status": outcome.status,
-                "errorCode": outcome.error_code,
+                "latencyMs": latency_ms,
+                "status": status,
+                "errorCode": error_code,
                 "occurredAt": occurred_at,
             }
 
-        usage = outcome.usage
-        input_tokens = usage.input_tokens if usage else 0
-        output_tokens = usage.output_tokens if usage else 0
-        cached_tokens = (usage.cache_read_tokens or 0) if usage else 0
-
-        if outcome.status == "SUCCESS" and credential.model_name:
+        if status == "SUCCESS" and credential.model_name:
             result = calculate_actual(
                 model_name=credential.model_name,
                 source_type=credential.source_type,
@@ -136,7 +205,7 @@ class UsageRecorder:
         return {
             "seq": len(self._lines),
             "nodeName": node_name,
-            "attempt": outcome.attempt,
+            "attempt": attempt,
             "chatModelId": credential.id,
             "provider": credential.provider,
             "modelName": credential.model_name,
@@ -147,9 +216,9 @@ class UsageRecorder:
             "costUsd": cost_usd,
             "estimatedCostUsd": _decimal_str(estimated_cost_usd),
             "costStatus": cost_status,
-            "latencyMs": outcome.latency_ms,
-            "status": outcome.status,
-            "errorCode": outcome.error_code,
+            "latencyMs": latency_ms,
+            "status": status,
+            "errorCode": error_code,
             "occurredAt": occurred_at,
         }
 
@@ -194,4 +263,16 @@ class UsageRecorder:
             enqueue_usage_payload,  # local import: avoids a cycle at module load
         )
 
-        await enqueue_usage_payload(payload)
+        try:
+            await enqueue_usage_payload(payload)
+        except Exception:
+            # enqueue_usage_payload() itself already never raises (see its own
+            # docstring) - this guards the payload-building above instead (e.g. a
+            # malformed provider `usage` object that isn't plain-JSON-serializable).
+            # Either way, a usage-recording bug must never surface to whatever
+            # actually did the LLM/embedding call this recorder was measuring.
+            logger.exception(
+                "UsageRecorder.close() failed to build/send its payload for requestId=%s - "
+                "usage record LOST",
+                self.request_id,
+            )

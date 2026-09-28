@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import time
+import uuid
 from dataclasses import dataclass, field
 
 from openai import OpenAI
@@ -10,6 +12,7 @@ from app.core.config import settings
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 from app.core.llm_error_classifier import MalformedExtractionResponseError
 from app.core.model_registry import CredentialConfig, get_current_snapshot
+from app.core.usage_recorder import UsageRecorder
 from app.rag.prompting.loader import get_templates
 from app.schemas.ingestion import Chunk
 
@@ -84,7 +87,9 @@ class MultiRepresentationEnricher:
         model = self.model
         client = self.client
         if model is not None and client is not None:
-            result = self._call_and_parse(chunk, model, client)
+            # Test-injected model/client, no registry credential to snapshot - matches
+            # OpenAIEmbedder's identical precedent, no usage line at all here.
+            result, _usage = self._call_and_parse(chunk, model, client)
             if result is not None:
                 return result
             logger.warning(
@@ -93,7 +98,26 @@ class MultiRepresentationEnricher:
             )
             return EnrichedChunk(chunk=chunk, summary="", questions=[])
 
+        # Cost Tracking plan.md Task 8: one enrich() call is one purpose=EXTRACTION
+        # business request, one line per attempt (including a failed attempt before
+        # failover) - self-contained like OpenAIEmbedder.embed(), so
+        # app.worker.celery_app's caller needs no changes.
+        recorder = UsageRecorder(request_id=str(uuid.uuid4()), purpose="EXTRACTION")
+        status = "ERROR"
+        try:
+            result = self._enrich_with_failover(chunk, recorder)
+            status = "SUCCESS"
+            return result
+        finally:
+            # `model_router.NoAvailableCredentialError` (every EXTRACTION credential
+            # exhausted) can propagate out of `_enrich_with_failover` uncaught (see this
+            # method's own docstring) - `status` stays "ERROR" in that case, same as it
+            # would for any other exception escaping this method.
+            asyncio.run(recorder.close(status=status))
+
+    def _enrich_with_failover(self, chunk: Chunk, recorder: UsageRecorder) -> EnrichedChunk:
         is_fallback = False
+        attempt = 0
         while True:
             credential = asyncio.run(model_router.get_next_credential("EXTRACTION"))
             snapshot = get_current_snapshot()
@@ -101,16 +125,40 @@ class MultiRepresentationEnricher:
             resolved_model = credential.model_name or ""
             resolved_client = self._build_client(credential)
 
+            started_at = time.monotonic()
             try:
-                result = self._call_and_parse(chunk, resolved_model, resolved_client)
+                result, usage = self._call_and_parse(chunk, resolved_model, resolved_client)
             except Exception as exc:
+                recorder.record(
+                    node_name="multi_representation_enrich",
+                    attempt=attempt,
+                    credential=credential,
+                    status="ERROR",
+                    latency_ms=int((time.monotonic() - started_at) * 1000),
+                    error_code=type(exc).__name__,
+                )
                 asyncio.run(
                     model_router.record_failure(
                         credential, exc, snapshot_version=snapshot_version, purpose="EXTRACTION"
                     )
                 )
                 is_fallback = True
+                attempt += 1
                 continue
+
+            latency_ms = int((time.monotonic() - started_at) * 1000)
+            # The provider call itself succeeded (tokens were spent) even when the
+            # response body turns out malformed below - that's a data-quality
+            # problem, not a call failure, so this line is always SUCCESS.
+            recorder.record(
+                node_name="multi_representation_enrich",
+                attempt=attempt,
+                credential=credential,
+                status="SUCCESS",
+                input_tokens=usage.prompt_tokens if usage else 0,
+                output_tokens=usage.completion_tokens if usage else 0,
+                latency_ms=latency_ms,
+            )
 
             if result is not None:
                 return result
@@ -142,6 +190,7 @@ class MultiRepresentationEnricher:
                 )
             )
             is_fallback = True
+            attempt += 1
 
     def _build_client(self, credential: CredentialConfig) -> OpenAI:
         """Builds the `OpenAI` client for one attempt (primary or fallback) - always through
@@ -157,12 +206,15 @@ class MultiRepresentationEnricher:
             ),
         )
 
-    def _call_and_parse(self, chunk: Chunk, model: str, client: OpenAI) -> EnrichedChunk | None:
-        """One provider call + response parse. Returns `None` for a malformed/short
-        response (never raises for that - only a JSON/shape problem, not a call failure);
-        a provider-call failure (network, auth, rate limit, ...) propagates as whatever
-        exception the SDK/PydanticAI raised, uncaught here, for the caller to classify and
-        report via `model_router`."""
+    def _call_and_parse(
+        self, chunk: Chunk, model: str, client: OpenAI
+    ) -> tuple[EnrichedChunk | None, object | None]:
+        """One provider call + response parse. Returns `(None, usage)` for a
+        malformed/short response (never raises for that - only a JSON/shape
+        problem, not a call failure - but `usage` is still real, tokens were
+        still spent); a provider-call failure (network, auth, rate limit, ...)
+        propagates as whatever exception the SDK/PydanticAI raised, uncaught
+        here, for the caller to classify and report via `model_router`."""
 
         response = client.chat.completions.create(
             model=model,
@@ -177,6 +229,7 @@ class MultiRepresentationEnricher:
             ],
             response_format={"type": "json_object"},
         )
+        usage = response.usage
         raw_content = response.choices[0].message.content or "{}"
 
         try:
@@ -186,6 +239,6 @@ class MultiRepresentationEnricher:
             if not summary or len(questions) != self.question_count:
                 raise ValueError("incomplete multi-representation response")
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            return None
+            return None, usage
 
-        return EnrichedChunk(chunk=chunk, summary=summary, questions=questions)
+        return EnrichedChunk(chunk=chunk, summary=summary, questions=questions), usage
