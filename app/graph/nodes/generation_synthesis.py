@@ -129,7 +129,7 @@ async def _repair_missing_ask_form(
     produced a valid JSON block - a partial/garbage repair attempt (or a
     literal "NONE") never reaches the client mid-stream.
 
-    `credential`/`on_attempt` (Cost Tracking plan.md Task 6): this repair
+    `credential`/`on_attempt`: this repair
     call has no failover wiring of its own (no retry, no `purpose`), so
     `credential` is whatever the caller's primary call started with - if THAT
     call failed over mid-flight, this snapshot is stale (a pre-existing gap,

@@ -1,5 +1,5 @@
-"""Cost Tracking plan Task 5 - offline price lookup, and Task 0's spike proof
-that `litellm.cost_per_token()` never makes a network call."""
+"""Tests for offline price lookup, including a spike proof that
+`litellm.cost_per_token()` never makes a network call."""
 
 from decimal import Decimal
 
@@ -95,7 +95,7 @@ def test_embedding_shaped_call_is_priced_like_completion() -> None:
 
 
 def test_cost_per_token_never_opens_a_network_connection(monkeypatch) -> None:
-    """Task 0 spike proof: LiteLLM's pricing lookup must not touch the network -
+    """Spike proof: LiteLLM's pricing lookup must not touch the network -
     see docs/product/DECISIONS.md "Cost Tracking" for why LITELLM_LOCAL_MODEL_COST_MAP
     matters (litellm fetches its price table from GitHub on import/unknown-model
     otherwise)."""

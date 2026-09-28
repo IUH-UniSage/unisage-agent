@@ -7,7 +7,7 @@ tests can pass any async callable, e.g. one that appends to a list.
 `stream_agent_text()` is the ONLY place `agent.run_stream()` is called across
 the whole graph (`app/graph/nodes/generation_synthesis.py` and
 `app/graph/nodes/ticket_fallback.py` are the two call sites), which is also
-why the pre-first-chunk failover from todo.md Task 11 lives here instead of
+why the pre-first-chunk failover boundary lives here instead of
 being duplicated in each node: every streaming call gets the same "retry
 before any chunk streamed, never after" boundary for free.
 
@@ -19,12 +19,12 @@ from scratch, no "already streamed some of it" case to preserve.
 
 Failover is opt-in via the `purpose`/`credential`/`snapshot_version`/
 `agent_factory` keyword-only arguments on both helpers. When any of them is
-omitted (the default), behavior is exactly what it was before Task 11/this
-helper existed - a failure propagates immediately, uncaught. This keeps every
+omitted (the default), behavior is unchanged from before this helper existed
+- a failure propagates immediately, uncaught. This keeps every
 existing call site/test that hands in a bare `Model`/`FunctionModel` double,
 with no `model_router` wiring at all, working unchanged.
 
-`on_attempt` (Cost Tracking plan.md Task 0/6) is a second, independent
+`on_attempt` is a second, independent
 opt-in callback: fired exactly once per attempt (every call to
 `agent.run()`/`run_stream()`, including one that fails and gets retried by
 failover), on BOTH the success and the failure path, with the credential
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class AttemptOutcome:
-    """One `on_attempt` callback firing - Cost Tracking plan.md Task 6."""
+    """One `on_attempt` callback firing."""
 
     credential: CredentialConfig | None
     attempt: int
@@ -119,7 +119,7 @@ async def stream_agent_text(
     Returns the full accumulated text once the stream completes.
 
     The "before vs after first chunk" boundary is the entire point of the
-    SSE error contract (plan.md "SSE error contract"): once a single chunk
+    SSE error contract: once a single chunk
     has been forwarded to `token_sink` for THIS call, a failure is no longer
     retried here - it propagates immediately and uncaught, because retrying
     would mean building a response out of two different models' output. Only
@@ -130,7 +130,7 @@ async def stream_agent_text(
     replacement credential is fetched via `model_router.get_next_credential()`,
     a fresh `Agent` is built around it (`agent_factory`), and the SAME prompt
     is retried from scratch. This repeats until either a call succeeds or
-    `model_router.NoAvailableCredentialError` propagates (todo.md's
+    `model_router.NoAvailableCredentialError` propagates (the
     `LLM_UNAVAILABLE` case - handled by the caller, not here).
 
     `on_failover`, when supplied, is called once right after a replacement

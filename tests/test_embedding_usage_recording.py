@@ -1,4 +1,4 @@
-"""Cost Tracking plan.md Task 8 - Embedding: one `embed()` call is one
+"""Usage-recording tests for Embedding: one `embed()` call is one
 `purpose=EMBEDDING` business request. Exercises `OpenAIEmbedder` with a
 registry-resolved credential already populated in `_resolved` (bypassing
 `_resolve_from_registry`'s identity-guard chain, which has its own dedicated

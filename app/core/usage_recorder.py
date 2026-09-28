@@ -1,4 +1,4 @@
-"""Per-request usage measurement + outbox handoff - Cost Tracking plan.md Task 6.
+"""Per-request usage measurement + outbox handoff.
 
 One instance per Chat request, created in `chat.py` and threaded through the
 graph as an explicit parameter (same pattern as `GraphTrace`/`trace`) - never
@@ -107,10 +107,11 @@ class UsageRecorder:
         error_code: str | None = None,
     ) -> None:
         """Records one line directly from plain token counts - used by Embedding/
-        Extraction (Task 8), which call the OpenAI SDK directly rather than through
+        Extraction, which call the OpenAI SDK directly rather than through
         `streaming.py`'s `on_attempt`/`AttemptOutcome` (PydanticAI-only machinery
         `bind()` wraps). `_record_attempt()` above is the PydanticAI path; this is
-        the raw path both it and Task 8's call sites end up funneling into.
+        the raw path both it and Embedding/Extraction's call sites end up funneling
+        into.
 
         Never raises - a bug here must not take down the enrichment/embedding job
         that called it, only lose the one line it was recording.
@@ -224,12 +225,11 @@ class UsageRecorder:
 
     async def close(self, *, status: str) -> None:
         """Call exactly once when the request ends - success, error, or client
-        disconnect (plan.md Task 6). Idempotent: a second call is a no-op, so a
-        caller that closes defensively in more than one place can never double-send.
+        disconnect. Idempotent: a second call is a no-op, so a caller that closes
+        defensively in more than one place can never double-send.
 
         No lines recorded (no provider call was ever made this request) -> settle
-        only, nothing enqueued, matching plan.md's "Request không có LLM call"
-        rule. `status` is the graph's own outcome (SUCCESS/ERROR); it is
+        only, nothing enqueued. `status` is the graph's own outcome (SUCCESS/ERROR); it is
         downgraded to PARTIAL here when at least one line failed but the graph
         still produced SUCCESS overall (a failover recovered from it).
         """

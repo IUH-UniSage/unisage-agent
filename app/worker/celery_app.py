@@ -30,7 +30,7 @@ from app.worker.verification_tasks import run_verification_batch, try_acquire_ve
 
 # Same redaction filter + noisy-logger silencing as the API process (see
 # app/main.py) - Celery worker/beat is a separate process that never imports
-# app.main, so it needs its own call. plan.md "Secret redaction".
+# app.main, so it needs its own call.
 configure_logging()
 logger = logging.getLogger(__name__)
 
@@ -52,29 +52,27 @@ _default_queue = f"{settings.CELERY_QUEUE_PREFIX}-default"
 celery_app.conf.task_default_queue = _default_queue
 celery_app.conf.task_queues = (Queue(_default_queue, routing_key=_default_queue),)
 
-# Beat heartbeat: the only thing on Beat's schedule until Task 8 (hot-reload
-# poll) adds the real verify-poll entry. Exists so the integration harness has
-# something observable to assert "Beat is actually ticking, not just started"
-# (plan.md Task 0.5's smoke test) - writes the current time to a registry-namespaced
-# (`mr:`) Redis key on DB 0, not the Celery broker/backend DB, and never touches
-# task args/results (plan.md "Secret redaction" - Celery tasks in this feature
-# never carry credentials as arguments).
+# Beat heartbeat: exists so the integration harness has something observable to
+# assert "Beat is actually ticking, not just started" - writes the current time to a
+# registry-namespaced (`mr:`) Redis key on DB 0, not the Celery broker/backend DB, and
+# never touches task args/results (Celery tasks in this feature never carry
+# credentials as arguments).
 BEAT_HEARTBEAT_REDIS_KEY = "mr:beat:last_tick"
 celery_app.conf.beat_schedule = {
     "model-registry-beat-heartbeat": {
         "task": "beat_heartbeat",
         "schedule": settings.CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS,
     },
-    # Verify-before-active claim loop (plan.md "Verification lifecycle") - the backstop that
-    # guarantees a queued job eventually gets claimed even if the verification-requested
-    # pub/sub nudge (see worker_process_init below) is missed entirely.
+    # Verify-before-active claim loop - the backstop that guarantees a queued job
+    # eventually gets claimed even if the verification-requested pub/sub nudge (see
+    # worker_process_init below) is missed entirely.
     "model-registry-verify-pending": {
         "task": "verify_pending_credentials",
         "schedule": settings.MODEL_REGISTRY_VERIFICATION_INTERVAL_SECONDS,
     },
-    # Cost Tracking outbox drain (plan.md Task 7) - moves UsageRecorder payloads from
-    # Redis to backend-java. Short interval on purpose: the outbox is the only thing
-    # standing between a Chat response and its cost ever reaching Java.
+    # Usage outbox drain - moves UsageRecorder payloads from Redis to backend-java.
+    # Short interval on purpose: the outbox is the only thing standing between a
+    # Chat response and its cost ever reaching Java.
     "usage-outbox-drain": {
         "task": "drain_usage_outbox",
         "schedule": settings.USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS,
@@ -84,8 +82,8 @@ celery_app.conf.beat_schedule = {
 
 @worker_process_init.connect
 def _load_model_registry_on_worker_start(**kwargs: Any) -> None:
-    """Mirrors `app.main`'s lifespan load (plan.md "Cutover khỏi cấu hình .env tĩnh") — each
-    prefork worker process gets its own snapshot, since it doesn't share memory with gunicorn
+    """Mirrors `app.main`'s lifespan load — each prefork worker process gets its own
+    snapshot, since it doesn't share memory with gunicorn
     workers or other worker processes. No-op when `MODEL_REGISTRY_ENABLED=false`; when true, an
     uncaught `ModelRegistryError` here is deliberately fatal (Celery aborts the worker process
     that raised out of a bootstep signal), same fail-loud contract as the FastAPI side.
@@ -93,7 +91,7 @@ def _load_model_registry_on_worker_start(**kwargs: Any) -> None:
 
     del kwargs
     asyncio.run(init_model_registry())
-    # Task 8: same hot-reload as the FastAPI side, but as a daemon thread running its own
+    # Same hot-reload as the FastAPI side, but as a daemon thread running its own
     # event loop - this prefork worker process has no asyncio loop of its own to schedule
     # tasks on. No-op when MODEL_REGISTRY_ENABLED=false.
     start_thread_registry_subscriber()
@@ -117,15 +115,15 @@ def beat_heartbeat() -> None:
 
 @celery_app.task(name="verify_pending_credentials", ignore_result=True)
 def verify_pending_credentials() -> None:
-    """Claims and verifies pending model-registry credentials (plan.md "Verification
-    lifecycle") - triggered by Beat on a schedule and by an immediate wake-up on the
+    """Claims and verifies pending model-registry credentials - triggered by Beat on
+    a schedule and by an immediate wake-up on the
     verification-requested channel (see `worker_process_init` above), always through this
     same task so the Redis lock below is the only thing that needs to serialize them.
 
     Deliberately takes **no arguments** and returns nothing: the claimed candidate
     credentials (plaintext API keys) live only in local variables inside
     `run_verification_batch()`'s call stack for the duration of this one run, and never cross
-    the Celery broker or result backend (plan.md "Secret redaction").
+    the Celery broker or result backend.
     """
 
     if not try_acquire_verification_lock():
@@ -167,7 +165,7 @@ def embed_chunks(
     per-chunk results rather than raised, so it doesn't abort the batch -
     UNLESS the failure is `EmbeddingProviderError` (the ACTIVE EMBEDDING
     credential itself is broken, or its identity guard refused it). Embedding
-    never auto-fails-over (plan.md "Embedding identity guard") - that kind of
+    never auto-fails-over - that kind of
     failure aborts the whole job instead: chunks already upserted stay in
     Qdrant untouched, no further chunk is embedded, no `completed` event is
     published, and this re-raises so Celery records the task as FAILED (the
@@ -265,8 +263,8 @@ def embed_chunks(
             logger.exception("Failed to embed chunk %s of %s", chunk.chunk_index, document_id)
             # This dict is the task's return value, which Celery persists to the
             # result backend (`result_expires` above keeps it there for a week) -
-            # exactly the kind of DB-like sink plan.md "Secret redaction" warns
-            # about, so the raw exception text never goes in unredacted.
+            # exactly the kind of DB-like sink a raw exception message must never
+            # reach unredacted, since it may embed provider credentials.
             results.append(
                 {
                     "chunk_index": chunk.chunk_index,
@@ -284,8 +282,8 @@ def embed_chunks(
 
 
 def _report_embedding_provider_failure(exc: EmbeddingProviderError) -> None:
-    """Best-effort health report to `backend-java` (plan.md "Internal API contract" endpoint #3),
-    same shape CHAT/EXTRACTION failures already report via `app.core.model_router`. A credential
+    """Best-effort health report to `backend-java`, same shape CHAT/EXTRACTION
+    failures already report via `app.core.model_router`. A credential
     identity mismatch is always `PERMANENT` (retrying never fixes a wrong model/provider); any
     other embedding provider failure is classified from its underlying cause the same way
     `model_router` classifies CHAT/EXTRACTION failures.

@@ -1,9 +1,7 @@
-"""Redis outbox for usage payloads - Cost Tracking plan.md "Architecture Decisions":
-"Ghi usage qua outbox Redis, không gọi Java trực tiếp trong request." `enqueue()`
-only ever `LPUSH`es - it never calls `POST /internal/usage-logs` itself, so a Java
-outage never adds latency (or a failure) to a Chat response. The Celery drain
-worker that moves items from here to Java is a separate piece (plan.md Task 7's
-`drain_usage_outbox` task), not implemented by this module.
+"""Redis outbox for usage payloads. `enqueue()` only ever `LPUSH`es - it never calls
+`POST /internal/usage-logs` itself, so a Java outage never adds latency (or a
+failure) to a Chat response. The Celery drain worker that moves items from here to
+Java (`drain_usage_outbox` task) is a separate piece, not implemented by this module.
 
 Same "degrade, don't crash the caller" posture as `app/core/alerting.py`, but the
 failure here is logged at ERROR (not WARNING): a lost alert is just silence, a lost
@@ -43,9 +41,8 @@ async def enqueue_usage_payload(
     Never raises - a Redis outage must not take Chat down with it. The payload is
     lost if this fails (no in-memory retry queue here; that would just move the
     same "process might die before flushing it" risk somewhere else) - logged at
-    ERROR so it's visible, matching the "Redis persistence is an acceptance
-    criterion" posture of plan.md's deployment section (AOF is what actually
-    prevents loss, not application-level retries).
+    ERROR so it's visible. Redis AOF persistence, not application-level retries,
+    is what actually prevents loss here.
     """
 
     body = json.dumps(payload)

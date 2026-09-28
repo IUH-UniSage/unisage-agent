@@ -26,7 +26,7 @@ straight out of `run_and_persist`, skip the sentinel put, and leave the SSE
 generator's `while True: token = await queue.get()` waiting forever - the
 client's connection would then never see `event: done` and never close.
 
-Task 11 (plan.md "SSE error contract") adds one more thing to that same
+The SSE error contract adds one more thing to that same
 outer `finally`'s neighborhood: when `run_graph(...)` raises, an `ErrorItem`
 describing it is put onto `queue` immediately BEFORE the `DoneItem`
 sentinel - still inside the same outer `try`, so it's put exactly once, and

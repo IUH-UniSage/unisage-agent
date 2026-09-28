@@ -145,8 +145,8 @@ async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenera
     which does the real work, runs in an independent `asyncio.create_task()`
     and is never awaited here.
 
-    Per plan.md "SSE error contract": `event: done` is always the last event
-    emitted, no matter what was queued before it - the loop below only ever
+    `event: done` is always the last event emitted, no matter what was queued
+    before it - the loop below only ever
     breaks on `DoneItem`, so every `TokenItem`/`ErrorItem` queued ahead of it
     is drained and emitted first. `run_and_persist` only ever queues at most
     one `ErrorItem`, immediately before its own `DoneItem` put, so `event:

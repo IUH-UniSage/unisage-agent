@@ -33,7 +33,7 @@ def _mock_client(content: str) -> MagicMock:
     client.chat.completions.create.return_value = MagicMock(
         choices=[MagicMock(message=MagicMock(content=content))],
         # Real ints, not an auto-vivified MagicMock - the registry-resolved failover
-        # path (Cost Tracking Task 8) JSON-encodes this for the usage outbox.
+        # path JSON-encodes this for the usage outbox.
         usage=MagicMock(prompt_tokens=10, completion_tokens=5),
     )
     return client
@@ -80,7 +80,7 @@ def test_enrich_falls_back_to_empty_on_short_question_list() -> None:
     assert enriched.questions == []
 
 
-# ── model_router-driven failover (todo.md Task 12) ─────────────────────────
+# ── model_router-driven failover ─────────────────────────
 #
 # These tests exercise the registry-resolved path (no `model`/`client` injected),
 # so `enrich()` goes through `model_router`. Same spirit as
@@ -345,7 +345,7 @@ def test_snapshot_version_reported_is_the_one_captured_at_failure_not_a_later_dr
     assert backend.reports[0]["snapshot_version"] == 1
 
 
-# --- Cost Tracking plan.md Task 8: one enrich() call = one purpose=EXTRACTION request ---
+# --- Usage recording: one enrich() call = one purpose=EXTRACTION request ---
 
 
 def test_enrich_success_records_one_line_with_purpose_extraction(

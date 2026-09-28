@@ -1,4 +1,4 @@
-"""app/worker/usage_outbox_tasks.py - Cost Tracking plan.md Task 7 (drain side).
+"""Tests for app/worker/usage_outbox_tasks.py (drain side).
 Uses a hand-rolled in-memory fake (same spirit as test_chat_stream_errors.py's
 _FakeRedis) rather than a real Redis connection - only the small subset of the
 list API this module actually calls needs faithful semantics."""

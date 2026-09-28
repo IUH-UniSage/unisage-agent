@@ -34,14 +34,14 @@ class MultiRepresentationEnricher:
     """Add a summary + hypothetical questions to a chunk via one LLM call.
 
     Model name, API key and base URL come from the model registry's ACTIVE EXTRACTION
-    credential (plan.md "Cutover khỏi cấu hình `.env` tĩnh") - never `.env`. Both are resolved
+    credential - never `.env`. Both are resolved
     lazily on first `enrich()` call, not at construction time - mirrors `OpenAIEmbedder`; tests
     inject `model`/`client` directly to skip the registry (and `model_router`) entirely (see
     tests/test_multi_representation.py).
 
     When resolving from the registry, credential selection and failover go through
-    `app.core.model_router` (todo.md Task 10) - the same circuit breaker Task 11 wired CHAT
-    streaming into - never a second, home-grown cooldown/exclusion mechanism. Every attempt
+    `app.core.model_router` - the same circuit breaker CHAT streaming already uses -
+    never a second, home-grown cooldown/exclusion mechanism. Every attempt
     (primary and every fallback) builds its `OpenAI` client through the same SSRF-guarded
     `build_provider_http_client_sync()` factory.
     """
@@ -98,7 +98,7 @@ class MultiRepresentationEnricher:
             )
             return EnrichedChunk(chunk=chunk, summary="", questions=[])
 
-        # Cost Tracking plan.md Task 8: one enrich() call is one purpose=EXTRACTION
+        # One enrich() call is one purpose=EXTRACTION
         # business request, one line per attempt (including a failed attempt before
         # failover) - self-contained like OpenAIEmbedder.embed(), so
         # app.worker.celery_app's caller needs no changes.
@@ -194,7 +194,7 @@ class MultiRepresentationEnricher:
 
     def _build_client(self, credential: CredentialConfig) -> OpenAI:
         """Builds the `OpenAI` client for one attempt (primary or fallback) - always through
-        the SSRF-guarded factory, so the Task 0.6 architecture test
+        the SSRF-guarded factory, so the architecture test
         (`tests/core/test_no_raw_provider_clients.py`) stays green for every fallback attempt
         too, not just the first one."""
 

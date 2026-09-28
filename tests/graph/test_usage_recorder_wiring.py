@@ -1,4 +1,4 @@
-"""Cost Tracking plan.md Task 6 verification: line count/attempt/status through a
+"""Usage-recording verification: line count/attempt/status through a
 real graph run (classification + query transformation + generation, with and
 without failover), and that the outbox still gets the payload when the SSE
 consumer never reads the queue (client-disconnect equivalent - `run_and_persist`

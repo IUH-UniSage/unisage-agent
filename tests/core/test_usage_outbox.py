@@ -1,5 +1,5 @@
-"""app/core/usage_outbox.py - Cost Tracking plan.md Task 7 (enqueue side only; the
-Celery drain worker is a separate piece, not covered here)."""
+"""Tests for app/core/usage_outbox.py (enqueue side only; the Celery drain worker
+is a separate piece, not covered here)."""
 
 from typing import Any
 

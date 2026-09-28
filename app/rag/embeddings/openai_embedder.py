@@ -34,7 +34,7 @@ class OpenAIEmbedder:
     """Embedding provider backed by the OpenAI-compatible embeddings API.
 
     Model name, API key and base URL come from the model registry's ACTIVE EMBEDDING
-    credential (plan.md "Cutover khỏi cấu hình `.env` tĩnh") - never `.env`. Both are resolved
+    credential - never `.env`. Both are resolved
     lazily on first `embed()` call, not at construction time, so building an `OpenAIEmbedder()`
     never itself requires a loaded registry snapshot - only actually calling `embed` does
     (matches the previous lazy-client behavior; tests inject `model`/`client` directly to skip
@@ -42,8 +42,8 @@ class OpenAIEmbedder:
     tests/test_embedding_provider.py, tests/test_retrieval.py).
 
     When `model`/`client` are resolved from the registry (not injected), every `embed()` call is
-    gated by `app.core.embedding_identity.ensure_embedding_identity` (plan.md "Embedding identity
-    guard") - this is the one chokepoint both ingest (`app.worker.celery_app.embed_chunks`) and
+    gated by `app.core.embedding_identity.ensure_embedding_identity` - this is the
+    one chokepoint both ingest (`app.worker.celery_app.embed_chunks`) and
     query-time retrieval (`app.rag.retrieval.service.RetrievalService`, which builds its embedder
     from this same class) go through, so neither path can silently embed with a credential that
     doesn't match the Qdrant collection's established vector space. A failed provider call, a
@@ -83,9 +83,8 @@ class OpenAIEmbedder:
         Sent in as few requests as the endpoint's 2048-item cap allows
         (usually one).
 
-        Cost Tracking plan.md Task 8: one `embed()` call is one business request
-        (`purpose=EMBEDDING`, no conversation/message ids - plan.md "1 request = 1
-        batch embed"). Self-contained: builds and closes its own `UsageRecorder`,
+        One `embed()` call is one business request (`purpose=EMBEDDING`, no
+        conversation/message ids). Self-contained: builds and closes its own `UsageRecorder`,
         so `app.worker.celery_app.embed_chunks` (the one production caller) needs
         no changes. Only recorded when a registry credential was actually resolved
         - a test that injects `model`/`client` directly (skipping the registry

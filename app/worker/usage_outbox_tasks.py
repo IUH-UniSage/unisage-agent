@@ -1,5 +1,4 @@
-"""Celery task draining `app.core.usage_outbox`'s Redis outbox to backend-java -
-Cost Tracking plan.md Task 7.
+"""Celery task draining `app.core.usage_outbox`'s Redis outbox to backend-java.
 
 Runs on Beat every `USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS` (see `celery_app.py`'s
 `beat_schedule`). Uses a `SET NX EX` lock (same idiom as
@@ -112,8 +111,8 @@ def drain_usage_outbox_once(
                     )
                 else:
                     # 5xx - Java itself is unhealthy, not this one payload. Return it to the
-                    # outbox immediately (plan.md: "lỗi mạng/5xx -> trả lại outbox") and stop
-                    # this run rather than hammering a struggling Java with the rest of the batch.
+                    # outbox immediately and stop this run rather than hammering a struggling
+                    # Java with the rest of the batch.
                     conn.lrem(PROCESSING_KEY, 1, item)
                     conn.rpush(OUTBOX_KEY, item)
                     logger.warning(
@@ -141,7 +140,7 @@ def drain_usage_outbox_once(
 
 
 def outbox_health() -> dict[str, int]:
-    """`{"pending": N, "dead": N}` for `GET /api/v1/health` (Task 11b, not yet wired there -
+    """`{"pending": N, "dead": N}` for `GET /api/v1/health` (not yet wired there -
     this function is the piece that endpoint will call)."""
 
     try:

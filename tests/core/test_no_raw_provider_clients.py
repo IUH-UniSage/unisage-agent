@@ -1,6 +1,6 @@
-"""Architecture test — plan.md "SSRF policy": every provider HTTP client must be
-built through `app/core/llm/http_client.py`'s factory, never with the SDK's own
-default transport.
+"""Architecture test — every provider HTTP client must be built through
+`app/core/llm/http_client.py`'s factory, never with the SDK's own default
+transport.
 
 AST-scans every `.py` file under `app/` for:
   - `OpenAI(`, `AsyncOpenAI(`, `Anthropic(` calls that don't pass an explicit
@@ -14,8 +14,8 @@ AST-scans every `.py` file under `app/` for:
     `app/integrations/slack_notifier.py` are scoped exceptions: each builds a
     plain `httpx.AsyncClient` to call an operator-configured external
     service, not a provider — SSRF pinning is a defense for URLs the SA
-    registers as a provider endpoint (plan.md "SSRF policy" /
-    `http_client.py`'s own module docstring), and both `BACKEND_JAVA_BASE_URL`
+    registers as a provider endpoint (see `http_client.py`'s own module
+    docstring), and both `BACKEND_JAVA_BASE_URL`
     and `SLACK_APIKEY_ALERT_WEBHOOK_URL` are operator-configured infra, not
     registry data.
   - Any `import litellm` / `from litellm import ...` anywhere in `app/` — ADR

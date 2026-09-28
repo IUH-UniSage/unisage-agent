@@ -1,4 +1,4 @@
-"""Offline LLM/embedding price lookup - Cost Tracking plan Task 5.
+"""Offline LLM/embedding price lookup.
 
 The only module in `app/` allowed to `import litellm` (see
 `tests/core/test_no_raw_provider_clients.py`) - only for `cost_per_token()`,
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 SOURCE_TYPE_SELF_HOSTED = "SELF_HOSTED"
 
-# Mirrors Java's `UsageCostStatus` enum (plan.md "Data Model").
+# Mirrors Java's `UsageCostStatus` enum.
 COST_STATUS_PRICED = "PRICED"
 COST_STATUS_UNPRICED = "UNPRICED"
 COST_STATUS_FREE = "FREE"
@@ -61,8 +61,8 @@ def calculate_actual(
 ) -> CostResult:
     """Cost of one already-completed call, from its real token usage.
 
-    `SELF_HOSTED` is always `FREE` (plan.md "Architecture Decisions") - never
-    asked of LiteLLM, since self-hosted models never have a public price.
+    `SELF_HOSTED` is always `FREE` - never asked of LiteLLM, since self-hosted
+    models never have a public price.
     """
 
     if source_type == SOURCE_TYPE_SELF_HOSTED:

@@ -1,4 +1,4 @@
-"""Unit tests for UsageRecorder - Cost Tracking plan.md Task 6. Graph-level line-count/
+"""Unit tests for UsageRecorder. Graph-level line-count/
 failover/disconnect scenarios are covered separately by
 tests/graph/test_usage_recorder_wiring.py; this file exercises the recorder in isolation
 (no real graph run needed)."""

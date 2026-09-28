@@ -1,7 +1,6 @@
-"""Tests for the SSE error contract (plan.md "SSE error contract", todo.md
-Task 11): `event: error` immediately before `event: done`, the pre-first-
-chunk failover boundary in `stream_agent_text()`, and the no-mixed-content
-invariant.
+"""Tests for the SSE error contract: `event: error` immediately before
+`event: done`, the pre-first-chunk failover boundary in `stream_agent_text()`,
+and the no-mixed-content invariant.
 
 Drives `run_and_persist` + `_sse_token_generator` directly (same level as
 `tests/graph/test_streaming_session.py`) rather than the full HTTP
