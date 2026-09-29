@@ -124,3 +124,20 @@ def test_embed_empty_texts_records_nothing(captured_outbox: list[dict[str, Any]]
 
     assert embedder.embed([]) == []
     assert captured_outbox == []
+
+
+@pytest.mark.asyncio
+async def test_embed_called_from_a_running_event_loop_still_records_usage(
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    """Chat retrieval calls the sync `embed()` from inside the server's event loop."""
+
+    client = _mock_client([[0.3, 0.4]], prompt_tokens=7)
+    embedder = _resolved_embedder(client)
+
+    vectors = embedder.embed(["học phí là bao nhiêu"])
+
+    assert vectors == [[0.3, 0.4]]
+    assert len(captured_outbox) == 1
+    assert captured_outbox[0]["status"] == "SUCCESS"
+    assert captured_outbox[0]["lines"][0]["inputTokens"] == 7

@@ -2,13 +2,15 @@ import asyncio
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
 from openai import OpenAI
+from redis import asyncio as redis_asyncio
 
-from app.core.budget.tracker import get_default_tracker
+from app.core.budget.tracker import BudgetTracker
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import EmbeddingProviderError
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
@@ -111,18 +113,34 @@ class OpenAIEmbedder:
         if credential is None:
             return self._call_provider(client, model, texts)
 
-        budget_tracker = get_default_tracker()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._embed_recorded(client, model, texts, credential))
+        # Chat retrieval calls this sync method from inside the server's event loop, where
+        # asyncio.run() is not allowed.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(
+                asyncio.run, self._embed_recorded(client, model, texts, credential)
+            ).result()
+
+    async def _embed_recorded(
+        self, client: OpenAI, model: str, texts: list[str], credential: CredentialConfig
+    ) -> list[list[float]]:
+        # One event loop and one Redis client for the whole call: an asyncio Redis connection
+        # is bound to the loop that opened it, so reusing a shared client across separate
+        # asyncio.run() calls fails and the budget calls silently fail open.
+        redis_client = redis_asyncio.Redis.from_url(settings.REDIS_URL)
+        budget_tracker = BudgetTracker(redis_client=redis_client)
         recorder = UsageRecorder(
             request_id=str(uuid.uuid4()), purpose="EMBEDDING", budget_tracker=budget_tracker
         )
         status = "ERROR"
         try:
-            reserve_result = asyncio.run(
-                budget_tracker.reserve_request(
-                    request_id=recorder.request_id,
-                    purpose="EMBEDDING",
-                    estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
-                )
+            reserve_result = await budget_tracker.reserve_request(
+                request_id=recorder.request_id,
+                purpose="EMBEDDING",
+                estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
             )
             if reserve_result != "OK":
                 # Reuses `EmbeddingProviderError` (not `RequestBudgetRejectedError`) so
@@ -133,13 +151,19 @@ class OpenAIEmbedder:
                     f"EMBEDDING budget reservation rejected: {reserve_result}",
                     credential=credential,
                 )
-            vectors = self._call_provider(
-                client, model, texts, usage_recorder=recorder, budget_tracker=budget_tracker
+            vectors = await self._call_provider_tracked(
+                client, model, texts, recorder, budget_tracker
             )
             status = "SUCCESS"
             return vectors
         finally:
-            asyncio.run(recorder.close(status=status))
+            try:
+                await recorder.close(status=status)
+            finally:
+                try:
+                    await redis_client.aclose()
+                except Exception:
+                    logger.debug("embedder: closing the Redis client failed", exc_info=True)
 
     def _resolve_from_registry(self) -> None:
         embedding_credentials = active_credentials_for("EMBEDDING")
@@ -183,111 +207,91 @@ class OpenAIEmbedder:
         self._resolved["client"] = client
         self._resolved["identity_key"] = identity_key
 
-    def _call_provider(
+    def _call_provider(self, client: OpenAI, model: str, texts: list[str]) -> list[list[float]]:
+        """Untracked call - the identity probe, and any caller that injected `model`/`client`
+        directly (no registry credential, so nothing to record or budget)."""
+
+        credential = self._resolved.get("credential")
+        try:
+            vectors, _ = self._request_embeddings(client, model, texts)
+            return vectors
+        except EmbeddingProviderError:
+            raise
+        except Exception as exc:
+            message = safe_error_message(exc, credential.api_key if credential else None)
+            raise EmbeddingProviderError(message, credential=credential) from exc
+
+    async def _call_provider_tracked(
         self,
         client: OpenAI,
         model: str,
         texts: list[str],
-        *,
-        usage_recorder: UsageRecorder | None = None,
-        budget_tracker: Any | None = None,
+        usage_recorder: UsageRecorder,
+        budget_tracker: BudgetTracker,
     ) -> list[list[float]]:
-        """`usage_recorder`, when given, gets exactly one line for this call (summed
-        across every 2048-item sub-batch it takes to embed `texts`) - `None` here
-        (the identity-probe call in `_resolve_from_registry`, and any test that
-        constructs this class with `model`/`client` injected directly) means no
-        line at all, not a line with zero tokens.
-
-        `budget_tracker`, only meaningful together with `usage_recorder` (both
-        require a resolved registry credential), gates this one call against the
-        PROVIDER-scope budget before it's made and releases the reservation
-        afterwards - embedding never fails over, so there is no candidate loop
-        here, just a single acquire/release pair."""
+        """Records exactly one line for this call (summed across every 2048-item sub-batch)
+        and gates it against the PROVIDER-scope budget - embedding never fails over, so there
+        is a single acquire/release pair, no candidate loop."""
 
         credential = self._resolved.get("credential")
-        budget_seq: int | None = None
-        if usage_recorder is not None and budget_tracker is not None:
-            budget_seq = usage_recorder.reserve_budget_seq()
-            acquire_result = asyncio.run(
-                budget_tracker.acquire_provider(
-                    request_id=usage_recorder.request_id,
-                    seq=budget_seq,
-                    provider=credential.provider if credential else "",
-                    estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
-                )
+        budget_seq = usage_recorder.reserve_budget_seq()
+        acquire_result = await budget_tracker.acquire_provider(
+            request_id=usage_recorder.request_id,
+            seq=budget_seq,
+            provider=credential.provider if credential else "",
+            estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
+        )
+        if acquire_result != "OK":
+            raise EmbeddingProviderError(
+                f"EMBEDDING provider budget denied: {acquire_result}", credential=credential
             )
-            if acquire_result != "OK":
-                raise EmbeddingProviderError(
-                    f"EMBEDDING provider budget denied: {acquire_result}", credential=credential
-                )
 
         started_at = time.monotonic()
+        committed_usd = Decimal("0")
         try:
-            vectors: list[list[float]] = []
-            prompt_tokens = 0
-            for start in range(0, len(texts), _MAX_INPUTS_PER_REQUEST):
-                batch = texts[start : start + _MAX_INPUTS_PER_REQUEST]
-                response = client.embeddings.create(model=model, input=batch)
-                vectors.extend(item.embedding for item in response.data)
-                if response.usage is not None:
-                    prompt_tokens += response.usage.prompt_tokens
-            committed_usd = Decimal("0")
-            if usage_recorder is not None:
-                committed_usd = usage_recorder.record(
-                    node_name="embed_batch",
-                    attempt=0,
-                    credential=credential,
-                    status="SUCCESS",
-                    input_tokens=prompt_tokens,
-                    latency_ms=int((time.monotonic() - started_at) * 1000),
-                )
-            if budget_tracker is not None and budget_seq is not None:
-                asyncio.run(
-                    budget_tracker.release_provider(
-                        request_id=usage_recorder.request_id,  # type: ignore[union-attr]
-                        seq=budget_seq,
-                        actual_usd=committed_usd,
-                    )
-                )
+            # The OpenAI client is sync; keep it off the event loop.
+            vectors, prompt_tokens = await asyncio.to_thread(
+                self._request_embeddings, client, model, texts
+            )
+            committed_usd = usage_recorder.record(
+                node_name="embed_batch",
+                attempt=0,
+                credential=credential,
+                status="SUCCESS",
+                input_tokens=prompt_tokens,
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+            )
             return vectors
-        except EmbeddingProviderError:
-            committed_usd = Decimal("0")
-            if usage_recorder is not None:
-                committed_usd = usage_recorder.record(
-                    node_name="embed_batch",
-                    attempt=0,
-                    credential=credential,
-                    status="ERROR",
-                    latency_ms=int((time.monotonic() - started_at) * 1000),
-                    error_code="EmbeddingProviderError",
-                )
-            if budget_tracker is not None and budget_seq is not None:
-                asyncio.run(
-                    budget_tracker.release_provider(
-                        request_id=usage_recorder.request_id,  # type: ignore[union-attr]
-                        seq=budget_seq,
-                        actual_usd=committed_usd,
-                    )
-                )
-            raise
         except Exception as exc:
-            committed_usd = Decimal("0")
-            if usage_recorder is not None:
-                committed_usd = usage_recorder.record(
-                    node_name="embed_batch",
-                    attempt=0,
-                    credential=credential,
-                    status="ERROR",
-                    latency_ms=int((time.monotonic() - started_at) * 1000),
-                    error_code=type(exc).__name__,
-                )
-            if budget_tracker is not None and budget_seq is not None:
-                asyncio.run(
-                    budget_tracker.release_provider(
-                        request_id=usage_recorder.request_id,  # type: ignore[union-attr]
-                        seq=budget_seq,
-                        actual_usd=committed_usd,
-                    )
-                )
+            committed_usd = usage_recorder.record(
+                node_name="embed_batch",
+                attempt=0,
+                credential=credential,
+                status="ERROR",
+                latency_ms=int((time.monotonic() - started_at) * 1000),
+                error_code=type(exc).__name__,
+            )
+            if isinstance(exc, EmbeddingProviderError):
+                raise
             message = safe_error_message(exc, credential.api_key if credential else None)
             raise EmbeddingProviderError(message, credential=credential) from exc
+        finally:
+            await budget_tracker.release_provider(
+                request_id=usage_recorder.request_id,
+                seq=budget_seq,
+                actual_usd=committed_usd,
+            )
+
+    @staticmethod
+    def _request_embeddings(
+        client: OpenAI, model: str, texts: list[str]
+    ) -> tuple[list[list[float]], int]:
+        vectors: list[list[float]] = []
+        prompt_tokens = 0
+        for start in range(0, len(texts), _MAX_INPUTS_PER_REQUEST):
+            batch = texts[start : start + _MAX_INPUTS_PER_REQUEST]
+            response = client.embeddings.create(model=model, input=batch)
+            vectors.extend(item.embedding for item in response.data)
+            if response.usage is not None:
+                prompt_tokens += response.usage.prompt_tokens
+        return vectors, prompt_tokens
