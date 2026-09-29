@@ -5,13 +5,14 @@ import json
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import TYPE_CHECKING
 
 from openai import OpenAI
+from redis import asyncio as redis_asyncio
 
-from app.core.budget.tracker import RequestBudgetRejectedError, get_default_tracker
+from app.core.budget.tracker import BudgetTracker, RequestBudgetRejectedError
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import MalformedExtractionResponseError
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
@@ -20,9 +21,6 @@ from app.core.registry.model_registry import CredentialConfig, get_current_snaps
 from app.core.usage.usage_recorder import UsageRecorder
 from app.rag.prompting.loader import get_templates
 from app.schemas.ingestion import Chunk
-
-if TYPE_CHECKING:
-    from app.core.budget.tracker import BudgetTracker
 
 logger = logging.getLogger(__name__)
 
@@ -106,51 +104,60 @@ class MultiRepresentationEnricher:
             )
             return EnrichedChunk(chunk=chunk, summary="", questions=[])
 
-        # One enrich() call is one purpose=EXTRACTION
-        # business request, one line per attempt (including a failed attempt before
-        # failover) - self-contained like OpenAIEmbedder.embed(), so
-        # app.worker.celery_app's caller needs no changes.
-        budget_tracker = get_default_tracker()
+        # One enrich() call is one purpose=EXTRACTION business request, one line per attempt
+        # (including a failed attempt before failover).
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._enrich_recorded(chunk))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, self._enrich_recorded(chunk)).result()
+
+    async def _enrich_recorded(self, chunk: Chunk) -> EnrichedChunk:
+        # One event loop and one Redis client for the whole call - an asyncio Redis
+        # connection is bound to the loop that opened it (see OpenAIEmbedder.embed()).
+        redis_client = redis_asyncio.Redis.from_url(settings.REDIS_URL)
+        budget_tracker = BudgetTracker(redis_client=redis_client)
         recorder = UsageRecorder(
             request_id=str(uuid.uuid4()), purpose="EXTRACTION", budget_tracker=budget_tracker
         )
         status = "ERROR"
         try:
-            reserve_result = asyncio.run(
-                budget_tracker.reserve_request(
-                    request_id=recorder.request_id,
-                    purpose="EXTRACTION",
-                    estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
-                )
+            reserve_result = await budget_tracker.reserve_request(
+                request_id=recorder.request_id,
+                purpose="EXTRACTION",
+                estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
             )
             if reserve_result != "OK":
                 raise RequestBudgetRejectedError("EXTRACTION", reserve_result)
-            result = self._enrich_with_failover(chunk, recorder, budget_tracker)
+            result = await self._enrich_with_failover(chunk, recorder, budget_tracker)
             status = "SUCCESS"
             return result
         finally:
             # `model_router.NoAvailableCredentialError`/`NoBudgetAvailableError` (every
             # EXTRACTION credential exhausted) can propagate out of
-            # `_enrich_with_failover` uncaught (see this method's own docstring) -
-            # `status` stays "ERROR" in that case, same as it would for any other
-            # exception escaping this method.
-            asyncio.run(recorder.close(status=status))
+            # `_enrich_with_failover` uncaught - `status` stays "ERROR" in that case.
+            try:
+                await recorder.close(status=status)
+            finally:
+                try:
+                    await redis_client.aclose()
+                except Exception:
+                    logger.debug("enricher: closing the Redis client failed", exc_info=True)
 
-    def _enrich_with_failover(
+    async def _enrich_with_failover(
         self, chunk: Chunk, recorder: UsageRecorder, budget_tracker: BudgetTracker
     ) -> EnrichedChunk:
         is_fallback = False
         attempt = 0
         while True:
             budget_seq = recorder.reserve_budget_seq()
-            credential = asyncio.run(
-                model_router.select_credential_with_budget(
-                    "EXTRACTION",
-                    budget_tracker=budget_tracker,
-                    request_id=recorder.request_id,
-                    seq=budget_seq,
-                    estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
-                )
+            credential = await model_router.select_credential_with_budget(
+                "EXTRACTION",
+                budget_tracker=budget_tracker,
+                request_id=recorder.request_id,
+                seq=budget_seq,
+                estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
             )
             snapshot = get_current_snapshot()
             snapshot_version = snapshot.version if snapshot is not None else 0
@@ -159,7 +166,10 @@ class MultiRepresentationEnricher:
 
             started_at = time.monotonic()
             try:
-                result, usage = self._call_and_parse(chunk, resolved_model, resolved_client)
+                # The OpenAI client is sync; keep it off the event loop.
+                result, usage = await asyncio.to_thread(
+                    self._call_and_parse, chunk, resolved_model, resolved_client
+                )
             except Exception as exc:
                 committed_usd = recorder.record(
                     node_name="multi_representation_enrich",
@@ -169,15 +179,11 @@ class MultiRepresentationEnricher:
                     latency_ms=int((time.monotonic() - started_at) * 1000),
                     error_code=type(exc).__name__,
                 )
-                asyncio.run(
-                    budget_tracker.release_provider(
-                        request_id=recorder.request_id, seq=budget_seq, actual_usd=committed_usd
-                    )
+                await budget_tracker.release_provider(
+                    request_id=recorder.request_id, seq=budget_seq, actual_usd=committed_usd
                 )
-                asyncio.run(
-                    model_router.record_failure(
-                        credential, exc, snapshot_version=snapshot_version, purpose="EXTRACTION"
-                    )
+                await model_router.record_failure(
+                    credential, exc, snapshot_version=snapshot_version, purpose="EXTRACTION"
                 )
                 is_fallback = True
                 attempt += 1
@@ -196,10 +202,8 @@ class MultiRepresentationEnricher:
                 output_tokens=usage.completion_tokens if usage else 0,
                 latency_ms=latency_ms,
             )
-            asyncio.run(
-                budget_tracker.release_provider(
-                    request_id=recorder.request_id, seq=budget_seq, actual_usd=committed_usd
-                )
+            await budget_tracker.release_provider(
+                request_id=recorder.request_id, seq=budget_seq, actual_usd=committed_usd
             )
 
             if result is not None:
@@ -220,16 +224,14 @@ class MultiRepresentationEnricher:
                 chunk.chunk_index,
                 credential.id,
             )
-            asyncio.run(
-                model_router.record_failure(
-                    credential,
-                    MalformedExtractionResponseError(
-                        f"fallback credential {credential.id!r} returned a malformed "
-                        f"multi-representation response for chunk {chunk.chunk_index}"
-                    ),
-                    snapshot_version=snapshot_version,
-                    purpose="EXTRACTION",
-                )
+            await model_router.record_failure(
+                credential,
+                MalformedExtractionResponseError(
+                    f"fallback credential {credential.id!r} returned a malformed "
+                    f"multi-representation response for chunk {chunk.chunk_index}"
+                ),
+                snapshot_version=snapshot_version,
+                purpose="EXTRACTION",
             )
             is_fallback = True
             attempt += 1

@@ -439,3 +439,23 @@ def test_enrich_with_injected_client_records_nothing(captured_outbox: list[dict[
     enricher.enrich(_chunk())
 
     assert captured_outbox == []
+
+
+@pytest.mark.asyncio
+async def test_enrich_called_from_a_running_event_loop_still_records_usage(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    cred = _credential("cred-1", priority=1)
+    _set_extraction_snapshot(version=1, extraction=(cred,))
+    client = _mock_client(json.dumps({"summary": "ok", "questions": ["Q1?", "Q2?", "Q3?"]}))
+    monkeypatch.setattr(
+        MultiRepresentationEnricher, "_build_client", lambda self, credential: client
+    )
+
+    result = MultiRepresentationEnricher(question_count=3).enrich(_chunk())
+
+    assert result.summary == "ok"
+    assert len(captured_outbox) == 1
+    assert captured_outbox[0]["status"] == "SUCCESS"
