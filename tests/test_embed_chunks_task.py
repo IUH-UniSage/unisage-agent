@@ -22,16 +22,18 @@ def _chunk_payload(index: int) -> dict[str, object]:
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embed_chunks_runs_enrich_embed_upsert_in_order(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
     mock_embedder = mock_embedder_cls.return_value
-    mock_embedder.embed.return_value = [[0.1], [0.2], [0.3]]
+    mock_embedder.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
     mock_enricher = mock_enricher_cls.return_value
-    mock_enricher.enrich.return_value = MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
+    mock_enricher.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
+    )
     mock_client = MagicMock()
     mock_qdrant_store.get_client.return_value = mock_client
 
@@ -48,11 +50,13 @@ def test_embed_chunks_runs_enrich_embed_upsert_in_order(
     assert result["percent"] == 100
     assert [r["status"] for r in result["results"]] == ["SUCCESS", "SUCCESS"]
     mock_qdrant_store.ensure_collection.assert_called_once_with(mock_client)
-    assert mock_enricher.enrich.call_count == 2
-    assert mock_embedder.embed.call_count == 2
+    assert mock_enricher.enrich_tracked.call_count == 2
+    assert mock_embedder.embed_tracked.call_count == 2
     assert mock_qdrant_store.upsert_chunk.call_count == 2
 
-    enrich_order = [call.args[0].chunk_index for call in mock_enricher.enrich.call_args_list]
+    enrich_order = [
+        call.args[0].chunk_index for call in mock_enricher.enrich_tracked.call_args_list
+    ]
     assert enrich_order == [0, 1]
 
     point_ids = [call.kwargs["point_id"] for call in mock_qdrant_store.ChunkPoint.call_args_list]
@@ -65,15 +69,17 @@ def test_embed_chunks_runs_enrich_embed_upsert_in_order(
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embed_chunks_reports_strictly_increasing_progress_to_100(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
+        return_value=[[0.1], [0.2], [0.3]]
+    )
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
 
@@ -81,9 +87,9 @@ def test_embed_chunks_reports_strictly_increasing_progress_to_100(
     task = embed_chunks
     original_update_state = task.update_state
 
-    def _tracking_update_state(*, state: str, meta: dict[str, int]) -> None:
+    def _tracking_update_state(*, task_id: str, state: str, meta: dict[str, int]) -> None:
         seen_percents.append(meta["percent"])
-        original_update_state(state=state, meta=meta)
+        original_update_state(task_id=task_id, state=state, meta=meta)
 
     with patch.object(task, "update_state", side_effect=_tracking_update_state):
         result = task.apply(
@@ -103,18 +109,20 @@ def test_embed_chunks_reports_strictly_increasing_progress_to_100(
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embed_chunks_records_per_chunk_failure_without_aborting_batch(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed.side_effect = [
-        RuntimeError("embedding provider unavailable"),
-        [[0.1], [0.2], [0.3]],
-    ]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
+        side_effect=[
+            RuntimeError("embedding provider unavailable"),
+            [[0.1], [0.2], [0.3]],
+        ]
+    )
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
 
@@ -131,13 +139,50 @@ def test_embed_chunks_records_per_chunk_failure_without_aborting_batch(
     assert result["results"][0]["status"] == "FAILED"
     assert result["results"][1]["status"] == "SUCCESS"
     assert mock_qdrant_store.upsert_chunk.call_count == 1
+    assert result["failed_chunk_count"] == 1
+    assert result["total_chunk_count"] == 2
+
+
+@patch("app.worker.celery_app.publish_ingestion_event")
+@patch("app.worker.celery_app.qdrant_store")
+@patch("app.worker.celery_app.MultiRepresentationEnricher")
+@patch("app.worker.celery_app.build_embedder")
+def test_embed_chunks_publishes_completed_failure_when_a_chunk_failed(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    mock_publish: MagicMock,
+) -> None:
+    """A per-chunk failure never aborts the batch (Celery ends SUCCESS), but the
+    terminal WS event must still say FAILURE - otherwise the web wizard shows a false
+    "100% done" for a job where a chunk never actually got embedded."""
+
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
+        side_effect=[RuntimeError("boom"), [[0.1], [0.2], [0.3]]]
+    )
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
+    )
+    mock_qdrant_store.get_client.return_value = MagicMock()
+
+    embed_chunks.apply(
+        args=("doc-1", "docs/handbook.pdf", [_chunk_payload(0), _chunk_payload(1)], "CNTT", 2)
+    ).get()
+
+    completed_frames = [
+        call.args[0] for call in mock_publish.call_args_list if call.args[0]["type"] == "completed"
+    ]
+    assert len(completed_frames) == 1
+    assert completed_frames[0]["state"] == "FAILURE"
+    assert completed_frames[0]["failed_chunk_count"] == 1
+    assert completed_frames[0]["total_chunk_count"] == 2
 
 
 @patch("app.worker.celery_app.publish_ingestion_event")
 @patch("app.worker.celery_app.BackendJavaClient")
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -146,8 +191,9 @@ def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
     mock_publish: MagicMock,
 ) -> None:
     """A provider-level embedding failure (todo.md Task 13a) is not a per-chunk data problem -
-    it must escape the loop entirely: no third chunk gets embedded, no `completed` event is
-    published (only `failed`), and the task itself ends up FAILED rather than SUCCESS."""
+    it must escape the loop entirely: no third chunk gets embedded, the one `completed`
+    event published carries `state=FAILURE`, and the task itself ends up FAILED rather
+    than SUCCESS."""
 
     credential = CredentialConfig(
         id="embed-cred",
@@ -161,12 +207,14 @@ def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
         api_key="sk-test",
     )
     mock_embedder = mock_embedder_cls.return_value
-    mock_embedder.embed.side_effect = [
-        [[0.1], [0.2], [0.3]],
-        EmbeddingProviderError("provider auth failed", credential=credential),
-    ]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder.embed_tracked = AsyncMock(
+        side_effect=[
+            [[0.1], [0.2], [0.3]],
+            EmbeddingProviderError("provider auth failed", credential=credential),
+        ]
+    )
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
     mock_backend_client_cls.return_value.report_health = AsyncMock(return_value={"applied": True})
@@ -190,13 +238,17 @@ def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
             )
         )
 
-    # Only 2 embed() calls happened - chunk 2 (index 2) was never reached.
-    assert mock_embedder.embed.call_count == 2
+    # Only 2 embed_tracked() calls happened - chunk 2 (index 2) was never reached.
+    assert mock_embedder.embed_tracked.call_count == 2
     assert mock_qdrant_store.upsert_chunk.call_count == 1
 
-    published_types = [call.args[0]["type"] for call in mock_publish.call_args_list]
-    assert "completed" not in published_types
-    assert "failed" in published_types
+    # One terminal "completed" event with state=FAILURE - not a separate "failed" type
+    # (that type was silently dropped by the web wizard's schema; see celery_app.py).
+    completed_frames = [
+        call.args[0] for call in mock_publish.call_args_list if call.args[0]["type"] == "completed"
+    ]
+    assert len(completed_frames) == 1
+    assert completed_frames[0]["state"] == "FAILURE"
 
     mock_backend_client_cls.return_value.report_health.assert_awaited_once()
     health_kwargs = mock_backend_client_cls.return_value.report_health.call_args.kwargs
@@ -206,15 +258,17 @@ def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
+        return_value=[[0.1], [0.2], [0.3]]
+    )
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
 
@@ -261,15 +315,17 @@ def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embed_chunks_defaults_is_public_to_false_when_omitted(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
+        return_value=[[0.1], [0.2], [0.3]]
+    )
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
 
@@ -280,15 +336,17 @@ def test_embed_chunks_defaults_is_public_to_false_when_omitted(
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embed_chunks_passes_is_public_true_through_to_chunk_point(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
+        return_value=[[0.1], [0.2], [0.3]]
+    )
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
 

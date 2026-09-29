@@ -14,12 +14,15 @@ from app.core.budget.snapshot import refresh_budget_snapshot
 from app.core.config import settings
 from app.core.errors.error_codes import ErrorCode
 from app.core.errors.exceptions import UniSageException
+from app.core.errors.llm_error_classifier import EmbeddingProviderError
 from app.core.observability.logging_config import configure_logging
 from app.core.observability.middleware import request_logging_middleware
 from app.core.pricing.poller import start_pricing_snapshot_poller
 from app.core.pricing.snapshot import refresh_pricing_snapshot
+from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.model_registry import init_model_registry
 from app.core.registry.registry_subscriber import start_asyncio_registry_subscriber
+from app.core.security.redaction import safe_error_message
 from app.rag.chunking.table_row import TableStructureError
 
 # Sets the root format, silences noisy/secret-leaking third-party loggers
@@ -146,6 +149,51 @@ async def table_structure_error_handler(request: Request, exc: TableStructureErr
     return JSONResponse(
         status_code=ErrorCode.INTERNAL_ERROR.http_status,
         content=_error_content(ErrorCode.INTERNAL_ERROR.code, ErrorCode.INTERNAL_ERROR.message),
+    )
+
+
+@app.exception_handler(EmbeddingIdentityMismatchError)
+async def embedding_identity_mismatch_handler(
+    request: Request, exc: EmbeddingIdentityMismatchError
+) -> JSONResponse:
+    """Raised deep inside `app.core.registry.embedding_identity.ensure_embedding_identity` -
+    reached from a synchronous embed call (e.g. the "semantic" chunking strategy's own
+    embedding step, `POST /ingestion/chunking`), not from an endpoint that can catch and
+    translate it itself. A dedicated handler (not a `UniSageException` subclass, same reasoning
+    as `TableStructureError` above) is the one place every such call site's mismatch reaches
+    the client as a specific, actionable error instead of falling through to
+    `unhandled_exception_handler`'s generic 500.
+    """
+
+    del request
+    api_key = exc.credential.api_key if exc.credential else None
+    logger.error("Embedding identity mismatch: %s", safe_error_message(exc, api_key))
+    return JSONResponse(
+        status_code=ErrorCode.EMBEDDING_IDENTITY_MISMATCH.http_status,
+        content=_error_content(
+            ErrorCode.EMBEDDING_IDENTITY_MISMATCH.code, ErrorCode.EMBEDDING_IDENTITY_MISMATCH.message
+        ),
+    )
+
+
+@app.exception_handler(EmbeddingProviderError)
+async def embedding_provider_error_handler(
+    request: Request, exc: EmbeddingProviderError
+) -> JSONResponse:
+    """Catches every OTHER `EmbeddingProviderError` (auth/network/budget-rejection failures
+    during a synchronous embed call) - `EmbeddingIdentityMismatchError` (a subclass) is matched
+    by the more specific handler above first, since Starlette dispatches to the most specific
+    registered handler in the exception's MRO.
+    """
+
+    del request
+    api_key = exc.credential.api_key if exc.credential else None
+    logger.error("Embedding provider error: %s", safe_error_message(exc, api_key))
+    return JSONResponse(
+        status_code=ErrorCode.EMBEDDING_PROVIDER_ERROR.http_status,
+        content=_error_content(
+            ErrorCode.EMBEDDING_PROVIDER_ERROR.code, ErrorCode.EMBEDDING_PROVIDER_ERROR.message
+        ),
     )
 
 

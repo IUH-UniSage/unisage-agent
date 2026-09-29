@@ -65,6 +65,14 @@ class ErrorCode(Enum):
         "Bản nháp này được tạo bằng phiên bản chia đoạn cũ hoặc thiếu metadata cấu trúc, "
         "vui lòng chia đoạn lại trước khi embed.",
     )
+    EMBEDDING_IDENTITY_MISMATCH = (
+        409,
+        4015,
+        "Mô hình Embedding hiện tại không khớp với dữ liệu đã được embedding từ trước trong hệ "
+        "thống (có thể do đổi mô hình/nhà cung cấp Embedding mà chưa re-index). Liên hệ quản trị "
+        "viên để đăng ký lại danh tính embedding hoặc embedding lại toàn bộ dữ liệu trước khi "
+        "tiếp tục.",
+    )
 
     # 404x Not Found Errors
     OBJECT_NOT_FOUND = (404, 4041, "Không tìm thấy file gốc của tài liệu này.")
@@ -93,6 +101,18 @@ class ErrorCode(Enum):
         502,
         5004,
         "Không kết nối được hệ thống quản lý hội thoại, thử lại sau nhé.",
+    )
+    EMBEDDING_JOB_FAILED = (
+        502,
+        5005,
+        "Nạp liệu (embedding) thất bại — kiểm tra Cấu hình AI (mô hình Embedding/Extraction) "
+        "rồi thử nạp lại.",
+    )
+    EMBEDDING_PROVIDER_ERROR = (
+        502,
+        5006,
+        "Nhà cung cấp Embedding đang gặp sự cố (sai cấu hình, hết hạn mức, hoặc lỗi kết nối). "
+        "Kiểm tra Cấu hình AI rồi thử lại.",
     )
 
     def __init__(self, http_status: int, code: int, message: str) -> None:

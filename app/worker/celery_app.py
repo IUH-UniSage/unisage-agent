@@ -2,16 +2,21 @@ import asyncio
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import redis
 from celery import Celery
 from celery.signals import worker_process_init
 from kombu import Queue
+from redis import asyncio as redis_asyncio
 
 from app.core.budget.snapshot import refresh_budget_snapshot
+from app.core.budget.tracker import BudgetTracker
 from app.core.config import settings
+from app.core.errors.error_codes import ErrorCode
 from app.core.errors.llm_error_classifier import (
     EmbeddingProviderError,
     ErrorType,
@@ -26,8 +31,9 @@ from app.core.registry.model_registry import get_current_snapshot, init_model_re
 from app.core.registry.registry_subscriber import start_thread_registry_subscriber
 from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import BackendJavaClient
-from app.rag.embeddings.openai_embedder import OpenAIEmbedder
+from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
+from app.core.usage.usage_recorder import UsageRecorder
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
 from app.worker.budget_reconciliation_tasks import (
@@ -230,6 +236,7 @@ def embed_chunks(
     access_level: int,
     is_public: bool = False,
     category: str = "HOC_VU",
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """Enrich, embed, and upsert a client-approved chunk list into Qdrant.
 
@@ -246,6 +253,13 @@ def embed_chunks(
     published, and this re-raises so Celery records the task as FAILED (the
     client's reconciliation sweep, `_draft_task_progress`, reads that state
     straight off Celery - no separate document-status bookkeeping needed).
+
+    Every embed/enrich call for this whole document shares ONE `UsageRecorder`
+    (`purpose="INGEST"`, `document_id=document_id`, `user_id` = whoever called
+    `POST /ingestion/embedding`) - one request-level budget reservation covering
+    the entire job, not one per chunk/call - so the cost history shows a single
+    INGEST record per document ingestion, with every embedding/extraction call
+    as its lines (see `UsageRecorder`/`RequestUsageLog`).
     """
 
     task_id = self.request.id
@@ -260,108 +274,229 @@ def embed_chunks(
             }
         )
 
-    embedder = OpenAIEmbedder()
+    embedder = build_embedder()
     enricher = MultiRepresentationEnricher()
     client = qdrant_store.get_client()
     qdrant_store.ensure_collection(client)
 
+    def _update_state(*, state: str, meta: dict[str, Any]) -> None:
+        # `task_id=` explicitly, not left to `update_state`'s own `self.request.id` default -
+        # `self.request` is a thread-local stack that a `ThreadPoolExecutor`-offloaded call
+        # below would see as an empty/unpushed context (Celery only pushes it on the thread
+        # that actually received the task), which would store the result under task_id=None.
+        self.update_state(task_id=task_id, state=state, meta=meta)
+
+    coro = _run_embed_chunks(
+        embedder=embedder,
+        enricher=enricher,
+        qdrant_client=client,
+        chunks=chunks,
+        document_id=document_id,
+        object_key=object_key,
+        department_id=department_id,
+        access_level=access_level,
+        is_public=is_public,
+        category=category,
+        user_id=user_id,
+        update_state=_update_state,
+        publish=_publish,
+    )
+    # The real Celery worker process has no event loop of its own (Celery's sync task
+    # machinery), so `asyncio.run()` is the normal path - but `task_always_eager=True`
+    # test callers can invoke this from inside a running loop (e.g. an async test client
+    # hitting `POST /ingestion/embedding`), where `asyncio.run()` would raise. Same
+    # loop-detection fallback as `OpenAIEmbedder.embed()`/`MultiRepresentationEnricher.enrich()`.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+async def _run_embed_chunks(
+    *,
+    embedder: EmbeddingProvider,
+    enricher: MultiRepresentationEnricher,
+    qdrant_client: Any,
+    chunks: list[dict[str, Any]],
+    document_id: str,
+    object_key: str,
+    department_id: str,
+    access_level: int,
+    is_public: bool,
+    category: str,
+    user_id: str | None,
+    update_state: Any,
+    publish: Any,
+) -> dict[str, Any]:
+    redis_client = redis_asyncio.Redis.from_url(settings.REDIS_URL)
+    budget_tracker = BudgetTracker(redis_client=redis_client)
+    recorder = UsageRecorder(
+        request_id=str(uuid.uuid4()),
+        purpose="INGEST",
+        document_id=document_id,
+        user_id=user_id,
+        budget_tracker=budget_tracker,
+    )
+
     total = len(chunks)
     results: list[dict[str, Any]] = []
+    overall_status = "SUCCESS"
+    try:
+        reserve_result = await budget_tracker.reserve_request(
+            request_id=recorder.request_id,
+            purpose="INGEST",
+            estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD))
+            * max(total, 1),
+        )
+        if reserve_result != "OK":
+            raise EmbeddingProviderError(
+                f"INGEST budget reservation rejected: {reserve_result}"
+            )
 
-    for position, raw_chunk in enumerate(chunks):
-        chunk = Chunk.model_validate(raw_chunk)
-        try:
-            enriched = enricher.enrich(chunk)
-            # Empty summary/questions (the enrichment fallback) would send an
-            # empty string to the embeddings API; fall back to the chunk's own
-            # content so every point still gets three valid vectors.
-            summary_text = enriched.summary or chunk.content
-            questions_text = " ".join(enriched.questions) or chunk.content
-            content_vector, summary_vector, questions_vector = embedder.embed(
-                [chunk.content, summary_text, questions_text]
-            )
-            chunk_id = f"{document_id}:{chunk.chunk_index}"
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
-            qdrant_store.upsert_chunk(
-                client,
-                qdrant_store.ChunkPoint(
-                    point_id=point_id,
-                    document_id=document_id,
-                    object_key=object_key,
-                    chunk_id=chunk_id,
-                    content=chunk.content,
-                    summary=enriched.summary,
-                    questions=enriched.questions,
-                    department=department_id,
-                    access_level=access_level,
-                    is_public=is_public,
-                    category=category,
-                    region_type=chunk.region_type.value,
-                    content_vector=content_vector,
-                    summary_vector=summary_vector,
-                    questions_vector=questions_vector,
-                    source_type=chunk.source_type.value if chunk.source_type else None,
-                    block_index=chunk.block_index,
-                    heading_path=list(chunk.heading_path),
-                    page_start=chunk.page_start,
-                    page_end=chunk.page_end,
-                    source_locator=(
-                        chunk.source_locator.model_dump(mode="json")
-                        if chunk.source_locator is not None
-                        else None
+        for position, raw_chunk in enumerate(chunks):
+            chunk = Chunk.model_validate(raw_chunk)
+            try:
+                enriched = await enricher.enrich_tracked(chunk, recorder, budget_tracker)
+                # Empty summary/questions (the enrichment fallback) would send an
+                # empty string to the embeddings API; fall back to the chunk's own
+                # content so every point still gets three valid vectors.
+                summary_text = enriched.summary or chunk.content
+                questions_text = " ".join(enriched.questions) or chunk.content
+                content_vector, summary_vector, questions_vector = await embedder.embed_tracked(
+                    [chunk.content, summary_text, questions_text], recorder, budget_tracker
+                )
+                chunk_id = f"{document_id}:{chunk.chunk_index}"
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
+                qdrant_store.upsert_chunk(
+                    qdrant_client,
+                    qdrant_store.ChunkPoint(
+                        point_id=point_id,
+                        document_id=document_id,
+                        object_key=object_key,
+                        chunk_id=chunk_id,
+                        content=chunk.content,
+                        summary=enriched.summary,
+                        questions=enriched.questions,
+                        department=department_id,
+                        access_level=access_level,
+                        is_public=is_public,
+                        category=category,
+                        region_type=chunk.region_type.value,
+                        content_vector=content_vector,
+                        summary_vector=summary_vector,
+                        questions_vector=questions_vector,
+                        source_type=chunk.source_type.value if chunk.source_type else None,
+                        block_index=chunk.block_index,
+                        heading_path=list(chunk.heading_path),
+                        page_start=chunk.page_start,
+                        page_end=chunk.page_end,
+                        source_locator=(
+                            chunk.source_locator.model_dump(mode="json")
+                            if chunk.source_locator is not None
+                            else None
+                        ),
+                        column_names=chunk.column_names,
+                        has_header=chunk.has_header,
+                        header_source=chunk.header_source.value,
+                        chunking_version=chunk.chunking_version,
+                        structure_confidence=chunk.structure_confidence,
+                        parse_warnings=list(chunk.parse_warnings),
+                        embedding_identity_key=embedder.identity_key,
                     ),
-                    column_names=chunk.column_names,
-                    has_header=chunk.has_header,
-                    header_source=chunk.header_source.value,
-                    chunking_version=chunk.chunking_version,
-                    structure_confidence=chunk.structure_confidence,
-                    parse_warnings=list(chunk.parse_warnings),
-                    embedding_identity_key=embedder.identity_key,
-                ),
-            )
-            results.append({"chunk_index": chunk.chunk_index, "status": "SUCCESS"})
-        except EmbeddingProviderError as exc:
-            # The provider itself (or the identity guard) is broken - never a per-chunk data
-            # problem. Stops the batch entirely: report health, tell the client, mark the task
-            # FAILED, and let no further chunk get embedded.
-            logger.error(
-                "Embedding provider failed for document %s at chunk %s: %s",
-                document_id,
-                chunk.chunk_index,
-                exc,
-            )
-            reason = safe_error_message(exc)
-            _publish({"type": "failed", "reason": reason})
-            _report_embedding_provider_failure(exc)
-            raise
-        except Exception as exc:
-            logger.exception("Failed to embed chunk %s of %s", chunk.chunk_index, document_id)
-            # This dict is the task's return value, which Celery persists to the
-            # result backend (`result_expires` above keeps it there for a week) -
-            # exactly the kind of DB-like sink a raw exception message must never
-            # reach unredacted, since it may embed provider credentials.
-            results.append(
+                )
+                results.append({"chunk_index": chunk.chunk_index, "status": "SUCCESS"})
+            except EmbeddingProviderError as exc:
+                # The provider itself (or the identity guard) is broken - never a per-chunk data
+                # problem. Stops the batch entirely: report health, tell the client, mark the
+                # task FAILED, and let no further chunk get embedded.
+                logger.error(
+                    "Embedding provider failed for document %s at chunk %s: %s",
+                    document_id,
+                    chunk.chunk_index,
+                    exc,
+                )
+                reason = safe_error_message(exc)
+                # One terminal shape - "completed" with state=FAILURE - not a separate
+                # "failed" frame: the web wizard's `ingestionEventSchema` only has one
+                # terminal variant (mirrors the per-chunk-failure case below), and a
+                # dedicated "failed" type previously wasn't even in that schema, so this
+                # frame was silently dropped client-side - a real ingest failure rendered
+                # as if the job were still running instead of surfacing an error.
+                publish(
+                    {
+                        "type": "completed",
+                        "state": "FAILURE",
+                        "error_code": ErrorCode.EMBEDDING_JOB_FAILED.code,
+                        "message": ErrorCode.EMBEDDING_JOB_FAILED.message,
+                    }
+                )
+                await _report_embedding_provider_failure(exc)
+                overall_status = "ERROR"
+                raise
+            except Exception as exc:
+                logger.exception("Failed to embed chunk %s of %s", chunk.chunk_index, document_id)
+                # This dict is the task's return value, which Celery persists to the
+                # result backend (`result_expires` above keeps it there for a week) -
+                # exactly the kind of DB-like sink a raw exception message must never
+                # reach unredacted, since it may embed provider credentials.
+                results.append(
+                    {
+                        "chunk_index": chunk.chunk_index,
+                        "status": "FAILED",
+                        "error": safe_error_message(exc),
+                    }
+                )
+
+            percent = round((position + 1) / total * 100)
+            update_state(state="PROGRESS", meta={"percent": percent})
+            publish({"type": "progress", "percent": percent})
+
+        failed_chunk_count = sum(1 for r in results if r["status"] == "FAILED")
+        if failed_chunk_count > 0:
+            # Every chunk failure is isolated (see per-chunk try/except above), so the
+            # task itself still ends Celery-SUCCESS with percent=100 - but a caller
+            # reading only that would see a false "100% done" for a job where some or
+            # all chunks never actually got embedded. The terminal event must say so.
+            publish(
                 {
-                    "chunk_index": chunk.chunk_index,
-                    "status": "FAILED",
-                    "error": safe_error_message(exc),
+                    "type": "completed",
+                    "state": "FAILURE",
+                    "error_code": ErrorCode.EMBEDDING_JOB_FAILED.code,
+                    "message": f"{failed_chunk_count}/{total} đoạn nạp liệu thất bại.",
+                    "failed_chunk_count": failed_chunk_count,
+                    "total_chunk_count": total,
                 }
             )
+        else:
+            publish({"type": "completed", "state": "SUCCESS"})
+        return {
+            "percent": 100,
+            "results": results,
+            "failed_chunk_count": failed_chunk_count,
+            "total_chunk_count": total,
+        }
+    finally:
+        try:
+            await recorder.close(status=overall_status)
+        finally:
+            try:
+                await redis_client.aclose()
+            except Exception:
+                logger.debug("embed_chunks: closing the Redis client failed", exc_info=True)
 
-        percent = round((position + 1) / total * 100)
-        self.update_state(state="PROGRESS", meta={"percent": percent})
-        _publish({"type": "progress", "percent": percent})
 
-    _publish({"type": "completed", "state": "SUCCESS"})
-    return {"percent": 100, "results": results}
-
-
-def _report_embedding_provider_failure(exc: EmbeddingProviderError) -> None:
+async def _report_embedding_provider_failure(exc: EmbeddingProviderError) -> None:
     """Best-effort health report to `backend-java`, same shape CHAT/EXTRACTION
     failures already report via `app.core.registry.model_router`. A credential
     identity mismatch is always `PERMANENT` (retrying never fixes a wrong model/provider); any
     other embedding provider failure is classified from its underlying cause the same way
     `model_router` classifies CHAT/EXTRACTION failures.
+
+    A plain `async def` (not wrapped in its own `asyncio.run`) - the caller,
+    `_run_embed_chunks`, is already running inside `embed_chunks`'s one outer
+    `asyncio.run`, and `asyncio.run` cannot be nested inside a running loop.
     """
 
     credential = exc.credential
@@ -384,23 +519,19 @@ def _report_embedding_provider_failure(exc: EmbeddingProviderError) -> None:
     # underlying cause classifies as TRANSIENT or PERMANENT - unlike CHAT/EXTRACTION, there is
     # no retry-with-a-different-credential path here that could still recover on its own, so
     # the "don't alert on a self-recovering TRANSIENT" exception doesn't apply.
-    asyncio.run(
-        alert_credential_failure(
-            credential, "EMBEDDING_PROVIDER_FAILURE", reason, purpose="EMBEDDING"
-        )
+    await alert_credential_failure(
+        credential, "EMBEDDING_PROVIDER_FAILURE", reason, purpose="EMBEDDING"
     )
 
     try:
-        asyncio.run(
-            BackendJavaClient().report_health(
-                credential_id=credential.id,
-                credential_revision=credential.revision,
-                snapshot_version=snapshot.version,
-                error_type=error_type.value,
-                error_code=type(exc.__cause__ or exc).__name__,
-                message=reason,
-                occurred_at=datetime.now(UTC).isoformat(),
-            )
+        await BackendJavaClient().report_health(
+            credential_id=credential.id,
+            credential_revision=credential.revision,
+            snapshot_version=snapshot.version,
+            error_type=error_type.value,
+            error_code=type(exc.__cause__ or exc).__name__,
+            message=reason,
+            occurred_at=datetime.now(UTC).isoformat(),
         )
     except Exception:
         # Best-effort - Java not hearing about this failure right now is not a reason to swallow

@@ -1,7 +1,7 @@
 import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -119,16 +119,16 @@ def test_embedding_returns_404_when_no_draft_exists_for_the_document(client: Tes
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embedding_returns_202_and_task_id_for_valid_request(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
     client: TestClient,
 ) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
     draft_chunks = _create_chunking_draft(client, "doc-embed-202")
@@ -149,16 +149,16 @@ def test_embedding_returns_202_and_task_id_for_valid_request(
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_valid_request_dispatches_task_with_request_department_and_level(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
     client: TestClient,
 ) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
     draft_chunks = _create_chunking_draft(client, "doc-embed-level")
@@ -180,16 +180,16 @@ def test_valid_request_dispatches_task_with_request_department_and_level(
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_successful_embedding_dispatch_marks_draft_as_embedding(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
     client: TestClient,
 ) -> None:
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
 
@@ -220,7 +220,7 @@ def test_successful_embedding_dispatch_marks_draft_as_embedding(
 
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embedding_uses_canonical_metadata_and_only_client_content(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -232,9 +232,9 @@ def test_embedding_uses_canonical_metadata_and_only_client_content(
     from the request payload is applied, everything else comes from the
     stored draft."""
 
-    mock_embedder_cls.return_value.embed.return_value = [[0.1], [0.2], [0.3]]
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
 
@@ -261,7 +261,7 @@ def test_embedding_uses_canonical_metadata_and_only_client_content(
     )
 
     assert response.status_code == 202
-    embed_call_chunks = mock_embedder_cls.return_value.embed.call_args_list
+    embed_call_chunks = mock_embedder_cls.return_value.embed_tracked.call_args_list
     # The content actually embedded must reflect the client's edit...
     assert any("EDITED BY USER" in call.args[0][0] for call in embed_call_chunks)
     # ...but the structural metadata sent to Qdrant must be the canonical

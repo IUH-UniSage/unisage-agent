@@ -3,26 +3,35 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Any
 
-from openai import OpenAI
+from pydantic_ai import Agent
+from pydantic_ai.models import Model
 from redis import asyncio as redis_asyncio
 
 from app.core.budget.tracker import BudgetTracker, RequestBudgetRejectedError
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import MalformedExtractionResponseError
-from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
+from app.core.llm.provider_models import build_model
 from app.core.registry import model_router
-from app.core.registry.model_registry import CredentialConfig, get_current_snapshot
+from app.core.registry.model_registry import (
+    ModelRegistryError,
+    get_current_snapshot,
+    require_top_priority_credential,
+)
 from app.core.usage.usage_recorder import UsageRecorder
+from app.graph.streaming import AttemptOutcome, BudgetContext, run_agent_text_with_failover
 from app.rag.prompting.loader import get_templates
 from app.schemas.ingestion import Chunk
 
 logger = logging.getLogger(__name__)
+
+_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -35,77 +44,109 @@ class EnrichedChunk:
     questions: list[str]
 
 
+def _extract_json_object(raw_output: str) -> dict[str, Any] | None:
+    """The output as-is, else its first `{...}` block (e.g. inside a code fence) - same
+    tolerance `message_classification._load_json_object` gives CHAT's JSON output, needed
+    here too now that nothing forces strict JSON mode the way OpenAI's `response_format=
+    json_object` used to (a native, provider-agnostic call has no equivalent knob)."""
+
+    candidate = raw_output.strip().strip("`").strip()
+    match = _JSON_OBJECT_PATTERN.search(candidate)
+    for text in (candidate, match.group(0) if match else None):
+        if text is None:
+            continue
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(loaded, dict):
+            return loaded
+    return None
+
+
+def _parse_enrichment_output(
+    raw_output: str, chunk: Chunk, question_count: int
+) -> EnrichedChunk | None:
+    """`None` for anything that doesn't parse into a usable result - malformed JSON, missing
+    keys, or the wrong number of questions - never raises."""
+
+    data = _extract_json_object(raw_output)
+    if data is None:
+        return None
+    try:
+        summary = str(data["summary"])
+        questions = [str(question) for question in data["questions"]]
+    except (KeyError, TypeError):
+        return None
+    if not summary or len(questions) != question_count:
+        return None
+    return EnrichedChunk(chunk=chunk, summary=summary, questions=questions)
+
+
 @dataclass(frozen=True)
 class MultiRepresentationEnricher:
     """Add a summary + hypothetical questions to a chunk via one LLM call.
 
     Model name, API key and base URL come from the model registry's ACTIVE EXTRACTION
-    credential - never `.env`. Both are resolved
-    lazily on first `enrich()` call, not at construction time - mirrors `OpenAIEmbedder`; tests
-    inject `model`/`client` directly to skip the registry (and `model_router`) entirely (see
-    tests/test_multi_representation.py).
+    credential - never `.env`. Resolved lazily on first `enrich()`/`enrich_tracked()` call, not
+    at construction time.
 
-    When resolving from the registry, credential selection and failover go through
-    `app.core.registry.model_router` - the same circuit breaker CHAT streaming already uses -
-    never a second, home-grown cooldown/exclusion mechanism. Every attempt
-    (primary and every fallback) builds its `OpenAI` client through the same SSRF-guarded
-    `build_provider_http_client_sync()` factory.
+    Provider-agnostic: every attempt builds its `pydantic_ai.Agent` through
+    `app.core.llm.provider_models.build_model()` - the SAME factory `get_graph_models()` (CHAT)
+    and the embedding identity guard use - so an EXTRACTION credential on ANY provider that
+    factory supports (`openai`, `google`, or a `SELF_HOSTED` OpenAI-compatible server) just
+    works, with no provider-specific base-URL configuration needed. This replaced an earlier
+    implementation that always spoke the OpenAI wire format directly regardless of
+    `credential.provider` - which 404'd for a Google credential unless its `api_base_url` was
+    pointed at Google's separate OpenAI-compatibility shim path instead of the native Gemini API.
+
+    Credential selection and failover go through `app.graph.streaming.run_agent_text_with_failover`
+    - the same shared machinery `MessageClassificationNode`/`QueryTransformationNode` use - not a
+    second, home-grown loop. `model_router` is still consulted directly for the initial pick
+    (`require_top_priority_credential`) and for the "malformed response from a fallback
+    credential" escalation below, exactly like CHAT's own top-priority pick in
+    `app.api.deps.get_graph_models()`.
     """
 
-    model: str | None = None
+    model: Model | str | None = None
     question_count: int = field(default_factory=lambda: settings.INGEST_MULTI_REP_QUESTION_COUNT)
-    client: OpenAI | None = None
+
+    def _build_agent(self, model: Model | str) -> Agent[None, str]:
+        return Agent(
+            model=model,
+            system_prompt=get_templates().agent_multi_representation_enricher.format(
+                question_count=self.question_count
+            ),
+        )
 
     def enrich(self, chunk: Chunk) -> EnrichedChunk:
         """Enrich one chunk.
 
-        Test-injected `model`/`client` (both set): skips the registry/router entirely, one
-        call, no failover - a malformed/short response logs a warning and falls back to an
-        empty result rather than raising, so one bad chunk doesn't kill the whole embedding
-        batch.
+        Test-injected `model` (a `pydantic_ai` `Model`/model-name string): skips the
+        registry/router entirely, one call, no failover, no usage line - a malformed/short
+        response logs a warning and falls back to an empty result rather than raising, so one
+        bad chunk doesn't kill the whole embedding batch.
 
-        Registry-resolved (the production path): each attempt picks the next EXTRACTION
-        credential via `model_router.get_next_credential()`. A provider-call failure at any
-        point reports it via `model_router.record_failure()` (with the credential + snapshot
-        version captured at the moment THAT credential was selected, never re-read after the
-        fact) and moves to the next credential - this is a plain call-then-parse-JSON flow,
-        not a stream, so there is no "before vs after first chunk" boundary to preserve, unlike
-        `stream_agent_text()`'s CHAT failover.
-
-        A malformed/short response on the FIRST (primary) attempt keeps the original
-        "log + return empty" behavior. The SAME malformed response on a FALLBACK attempt is
-        different: silently handing a second bad-looking result to the ingest pipeline would
-        hide that the fallback credential itself might be broken, so it's reported to
-        `model_router.record_failure()` as `MalformedExtractionResponseError` (see that class's
-        docstring for the one open gap here) and the loop moves to yet another credential.
-
-        `model_router.NoAvailableCredentialError` (every EXTRACTION credential exhausted)
-        propagates uncaught - deliberately NOT folded into the "log + return empty" path.
-        That path exists for a single chunk's response happening to be malformed; total
-        credential exhaustion is a different kind of problem entirely (a real provider
-        outage, not this chunk's bad luck), and it needs to surface loudly rather than let
-        every remaining chunk in the batch silently degrade to placeholder embeddings. The
-        caller (`app.worker.celery_app`'s `embed_chunks_task`) already treats any exception
-        from `enrich()` as a per-chunk `FAILED` result without aborting the rest of the
-        batch, so propagating here is safe at the job level too.
+        Registry-resolved (the production path, `self.model is None`): one `enrich()` call is
+        one purpose=EXTRACTION business request, self-contained - builds and closes its own
+        `UsageRecorder`, same as `OpenAIEmbedder.embed()`. `app.worker.celery_app.embed_chunks`
+        instead calls `enrich_tracked()` directly with a document-wide shared recorder.
         """
 
-        model = self.model
-        client = self.client
-        if model is not None and client is not None:
-            # Test-injected model/client, no registry credential to snapshot - matches
-            # OpenAIEmbedder's identical precedent, no usage line at all here.
-            result, _usage = self._call_and_parse(chunk, model, client)
-            if result is not None:
-                return result
-            logger.warning(
-                "Malformed multi-representation response for chunk %s; falling back to empty.",
-                chunk.chunk_index,
-            )
+        if self.model is not None:
+            agent = self._build_agent(self.model)
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                result = asyncio.run(agent.run(chunk.content))
+            else:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    result = pool.submit(asyncio.run, agent.run(chunk.content)).result()
+            parsed = _parse_enrichment_output(result.output or "", chunk, self.question_count)
+            if parsed is not None:
+                return parsed
             return EnrichedChunk(chunk=chunk, summary="", questions=[])
 
-        # One enrich() call is one purpose=EXTRACTION business request, one line per attempt
-        # (including a failed attempt before failover).
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -130,13 +171,13 @@ class MultiRepresentationEnricher:
             )
             if reserve_result != "OK":
                 raise RequestBudgetRejectedError("EXTRACTION", reserve_result)
-            result = await self._enrich_with_failover(chunk, recorder, budget_tracker)
+            result = await self.enrich_tracked(chunk, recorder, budget_tracker)
             status = "SUCCESS"
             return result
         finally:
             # `model_router.NoAvailableCredentialError`/`NoBudgetAvailableError` (every
             # EXTRACTION credential exhausted) can propagate out of
-            # `_enrich_with_failover` uncaught - `status` stays "ERROR" in that case.
+            # `enrich_tracked` uncaught - `status` stays "ERROR" in that case.
             try:
                 await recorder.close(status=status)
             finally:
@@ -145,71 +186,71 @@ class MultiRepresentationEnricher:
                 except Exception:
                     logger.debug("enricher: closing the Redis client failed", exc_info=True)
 
-    async def _enrich_with_failover(
-        self, chunk: Chunk, recorder: UsageRecorder, budget_tracker: BudgetTracker
+    async def enrich_tracked(
+        self,
+        chunk: Chunk,
+        usage_recorder: UsageRecorder,
+        budget_tracker: BudgetTracker,
     ) -> EnrichedChunk:
-        is_fallback = False
-        attempt = 0
+        """Enrich within a CALLER-managed `UsageRecorder`/`BudgetTracker` - the ingestion
+        pipeline's shared per-document recorder (`app.worker.celery_app.embed_chunks`), which
+        reserves/settles the request-level budget once for the whole document rather than once
+        per `enrich()` call. Registry-resolved only - there is no test-injected `model` bypass
+        here, unlike `enrich()`.
+
+        `model_router.NoAvailableCredentialError`/`NoBudgetAvailableError` (every EXTRACTION
+        credential exhausted) propagates uncaught - deliberately NOT folded into the
+        "log + return empty" path used for a single malformed-looking response. The caller
+        (`app.worker.celery_app.embed_chunks`) already treats any exception from this method as a
+        per-chunk `FAILED` result without aborting the rest of the batch.
+        """
+
+        try:
+            credential = require_top_priority_credential("EXTRACTION")
+        except ModelRegistryError as exc:
+            raise model_router.NoAvailableCredentialError("EXTRACTION") from exc
+
+        snapshot = get_current_snapshot()
+        snapshot_version = snapshot.version if snapshot is not None else 0
+        base_on_attempt = usage_recorder.bind("multi_representation_enrich")
+
         while True:
-            budget_seq = recorder.reserve_budget_seq()
-            credential = await model_router.select_credential_with_budget(
-                "EXTRACTION",
-                budget_tracker=budget_tracker,
-                request_id=recorder.request_id,
-                seq=budget_seq,
-                estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
-            )
-            snapshot = get_current_snapshot()
-            snapshot_version = snapshot.version if snapshot is not None else 0
-            resolved_model = credential.model_name or ""
-            resolved_client = self._build_client(credential)
+            model = build_model(credential)
+            agent = self._build_agent(model)
+            # Tracks which credential/attempt actually produced a response (success or not) -
+            # `run_agent_text_with_failover` doesn't return this itself, and it's needed below to
+            # tell "malformed on the PRIMARY credential" (fall back to empty) apart from
+            # "malformed on a FALLBACK credential" (report + try yet another one).
+            last_success: dict[str, Any] = {}
 
-            started_at = time.monotonic()
-            try:
-                # The OpenAI client is sync; keep it off the event loop.
-                result, usage = await asyncio.to_thread(
-                    self._call_and_parse, chunk, resolved_model, resolved_client
-                )
-            except Exception as exc:
-                committed_usd = recorder.record(
-                    node_name="multi_representation_enrich",
-                    attempt=attempt,
-                    credential=credential,
-                    status="ERROR",
-                    latency_ms=int((time.monotonic() - started_at) * 1000),
-                    error_code=type(exc).__name__,
-                )
-                await budget_tracker.release_provider(
-                    request_id=recorder.request_id, seq=budget_seq, actual_usd=committed_usd
-                )
-                await model_router.record_failure(
-                    credential, exc, snapshot_version=snapshot_version, purpose="EXTRACTION"
-                )
-                is_fallback = True
-                attempt += 1
-                continue
+            def _on_attempt(outcome: AttemptOutcome, _store: dict[str, Any] = last_success) -> Decimal:
+                if outcome.status == "SUCCESS":
+                    _store["credential"] = outcome.credential
+                    _store["attempt"] = outcome.attempt
+                return base_on_attempt(outcome)
 
-            latency_ms = int((time.monotonic() - started_at) * 1000)
-            # The provider call itself succeeded (tokens were spent) even when the
-            # response body turns out malformed below - that's a data-quality
-            # problem, not a call failure, so this line is always SUCCESS.
-            committed_usd = recorder.record(
-                node_name="multi_representation_enrich",
-                attempt=attempt,
+            output = await run_agent_text_with_failover(
+                agent,
+                chunk.content,
+                purpose="EXTRACTION",
                 credential=credential,
-                status="SUCCESS",
-                input_tokens=usage.prompt_tokens if usage else 0,
-                output_tokens=usage.completion_tokens if usage else 0,
-                latency_ms=latency_ms,
+                snapshot_version=snapshot_version,
+                agent_factory=self._build_agent,
+                on_attempt=_on_attempt,
+                budget=BudgetContext(
+                    tracker=budget_tracker,
+                    request_id=usage_recorder.request_id,
+                    reserve_seq=usage_recorder.reserve_budget_seq,
+                    per_attempt_estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
+                ),
             )
-            await budget_tracker.release_provider(
-                request_id=recorder.request_id, seq=budget_seq, actual_usd=committed_usd
-            )
+            parsed = _parse_enrichment_output(output, chunk, self.question_count)
+            if parsed is not None:
+                return parsed
 
-            if result is not None:
-                return result
-
-            if not is_fallback:
+            succeeded_credential = last_success.get("credential")
+            succeeded_attempt = last_success.get("attempt", 0)
+            if succeeded_credential is None or succeeded_attempt == 0:
                 logger.warning(
                     "Malformed multi-representation response for chunk %s on primary "
                     "credential %s; falling back to empty.",
@@ -222,67 +263,15 @@ class MultiRepresentationEnricher:
                 "Malformed multi-representation response for chunk %s on fallback "
                 "credential %s; reporting as a permanent failure for that credential.",
                 chunk.chunk_index,
-                credential.id,
+                succeeded_credential.id,
             )
             await model_router.record_failure(
-                credential,
+                succeeded_credential,
                 MalformedExtractionResponseError(
-                    f"fallback credential {credential.id!r} returned a malformed "
+                    f"fallback credential {succeeded_credential.id!r} returned a malformed "
                     f"multi-representation response for chunk {chunk.chunk_index}"
                 ),
                 snapshot_version=snapshot_version,
                 purpose="EXTRACTION",
             )
-            is_fallback = True
-            attempt += 1
-
-    def _build_client(self, credential: CredentialConfig) -> OpenAI:
-        """Builds the `OpenAI` client for one attempt (primary or fallback) - always through
-        the SSRF-guarded factory, so the architecture test
-        (`tests/core/test_no_raw_provider_clients.py`) stays green for every fallback attempt
-        too, not just the first one."""
-
-        return OpenAI(
-            api_key=credential.api_key,
-            base_url=credential.api_base_url or None,
-            http_client=build_provider_http_client_sync(
-                ProviderConnectionInfo(api_base_url=credential.api_base_url or "")
-            ),
-        )
-
-    def _call_and_parse(
-        self, chunk: Chunk, model: str, client: OpenAI
-    ) -> tuple[EnrichedChunk | None, object | None]:
-        """One provider call + response parse. Returns `(None, usage)` for a
-        malformed/short response (never raises for that - only a JSON/shape
-        problem, not a call failure - but `usage` is still real, tokens were
-        still spent); a provider-call failure (network, auth, rate limit, ...)
-        propagates as whatever exception the SDK/PydanticAI raised, uncaught
-        here, for the caller to classify and report via `model_router`."""
-
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": get_templates().agent_multi_representation_enricher.format(
-                        question_count=self.question_count
-                    ),
-                },
-                {"role": "user", "content": chunk.content},
-            ],
-            response_format={"type": "json_object"},
-        )
-        usage = response.usage
-        raw_content = response.choices[0].message.content or "{}"
-
-        try:
-            data = json.loads(raw_content)
-            summary = str(data["summary"])
-            questions = [str(question) for question in data["questions"]]
-            if not summary or len(questions) != self.question_count:
-                raise ValueError("incomplete multi-representation response")
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            return None, usage
-
-        return EnrichedChunk(chunk=chunk, summary=summary, questions=questions), usage
+            credential = await model_router.get_next_credential("EXTRACTION")

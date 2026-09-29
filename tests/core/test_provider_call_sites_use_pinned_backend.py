@@ -137,9 +137,15 @@ def test_embedder_call_site_uses_pinned_backend_sync(
     assert all(host == "api.openai.com" for host, _ in sync_connect_tcp_spy)
 
 
-def test_multi_representation_call_site_uses_pinned_backend_sync(
-    sync_connect_tcp_spy: list[tuple[str, int]],
+def test_multi_representation_call_site_uses_pinned_backend_async(
+    async_connect_tcp_spy: list[tuple[str, int]],
 ) -> None:
+    """`MultiRepresentationEnricher.enrich()` now goes through `pydantic_ai.Agent`
+    (`app.core.llm.provider_models.build_model()`, the same provider-agnostic factory
+    CHAT uses - see that module's docstring) instead of a raw sync OpenAI SDK client, so
+    this reaches the ASYNC pinned backend, same as `get_graph_models()` below - not the
+    sync one `OpenAIEmbedder` still uses."""
+
     enricher = MultiRepresentationEnricher()
     chunk = Chunk(
         chunk_index=0,
@@ -151,10 +157,10 @@ def test_multi_representation_call_site_uses_pinned_backend_sync(
     with pytest.raises(Exception):  # noqa: B017
         enricher.enrich(chunk)
 
-    assert sync_connect_tcp_spy, (
-        "MultiRepresentationEnricher.enrich() never reached PinnedNetworkBackendSync.connect_tcp"
+    assert async_connect_tcp_spy, (
+        "MultiRepresentationEnricher.enrich() never reached PinnedNetworkBackend.connect_tcp"
     )
-    assert all(host == "api.openai.com" for host, _ in sync_connect_tcp_spy)
+    assert all(host == "api.openai.com" for host, _ in async_connect_tcp_spy)
 
 
 def test_graph_model_call_site_uses_pinned_backend_async(

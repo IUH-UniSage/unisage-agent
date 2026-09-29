@@ -48,6 +48,7 @@ class UsageRecorder:
     assistant_message_id: str | None = None
     user_id: str | None = None
     guest_ip: str | None = None
+    document_id: str | None = None
     budget_tracker: BudgetTracker | None = None
 
     _lines: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
@@ -309,6 +310,7 @@ class UsageRecorder:
             "assistantMessageId": self.assistant_message_id,
             "userId": self.user_id,
             "guestIp": self.guest_ip,
+            "documentId": self.document_id,
             "status": final_status,
             "startedAt": _iso_z(self._started_at),
             "finishedAt": _iso_z(finished_at),

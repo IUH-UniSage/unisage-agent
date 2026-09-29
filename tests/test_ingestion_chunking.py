@@ -56,10 +56,13 @@ def test_chunking_semantic_strategy_without_live_openai_calls(
 ) -> None:
     from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 
-    def _fake_embed(self: OpenAIEmbedder, texts: list[str]) -> list[list[float]]:
+    async def _fake_embed_tracked(
+        self: OpenAIEmbedder, texts: list[str], usage_recorder: object, budget_tracker: object
+    ) -> list[list[float]]:
+        del usage_recorder, budget_tracker
         return [[0.0, 1.0] for _ in texts]
 
-    monkeypatch.setattr(OpenAIEmbedder, "embed", _fake_embed)
+    monkeypatch.setattr(OpenAIEmbedder, "embed_tracked", _fake_embed_tracked)
     mock_get_object_bytes.return_value = make_pdf_bytes("A paragraph for chunking.")
 
     response = client.post(
@@ -75,6 +78,76 @@ def test_chunking_semantic_strategy_without_live_openai_calls(
 
     assert response.status_code == 200
     assert response.json()["data"]["chunks"]
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_chunking_semantic_strategy_reports_embedding_identity_mismatch_clearly(
+    mock_get_object_bytes: MagicMock, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `EmbeddingIdentityMismatchError` raised deep inside the semantic strategy's embedding
+    step must reach the client as a specific, actionable error (`app.main`'s dedicated handler),
+    not `unhandled_exception_handler`'s generic "Có lỗi xảy ra, bạn thử lại sau nhé." 500."""
+
+    from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
+    from app.rag.embeddings.openai_embedder import OpenAIEmbedder
+
+    async def _fake_embed_tracked(
+        self: OpenAIEmbedder, texts: list[str], usage_recorder: object, budget_tracker: object
+    ) -> list[list[float]]:
+        del self, texts, usage_recorder, budget_tracker
+        raise EmbeddingIdentityMismatchError("collection already has vectors but no identity")
+
+    monkeypatch.setattr(OpenAIEmbedder, "embed_tracked", _fake_embed_tracked)
+    mock_get_object_bytes.return_value = make_pdf_bytes("A paragraph for chunking.")
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "semantic",
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == 4015
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_chunking_semantic_strategy_reports_other_embedding_provider_errors_clearly(
+    mock_get_object_bytes: MagicMock, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any OTHER `EmbeddingProviderError` (auth/network/budget-rejection) must also reach the
+    client as a specific error, not a generic 500 - `EmbeddingIdentityMismatchError`'s more
+    specific handler must not swallow this broader case."""
+
+    from app.core.errors.llm_error_classifier import EmbeddingProviderError
+    from app.rag.embeddings.openai_embedder import OpenAIEmbedder
+
+    async def _fake_embed_tracked(
+        self: OpenAIEmbedder, texts: list[str], usage_recorder: object, budget_tracker: object
+    ) -> list[list[float]]:
+        del self, texts, usage_recorder, budget_tracker
+        raise EmbeddingProviderError("provider auth failed")
+
+    monkeypatch.setattr(OpenAIEmbedder, "embed_tracked", _fake_embed_tracked)
+    mock_get_object_bytes.return_value = make_pdf_bytes("A paragraph for chunking.")
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "semantic",
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == 5006
 
 
 @patch("app.api.v1.ingestion.minio_client.get_object_bytes")

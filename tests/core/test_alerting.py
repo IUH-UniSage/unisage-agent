@@ -347,7 +347,7 @@ async def test_model_router_exhaustion_calls_alert_with_no_credential(
 @patch("app.worker.celery_app.BackendJavaClient")
 @patch("app.worker.celery_app.qdrant_store")
 @patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.OpenAIEmbedder")
+@patch("app.worker.celery_app.build_embedder")
 def test_embed_chunks_calls_alert_on_embedding_provider_error(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -367,11 +367,11 @@ def test_embed_chunks_calls_alert_on_embedding_provider_error(
     )
 
     credential = _credential(id="embed-cred", api_key="sk-embed-secret")
-    mock_embedder_cls.return_value.embed.side_effect = EmbeddingProviderError(
-        "provider auth failed", credential=credential
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
+        side_effect=EmbeddingProviderError("provider auth failed", credential=credential)
     )
-    mock_enricher_cls.return_value.enrich.return_value = MagicMock(
-        summary="a summary", questions=["Q1?", "Q2?"]
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
     mock_qdrant_store.get_client.return_value = MagicMock()
     mock_backend_client_cls.return_value.report_health = AsyncMock(return_value={"applied": True})

@@ -124,6 +124,33 @@ class OpenAIEmbedder:
                 asyncio.run, self._embed_recorded(client, model, texts, credential)
             ).result()
 
+    async def embed_tracked(
+        self,
+        texts: list[str],
+        usage_recorder: UsageRecorder,
+        budget_tracker: BudgetTracker,
+    ) -> list[list[float]]:
+        """Embed within a CALLER-managed `UsageRecorder`/`BudgetTracker` - the ingestion
+        pipeline's shared per-document recorder (`app.worker.celery_app.embed_chunks`), which
+        reserves/settles the request-level budget once for the whole document rather than once
+        per `embed()` call. Unlike `embed()`, never builds/closes its own recorder or reserves/
+        settles a request-level budget - only the one PROVIDER-scope acquire/release pair
+        `_call_provider_tracked` already does per call. Must be awaited from within the caller's
+        own event loop (no `asyncio.run`/thread-pool wrapping here, unlike `embed()`)."""
+
+        if not texts:
+            return []
+
+        model = self.model
+        client = self.client
+        if model is None or client is None:
+            if "model" not in self._resolved:
+                self._resolve_from_registry()
+            model = self._resolved["model"]
+            client = self._resolved["client"]
+
+        return await self._call_provider_tracked(client, model, texts, usage_recorder, budget_tracker)
+
     async def _embed_recorded(
         self, client: OpenAI, model: str, texts: list[str], credential: CredentialConfig
     ) -> list[list[float]]:

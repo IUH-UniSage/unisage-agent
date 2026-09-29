@@ -17,11 +17,14 @@ class _RegionChunker(Protocol):
     def split(self, regions: list[ParsedRegion]) -> list[Chunk]: ...
 
 
-def dispatch(
+async def dispatch(
     strategy: ChunkingStrategyName,
     params: dict[str, Any],
     content: bytes,
     filename: str,
+    *,
+    document_id: str,
+    user_id: str | None = None,
 ) -> list[Chunk]:
     """Route a chunking request to the selected strategy, validating file-type fit.
 
@@ -34,6 +37,12 @@ def dispatch(
     `block_index` (the position of its originating region in the document),
     then `chunk_index` is renumbered 0..n-1 over the merged, ordered list -
     `block_index` itself is left untouched by the renumbering.
+
+    `async def` only for `SemanticChunker` (the one strategy that calls an embedding
+    provider): its embedding calls for this request are grouped under one
+    `purpose="SEMANTIC_CHUNKING"` `UsageRecorder` via `SemanticChunker.split_tracked()`,
+    keyed by `document_id`/`user_id` - every other chunker's plain sync `.split()` is
+    called as-is, no behavior change.
     """
 
     extension = get_extension(filename)
@@ -55,7 +64,12 @@ def dispatch(
     table_chunks = TableRowChunker(max_tokens=table_max_tokens).split(table_regions)
 
     chunker: _RegionChunker = _build_text_chunker(strategy, params)
-    text_chunks = chunker.split(text_regions)
+    if isinstance(chunker, SemanticChunker):
+        text_chunks = await chunker.split_tracked(
+            text_regions, document_id=document_id, user_id=user_id
+        )
+    else:
+        text_chunks = chunker.split(text_regions)
 
     merged = sorted(
         [*table_chunks, *text_chunks],
