@@ -160,6 +160,9 @@ class Settings(BaseSettings):
     # the config_version pub/sub nudge (same "self-heal on a timer" posture as
     # MODEL_REGISTRY_POLL_INTERVAL_SECONDS).
     BUDGET_SNAPSHOT_REFRESH_SECONDS: float = 60.0
+    # How often PricingSnapshot re-polls GET /internal/model-pricing/snapshot. A price an SA
+    # edits applies to new calls within this window.
+    MODEL_PRICING_SNAPSHOT_REFRESH_SECONDS: float = 60.0
     # How often Beat runs drain_usage_outbox.
     USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS: float = 5.0
     # Upper-bound output tokens assumed for the request-level Chat reservation

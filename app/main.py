@@ -16,6 +16,8 @@ from app.core.errors.error_codes import ErrorCode
 from app.core.errors.exceptions import UniSageException
 from app.core.observability.logging_config import configure_logging
 from app.core.observability.middleware import request_logging_middleware
+from app.core.pricing.poller import start_pricing_snapshot_poller
+from app.core.pricing.snapshot import refresh_pricing_snapshot
 from app.core.registry.model_registry import init_model_registry
 from app.core.registry.registry_subscriber import start_asyncio_registry_subscriber
 from app.rag.chunking.table_row import TableStructureError
@@ -46,13 +48,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # startup even if Java is unreachable right now. Gated on the same flag as the
     # model registry above - a process running on static .env credentials has no
     # live backend-java to fetch a budget snapshot from either.
+    # Prices follow the same gate: without a live backend-java every call is UNPRICED.
     budget_poller: asyncio.Task[None] | None = None
+    pricing_poller: asyncio.Task[None] | None = None
     if settings.MODEL_REGISTRY_ENABLED:
         await refresh_budget_snapshot()
         budget_poller = start_budget_snapshot_poller()
+        await refresh_pricing_snapshot()
+        pricing_poller = start_pricing_snapshot_poller()
     yield
     if budget_poller is not None:
         budget_poller.cancel()
+    if pricing_poller is not None:
+        pricing_poller.cancel()
     await subscriber.stop()
     logger.info("Shutting down %s", settings.APP_NAME)
 

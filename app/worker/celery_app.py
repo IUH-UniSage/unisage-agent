@@ -20,6 +20,7 @@ from app.core.errors.llm_error_classifier import (
 from app.core.observability.alerting import alert_credential_failure
 from app.core.observability.events import publish_ingestion_event
 from app.core.observability.logging_config import configure_logging
+from app.core.pricing.snapshot import refresh_pricing_snapshot
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.model_registry import get_current_snapshot, init_model_registry
 from app.core.registry.registry_subscriber import start_thread_registry_subscriber
@@ -93,6 +94,10 @@ celery_app.conf.beat_schedule = {
         "task": "refresh_budget_snapshot",
         "schedule": settings.BUDGET_SNAPSHOT_REFRESH_SECONDS,
     },
+    "pricing-snapshot-refresh": {
+        "task": "refresh_pricing_snapshot",
+        "schedule": settings.MODEL_PRICING_SNAPSHOT_REFRESH_SECONDS,
+    },
     "budget-release-expired-reservations": {
         "task": "release_expired_reservations",
         "schedule": 60.0,
@@ -117,6 +122,7 @@ def _load_model_registry_on_worker_start(**kwargs: Any) -> None:
     asyncio.run(init_model_registry())
     if settings.MODEL_REGISTRY_ENABLED:
         asyncio.run(refresh_budget_snapshot())
+        asyncio.run(refresh_pricing_snapshot())
     # Same hot-reload as the FastAPI side, but as a daemon thread running its own
     # event loop - this prefork worker process has no asyncio loop of its own to schedule
     # tasks on. No-op when MODEL_REGISTRY_ENABLED=false.
@@ -182,6 +188,14 @@ def refresh_budget_snapshot_task() -> None:
 
     if settings.MODEL_REGISTRY_ENABLED:
         asyncio.run(refresh_budget_snapshot())
+
+
+@celery_app.task(name="refresh_pricing_snapshot", ignore_result=True)
+def refresh_pricing_snapshot_task() -> None:
+    """Beat-scheduled - same role as `refresh_budget_snapshot_task`, for model prices."""
+
+    if settings.MODEL_REGISTRY_ENABLED:
+        asyncio.run(refresh_pricing_snapshot())
 
 
 @celery_app.task(name="release_expired_reservations", ignore_result=True)
