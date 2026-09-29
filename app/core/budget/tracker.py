@@ -26,6 +26,18 @@ _INFLIGHT_TTL_SECONDS = 3600  # safety TTL so an abandoned inflight counter self
 ReserveResult = Literal["OK", "REJECT_EXCEEDED", "REJECT_THROTTLED"]
 AcquireResult = Literal["OK", "DENY_EXCEEDED", "DENY_THROTTLED"]
 
+
+class RequestBudgetRejectedError(Exception):
+    """The request-level SYSTEM/PURPOSE reservation was rejected before any
+    provider call was made - callers map `reason` ("REJECT_EXCEEDED" /
+    "REJECT_THROTTLED") to a BUDGET_EXCEEDED/BUDGET_THROTTLED client-facing error."""
+
+    def __init__(self, purpose: str, reason: ReserveResult) -> None:
+        self.purpose = purpose
+        self.reason = reason
+        super().__init__(f"Budget reservation rejected for purpose={purpose!r}: {reason}")
+
+
 # Fail-open on any Redis/script error - see module docstring.
 _RESERVE_FAIL_OPEN: ReserveResult = "OK"
 _ACQUIRE_FAIL_OPEN: AcquireResult = "OK"

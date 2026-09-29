@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.registry.model_registry import CredentialConfig
 from app.core.usage.cost_calculator import (
@@ -24,6 +24,9 @@ from app.core.usage.cost_calculator import (
     calculate_actual,
 )
 from app.graph.streaming import AttemptOutcome, AttemptRecorder
+
+if TYPE_CHECKING:
+    from app.core.budget.tracker import BudgetTracker
 
 logger = logging.getLogger(__name__)
 
@@ -45,23 +48,38 @@ class UsageRecorder:
     assistant_message_id: str | None = None
     user_id: str | None = None
     guest_ip: str | None = None
+    budget_tracker: BudgetTracker | None = None
 
     _lines: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
     _started_at: datetime = field(default_factory=lambda: datetime.now(UTC), init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
+    _next_budget_seq: int = field(default=0, init=False, repr=False)
+
+    def reserve_budget_seq(self) -> int:
+        """A monotonic counter independent of `_lines`' own `seq` numbering - used as
+        the Redis hash field disambiguator for one provider-budget acquire/release
+        pair. Must be called once per attempt, before that attempt's
+        `acquire_provider` call, so every attempt across every node in this request
+        gets its own field even though each node's `attempt_index` restarts at 0."""
+
+        seq = self._next_budget_seq
+        self._next_budget_seq += 1
+        return seq
 
     def bind(self, node_name: str) -> AttemptRecorder:
         """An `on_attempt` callback pre-bound with this node's display name - the
         `nodeName` field on every line it produces (e.g. `GenerationSynthesisNode`,
         not the numbered trace label `10_GenerationSynthesisNode` - see
-        docs/product/DECISIONS.md's node-naming rule)."""
+        docs/product/DECISIONS.md's node-naming rule). Returns the line's committed
+        dollar amount (PRICED cost, else estimated, else 0) so a caller wiring budget
+        reservation can release the matching PROVIDER-scope reservation with it."""
 
-        def _on_attempt(outcome: AttemptOutcome) -> None:
-            self._record_attempt(node_name, outcome)
+        def _on_attempt(outcome: AttemptOutcome) -> Decimal:
+            return self._record_attempt(node_name, outcome)
 
         return _on_attempt
 
-    def _record_attempt(self, node_name: str, outcome: AttemptOutcome) -> None:
+    def _record_attempt(self, node_name: str, outcome: AttemptOutcome) -> Decimal:
         # Called synchronously from inside streaming.py's own try/except, which
         # already wraps this in a catch-all - but a second layer here means a bug
         # in THIS method (including reading `outcome.usage`'s fields, which is why
@@ -79,9 +97,9 @@ class UsageRecorder:
                 "UsageRecorder failed to read usage fields for node=%s - this line is LOST",
                 node_name,
             )
-            return
+            return Decimal("0")
 
-        self.record(
+        return self.record(
             node_name=node_name,
             attempt=outcome.attempt,
             credential=outcome.credential,
@@ -105,7 +123,7 @@ class UsageRecorder:
         output_tokens: int = 0,
         cached_tokens: int = 0,
         error_code: str | None = None,
-    ) -> None:
+    ) -> Decimal:
         """Records one line directly from plain token counts - used by Embedding/
         Extraction, which call the OpenAI SDK directly rather than through
         `streaming.py`'s `on_attempt`/`AttemptOutcome` (PydanticAI-only machinery
@@ -114,29 +132,32 @@ class UsageRecorder:
         into.
 
         Never raises - a bug here must not take down the enrichment/embedding job
-        that called it, only lose the one line it was recording.
+        that called it, only lose the one line it was recording. Returns the line's
+        committed dollar amount (`Decimal("0")` if recording itself failed), for a
+        caller releasing a matching PROVIDER-scope budget reservation.
         """
 
         try:
-            self._lines.append(
-                self._build_line(
-                    node_name=node_name,
-                    attempt=attempt,
-                    credential=credential,
-                    status=status,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cached_tokens=cached_tokens,
-                    latency_ms=latency_ms,
-                    error_code=error_code,
-                )
+            line, committed_usd = self._build_line(
+                node_name=node_name,
+                attempt=attempt,
+                credential=credential,
+                status=status,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_tokens=cached_tokens,
+                latency_ms=latency_ms,
+                error_code=error_code,
             )
+            self._lines.append(line)
+            return committed_usd
         except Exception:
             logger.exception(
                 "UsageRecorder failed to record an attempt for node=%s - this line is LOST, "
                 "not retried (the provider call itself already happened)",
                 node_name,
             )
+            return Decimal("0")
 
     def _build_line(
         self,
@@ -150,13 +171,13 @@ class UsageRecorder:
         cached_tokens: int,
         latency_ms: int,
         error_code: str | None,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], Decimal]:
         occurred_at = _iso_z(datetime.now(UTC))
 
         if credential is None:
             # No credential known at all (e.g. failed before any was resolved) -
             # nothing to price, nothing to snapshot.
-            return {
+            line = {
                 "seq": len(self._lines),
                 "nodeName": node_name,
                 "attempt": attempt,
@@ -175,6 +196,7 @@ class UsageRecorder:
                 "errorCode": error_code,
                 "occurredAt": occurred_at,
             }
+            return line, Decimal("0")
 
         if status == "SUCCESS" and credential.model_name:
             result = calculate_actual(
@@ -191,6 +213,13 @@ class UsageRecorder:
             # real Decimal("0") (a true statement about the dollar amount), but
             # the wire payload must null it out for anything that isn't PRICED.
             cost_usd = _decimal_str(result.cost_usd) if cost_status == COST_STATUS_PRICED else None
+            # Budget commits PRICED cost when known, else the estimate (UNPRICED),
+            # else nothing (FREE) - same rule Java's period-totals query uses.
+            committed_usd = (
+                result.cost_usd
+                if cost_status == COST_STATUS_PRICED
+                else (estimated_cost_usd if cost_status == COST_STATUS_UNPRICED else Decimal("0"))
+            )
         else:
             # A failed attempt spent no priceable tokens (or there is no model
             # name to look up) - FREE for a self-hosted credential, UNPRICED
@@ -202,8 +231,9 @@ class UsageRecorder:
             )
             cost_usd = None
             estimated_cost_usd = Decimal("0")
+            committed_usd = Decimal("0")
 
-        return {
+        line = {
             "seq": len(self._lines),
             "nodeName": node_name,
             "attempt": attempt,
@@ -222,21 +252,46 @@ class UsageRecorder:
             "errorCode": error_code,
             "occurredAt": occurred_at,
         }
+        return line, committed_usd
+
+    @staticmethod
+    def _line_committed_usd(line: dict[str, Any]) -> Decimal:
+        """Same PRICED→costUsd / UNPRICED→estimatedCostUsd / FREE→0 rule
+        `_build_line` used when it first computed each line - recomputed here from
+        the stored wire-format strings since `_lines` keeps the built dicts, not the
+        original `Decimal`s."""
+
+        if line["costStatus"] == COST_STATUS_PRICED:
+            return Decimal(line["costUsd"])
+        if line["costStatus"] == COST_STATUS_UNPRICED:
+            return Decimal(line["estimatedCostUsd"])
+        return Decimal("0")
 
     async def close(self, *, status: str) -> None:
         """Call exactly once when the request ends - success, error, or client
         disconnect. Idempotent: a second call is a no-op, so a caller that closes
         defensively in more than one place can never double-send.
 
-        No lines recorded (no provider call was ever made this request) -> settle
-        only, nothing enqueued. `status` is the graph's own outcome (SUCCESS/ERROR); it is
-        downgraded to PARTIAL here when at least one line failed but the graph
-        still produced SUCCESS overall (a failover recovered from it).
+        Always settles the request-level budget reservation (if `budget_tracker`
+        was given), even with zero lines (no provider call was ever made this
+        request, e.g. a fast-path greeting) - the reservation still exists and must
+        be released. Only the usage-log enqueue is skipped when there are no lines.
+        `status` is the graph's own outcome (SUCCESS/ERROR); it is downgraded to
+        PARTIAL here when at least one line failed but the graph still produced
+        SUCCESS overall (a failover recovered from it).
         """
 
         if self._closed:
             return
         self._closed = True
+
+        actual_total_usd = sum(
+            (self._line_committed_usd(line) for line in self._lines), start=Decimal("0")
+        )
+        if self.budget_tracker is not None:
+            await self.budget_tracker.settle_request(
+                request_id=self.request_id, actual_total_usd=actual_total_usd
+            )
 
         if not self._lines:
             return

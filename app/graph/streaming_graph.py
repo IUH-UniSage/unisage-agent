@@ -40,7 +40,7 @@ from app.graph.nodes.security_context import (
     resolve_clarification_guard,
 )
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
-from app.graph.streaming import FailoverCallback, TokenSink
+from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.rag.prompting.citations import build_citations
 from app.schemas.clarification import PendingClarification
@@ -74,6 +74,7 @@ async def run_graph(
     token_sink: TokenSink,
     trace: GraphTrace,
     usage_recorder: UsageRecorder,
+    budget: BudgetContext | None = None,
 ) -> GraphOutput:
     # GreetingDetectionNode: fast path, no LLM.
     trace.node("01_GreetingDetectionNode")
@@ -105,6 +106,7 @@ async def run_graph(
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
             advisory_tasks=_resume_advisory_tasks(graph_input, guard_result),
+            budget=budget,
         )
 
     # MessageClassificationNode.
@@ -120,6 +122,7 @@ async def run_graph(
         agent_factory=build_classification_agent,
         on_failover=_make_failover_applier(models),
         on_attempt=usage_recorder.bind("MessageClassificationNode"),
+        budget=budget,
     )
 
     # IntentRoutingNode (deterministic).
@@ -171,6 +174,7 @@ async def run_graph(
         pending_clarification=pending_clarification,
         advisory_tasks=route_plan.advisory_tasks,
         question=advisory_question,
+        budget=budget,
     )
     if not route_plan.calculation_tasks:
         return output
@@ -245,6 +249,7 @@ async def _run_advisory_flow(
     pending_clarification: PendingClarification | None,
     advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
     question: str | None = None,
+    budget: BudgetContext | None = None,
 ) -> GraphOutput:
     """Advisory branch: query transformation → retrieval → rerank → generation
     (or ticket fallback). `question` is what gets answered; `None` means the
@@ -267,6 +272,7 @@ async def _run_advisory_flow(
         decomposer_agent_factory=build_decomposer_agent,
         on_failover=_make_failover_applier(models),
         on_attempt=usage_recorder.bind("QueryTransformationNode"),
+        budget=budget,
     )
     for sub_query in sub_queries:
         trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
@@ -305,6 +311,7 @@ async def _run_advisory_flow(
             snapshot_version=models.snapshot_version,
             on_failover=_make_failover_applier(models),
             on_attempt=usage_recorder.bind("TicketFallbackNode"),
+            budget=budget,
         )
         return GraphOutput(
             response_text=fallback_text,
@@ -338,6 +345,7 @@ async def _run_advisory_flow(
         snapshot_version=models.snapshot_version,
         on_failover=_make_failover_applier(models),
         on_attempt=usage_recorder.bind("GenerationSynthesisNode"),
+        budget=budget,
     )
     return GraphOutput(
         response_text=generation_result.response_text,

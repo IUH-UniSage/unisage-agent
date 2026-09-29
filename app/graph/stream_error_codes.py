@@ -1,4 +1,4 @@
-"""SSE `event: error` codes for the chat stream - plan.md "SSE error contract".
+"""SSE `event: error` codes for the chat stream.
 
 Each code's message is a fixed, friendly Vietnamese sentence rather than
 anything derived from the underlying provider exception - the safest way to
@@ -22,21 +22,28 @@ LLM_STREAM_INTERRUPTED = "LLM_STREAM_INTERRUPTED"
 # so retrying the whole request later may succeed once a credential recovers.
 LLM_UNAVAILABLE = "LLM_UNAVAILABLE"
 
-# Reserved for todo.md Task 20 (running-total budget check) - no code in this
-# task raises it; defined here so the wire contract's third code already has
-# a home when that task lands.
-SYSTEM_BUDGET_EXHAUSTED = "SYSTEM_BUDGET_EXHAUSTED"
+# A BLOCK-action budget (SYSTEM/PURPOSE/PROVIDER) was already at or over its
+# limit - retrying immediately would hit the same wall; the budget resets on
+# its own period boundary (daily/monthly).
+BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+
+# A THROTTLE-action budget's soft limit was reached and its concurrency cap is
+# currently full - unlike BUDGET_EXCEEDED, this can clear itself within
+# seconds as in-flight requests finish, so it is safe to retry shortly after.
+BUDGET_THROTTLED = "BUDGET_THROTTLED"
 
 MESSAGES: dict[str, str] = {
     LLM_STREAM_INTERRUPTED: ("Đã có lỗi xảy ra trong khi tạo câu trả lời. Vui lòng thử lại."),
     LLM_UNAVAILABLE: (
         "Hệ thống đang tạm thời không thể xử lý yêu cầu này. Vui lòng thử lại sau ít phút."
     ),
-    SYSTEM_BUDGET_EXHAUSTED: ("Hệ thống đã đạt giới hạn sử dụng. Vui lòng thử lại sau."),
+    BUDGET_EXCEEDED: ("Hệ thống đã đạt giới hạn sử dụng. Vui lòng thử lại sau."),
+    BUDGET_THROTTLED: ("Hệ thống đang xử lý nhiều yêu cầu cùng lúc. Vui lòng thử lại sau ít giây."),
 }
 
 RETRYABLE: dict[str, bool] = {
     LLM_STREAM_INTERRUPTED: True,
     LLM_UNAVAILABLE: False,
-    SYSTEM_BUDGET_EXHAUSTED: False,
+    BUDGET_EXCEEDED: False,
+    BUDGET_THROTTLED: True,
 }

@@ -1,6 +1,6 @@
-"""Circuit breaker + cooldown + priority failover across `ModelRegistry` credentials
-(todo.md Task 10) — the single place this logic lives. Task 11 (CHAT streaming) and
-Task 12 (EXTRACTION) both call this router identically; neither is wired up here.
+"""Circuit breaker + cooldown + priority failover across `ModelRegistry` credentials -
+the single place this logic lives. Also gates credential selection against the
+PROVIDER-scope budget when a caller opts in (see `select_credential_with_budget`).
 
 Two credential-level states, keyed by `(credential_id, credential_revision)` so a
 rotated credential (new revision) always starts with clean state:
@@ -8,31 +8,29 @@ rotated credential (new revision) always starts with clean state:
 - **Cooling down** (TRANSIENT failure): skipped for a TTL — the provider's own
   `Retry-After` if it sent one, otherwise a short default backoff.
 - **Excluded** (PERMANENT failure): skipped immediately, and a health report is sent
-  to `backend-java` so it can set the row `DISABLED` (plan.md "Internal API contract"
-  endpoint #3). The exclusion marker also carries a TTL — a long one — since the
-  credential is expected to actually disappear from the snapshot once Java disables it
-  and the next hot-reload picks that up; the marker is just the immediate stop-gap
-  until that happens.
+  to `backend-java` so it can set the row `DISABLED`. The exclusion marker also
+  carries a TTL — a long one — since the credential is expected to actually disappear
+  from the snapshot once Java disables it and the next hot-reload picks that up; the
+  marker is just the immediate stop-gap until that happens.
 
 State lives in Redis (`REDIS_URL`, DB 0 — shared with the registry/hot-reload signal,
 never Celery's broker/backend DBs) under key prefix `mr:cb:` so every worker process
 agrees. When Redis is unreachable, the router degrades to **per-process, in-memory**
 state instead of raising — each worker may then make a locally-inconsistent decision,
-which is the accepted tradeoff (todo.md: "degrade, không crash"). This mirrors the
+which is an accepted tradeoff (degrade, don't crash). This mirrors the
 try/log/swallow-on-Redis-failure pattern already used by `app.core.observability.events` (Celery
 worker publishing ingestion progress) and `app.core.registry.registry_subscriber` (a dropped
 pub/sub connection is logged and retried, never fatal).
 
 The router always reports health to Java (`report_health`) on failure — TRANSIENT and
-PERMANENT alike, matching the Internal API contract table's endpoint #3 description
-("Ghi errorCount/lastErrorAt, PERMANENT → DISABLED"): Java decides what a given
-`errorType` means, this side just relays it. A failed health-report call is itself
-best-effort (logged, swallowed) — losing one health ping must never blow up the
-request/task that just failed against the provider.
+PERMANENT alike ("Ghi errorCount/lastErrorAt, PERMANENT → DISABLED"): Java decides
+what a given `errorType` means, this side just relays it. A failed health-report call
+is itself best-effort (logged, swallowed) — losing one health ping must never blow up
+the request/task that just failed against the provider.
 
 `credentialRevision`/`snapshotVersion` on that report must reflect the moment the
 failure happened, not whatever the registry snapshot has drifted to by the time the
-report actually reaches Java (todo.md is explicit about this). This module cannot
+report actually reaches Java. This module cannot
 capture that "moment" on its own — the caller is the one holding both the credential
 (already carries its own `.revision`) and the snapshot version at the instant the
 provider call failed, before it goes on to pick a fallback credential (which may
@@ -47,7 +45,8 @@ import logging
 import threading
 import time
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Protocol
 
 import redis.asyncio as redis_asyncio
 
@@ -57,6 +56,9 @@ from app.core.observability.alerting import alert_credential_failure
 from app.core.registry.model_registry import CredentialConfig, active_credentials_for
 from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import BackendJavaClient
+
+if TYPE_CHECKING:
+    from app.core.budget.tracker import BudgetTracker
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +74,26 @@ _EXCLUDED_TTL_SECONDS = 24 * 60 * 60.0
 
 class NoAvailableCredentialError(Exception):
     """No usable (non-cooling-down, non-excluded) credential exists for `purpose` -
-    todo.md's explicit "don't loop" trigger condition for Task 15's alerting."""
+    the trigger condition for the "no available credential" alert."""
 
     def __init__(self, purpose: str) -> None:
         self.purpose = purpose
         super().__init__(f"No available credential for purpose={purpose!r}")
+
+
+class NoBudgetAvailableError(Exception):
+    """Every remaining candidate for `purpose` was denied by budget enforcement
+    (PROVIDER-scope BLOCK/THROTTLE), distinct from `NoAvailableCredentialError` so
+    callers can map it to a budget-specific error response instead of
+    LLM_UNAVAILABLE."""
+
+    def __init__(self, purpose: str, last_deny_reason: str) -> None:
+        self.purpose = purpose
+        self.last_deny_reason = last_deny_reason
+        super().__init__(
+            f"Every credential for purpose={purpose!r} was denied by budget "
+            f"enforcement (last reason: {last_deny_reason})"
+        )
 
 
 class _RedisLike(Protocol):
@@ -96,8 +113,8 @@ def _state_key(credential_id: str, revision: int) -> str:
 
 class _InMemoryCircuitState:
     """Per-process fallback used only when Redis is unreachable. Not shared across
-    workers - that inconsistency between workers during a Redis outage is the
-    documented, accepted tradeoff (todo.md: "degrade, không crash")."""
+    workers - that inconsistency between workers during a Redis outage is an
+    accepted tradeoff (degrade, don't crash)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -267,16 +284,22 @@ class ModelRouter:
             except Exception:  # pragma: no cover - best-effort cleanup only
                 pass
 
-    async def get_next_credential(self, purpose: str) -> CredentialConfig:
+    async def get_next_credential(
+        self, purpose: str, *, exclude_ids: set[str] | None = None
+    ) -> CredentialConfig:
         """The highest-priority ACTIVE credential for `purpose` that is neither
-        cooling down nor excluded. Raises `NoAvailableCredentialError` if none - never
-        loops/retries on its own."""
+        cooling down, excluded, nor in `exclude_ids` (credentials the caller already
+        tried and rejected for a reason this router doesn't track itself - e.g. a
+        budget denial within the same request). Raises `NoAvailableCredentialError`
+        if none - never loops/retries on its own."""
 
         candidates = sorted(
             active_credentials_for(purpose),
             key=lambda credential: (credential.priority is None, credential.priority),
         )
         for credential in candidates:
+            if exclude_ids is not None and credential.id in exclude_ids:
+                continue
             key = _state_key(credential.id, credential.revision)
             if not await self._is_blocked(key):
                 return credential
@@ -360,8 +383,8 @@ _default_router_lock = threading.Lock()
 
 
 def get_default_router() -> ModelRouter:
-    """Lazily-constructed, process-wide `ModelRouter` for call sites (Task 11/12) that
-    don't need their own instance/test doubles."""
+    """Lazily-constructed, process-wide `ModelRouter` for call sites that don't need
+    their own instance/test doubles."""
 
     global _default_router
     if _default_router is None:
@@ -375,6 +398,66 @@ async def get_next_credential(purpose: str) -> CredentialConfig:
     """Convenience wrapper around `get_default_router().get_next_credential()`."""
 
     return await get_default_router().get_next_credential(purpose)
+
+
+async def select_credential_with_budget(
+    purpose: str,
+    *,
+    budget_tracker: BudgetTracker,
+    request_id: str,
+    seq: int,
+    estimate_usd: Decimal,
+    initial_credential: CredentialConfig | None = None,
+    router: ModelRouter | None = None,
+) -> CredentialConfig:
+    """Reserves a credential against the PROVIDER-scope budget, retrying with the
+    next `get_next_credential` candidate whenever `acquire_provider` denies the one
+    just tried. `seq` is reused across every candidate tried in this one call - only
+    the winning `acquire_provider` call actually writes anything to Redis (a denial
+    writes nothing), so reusing it is safe and keeps this call's budget bookkeeping
+    under one hash field.
+
+    `initial_credential`, when given, is tried FIRST without going through
+    `get_next_credential` at all - the caller already picked it (e.g. the request's
+    shared `GraphModels` credential); only a budget denial for it falls through to
+    the normal circuit-breaker-driven candidate loop, excluding it from there on.
+
+    Raises `NoAvailableCredentialError` if circuit-breaker state runs out of
+    candidates first, or `NoBudgetAvailableError` if every remaining candidate was
+    denied by budget instead.
+    """
+
+    active_router = router if router is not None else get_default_router()
+    excluded: set[str] = set()
+    last_deny_reason = "DENY_EXCEEDED"
+
+    if initial_credential is not None:
+        result = await budget_tracker.acquire_provider(
+            request_id=request_id,
+            seq=seq,
+            provider=initial_credential.provider,
+            estimate_usd=estimate_usd,
+        )
+        if result == "OK":
+            return initial_credential
+        last_deny_reason = result
+        excluded.add(initial_credential.id)
+
+    while True:
+        try:
+            credential = await active_router.get_next_credential(purpose, exclude_ids=excluded)
+        except NoAvailableCredentialError:
+            if excluded:
+                raise NoBudgetAvailableError(purpose, last_deny_reason) from None
+            raise
+
+        result = await budget_tracker.acquire_provider(
+            request_id=request_id, seq=seq, provider=credential.provider, estimate_usd=estimate_usd
+        )
+        if result == "OK":
+            return credential
+        last_deny_reason = result
+        excluded.add(credential.id)
 
 
 async def record_failure(

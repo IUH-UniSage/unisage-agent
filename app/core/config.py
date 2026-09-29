@@ -162,6 +162,11 @@ class Settings(BaseSettings):
     BUDGET_SNAPSHOT_REFRESH_SECONDS: float = 60.0
     # How often Beat runs drain_usage_outbox.
     USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS: float = 5.0
+    # Upper-bound output tokens assumed for the request-level Chat reservation
+    # estimate - deliberately generous (a real response rarely reaches this),
+    # since under-reserving would let a request through that a THROTTLE/BLOCK
+    # budget should have caught.
+    BUDGET_ESTIMATE_MAX_OUTPUT_TOKENS: int = 2000
 
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":

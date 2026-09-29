@@ -3,10 +3,13 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from openai import OpenAI
 
+from app.core.budget.tracker import get_default_tracker
+from app.core.config import settings
 from app.core.errors.llm_error_classifier import EmbeddingProviderError
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 from app.core.registry.embedding_identity import ensure_embedding_identity
@@ -108,10 +111,31 @@ class OpenAIEmbedder:
         if credential is None:
             return self._call_provider(client, model, texts)
 
-        recorder = UsageRecorder(request_id=str(uuid.uuid4()), purpose="EMBEDDING")
+        budget_tracker = get_default_tracker()
+        recorder = UsageRecorder(
+            request_id=str(uuid.uuid4()), purpose="EMBEDDING", budget_tracker=budget_tracker
+        )
         status = "ERROR"
         try:
-            vectors = self._call_provider(client, model, texts, usage_recorder=recorder)
+            reserve_result = asyncio.run(
+                budget_tracker.reserve_request(
+                    request_id=recorder.request_id,
+                    purpose="EMBEDDING",
+                    estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
+                )
+            )
+            if reserve_result != "OK":
+                # Reuses `EmbeddingProviderError` (not `RequestBudgetRejectedError`) so
+                # `app.worker.celery_app.embed_chunks`'s existing "abort the whole job"
+                # handling for that type applies here too - a budget rejection is not a
+                # per-chunk data-quality problem, it means embedding should stop entirely.
+                raise EmbeddingProviderError(
+                    f"EMBEDDING budget reservation rejected: {reserve_result}",
+                    credential=credential,
+                )
+            vectors = self._call_provider(
+                client, model, texts, usage_recorder=recorder, budget_tracker=budget_tracker
+            )
             status = "SUCCESS"
             return vectors
         finally:
@@ -166,14 +190,37 @@ class OpenAIEmbedder:
         texts: list[str],
         *,
         usage_recorder: UsageRecorder | None = None,
+        budget_tracker: Any | None = None,
     ) -> list[list[float]]:
         """`usage_recorder`, when given, gets exactly one line for this call (summed
         across every 2048-item sub-batch it takes to embed `texts`) - `None` here
         (the identity-probe call in `_resolve_from_registry`, and any test that
         constructs this class with `model`/`client` injected directly) means no
-        line at all, not a line with zero tokens."""
+        line at all, not a line with zero tokens.
+
+        `budget_tracker`, only meaningful together with `usage_recorder` (both
+        require a resolved registry credential), gates this one call against the
+        PROVIDER-scope budget before it's made and releases the reservation
+        afterwards - embedding never fails over, so there is no candidate loop
+        here, just a single acquire/release pair."""
 
         credential = self._resolved.get("credential")
+        budget_seq: int | None = None
+        if usage_recorder is not None and budget_tracker is not None:
+            budget_seq = usage_recorder.reserve_budget_seq()
+            acquire_result = asyncio.run(
+                budget_tracker.acquire_provider(
+                    request_id=usage_recorder.request_id,
+                    seq=budget_seq,
+                    provider=credential.provider if credential else "",
+                    estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
+                )
+            )
+            if acquire_result != "OK":
+                raise EmbeddingProviderError(
+                    f"EMBEDDING provider budget denied: {acquire_result}", credential=credential
+                )
+
         started_at = time.monotonic()
         try:
             vectors: list[list[float]] = []
@@ -184,8 +231,9 @@ class OpenAIEmbedder:
                 vectors.extend(item.embedding for item in response.data)
                 if response.usage is not None:
                     prompt_tokens += response.usage.prompt_tokens
+            committed_usd = Decimal("0")
             if usage_recorder is not None:
-                usage_recorder.record(
+                committed_usd = usage_recorder.record(
                     node_name="embed_batch",
                     attempt=0,
                     credential=credential,
@@ -193,10 +241,19 @@ class OpenAIEmbedder:
                     input_tokens=prompt_tokens,
                     latency_ms=int((time.monotonic() - started_at) * 1000),
                 )
+            if budget_tracker is not None and budget_seq is not None:
+                asyncio.run(
+                    budget_tracker.release_provider(
+                        request_id=usage_recorder.request_id,  # type: ignore[union-attr]
+                        seq=budget_seq,
+                        actual_usd=committed_usd,
+                    )
+                )
             return vectors
         except EmbeddingProviderError:
+            committed_usd = Decimal("0")
             if usage_recorder is not None:
-                usage_recorder.record(
+                committed_usd = usage_recorder.record(
                     node_name="embed_batch",
                     attempt=0,
                     credential=credential,
@@ -204,16 +261,33 @@ class OpenAIEmbedder:
                     latency_ms=int((time.monotonic() - started_at) * 1000),
                     error_code="EmbeddingProviderError",
                 )
+            if budget_tracker is not None and budget_seq is not None:
+                asyncio.run(
+                    budget_tracker.release_provider(
+                        request_id=usage_recorder.request_id,  # type: ignore[union-attr]
+                        seq=budget_seq,
+                        actual_usd=committed_usd,
+                    )
+                )
             raise
         except Exception as exc:
+            committed_usd = Decimal("0")
             if usage_recorder is not None:
-                usage_recorder.record(
+                committed_usd = usage_recorder.record(
                     node_name="embed_batch",
                     attempt=0,
                     credential=credential,
                     status="ERROR",
                     latency_ms=int((time.monotonic() - started_at) * 1000),
                     error_code=type(exc).__name__,
+                )
+            if budget_tracker is not None and budget_seq is not None:
+                asyncio.run(
+                    budget_tracker.release_provider(
+                        request_id=usage_recorder.request_id,  # type: ignore[union-attr]
+                        seq=budget_seq,
+                        actual_usd=committed_usd,
+                    )
                 )
             message = safe_error_message(exc, credential.api_key if credential else None)
             raise EmbeddingProviderError(message, credential=credential) from exc

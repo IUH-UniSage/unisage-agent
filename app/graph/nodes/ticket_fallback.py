@@ -12,7 +12,13 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from app.core.registry.model_registry import CredentialConfig
-from app.graph.streaming import AttemptRecorder, FailoverCallback, TokenSink, stream_agent_text
+from app.graph.streaming import (
+    AttemptRecorder,
+    BudgetContext,
+    FailoverCallback,
+    TokenSink,
+    stream_agent_text,
+)
 from app.rag.prompting import build_ticket_fallback_prompt
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.security import AcademicSecurityContext
@@ -35,6 +41,7 @@ async def run_ticket_fallback(
     snapshot_version: int | None = None,
     on_failover: FailoverCallback | None = None,
     on_attempt: AttemptRecorder | None = None,
+    budget: BudgetContext | None = None,
 ) -> str:
     prompt = build_ticket_fallback_prompt(
         user_query=user_query,
@@ -52,4 +59,5 @@ async def run_ticket_fallback(
         agent_factory=build_ticket_fallback_agent,
         on_failover=on_failover,
         on_attempt=on_attempt,
+        budget=budget,
     )

@@ -1,12 +1,17 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from openai import OpenAI
 
+from app.core.budget.tracker import RequestBudgetRejectedError, get_default_tracker
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import MalformedExtractionResponseError
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
@@ -15,6 +20,9 @@ from app.core.registry.model_registry import CredentialConfig, get_current_snaps
 from app.core.usage.usage_recorder import UsageRecorder
 from app.rag.prompting.loader import get_templates
 from app.schemas.ingestion import Chunk
+
+if TYPE_CHECKING:
+    from app.core.budget.tracker import BudgetTracker
 
 logger = logging.getLogger(__name__)
 
@@ -102,24 +110,48 @@ class MultiRepresentationEnricher:
         # business request, one line per attempt (including a failed attempt before
         # failover) - self-contained like OpenAIEmbedder.embed(), so
         # app.worker.celery_app's caller needs no changes.
-        recorder = UsageRecorder(request_id=str(uuid.uuid4()), purpose="EXTRACTION")
+        budget_tracker = get_default_tracker()
+        recorder = UsageRecorder(
+            request_id=str(uuid.uuid4()), purpose="EXTRACTION", budget_tracker=budget_tracker
+        )
         status = "ERROR"
         try:
-            result = self._enrich_with_failover(chunk, recorder)
+            reserve_result = asyncio.run(
+                budget_tracker.reserve_request(
+                    request_id=recorder.request_id,
+                    purpose="EXTRACTION",
+                    estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
+                )
+            )
+            if reserve_result != "OK":
+                raise RequestBudgetRejectedError("EXTRACTION", reserve_result)
+            result = self._enrich_with_failover(chunk, recorder, budget_tracker)
             status = "SUCCESS"
             return result
         finally:
-            # `model_router.NoAvailableCredentialError` (every EXTRACTION credential
-            # exhausted) can propagate out of `_enrich_with_failover` uncaught (see this
-            # method's own docstring) - `status` stays "ERROR" in that case, same as it
-            # would for any other exception escaping this method.
+            # `model_router.NoAvailableCredentialError`/`NoBudgetAvailableError` (every
+            # EXTRACTION credential exhausted) can propagate out of
+            # `_enrich_with_failover` uncaught (see this method's own docstring) -
+            # `status` stays "ERROR" in that case, same as it would for any other
+            # exception escaping this method.
             asyncio.run(recorder.close(status=status))
 
-    def _enrich_with_failover(self, chunk: Chunk, recorder: UsageRecorder) -> EnrichedChunk:
+    def _enrich_with_failover(
+        self, chunk: Chunk, recorder: UsageRecorder, budget_tracker: BudgetTracker
+    ) -> EnrichedChunk:
         is_fallback = False
         attempt = 0
         while True:
-            credential = asyncio.run(model_router.get_next_credential("EXTRACTION"))
+            budget_seq = recorder.reserve_budget_seq()
+            credential = asyncio.run(
+                model_router.select_credential_with_budget(
+                    "EXTRACTION",
+                    budget_tracker=budget_tracker,
+                    request_id=recorder.request_id,
+                    seq=budget_seq,
+                    estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
+                )
+            )
             snapshot = get_current_snapshot()
             snapshot_version = snapshot.version if snapshot is not None else 0
             resolved_model = credential.model_name or ""
@@ -129,13 +161,18 @@ class MultiRepresentationEnricher:
             try:
                 result, usage = self._call_and_parse(chunk, resolved_model, resolved_client)
             except Exception as exc:
-                recorder.record(
+                committed_usd = recorder.record(
                     node_name="multi_representation_enrich",
                     attempt=attempt,
                     credential=credential,
                     status="ERROR",
                     latency_ms=int((time.monotonic() - started_at) * 1000),
                     error_code=type(exc).__name__,
+                )
+                asyncio.run(
+                    budget_tracker.release_provider(
+                        request_id=recorder.request_id, seq=budget_seq, actual_usd=committed_usd
+                    )
                 )
                 asyncio.run(
                     model_router.record_failure(
@@ -150,7 +187,7 @@ class MultiRepresentationEnricher:
             # The provider call itself succeeded (tokens were spent) even when the
             # response body turns out malformed below - that's a data-quality
             # problem, not a call failure, so this line is always SUCCESS.
-            recorder.record(
+            committed_usd = recorder.record(
                 node_name="multi_representation_enrich",
                 attempt=attempt,
                 credential=credential,
@@ -158,6 +195,11 @@ class MultiRepresentationEnricher:
                 input_tokens=usage.prompt_tokens if usage else 0,
                 output_tokens=usage.completion_tokens if usage else 0,
                 latency_ms=latency_ms,
+            )
+            asyncio.run(
+                budget_tracker.release_provider(
+                    request_id=recorder.request_id, seq=budget_seq, actual_usd=committed_usd
+                )
             )
 
             if result is not None:
