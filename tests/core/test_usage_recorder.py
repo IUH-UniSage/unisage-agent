@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 import app.core.usage.usage_outbox as usage_outbox_module
+from app.core.pricing.snapshot import parse_pricing_snapshot, set_current_pricing_snapshot
 from app.core.registry.model_registry import CredentialConfig
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.streaming import AttemptOutcome
@@ -49,8 +50,26 @@ def captured_outbox(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return captured
 
 
+@pytest.fixture
+def gpt_4o_mini_price() -> Any:
+    set_current_pricing_snapshot(
+        parse_pricing_snapshot(
+            {
+                "version": 1,
+                "prices": [
+                    {"provider": "openai", "modelName": "gpt-4o-mini", "inputPerMillion": 0.15}
+                ],
+            }
+        )
+    )
+    yield
+    set_current_pricing_snapshot(None)
+
+
 @pytest.mark.asyncio
-async def test_priced_success_line(captured_outbox: list[dict[str, Any]]) -> None:
+async def test_priced_success_line(
+    captured_outbox: list[dict[str, Any]], gpt_4o_mini_price: None
+) -> None:
     recorder = UsageRecorder(request_id="r1", purpose="CHAT")
     recorder.bind("GenerationSynthesisNode")(
         AttemptOutcome(

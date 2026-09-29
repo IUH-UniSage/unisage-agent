@@ -145,6 +145,12 @@ tiết và các khoảng trống đã biết.
   đúng cùng danh sách này — SA không thể tạo được một credential mà Python chắc chắn không dùng
   được. `groq` và `mistral` đã bị gỡ khỏi danh sách (quyết định sản phẩm, không phải lý do
   SSRF); model groq/mistral tạo từ trước bị chuyển sang INACTIVE và không được định tuyến nữa.
+- **Giá model do backend-java quản lý, agent chỉ đọc.** Mỗi lượt gọi provider được tính tiền theo
+  giá của đúng cặp (provider, model) trong bảng giá: giá đồng bộ hằng ngày từ LiteLLM cho `openai`
+  và `google`, hoặc giá SA sửa tay (giá sửa tay luôn thắng, đồng bộ không ghi đè). Chỉ dùng giá tier
+  Standard. Model chưa có giá → lượt gọi ghi **UNPRICED** với chi phí ước tính cố định, được hiển
+  thị riêng và vẫn trừ vào ngân sách; `SELF_HOSTED` luôn miễn phí. Giá mới áp dụng cho các lượt gọi
+  sau tối đa 60 giây; chi phí đã ghi của lượt gọi cũ không bao giờ bị tính lại.
 
 ## Glossary
 

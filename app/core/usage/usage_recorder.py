@@ -200,6 +200,7 @@ class UsageRecorder:
 
         if status == "SUCCESS" and credential.model_name:
             result = calculate_actual(
+                provider=credential.provider,
                 model_name=credential.model_name,
                 source_type=credential.source_type,
                 input_tokens=input_tokens,

@@ -361,42 +361,43 @@ Embedding/Extraction (raw OpenAI SDK) không dùng `stream_agent_text`/
 
 ### Vì sao `litellm` chỉ dùng để định giá, và vì sao cần ép `LITELLM_LOCAL_MODEL_COST_MAP=True`?
 
-ADR 0005 (Dynamic Model Registry) đã chốt: không dùng LiteLLM SDK làm đường gọi
-provider (model native PydanticAI mới nhận được `http_client=` đã pin theo
-SSRF guard). Cost Tracking chỉ cần `litellm.completion_cost()`/
-`litellm.cost_per_token()` để tra bảng giá tĩnh theo tên model — 2 hàm test
-được bằng cách spy `socket.socket.connect`.
+Không còn áp dụng: agent đã gỡ hẳn `litellm` (29-09-2026). Xem mục kế tiếp.
 
-Spike phát hiện: **`import litellm` mặc định vẫn có thể phát sinh network
-call thật** — không phải trong `cost_per_token()` khi model đã biết (0 call),
-mà trong `get_model_cost_map()` (`litellm/litellm_core_utils/get_model_cost_map.py`),
-chạy lúc `import litellm` và mỗi khi gặp model lạ: nó `httpx.get()` tới
-`https://raw.githubusercontent.com/BerriAI/litellm/.../model_prices_and_context_window.json`
-để cập nhật bảng giá mới nhất, kể cả retry nền bằng thread riêng nếu lần đầu
-thất bại. Set `LITELLM_LOCAL_MODEL_COST_MAP=True` **trước khi import** tắt
-hẳn đường mạng này — package tự dùng bản JSON đóng gói sẵn
-(`model_prices_and_context_window_backup.json`), đã verify bằng test spy
-socket: 0 network call kể cả khi gọi với model không tồn tại trong bảng giá
-(`BadRequestError` được raise, không fetch mạng).
+### Vì sao giá model lấy từ backend-java (đồng bộ LiteLLM + SA ghi đè), không dùng bảng `litellm` offline hay cào trang giá provider?
 
-Vì đây là yêu cầu bắt buộc cho SSRF/"factory duy nhất" của ADR 0005 (không
-được có bất kỳ code Python nào mở kết nối mạng ngoài factory đã pin), quyết
-định: `app/core/cost_calculator.py` (module duy nhất được whitelist
-`import litellm`, xem plan Cost Tracking "Vòng 4") tự set
-`os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")` **ngay dòng
-đầu module, trước `import litellm`** — không chỉ dựa vào `.env`, vì `.env`
-có thể bị xoá/quên khi deploy và hậu quả là một network call âm thầm lọt qua
-factory duy nhất. `.env.example` vẫn thêm biến này để tài liệu hoá, nhưng
-code không tin tưởng nó là nguồn duy nhất.
+Bản đầu tính cost bằng `litellm.cost_per_token()` trên bảng giá đóng gói sẵn trong package,
+tra theo **tên model trần**. Có 3 vấn đề:
 
-Đã cân và loại: whitelist domain GitHub raw content vào
-`MODEL_REGISTRY_URL_ALLOWLIST` của SSRF guard (mở rộng phạm vi allowlist chỉ
-để phục vụ một thư viện phụ trợ, không phải đường gọi provider — không đáng)
-· vá `litellm.get_model_cost_map` bằng monkeypatch (giòn hơn set 1 env var, dễ
-gãy khi litellm đổi nội bộ).
+- **Lệch key:** bảng đó đặt model Gemini API dưới key `gemini/<model>`, nên tra `gemini-2.5-flash`
+  không ra giá và lượt gọi bị ghi UNPRICED dù có giá.
+- **Giá đứng yên và không sửa được:** giá chỉ đổi khi nâng version `litellm`; SA không sửa được một
+  giá sai hay thêm giá cho model mới.
+- **Hai nguồn lệch nhau:** tab Bảng giá trên web đọc một bảng chép tay khác, nên số UI hiển thị có
+  thể khác số budget đang trừ.
 
-Luật nằm ở: `backend-java/changes/23-09-2026-Cost-Tracking-Budget-Management/plan.md`
-› Overview, Architecture Decisions.
+Quyết định: giá nằm trong bảng `model_prices` của backend-java, khoá `(provider, model)`, đơn vị
+USD per 1M token. Backend đồng bộ hằng ngày từ file JSON giá của LiteLLM; SA sửa được và giá sửa tay
+không bị đồng bộ ghi đè. Agent tải giá qua `GET /internal/model-pricing/snapshot`
+(`app/core/pricing/snapshot.py`), cùng cơ chế snapshot + `config_version` với budget, và
+`cost_calculator` chỉ còn là phép tính:
+`(input − cached) × giá input + cached × giá cached (không có thì dùng giá input) + output × giá output`.
+Test so khớp từng số với kết quả `litellm.cost_per_token()` cũ cho cùng đơn giá, nên việc chuyển
+nguồn không làm đổi chi phí của một lượt gọi.
+
+Hệ quả phụ có lợi: gỡ `litellm` gỡ luôn nguy cơ network call ngầm lúc `import litellm` (mục trên),
+và sửa được `uv.lock` bị lệch (`litellm` có trong `pyproject.toml` nhưng không có trong lock, nên
+image Docker dựng bằng `uv sync --frozen` không có `litellm`).
+
+Đã cân và loại:
+- **Cào HTML trang giá của provider:** một phần bảng giá OpenAI render bằng JS nên không có trong
+  HTML tĩnh; trang AI Studio chỉ là vỏ JS; nhiều tier (Standard/Batch/Flex/Priority), giá theo loại
+  dữ liệu và theo độ dài context khiến parser phải đoán; provider đổi giao diện là hỏng không báo
+  lỗi, trong khi budget chặn request dựa trên con số này.
+- **Giữ `litellm` offline:** không sửa được cả 3 vấn đề trên.
+- **Chỉ nhập tay:** SA phải tự cập nhật mọi model, dễ quên.
+
+Luật nằm ở: `PRODUCT.md` › Business rules (giá model). Chi tiết thiết kế: ADR 0006 bên
+`unisage-backend/docs/adr/0006-model-pricing-source.md`.
 
 ## Cấu hình
 

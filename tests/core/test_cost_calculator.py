@@ -1,8 +1,14 @@
-"""Tests for offline price lookup, including a spike proof that
-`litellm.cost_per_token()` never makes a network call."""
+"""Tests for cost calculation from backend-java's model prices.
 
+The parity cases use the numbers `litellm.cost_per_token()` returned for the same token counts
+and unit prices, so the switch away from LiteLLM does not change what a call costs."""
+
+from collections.abc import Iterator
 from decimal import Decimal
 
+import pytest
+
+from app.core.pricing.snapshot import parse_pricing_snapshot, set_current_pricing_snapshot
 from app.core.usage import cost_calculator
 from app.core.usage.cost_calculator import (
     COST_STATUS_FREE,
@@ -12,23 +18,86 @@ from app.core.usage.cost_calculator import (
     estimate,
 )
 
+FALLBACK = Decimal(str(cost_calculator.settings.BUDGET_RESERVATION_FALLBACK_USD))
 
-def test_calculate_actual_priced_model() -> None:
+
+@pytest.fixture(autouse=True)
+def _prices() -> Iterator[None]:
+    set_current_pricing_snapshot(
+        parse_pricing_snapshot(
+            {
+                "version": 1,
+                "prices": [
+                    {
+                        "provider": "openai",
+                        "modelName": "gpt-4o-mini",
+                        "inputPerMillion": 0.15,
+                        "outputPerMillion": 0.6,
+                        "cachedInputPerMillion": 0.075,
+                    },
+                    {
+                        "provider": "openai",
+                        "modelName": "gpt-4o",
+                        "inputPerMillion": 2.5,
+                        "outputPerMillion": 10,
+                        "cachedInputPerMillion": 1.25,
+                    },
+                    {
+                        "provider": "openai",
+                        "modelName": "text-embedding-3-small",
+                        "inputPerMillion": 0.02,
+                        "outputPerMillion": None,
+                        "cachedInputPerMillion": None,
+                    },
+                ],
+            }
+        )
+    )
+    yield
+    set_current_pricing_snapshot(None)
+
+
+@pytest.mark.parametrize(
+    ("model", "input_tokens", "output_tokens", "cached_tokens", "litellm_cost"),
+    [
+        ("gpt-4o-mini", 1000, 500, 200, "0.000435"),
+        ("gpt-4o-mini", 1000, 500, 0, "0.00045"),
+        ("text-embedding-3-small", 5000, 0, 0, "0.0001"),
+        ("gpt-4o", 1234, 567, 1000, "0.007505"),
+    ],
+)
+def test_calculate_actual_matches_litellm(
+    model: str, input_tokens: int, output_tokens: int, cached_tokens: int, litellm_cost: str
+) -> None:
     result = calculate_actual(
+        provider="openai",
+        model_name=model,
+        source_type="CLOUD_API",
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_tokens=cached_tokens,
+    )
+
+    assert result.cost_status == COST_STATUS_PRICED
+    assert result.cost_usd == Decimal(litellm_cost)
+    assert result.estimated_cost_usd == result.cost_usd
+
+
+def test_price_lookup_is_per_provider() -> None:
+    result = calculate_actual(
+        provider="google",
         model_name="gpt-4o-mini",
         source_type="CLOUD_API",
         input_tokens=1000,
         output_tokens=500,
     )
 
-    assert result.cost_status == COST_STATUS_PRICED
-    assert result.cost_usd is not None
-    assert result.cost_usd > Decimal("0")
-    assert result.estimated_cost_usd == result.cost_usd
+    assert result.cost_status == COST_STATUS_UNPRICED
 
 
 def test_calculate_actual_unpriced_model_falls_back_to_estimate(caplog) -> None:
     result = calculate_actual(
+        provider="openai",
         model_name="totally-unknown-model-xyz",
         source_type="CLOUD_API",
         input_tokens=1000,
@@ -37,19 +106,27 @@ def test_calculate_actual_unpriced_model_falls_back_to_estimate(caplog) -> None:
 
     assert result.cost_status == COST_STATUS_UNPRICED
     assert result.cost_usd is None
-    assert result.estimated_cost_usd == Decimal(
-        str(cost_calculator.settings.BUDGET_RESERVATION_FALLBACK_USD)
-    )
-    assert "UNPRICED" in caplog.text or "no LiteLLM price" in caplog.text
+    assert result.estimated_cost_usd == FALLBACK
+    assert "UNPRICED" in caplog.text
 
 
-def test_calculate_actual_self_hosted_is_free_without_calling_litellm(monkeypatch) -> None:
-    def _boom(*args, **kwargs):
-        raise AssertionError("SELF_HOSTED must never call litellm.cost_per_token")
-
-    monkeypatch.setattr(cost_calculator.litellm, "cost_per_token", _boom)
+def test_no_snapshot_loaded_means_unpriced() -> None:
+    set_current_pricing_snapshot(None)
 
     result = calculate_actual(
+        provider="openai",
+        model_name="gpt-4o-mini",
+        source_type="CLOUD_API",
+        input_tokens=1000,
+        output_tokens=500,
+    )
+
+    assert result.cost_status == COST_STATUS_UNPRICED
+
+
+def test_calculate_actual_self_hosted_is_free() -> None:
+    result = calculate_actual(
+        provider=None,
         model_name="local-llama",
         source_type="SELF_HOSTED",
         input_tokens=1000,
@@ -61,27 +138,33 @@ def test_calculate_actual_self_hosted_is_free_without_calling_litellm(monkeypatc
     )
 
 
-def test_estimate_priced_model() -> None:
+def test_estimate_priced_model_ignores_cache() -> None:
     value = estimate(
-        model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=1000, max_output_tokens=500
+        provider="openai",
+        model_name="gpt-4o-mini",
+        source_type="CLOUD_API",
+        input_tokens=1000,
+        max_output_tokens=500,
     )
 
-    assert value > Decimal("0")
+    assert value == Decimal("0.00045")
 
 
 def test_estimate_unpriced_model_uses_fallback() -> None:
     value = estimate(
+        provider="openai",
         model_name="totally-unknown-model-xyz",
         source_type="CLOUD_API",
         input_tokens=1000,
         max_output_tokens=500,
     )
 
-    assert value == Decimal(str(cost_calculator.settings.BUDGET_RESERVATION_FALLBACK_USD))
+    assert value == FALLBACK
 
 
 def test_estimate_self_hosted_is_zero() -> None:
     value = estimate(
+        provider=None,
         model_name="local-llama",
         source_type="SELF_HOSTED",
         input_tokens=1000,
@@ -91,49 +174,14 @@ def test_estimate_self_hosted_is_zero() -> None:
     assert value == Decimal("0")
 
 
-def test_embedding_shaped_call_is_priced_like_completion() -> None:
-    """Embedding usage has no output_tokens - calculate_actual must accept 0."""
-
+def test_cached_tokens_above_input_are_capped() -> None:
     result = calculate_actual(
-        model_name="text-embedding-3-small",
-        source_type="CLOUD_API",
-        input_tokens=800,
-        output_tokens=0,
-    )
-
-    assert result.cost_status == COST_STATUS_PRICED
-    assert result.cost_usd is not None
-    assert result.cost_usd > Decimal("0")
-
-
-def test_cost_per_token_never_opens_a_network_connection(monkeypatch) -> None:
-    """Spike proof: LiteLLM's pricing lookup must not touch the network -
-    see docs/product/DECISIONS.md "Cost Tracking" for why LITELLM_LOCAL_MODEL_COST_MAP
-    matters (litellm fetches its price table from GitHub on import/unknown-model
-    otherwise)."""
-
-    import socket
-
-    calls: list[object] = []
-    original_connect = socket.socket.connect
-
-    def spy_connect(self, address):
-        calls.append(address)
-        return original_connect(self, address)
-
-    monkeypatch.setattr(socket.socket, "connect", spy_connect)
-
-    calculate_actual(
-        model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=100, output_tokens=50
-    )
-    calculate_actual(
-        model_name="totally-unknown-model-xyz",
+        provider="openai",
+        model_name="gpt-4o-mini",
         source_type="CLOUD_API",
         input_tokens=100,
-        output_tokens=50,
-    )
-    estimate(
-        model_name="gpt-4o-mini", source_type="CLOUD_API", input_tokens=100, max_output_tokens=50
+        output_tokens=0,
+        cached_tokens=500,
     )
 
-    assert calls == [], f"litellm made unexpected network connection(s): {calls}"
+    assert result.cost_usd == Decimal("0.0000075")

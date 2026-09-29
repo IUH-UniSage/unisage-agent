@@ -36,10 +36,6 @@ dependencies = [
     "pyyaml>=6.0.0",
     "beautifulsoup4>=4.12.0",
     "lxml>=5.0.0",
-    # Price lookups ONLY (completion_cost/cost_per_token) - app/core/cost_calculator.py
-    # is the one file allowed to import this (see test_no_raw_provider_clients.py).
-    # Never used to call a provider - ADR 0005 rejected it for that.
-    "litellm>=1.103.0",
     "pydantic-ai-slim[anthropic,google,openai]>=1.0.0",
 ]
 

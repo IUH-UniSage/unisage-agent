@@ -20,16 +20,9 @@ AST-scans every `.py` file under `app/` for:
     registry data.
   - Any `import litellm` / `from litellm import ...` anywhere in `app/` — ADR
     0005 rejected LiteLLM as the provider-calling SDK (couldn't inject a
-    pinned transport), so it must never come back **as a way to call a
-    provider**. One narrow exception: `app/core/usage/cost_calculator.py` is
-    allowed to `import litellm` **only** to call
-    `litellm.completion_cost()`/`litellm.cost_per_token()` for offline price
-    lookups — those two functions read a static pricing table and (with
-    `LITELLM_LOCAL_MODEL_COST_MAP=True`, which that module sets before the
-    import) make no network call. Even inside that one file, this test still
-    bans `litellm.completion(`/`acompletion(`/`embedding(`/`aembedding(` (the
-    functions that actually call a provider) and any httpx/OpenAI client
-    construction — the file may only do pure price arithmetic.
+    pinned transport). Model prices come from backend-java
+    (`app/core/pricing/snapshot.py`, ADR 0006 in unisage-backend), so there is
+    no remaining reason to import it at all.
 """
 
 from __future__ import annotations
@@ -47,17 +40,6 @@ _HTTPX_CLIENT_ALLOWED_FILES = {
     _APP_ROOT / "integrations" / "backend_java_client.py",
     _APP_ROOT / "integrations" / "slack_notifier.py",
 }
-
-# The only file allowed to `import litellm`, and only for offline price
-# lookups — see module docstring.
-_LITELLM_IMPORT_ALLOWED_FILES = {
-    _APP_ROOT / "core" / "usage" / "cost_calculator.py",
-}
-
-# Functions that actually call a provider (network) — banned everywhere,
-# including inside `_LITELLM_IMPORT_ALLOWED_FILES`. Only `completion_cost`/
-# `cost_per_token` (pure price lookups) may be called there.
-_LITELLM_PROVIDER_CALL_FUNCS = {"completion", "acompletion", "embedding", "aembedding"}
 
 _SDK_CLIENT_NAMES = {"OpenAI", "AsyncOpenAI", "Anthropic"}
 _HTTPX_CLIENT_ATTRS = {"Client", "AsyncClient"}
@@ -100,11 +82,7 @@ def _violations_in_file(path: Path) -> list[str]:
             module = getattr(node, "module", None) or ""
             names = [alias.name for alias in node.names]
             if module == "litellm" or module.startswith("litellm.") or "litellm" in names:
-                if path not in _LITELLM_IMPORT_ALLOWED_FILES:
-                    violations.append(
-                        f"{path}:{node.lineno}: `import litellm` is banned outside "
-                        "app/core/usage/cost_calculator.py (ADR 0005)"
-                    )
+                violations.append(f"{path}:{node.lineno}: `import litellm` is banned (ADR 0005)")
             continue
 
         if not isinstance(node, ast.Call):
@@ -116,21 +94,6 @@ def _violations_in_file(path: Path) -> list[str]:
                     f"{path}:{node.lineno}: raw httpx.Client/AsyncClient construction "
                     "outside app/core/llm/http_client.py"
                 )
-            continue
-
-        func = node.func
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr in _LITELLM_PROVIDER_CALL_FUNCS
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "litellm"
-        ):
-            violations.append(
-                f"{path}:{node.lineno}: litellm.{func.attr}(...) calls a provider "
-                "over the network - banned everywhere, even in "
-                "app/core/usage/cost_calculator.py (only completion_cost/cost_per_token "
-                "price lookups are allowed there)"
-            )
             continue
 
         name = _call_name(node)
@@ -163,9 +126,4 @@ def test_factory_module_exists() -> None:
 
 @pytest.mark.parametrize("path", sorted(_HTTPX_CLIENT_ALLOWED_FILES))
 def test_httpx_client_allowlist_entries_exist(path: Path) -> None:
-    assert path.is_file(), f"allowlisted file no longer exists: {path}"
-
-
-@pytest.mark.parametrize("path", sorted(_LITELLM_IMPORT_ALLOWED_FILES))
-def test_litellm_import_allowlist_entries_exist(path: Path) -> None:
     assert path.is_file(), f"allowlisted file no longer exists: {path}"

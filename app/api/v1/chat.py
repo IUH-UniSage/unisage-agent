@@ -145,6 +145,7 @@ def _estimate_chat_call_cost_usd(message: str, models: GraphModels) -> Decimal:
         return Decimal("0")
     input_tokens_estimate = max(1, len(message) // 4)
     return estimate_cost(
+        provider=models.generation_credential.provider,
         model_name=models.generation_credential.model_name,
         source_type=models.generation_credential.source_type,
         input_tokens=input_tokens_estimate,
