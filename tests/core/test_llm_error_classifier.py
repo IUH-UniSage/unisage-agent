@@ -7,20 +7,17 @@ typed attributes (`status_code`/`code`, `body`/`details`), so a test double that
 attributes would pass for the wrong reason.
 
 Covers every provider `provider_models.py` (Task 5) actually wires: `openai` (also exercises
-`SELF_HOSTED`, which reuses the same SDK/exception hierarchy), `groq`, `google` (`google-genai`),
-`mistral` — plus `pydantic_ai.exceptions.ModelHTTPError`/`ModelAPIError` (the PydanticAI-wrapped
-form of the same failures) and `SsrfBlockedError`.
+`SELF_HOSTED`, which reuses the same SDK/exception hierarchy), `google` (`google-genai`) — plus
+`pydantic_ai.exceptions.ModelHTTPError`/`ModelAPIError` (the PydanticAI-wrapped form of the same
+failures) and `SsrfBlockedError`.
 """
 
 from __future__ import annotations
 
 import google.genai.errors as google_errors
-import groq
-import httpx
 import httpx2
 import openai
 import pytest
-from mistralai.client.errors import SDKError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from app.core.errors.llm_error_classifier import (
@@ -34,16 +31,6 @@ from app.core.security.ssrf_guard import SsrfBlockedError
 def _openai_response(status_code: int, *, error: dict) -> httpx2.Response:
     request = httpx2.Request("POST", "https://api.openai.com/v1/chat/completions")
     return httpx2.Response(status_code, request=request, json={"error": error})
-
-
-def _groq_response(status_code: int, *, error: dict) -> httpx.Response:
-    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
-    return httpx.Response(status_code, request=request, json={"error": error})
-
-
-def _mistral_response(status_code: int, *, text: str) -> httpx.Response:
-    request = httpx.Request("POST", "https://api.mistral.ai/v1/chat/completions")
-    return httpx.Response(status_code, request=request, text=text)
 
 
 class TestSsrfBlocked:
@@ -127,45 +114,6 @@ class TestOpenAI:
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
 
-class TestGroq:
-    def test_authentication_error_is_permanent(self) -> None:
-        response = _groq_response(
-            401, error={"message": "Invalid API Key", "type": "invalid_request_error"}
-        )
-        exc = groq.AuthenticationError("Invalid API Key", response=response, body=response.json())
-        assert classify_llm_error(exc) == ErrorType.PERMANENT
-
-    def test_rate_limit_with_quota_code_is_permanent(self) -> None:
-        # groq's `_make_status_error` does NOT unwrap the body the way openai's does — `.body`
-        # is the raw `{"error": {...}}` JSON, not the inner dict.
-        response = _groq_response(
-            429, error={"message": "You have exceeded your current quota", "code": "quota_exceeded"}
-        )
-        exc = groq.RateLimitError("quota", response=response, body=response.json())
-        assert exc.body == {
-            "error": {"message": "You have exceeded your current quota", "code": "quota_exceeded"}
-        }
-        assert classify_llm_error(exc) == ErrorType.PERMANENT
-
-    def test_rate_limit_without_quota_code_is_transient(self) -> None:
-        response = _groq_response(
-            429,
-            error={"message": "Rate limit reached, please retry", "type": "rate_limit_exceeded"},
-        )
-        exc = groq.RateLimitError("rl", response=response, body=response.json())
-        assert classify_llm_error(exc) == ErrorType.TRANSIENT
-
-    def test_internal_server_error_is_transient(self) -> None:
-        response = _groq_response(500, error={"message": "internal error"})
-        exc = groq.InternalServerError("internal error", response=response, body=response.json())
-        assert classify_llm_error(exc) == ErrorType.TRANSIENT
-
-    def test_api_connection_error_is_transient(self) -> None:
-        request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
-        exc = groq.APIConnectionError(request=request)
-        assert classify_llm_error(exc) == ErrorType.TRANSIENT
-
-
 class TestGoogle:
     def test_permission_denied_is_permanent(self) -> None:
         exc = google_errors.ClientError(
@@ -206,39 +154,9 @@ class TestGoogle:
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
 
-class TestMistral:
-    def test_status_401_is_permanent(self) -> None:
-        response = _mistral_response(401, text='{"message":"Unauthorized"}')
-        exc = SDKError("Unauthorized", raw_response=response)
-        assert classify_llm_error(exc) == ErrorType.PERMANENT
-
-    def test_rate_limit_with_quota_text_is_permanent(self) -> None:
-        # mistralai never parses `.body` into a structured code - it's the raw response text.
-        response = _mistral_response(
-            429,
-            text=(
-                "Service tier capacity exceeded. You have exceeded your current quota, "
-                "please check your plan and billing details."
-            ),
-        )
-        exc = SDKError("quota", raw_response=response)
-        assert isinstance(exc.body, str)
-        assert classify_llm_error(exc) == ErrorType.PERMANENT
-
-    def test_rate_limit_without_quota_text_is_transient(self) -> None:
-        response = _mistral_response(429, text="Requests rate limit exceeded")
-        exc = SDKError("rl", raw_response=response)
-        assert classify_llm_error(exc) == ErrorType.TRANSIENT
-
-    def test_status_500_is_transient(self) -> None:
-        response = _mistral_response(500, text="internal error")
-        exc = SDKError("500", raw_response=response)
-        assert classify_llm_error(exc) == ErrorType.TRANSIENT
-
-
 class TestModelHTTPErrorWrapping:
     """`pydantic_ai.exceptions.ModelHTTPError` — the form each provider's model-native layer
-    (`pydantic_ai/models/{openai,groq,mistral,google}.py`) actually re-raises as, per ADR 0005."""
+    (`pydantic_ai/models/{openai,google}.py`) actually re-raises as, per ADR 0005."""
 
     def test_401_is_permanent(self) -> None:
         exc = ModelHTTPError(
@@ -263,27 +181,27 @@ class TestModelHTTPErrorWrapping:
         )
         assert classify_llm_error(exc) == ErrorType.PERMANENT
 
-    def test_429_with_groq_shaped_body_and_quota_code_is_permanent(self) -> None:
-        # groq's model-native layer forwards the raw, still-nested `{"error": {...}}` body.
+    def test_429_with_nested_error_body_and_quota_code_is_permanent(self) -> None:
+        # Some model-native layers forward the raw, still-nested `{"error": {...}}` body.
         exc = ModelHTTPError(
             status_code=429,
-            model_name="llama-3.1-70b",
+            model_name="gpt-4o-mini",
             body={"error": {"code": "rate_limit_exceeded"}},
         )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
         exc_quota = ModelHTTPError(
             status_code=429,
-            model_name="llama-3.1-70b",
+            model_name="gpt-4o-mini",
             body={"error": {"code": "quota_exceeded", "message": "x"}},
         )
         assert classify_llm_error(exc_quota) == ErrorType.PERMANENT
 
-    def test_429_with_mistral_shaped_string_body_and_quota_text_is_permanent(self) -> None:
-        # mistral's model-native layer forwards `e.body`, a raw string, not a dict.
+    def test_429_with_string_body_and_quota_text_is_permanent(self) -> None:
+        # The body can arrive as a raw string, not a dict.
         exc = ModelHTTPError(
             status_code=429,
-            model_name="mistral-small-latest",
+            model_name="gpt-4o-mini",
             body="You exceeded your current quota",
         )
         assert classify_llm_error(exc) == ErrorType.PERMANENT

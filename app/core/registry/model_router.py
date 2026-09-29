@@ -137,7 +137,7 @@ class _InMemoryCircuitState:
 
 def _extract_retry_after_seconds(exc: Exception) -> float | None:
     """Best-effort `Retry-After` (seconds) off a provider exception's HTTP response, if
-    it carries one. Every SDK this router deals with (openai/groq/mistral's
+    it carries one. Every SDK this router deals with (openai's
     `APIStatusError`-alikes, and PydanticAI's `ModelHTTPError`) exposes the underlying
     HTTP response as `.response`, an `httpx.Response`-shaped object with `.headers`."""
 

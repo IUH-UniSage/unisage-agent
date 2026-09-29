@@ -14,7 +14,6 @@ dependencies = [
     "gunicorn>=22.0.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
-    "pydantic-ai-slim[anthropic,google,groq,mistral,openai]>=1.0.0",
     "pydantic-graph>=1.80.0",
     "sqlalchemy[asyncio]>=2.0.35",
     "alembic>=1.13.0",
@@ -41,6 +40,7 @@ dependencies = [
     # is the one file allowed to import this (see test_no_raw_provider_clients.py).
     # Never used to call a provider - ADR 0005 rejected it for that.
     "litellm>=1.103.0",
+    "pydantic-ai-slim[anthropic,google,openai]>=1.0.0",
 ]
 
 [project.optional-dependencies]

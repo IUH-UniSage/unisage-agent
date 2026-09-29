@@ -4,10 +4,10 @@
 Task 10's router and health-report call live entirely on this side.
 
 `provider_models.py` (Task 5) only ever builds a `Model`/`Provider` pair for `openai`, `google`
-(`google-genai`), `groq`, `mistral`, and the OpenAI-compatible `SELF_HOSTED` transport (which is
-the *same* `openai` SDK under the hood — there is no separate exception hierarchy to add for it).
-Each of those four provider SDKs raises its own exception types on a failed call; on top of that,
-per ADR 0005, PydanticAI's model-native layer (`pydantic_ai/models/{openai,groq,mistral,google}.py`)
+(`google-genai`), and the OpenAI-compatible `SELF_HOSTED` transport (which is the *same* `openai`
+SDK under the hood — there is no separate exception hierarchy to add for it). Each of those
+provider SDKs raises its own exception types on a failed call; on top of that, per ADR 0005,
+PydanticAI's model-native layer (`pydantic_ai/models/{openai,google}.py`)
 sometimes re-wraps an HTTP-status failure into `pydantic_ai.exceptions.ModelHTTPError` before it
 reaches the caller, or a connection/timeout failure into the status-code-less
 `pydantic_ai.exceptions.ModelAPIError`. `classify_llm_error()` recognizes both the raw SDK
@@ -25,9 +25,7 @@ from enum import Enum
 from typing import Any
 
 import google.genai.errors as google_errors
-import groq
 import openai
-from mistralai.client.errors import MistralError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from app.core.security.ssrf_guard import SsrfBlockedError
@@ -163,8 +161,8 @@ def classify_llm_error(exc: Exception) -> ErrorType:
     if isinstance(exc, ModelHTTPError):
         return _classify_by_status_code(exc.status_code, exc.body)
     if isinstance(exc, ModelAPIError):
-        # PydanticAI's generic wrap with no HTTP status attached — every provider's
-        # `_map_api_errors` (openai.py/groq.py/mistral.py) routes a connection/timeout failure
+        # PydanticAI's generic wrap with no HTTP status attached — a provider's
+        # `_map_api_errors` (e.g. openai.py) routes a connection/timeout failure
         # here, never into `ModelHTTPError`. No status code to inspect, so: connection error →
         # TRANSIENT.
         return ErrorType.TRANSIENT
@@ -182,17 +180,6 @@ def classify_llm_error(exc: Exception) -> ErrorType:
         # exception), so `exc.body.get("code")` is directly e.g. `"insufficient_quota"`.
         return _classify_by_status_code(exc.status_code, exc.body)
 
-    # --- groq SDK (`groq` provider) — a distinct exception hierarchy from openai's despite
-    # mirroring its class names and shape; `groq.AuthenticationError` is not `openai.AuthenticationError`. ---
-    if isinstance(exc, groq.APIConnectionError):
-        return ErrorType.TRANSIENT
-    if isinstance(exc, groq.APIStatusError):
-        # Unlike openai, groq's `_make_status_error` does NOT unwrap the body — `exc.body` is
-        # the raw `{"error": {...}}` JSON, so a quota code (if any) is nested under
-        # `exc.body["error"]["code"]`. `_dict_signals_quota_exhaustion` checks both the top
-        # level and a nested "error" key, so no groq-specific unwrapping is needed here.
-        return _classify_by_status_code(exc.status_code, exc.body)
-
     # --- google-genai SDK (`google` provider, `GoogleModel`/`GoogleProvider`) — no dedicated
     # AuthenticationError/RateLimitError subclasses; every failure is `errors.APIError` (or its
     # `ClientError`/`ServerError` subclasses), differentiated by `exc.code` (the HTTP status, an
@@ -203,12 +190,5 @@ def classify_llm_error(exc: Exception) -> ErrorType:
     # are what `_classify_by_status_code` checks for a quota marker instead. ---
     if isinstance(exc, google_errors.APIError):
         return _classify_by_status_code(exc.code, exc.message, exc.details)
-
-    # --- mistralai SDK (`mistral` provider) — `MistralError`/`SDKError` expose `status_code`
-    # (int) directly, but `exc.body` is a raw *string* (the response text), not a dict — the
-    # SDK never parses it into a structured `code` field the way openai/groq do. Quota
-    # exhaustion can only be recognized by substring-matching that text (and `exc.message`). ---
-    if isinstance(exc, MistralError):
-        return _classify_by_status_code(exc.status_code, exc.body, exc.message)
 
     return ErrorType.TRANSIENT

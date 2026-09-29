@@ -245,8 +245,15 @@ Từng kiểm và loại: `anthropic` — SDK hiện tại chỉ nhận `httpx2.
 khác hẳn `httpx`), nên không có cách gắn transport đã pin vào nó; `xai` — SDK của xAI dùng gRPC,
 không tồn tại một HTTP client nào để pin; `deepseek` — SDK chấp nhận `httpx.AsyncClient` bình
 thường, nhưng constructor cố định sẵn base URL, không nhận `base_url` theo từng credential như
-cách factory hiện tại dựng client. Google (Gemini), Groq, Mistral đều đã thử thật và nhận đúng
-client đã pin, nên được thêm vào cùng OpenAI.
+cách factory hiện tại dựng client. Google (Gemini) đã thử thật và nhận đúng client đã pin, nên
+được thêm vào cùng OpenAI.
+
+Groq và Mistral từng được thêm (SDK của chúng cũng nhận client đã pin), sau đó bị gỡ (29-09-2026)
+vì sản phẩm chỉ cần OpenAI và Google. Giữ thêm provider nghĩa là giữ thêm SDK, thêm nhánh phân loại
+lỗi và thêm nguồn giá phải đồng bộ cho Cost Tracking, trong khi không ai dùng. Gỡ ở cả 3 tầng (web,
+allowlist Java, factory + error classifier Python) để SA không tạo được credential mà Python không
+dựng được. Model đã tạo từ trước không bị xoá mà chuyển sang INACTIVE (migration V28 bên
+backend-java), kèm huỷ verification job đang mở, để lịch sử usage vẫn trỏ được về model đó.
 
 Luật nằm ở: `PRODUCT.md` › Business rules.
 
