@@ -304,6 +304,20 @@ class BackendJavaClient:
         result = await self._request("GET", "/internal/budgets/snapshot", authorization=None)
         return dict(result) if result else {}
 
+    async def get_period_totals(self, *, period: str, period_key: str) -> dict[str, Any]:
+        """`GET /internal/usage-logs/period-totals` - the DB's real total spend for
+        one period+periodKey, broken down by every scope at once
+        (`{"totals": {"SYSTEM": micro_usd, "PURPOSE:<name>": ..., "PROVIDER:<name>": ...}}`).
+        No secret in the response."""
+
+        result = await self._request(
+            "GET",
+            "/internal/usage-logs/period-totals",
+            authorization=None,
+            params={"period": period, "periodKey": period_key},
+        )
+        return dict(result) if result else {}
+
     async def report_health(
         self,
         *,

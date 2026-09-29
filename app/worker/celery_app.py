@@ -10,6 +10,7 @@ from celery import Celery
 from celery.signals import worker_process_init
 from kombu import Queue
 
+from app.core.budget.snapshot import refresh_budget_snapshot
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import (
     EmbeddingProviderError,
@@ -28,6 +29,10 @@ from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
+from app.worker.budget_reconciliation_tasks import (
+    reconcile_budget_committed_once,
+    release_expired_reservations_once,
+)
 from app.worker.usage_outbox_tasks import drain_usage_outbox_once
 from app.worker.verification_subscriber import start_thread_verification_subscriber
 from app.worker.verification_tasks import run_verification_batch, try_acquire_verification_lock
@@ -81,6 +86,21 @@ celery_app.conf.beat_schedule = {
         "task": "drain_usage_outbox",
         "schedule": settings.USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS,
     },
+    # Refreshes THIS worker process's own BudgetSnapshot cache - a prefork worker
+    # has no long-lived event loop to run the FastAPI process's background poller
+    # on, so Beat is what keeps it from going stale between worker restarts.
+    "budget-snapshot-refresh": {
+        "task": "refresh_budget_snapshot",
+        "schedule": settings.BUDGET_SNAPSHOT_REFRESH_SECONDS,
+    },
+    "budget-release-expired-reservations": {
+        "task": "release_expired_reservations",
+        "schedule": 60.0,
+    },
+    "budget-reconcile-committed": {
+        "task": "reconcile_budget_committed",
+        "schedule": 60.0 * 60.0,
+    },
 }
 
 
@@ -95,6 +115,8 @@ def _load_model_registry_on_worker_start(**kwargs: Any) -> None:
 
     del kwargs
     asyncio.run(init_model_registry())
+    if settings.MODEL_REGISTRY_ENABLED:
+        asyncio.run(refresh_budget_snapshot())
     # Same hot-reload as the FastAPI side, but as a daemon thread running its own
     # event loop - this prefork worker process has no asyncio loop of its own to schedule
     # tasks on. No-op when MODEL_REGISTRY_ENABLED=false.
@@ -147,6 +169,41 @@ def drain_usage_outbox() -> None:
     result = drain_usage_outbox_once()
     if result["sent"] or result["dead"]:
         logger.info("drain_usage_outbox: sent=%d dead=%d", result["sent"], result["dead"])
+
+
+@celery_app.task(name="refresh_budget_snapshot", ignore_result=True)
+def refresh_budget_snapshot_task() -> None:
+    """Beat-scheduled - keeps this worker process's own `BudgetSnapshot` cache
+    from going stale between restarts (see `app.core.budget.poller` for the
+    FastAPI process's equivalent, which uses a background asyncio task instead
+    since it has a long-lived event loop Beat doesn't give a worker process).
+    No-op when `MODEL_REGISTRY_ENABLED=false` - same as the initial worker-start
+    load, there is no live backend-java to fetch a snapshot from in that mode."""
+
+    if settings.MODEL_REGISTRY_ENABLED:
+        asyncio.run(refresh_budget_snapshot())
+
+
+@celery_app.task(name="release_expired_reservations", ignore_result=True)
+def release_expired_reservations() -> None:
+    """Beat-scheduled - see
+    `app.worker.budget_reconciliation_tasks.release_expired_reservations_once`."""
+
+    release_expired_reservations_once()
+
+
+@celery_app.task(name="reconcile_budget_committed", ignore_result=True)
+def reconcile_budget_committed() -> None:
+    """Beat-scheduled - see
+    `app.worker.budget_reconciliation_tasks.reconcile_budget_committed_once`."""
+
+    result = reconcile_budget_committed_once()
+    if result["reconciled"] or result["skipped"]:
+        logger.info(
+            "reconcile_budget_committed: reconciled=%d skipped=%d",
+            result["reconciled"],
+            result["skipped"],
+        )
 
 
 @celery_app.task(bind=True, name="embed_chunks")

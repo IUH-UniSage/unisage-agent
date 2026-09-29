@@ -873,3 +873,21 @@ async def test_post_verification_result_rejects_redirect(status_code: int) -> No
 def test_client_never_follows_redirects_by_default() -> None:
     client = BackendJavaClient(base_url="http://java.test")
     assert client._client().follow_redirects is False
+
+
+@pytest.mark.asyncio
+async def test_get_period_totals_sends_period_and_period_key_params() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(
+            200, json={"period": "DAILY", "periodKey": "2026-09-28", "totals": {"SYSTEM": 1500}}
+        )
+
+    client = _client_with(handler)
+
+    result = await client.get_period_totals(period="DAILY", period_key="2026-09-28")
+
+    assert seen["params"] == {"period": "DAILY", "periodKey": "2026-09-28"}
+    assert result["totals"] == {"SYSTEM": 1500}
