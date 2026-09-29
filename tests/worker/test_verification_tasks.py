@@ -168,6 +168,48 @@ async def test_embedding_job_result_includes_dimension_and_fingerprint(
     assert call["embedding_fingerprint"] == fingerprint.flattened()
 
 
+def _embedding_credential(provider: str) -> Any:
+    from app.core.registry.model_registry import CredentialConfig
+
+    return CredentialConfig(
+        id="cand-1",
+        revision=0,
+        source_type="CLOUD_API",
+        provider=provider,
+        model_name="some-embedding-model",
+        api_base_url="https://example.test",
+        priority=None,
+        max_rpm=None,
+        api_key="sk-test",
+    )
+
+
+def test_embedding_fingerprint_dispatches_google_credentials_to_the_google_prober(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `provider="google"` candidate must go through Gemini's native `embedContent` prober,
+    not the OpenAI-wire-format one - the exact bug that made adding a Google EMBEDDING
+    credential 404 (Google's native REST API has no `/embeddings` path)."""
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        verification_tasks,
+        "_measure_embedding_fingerprint_google_sync",
+        lambda credential: (calls.append("google"), None)[1],
+    )
+    monkeypatch.setattr(
+        verification_tasks,
+        "_measure_embedding_fingerprint_openai_sync",
+        lambda credential: (calls.append("openai"), None)[1],
+    )
+
+    verification_tasks._measure_embedding_fingerprint_sync(_embedding_credential("google"))
+    assert calls == ["google"]
+
+    verification_tasks._measure_embedding_fingerprint_sync(_embedding_credential("openai"))
+    assert calls == ["google", "openai"]
+
+
 @pytest.mark.asyncio
 async def test_409_on_result_submission_logs_and_does_not_retry(
     monkeypatch: pytest.MonkeyPatch,

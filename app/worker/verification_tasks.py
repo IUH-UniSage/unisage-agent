@@ -130,9 +130,25 @@ async def _run_minimal_completion(credential: CredentialConfig) -> None:
 
 
 def _measure_embedding_fingerprint_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
-    """Embeds the 3 fixed probe sentences with the candidate EMBEDDING credential, through
-    the same SSRF-pinned sync factory `app.rag.embeddings.openai_embedder.OpenAIEmbedder`
-    uses. Blocking - run this off the event loop (`asyncio.to_thread`)."""
+    """Embeds the 3 fixed probe sentences with the candidate EMBEDDING credential. Blocking -
+    run this off the event loop (`asyncio.to_thread`).
+
+    Dispatches on `credential.provider` the same way
+    `app.rag.embeddings.provider.build_embedder()` does for an ACTIVE credential - a Google
+    credential speaks Gemini's native `embedContent` API (not the OpenAI wire format every
+    other provider/`SELF_HOSTED` server speaks). This can't just call `build_embedder()` itself:
+    a candidate under verification isn't in the registry snapshot yet - there is nothing to
+    resolve, the credential to probe is the one handed in directly.
+    """
+
+    if credential.provider == "google":
+        return _measure_embedding_fingerprint_google_sync(credential)
+    return _measure_embedding_fingerprint_openai_sync(credential)
+
+
+def _measure_embedding_fingerprint_openai_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
+    """Through the same SSRF-pinned sync factory `app.rag.embeddings.openai_embedder.OpenAIEmbedder`
+    uses."""
 
     client = OpenAI(
         api_key=credential.api_key,
@@ -147,6 +163,43 @@ def _measure_embedding_fingerprint_sync(credential: CredentialConfig) -> Embeddi
     def _embed(texts: list[str]) -> list[list[float]]:
         response = client.embeddings.create(model=model_name, input=texts)
         return [item.embedding for item in response.data]
+
+    return measure_fingerprint(_embed)
+
+
+def _measure_embedding_fingerprint_google_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
+    """Through the same SSRF-pinned sync factory + `embedContent` batching
+    `app.rag.embeddings.google_embedder.GoogleEmbedder` uses."""
+
+    from google.genai import Client
+    from google.genai.types import HttpOptions
+
+    from app.core.llm.http_client import build_provider_http_client
+    from app.rag.embeddings.google_embedder import request_embeddings_sync
+
+    connection_info = ProviderConnectionInfo(api_base_url=credential.api_base_url or "")
+    client = Client(
+        vertexai=False,
+        api_key=credential.api_key,
+        http_options=HttpOptions(
+            base_url=credential.api_base_url or None,
+            httpx_client=build_provider_http_client_sync(connection_info),
+            # Only the sync path is ever used here (this function is sync top to bottom), but
+            # `google-genai`'s `Client.__init__` eagerly falls back to auto-building its own
+            # aiohttp session for `.aio` whenever `httpx_async_client` is left `None` (see
+            # `_api_client.py`'s `_use_aiohttp()`) - that fallback breaks in this environment
+            # (`AttributeError: module 'aiohttp' has no attribute 'ClientSession'`, likely a
+            # broken/shadowed aiohttp install). Supplying our own async client too (never called)
+            # disables that fallback entirely - same as `GoogleEmbedder._resolve_from_registry()`
+            # already does for the exact same reason.
+            httpx_async_client=build_provider_http_client(connection_info),
+        ),
+    )
+    model_name = credential.model_name or ""
+
+    def _embed(texts: list[str]) -> list[list[float]]:
+        vectors, _ = request_embeddings_sync(client, model_name, texts)
+        return vectors
 
     return measure_fingerprint(_embed)
 
