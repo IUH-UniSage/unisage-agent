@@ -31,13 +31,27 @@ Copy-Item .env.example .env
 task be:dev
 ```
 
-Run the server directly when `go-task` is unavailable:
+Celery worker + beat (usage outbox drain, budget reconciliation, model
+registry verification, ...), each in its own terminal:
+
+```powershell
+task be:worker
+task be:beat
+```
+
+Replay usage-log payloads that landed in the dead-letter queue (after fixing
+whatever made backend-java reject them):
+
+```powershell
+task usage:replay-dead
+```
+
+Run everything directly when `go-task` is unavailable:
 
 ```powershell
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8402
-
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8402
-celery -A app.worker.celery_app worker --loglevel=info
+.venv\Scripts\python.exe -m celery -A app.worker.celery_app worker --loglevel=info
+.venv\Scripts\python.exe -m celery -A app.worker.celery_app beat --loglevel=info
 ```
 
 ### Linux / macOS
@@ -50,6 +64,21 @@ python3.12 -m venv .venv
 cp .env.example .env
 
 task be:dev
+```
+
+Celery worker + beat, each in its own terminal:
+
+```bash
+task be:worker
+task be:beat
+```
+
+Run everything directly when `go-task` is unavailable:
+
+```bash
+.venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8402
+.venv/bin/python -m celery -A app.worker.celery_app worker --loglevel=info
+.venv/bin/python -m celery -A app.worker.celery_app beat --loglevel=info
 ```
 
 ## API Endpoints

@@ -14,3 +14,15 @@ tasks:
     dotenv: ['.env']
     cmds:
       - '{{.UV_RUN}} gunicorn -w ${WORKERS:-4} -k uvicorn.workers.UvicornWorker -b {{.HOST}}:{{.PORT}} app.main:app'
+
+  worker:
+    desc: "Chạy Celery worker (ingestion, usage outbox drain, budget reconciliation)"
+    dotenv: ['.env']
+    cmds:
+      - '{{.UV_RUN}} celery -A app.worker.celery_app worker --loglevel=info {{.CLI_ARGS}}'
+
+  beat:
+    desc: "Chạy Celery beat scheduler (drain_usage_outbox, release_expired_reservations, reconcile_budget_committed, ...)"
+    dotenv: ['.env']
+    cmds:
+      - '{{.UV_RUN}} celery -A app.worker.celery_app beat --loglevel=info {{.CLI_ARGS}}'

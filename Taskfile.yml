@@ -45,6 +45,10 @@ includes:
     taskfile: ./taskfiles/db.yml
     optional: false
 
+  usage:
+    taskfile: ./taskfiles/usage.yml
+    optional: false
+
 tasks:
   default:
     desc: "Hiển thị menu help với các nhóm task"

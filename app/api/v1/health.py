@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.registry.model_registry import get_current_snapshot
 from app.database.session import async_session_factory
 from app.schemas.common import ApiResponse
+from app.worker.usage_outbox_tasks import outbox_health
 
 router = APIRouter(tags=["Health"])
 
@@ -89,25 +90,33 @@ async def health_check() -> ApiResponse[dict[str, Any]]:
         except TimeoutError:
             return {"status": "down", "error": "timed out"}
 
-    database_check, redis_check, qdrant_check = await asyncio.gather(
+    database_check, redis_check, qdrant_check, usage_outbox = await asyncio.gather(
         _bounded(_check_database()),
         _bounded(asyncio.to_thread(_check_redis_sync)),
         _bounded(asyncio.to_thread(_check_qdrant_sync)),
+        asyncio.to_thread(outbox_health),
     )
     components = {
         "database": database_check,
         "qdrant": qdrant_check,
         "redis": redis_check,
     }
-    overall = "healthy" if all(c["status"] == "up" for c in components.values()) else "unhealthy"
+    if not all(c["status"] == "up" for c in components.values()):
+        overall = "unhealthy"
+    elif usage_outbox["dead"] > 0:
+        # Every dependency is reachable, but at least one usage-log payload has
+        # permanently failed to reach backend-java (a 4xx backend-java rejected
+        # outright) and needs a human to look at it - degraded, not unhealthy,
+        # since Chat itself is still fully functional.
+        overall = "degraded"
+    else:
+        overall = "healthy"
 
-    # No secret in here (mirrors plan.md's "Internal API contract" endpoint #2, GET /version -
-    # "Không" trả secret) - just which worker process answered and what registry version it has
-    # cached. Task 8's hot-reload swaps this process-local cache without a request payload of
-    # its own to observe, so the cross-repo test that asserts "every gunicorn/Celery worker
-    # picked up the new version" (todo.md Task 8, "assert qua X-Worker-Pid") reads it from here:
-    # hit this endpoint repeatedly across `gunicorn -w N` workers and see every PID converge on
-    # the same version within the poll interval.
+    # No secret in here - just which worker process answered and what registry version it has
+    # cached. The hot-reload swaps this process-local cache without a request payload of
+    # its own to observe, so a check that "every gunicorn/Celery worker picked up the new
+    # version" reads it from here: hit this endpoint repeatedly across `gunicorn -w N` workers
+    # and see every PID converge on the same version within the poll interval.
     snapshot = get_current_snapshot()
     model_registry_status = {
         "enabled": settings.MODEL_REGISTRY_ENABLED,
@@ -121,6 +130,7 @@ async def health_check() -> ApiResponse[dict[str, Any]]:
             "service": settings.APP_NAME,
             "environment": settings.APP_ENV,
             "components": components,
+            "usageOutbox": usage_outbox,
             "model_registry": model_registry_status,
         }
     )
