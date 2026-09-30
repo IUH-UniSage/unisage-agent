@@ -1,0 +1,95 @@
+# Simulated access labels for the crawled IUH PDFs (Task 6).
+#
+# Every crawled document is public on the web; `is_public=false` + `access_level`
+# are assigned here only so the evaluation can measure permission leakage.
+# The report must say the labels are simulated.
+#
+# `department` is the department *code* seeded by unisage-backend
+# (`DataInitializer.seedDepartments()`, column `departments.name`); the runtime
+# `department_id` is that row's UUID, resolved at ingest time (Task 7).
+
+seed: 30092026
+# Share of each department's documents turned private (at least one when the
+# department has two or more documents in the group).
+private_ratio: 0.3
+# Levels drawn for private documents. 0 ("no limit") is excluded so every
+# private document has a "one level too low" persona; 5 is left for admins.
+private_levels: [1, 2, 3, 4]
+
+# Copied from DataInitializer.seedDepartments(); label.py rejects any other code.
+known_departments:
+  - PHONG_DAO_TAO
+  - PHONG_CTSV
+  - PHONG_TC_KT
+  - KHOA_CNTT
+  - KHOA_KINH_TE
+  - KHOA_LY_LUAN_CHINH_TRI
+  - KHOA_CN_CO_KHI
+  - KHOA_CN_DIEN
+  - KHOA_CN_DIEN_TU
+  - KHOA_CN_DONG_LUC
+  - KHOA_CN_HOA_HOC
+  - KHOA_CN_MAY_THOI_TRANG
+  - KHOA_CN_NHIET_LANH
+  - KHOA_KHOA_HOC_CO_BAN
+  - KHOA_KHOA_HOC_SUC_KHOE
+  - KHOA_KY_THUAT_XAY_DUNG
+  - KHOA_LUAT_KHCT
+  - KHOA_NGOAI_NGU
+  - KHOA_QTKD
+  - KHOA_THUONG_MAI_DU_LICH
+  - BAN_QUAN_LY_KTX
+  - PHONG_KHAO_THI_DBCL
+  - PHONG_QLKH_HTQT
+  - PHONG_TO_CHUC_HANH_CHINH
+  - TAP_CHI_KHCN
+  - VAN_PHONG_DANG_UY
+  - CONG_DOAN
+  - DOAN_HOI_SV
+  - CO_SO_THANH_HOA
+  - PHAN_HIEU_QUANG_NGAI
+  - TT_GDQP_THE_CHAT
+  - TT_NC_MAY_CONG_NGHIEP
+  - TT_NGOAI_NGU
+  - TT_QUAN_TRI_HE_THONG
+  - TT_TIN_HOC
+  - VIEN_CNSH_THUC_PHAM
+  - VIEN_DTQT_SAU_DAI_HOC
+  - VIEN_TAI_CHINH_KE_TOAN
+
+# Crawled unit (manifest `unit`) -> department code. `force_public: true` for
+# units whose documents are public-facing by nature (never made private).
+units:
+  "Phòng Đào tạo": {department: PHONG_DAO_TAO}
+  "Phòng Công tác chính trị và Hỗ trợ sinh viên": {department: PHONG_CTSV}
+  "Phòng Tài chính - Kế toán": {department: PHONG_TC_KT}
+  "Phòng Khảo thí và Đảm bảo chất lượng": {department: PHONG_KHAO_THI_DBCL}
+  "Phòng Quản lý khoa học và hợp tác quốc tế": {department: PHONG_QLKH_HTQT}
+  "Phòng Quản lý Ký túc xá": {department: BAN_QUAN_LY_KTX}
+  "Khoa Công nghệ thông tin": {department: KHOA_CNTT}
+  "Khoa Công nghệ Cơ khí": {department: KHOA_CN_CO_KHI}
+  "Khoa Công nghệ Điện": {department: KHOA_CN_DIEN}
+  "Khoa Công nghệ Điện tử": {department: KHOA_CN_DIEN_TU}
+  "Khoa Công nghệ Động lực": {department: KHOA_CN_DONG_LUC}
+  "Khoa Công nghệ Hóa học": {department: KHOA_CN_HOA_HOC}
+  "Khoa Công nghệ May - Thời trang": {department: KHOA_CN_MAY_THOI_TRANG}
+  "Khoa Công nghệ Nhiệt - Lạnh": {department: KHOA_CN_NHIET_LANH}
+  "Khoa Khoa học Sức khỏe": {department: KHOA_KHOA_HOC_SUC_KHOE}
+  "Khoa Kỹ thuật Xây dựng": {department: KHOA_KY_THUAT_XAY_DUNG}
+  "Khoa Luật và Khoa học chính trị": {department: KHOA_LUAT_KHCT}
+  "Khoa Ngoại ngữ": {department: KHOA_NGOAI_NGU}
+  "Khoa Quản trị Kinh doanh": {department: KHOA_QTKD}
+  "Khoa Thương mại - Du lịch": {department: KHOA_THUONG_MAI_DU_LICH}
+  "Viện Công nghệ Sinh học và Thực phẩm": {department: VIEN_CNSH_THUC_PHAM}
+  "Viện Tài chính - Kế toán": {department: VIEN_TAI_CHINH_KE_TOAN}
+  "Viện Đào tạo Quốc tế và Sau đại học": {department: VIEN_DTQT_SAU_DAI_HOC}
+  "Cơ sở Thanh Hóa": {department: CO_SO_THANH_HOA}
+  "Phân hiệu Quảng Ngãi": {department: PHAN_HIEU_QUANG_NGAI}
+  "Trung tâm Quản trị Hệ thống": {department: TT_QUAN_TRI_HE_THONG}
+  # No separate "Ngoại ngữ - Tin học" centre in the DB; its language side is TT_NGOAI_NGU.
+  "Trung tâm Ngoại ngữ - Tin học": {department: TT_NGOAI_NGU}
+  # Assumptions: units with no department of their own in the DB.
+  "Trung tâm Kết nối doanh nghiệp và Giới thiệu việc làm": {department: PHONG_CTSV}
+  "Trường (trang chính)": {department: PHONG_TO_CHUC_HANH_CHINH, force_public: true}
+  "Tuyển sinh": {department: PHONG_DAO_TAO, force_public: true}
+  "Cẩm nang người học": {department: PHONG_CTSV, force_public: true}

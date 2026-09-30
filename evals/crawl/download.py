@@ -40,7 +40,7 @@ SCANNED_CHARS_PER_PAGE = 100
 
 MANIFEST_FIELDS = [
     "file_id", "file_name", "source_url", "source_page", "unit", "campus",
-    "department_id", "is_public", "access_level",
+    "department_id", "is_public", "access_level", "label_source",
     "pages", "text_chars", "quality", "size_bytes", "sha256", "local_path",
     "tls_verified", "crawled_at",
     "selected", "ingest_status", "document_id",
@@ -189,6 +189,7 @@ def store(
         "department_id": "",
         "is_public": "",
         "access_level": "",
+        "label_source": "",
         "pages": str(pages),
         "text_chars": str(text_chars),
         "quality": "",
