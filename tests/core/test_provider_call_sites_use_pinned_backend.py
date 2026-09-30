@@ -27,11 +27,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import app.core.embedding_identity as embedding_identity
-import app.core.model_registry as model_registry
+import app.core.registry.embedding_identity as embedding_identity
+import app.core.registry.model_registry as model_registry
 from app.api.deps import get_graph_models
-from app.core.model_registry import parse_snapshot
-from app.core.ssrf_guard import PinnedNetworkBackend, PinnedNetworkBackendSync
+from app.core.registry.model_registry import parse_snapshot
+from app.core.security.ssrf_guard import PinnedNetworkBackend, PinnedNetworkBackendSync
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
@@ -79,11 +79,12 @@ def _registry_snapshot_with_every_purpose() -> Any:
 @pytest.fixture(autouse=True)
 def _empty_qdrant_collection_no_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """`OpenAIEmbedder` now runs the embedding identity guard
-    (`app.core.embedding_identity.ensure_embedding_identity`) before it ever calls the provider -
-    which otherwise talks to whatever real Qdrant collection happens to be configured in this
-    environment. This file only cares about the provider call site reaching the pinned network
-    backend, not about identity-guard behavior (that's `tests/rag/test_embedding_identity_guard.
-    py`), so it fakes an empty collection with no identity registered yet: the guard's bootstrap
+    (`app.core.registry.embedding_identity.ensure_embedding_identity`) before it ever calls the
+    provider - which otherwise talks to whatever real Qdrant collection happens to be configured
+    in this environment. This file only cares about the provider call site reaching the pinned
+    network backend, not about identity-guard behavior (that's
+    `tests/rag/test_embedding_identity_guard.py`), so it fakes an empty collection with no
+    identity registered yet: the guard's bootstrap
     path then measures a fingerprint by calling `embed_probe` - the real provider call - which is
     exactly the call this file's `connect_tcp` spies are watching for."""
 
@@ -136,9 +137,15 @@ def test_embedder_call_site_uses_pinned_backend_sync(
     assert all(host == "api.openai.com" for host, _ in sync_connect_tcp_spy)
 
 
-def test_multi_representation_call_site_uses_pinned_backend_sync(
-    sync_connect_tcp_spy: list[tuple[str, int]],
+def test_multi_representation_call_site_uses_pinned_backend_async(
+    async_connect_tcp_spy: list[tuple[str, int]],
 ) -> None:
+    """`MultiRepresentationEnricher.enrich()` now goes through `pydantic_ai.Agent`
+    (`app.core.llm.provider_models.build_model()`, the same provider-agnostic factory
+    CHAT uses - see that module's docstring) instead of a raw sync OpenAI SDK client, so
+    this reaches the ASYNC pinned backend, same as `get_graph_models()` below - not the
+    sync one `OpenAIEmbedder` still uses."""
+
     enricher = MultiRepresentationEnricher()
     chunk = Chunk(
         chunk_index=0,
@@ -150,10 +157,10 @@ def test_multi_representation_call_site_uses_pinned_backend_sync(
     with pytest.raises(Exception):  # noqa: B017
         enricher.enrich(chunk)
 
-    assert sync_connect_tcp_spy, (
-        "MultiRepresentationEnricher.enrich() never reached PinnedNetworkBackendSync.connect_tcp"
+    assert async_connect_tcp_spy, (
+        "MultiRepresentationEnricher.enrich() never reached PinnedNetworkBackend.connect_tcp"
     )
-    assert all(host == "api.openai.com" for host, _ in sync_connect_tcp_spy)
+    assert all(host == "api.openai.com" for host, _ in async_connect_tcp_spy)
 
 
 def test_graph_model_call_site_uses_pinned_backend_async(

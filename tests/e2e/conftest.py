@@ -190,7 +190,7 @@ def _call_java_reset(client: httpx.Client) -> bool:
 
         warnings.warn(
             "POST /internal/test/registry/reset -> 404 - backend-java has not added the "
-            "@Profile(\"integration\") reset endpoint yet, skipping the DB-level reset step",
+            '@Profile("integration") reset endpoint yet, skipping the DB-level reset step',
             stacklevel=2,
         )
         return False

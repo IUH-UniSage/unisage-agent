@@ -10,9 +10,15 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
-from app.core.model_registry import CredentialConfig
-from app.core.model_router import ModelRouter
-from app.graph.streaming import AgentFactory, FailoverCallback, run_agent_text_with_failover
+from app.core.registry.model_registry import CredentialConfig
+from app.core.registry.model_router import ModelRouter
+from app.graph.streaming import (
+    AgentFactory,
+    AttemptRecorder,
+    BudgetContext,
+    FailoverCallback,
+    run_agent_text_with_failover,
+)
 from app.rag.prompting import append_recent_history, get_templates
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
@@ -135,12 +141,14 @@ async def classify_intent(
     agent_factory: AgentFactory | None = None,
     router: ModelRouter | None = None,
     on_failover: FailoverCallback | None = None,
+    on_attempt: AttemptRecorder | None = None,
+    budget: BudgetContext | None = None,
 ) -> IntentClassification:
     """`history` lets a short follow-up be classified in context.
 
     `purpose`/`credential`/`snapshot_version`/`agent_factory`/`router`/
-    `on_failover` are the same opt-in failover wiring as
-    `run_agent_text_with_failover()` - omitted (the default), a provider
+    `on_failover`/`on_attempt`/`budget` are the same opt-in failover/usage/budget
+    wiring as `run_agent_text_with_failover()` - omitted (the default), a provider
     failure propagates immediately, same as before.
     """
 
@@ -153,5 +161,7 @@ async def classify_intent(
         agent_factory=agent_factory,
         router=router,
         on_failover=on_failover,
+        on_attempt=on_attempt,
+        budget=budget,
     )
     return parse_classification(output, message)

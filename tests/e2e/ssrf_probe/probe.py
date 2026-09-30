@@ -22,7 +22,7 @@ from app.core.llm.http_client import (
     ProviderConnectionInfo,
     build_provider_http_client_sync,
 )
-from app.core.ssrf_guard import SsrfBlockedError
+from app.core.security.ssrf_guard import SsrfBlockedError
 
 
 def main() -> None:

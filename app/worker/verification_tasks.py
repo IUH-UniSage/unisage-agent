@@ -26,14 +26,14 @@ from openai import OpenAI
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
-from app.core.alerting import alert_credential_failure
 from app.core.config import settings
+from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
 from app.core.llm.embedding_probe import EmbeddingFingerprint, measure_fingerprint
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 from app.core.llm.provider_models import build_model
-from app.core.llm_error_classifier import ErrorType, classify_llm_error
-from app.core.model_registry import CredentialConfig
-from app.core.redaction import safe_error_message
+from app.core.observability.alerting import alert_credential_failure
+from app.core.registry.model_registry import CredentialConfig
+from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import (
     BackendJavaClient,
     BackendJavaConnectionError,
@@ -71,7 +71,9 @@ def try_acquire_verification_lock(redis_url: str | None = None) -> bool:
     try:
         conn = redis.Redis.from_url(redis_url or settings.REDIS_URL)
         try:
-            return bool(conn.set(VERIFICATION_LOCK_KEY, "1", nx=True, ex=VERIFICATION_LOCK_TTL_SECONDS))
+            return bool(
+                conn.set(VERIFICATION_LOCK_KEY, "1", nx=True, ex=VERIFICATION_LOCK_TTL_SECONDS)
+            )
         finally:
             conn.close()
     except Exception:
@@ -83,7 +85,7 @@ def try_acquire_verification_lock(redis_url: str | None = None) -> bool:
 
 def _credential_from_candidate(candidate: dict[str, Any]) -> CredentialConfig:
     """Builds a `CredentialConfig` from one claim response entry's `credential` object -
-    same field names `app.core.model_registry._parse_credential` reads off the snapshot,
+    same field names `app.core.registry.model_registry._parse_credential` reads off the snapshot,
     minus `revision` (a candidate under verification has none yet meaningful to attach to a
     health report, and nothing here sends one)."""
 
@@ -102,7 +104,7 @@ def _credential_from_candidate(candidate: dict[str, Any]) -> CredentialConfig:
 
 def _error_code_for(exc: Exception) -> str:
     """A short, non-secret-bearing code for the result's `errorCode` field - same shape
-    `app.core.model_router._error_code_for` uses for health reports."""
+    `app.core.registry.model_router._error_code_for` uses for health reports."""
 
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int):
@@ -121,18 +123,32 @@ async def _run_minimal_completion(credential: CredentialConfig) -> None:
     await asyncio.wait_for(
         agent.run(
             _MINIMAL_COMPLETION_PROMPT,
-            model_settings=ModelSettings(
-                max_tokens=_MINIMAL_COMPLETION_MAX_TOKENS, thinking=False
-            ),
+            model_settings=ModelSettings(max_tokens=_MINIMAL_COMPLETION_MAX_TOKENS, thinking=False),
         ),
         timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
     )
 
 
 def _measure_embedding_fingerprint_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
-    """Embeds the 3 fixed probe sentences with the candidate EMBEDDING credential, through
-    the same SSRF-pinned sync factory `app.rag.embeddings.openai_embedder.OpenAIEmbedder`
-    uses. Blocking - run this off the event loop (`asyncio.to_thread`)."""
+    """Embeds the 3 fixed probe sentences with the candidate EMBEDDING credential. Blocking -
+    run this off the event loop (`asyncio.to_thread`).
+
+    Dispatches on `credential.provider` the same way
+    `app.rag.embeddings.provider.build_embedder()` does for an ACTIVE credential - a Google
+    credential speaks Gemini's native `embedContent` API (not the OpenAI wire format every
+    other provider/`SELF_HOSTED` server speaks). This can't just call `build_embedder()` itself:
+    a candidate under verification isn't in the registry snapshot yet - there is nothing to
+    resolve, the credential to probe is the one handed in directly.
+    """
+
+    if credential.provider == "google":
+        return _measure_embedding_fingerprint_google_sync(credential)
+    return _measure_embedding_fingerprint_openai_sync(credential)
+
+
+def _measure_embedding_fingerprint_openai_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
+    """Through the same SSRF-pinned sync factory `app.rag.embeddings.openai_embedder.OpenAIEmbedder`
+    uses."""
 
     client = OpenAI(
         api_key=credential.api_key,
@@ -147,6 +163,43 @@ def _measure_embedding_fingerprint_sync(credential: CredentialConfig) -> Embeddi
     def _embed(texts: list[str]) -> list[list[float]]:
         response = client.embeddings.create(model=model_name, input=texts)
         return [item.embedding for item in response.data]
+
+    return measure_fingerprint(_embed)
+
+
+def _measure_embedding_fingerprint_google_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
+    """Through the same SSRF-pinned sync factory + `embedContent` batching
+    `app.rag.embeddings.google_embedder.GoogleEmbedder` uses."""
+
+    from google.genai import Client
+    from google.genai.types import HttpOptions
+
+    from app.core.llm.http_client import build_provider_http_client
+    from app.rag.embeddings.google_embedder import request_embeddings_sync
+
+    connection_info = ProviderConnectionInfo(api_base_url=credential.api_base_url or "")
+    client = Client(
+        vertexai=False,
+        api_key=credential.api_key,
+        http_options=HttpOptions(
+            base_url=credential.api_base_url or None,
+            httpx_client=build_provider_http_client_sync(connection_info),
+            # Only the sync path is ever used here (this function is sync top to bottom), but
+            # `google-genai`'s `Client.__init__` eagerly falls back to auto-building its own
+            # aiohttp session for `.aio` whenever `httpx_async_client` is left `None` (see
+            # `_api_client.py`'s `_use_aiohttp()`) - that fallback breaks in this environment
+            # (`AttributeError: module 'aiohttp' has no attribute 'ClientSession'`, likely a
+            # broken/shadowed aiohttp install). Supplying our own async client too (never called)
+            # disables that fallback entirely - same as `GoogleEmbedder._resolve_from_registry()`
+            # already does for the exact same reason.
+            httpx_async_client=build_provider_http_client(connection_info),
+        ),
+    )
+    model_name = credential.model_name or ""
+
+    def _embed(texts: list[str]) -> list[list[float]]:
+        vectors, _ = request_embeddings_sync(client, model_name, texts)
+        return vectors
 
     return measure_fingerprint(_embed)
 
@@ -256,7 +309,7 @@ async def _verify_one_job(job: dict[str, Any], *, client: BackendJavaClient) -> 
             credential.id,
             attempt,
         )
-    except Exception as exc:  # noqa: BLE001 - classified below, never re-raised bare
+    except Exception as exc:
         error_type = classify_llm_error(exc)
         result_type = "TRANSIENT" if error_type is ErrorType.TRANSIENT else "PERMANENT"
         message = safe_error_message(exc, credential.api_key)

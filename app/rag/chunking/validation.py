@@ -14,7 +14,7 @@ not to re-derive table structure truth from `content` text.
 Rules (a)-(m) below; (k)/(l) are the inverse checks of (f)/(g)/(d).
 """
 
-from app.core.exceptions import ChunkValidationException
+from app.core.errors.exceptions import ChunkValidationException
 from app.schemas.ingestion import Chunk, HeaderSource, RegionType, SourceType
 
 _TABLE_REGION_TYPES = (RegionType.TABLE, RegionType.EXCEL_ROW)

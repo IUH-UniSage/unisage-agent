@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -8,19 +9,25 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.v1 import chat, documents, health, ingestion
+from app.core.budget.poller import start_budget_snapshot_poller
+from app.core.budget.snapshot import refresh_budget_snapshot
 from app.core.config import settings
-from app.core.error_codes import ErrorCode
-from app.core.exceptions import UniSageException
-from app.core.logging_config import configure_logging
-from app.core.middleware import request_logging_middleware
-from app.core.model_registry import init_model_registry
-from app.core.registry_subscriber import start_asyncio_registry_subscriber
+from app.core.errors.error_codes import ErrorCode
+from app.core.errors.exceptions import UniSageException
+from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.observability.logging_config import configure_logging
+from app.core.observability.middleware import request_logging_middleware
+from app.core.pricing.poller import start_pricing_snapshot_poller
+from app.core.pricing.snapshot import refresh_pricing_snapshot
+from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
+from app.core.registry.model_registry import init_model_registry
+from app.core.registry.registry_subscriber import start_asyncio_registry_subscriber
+from app.core.security.redaction import safe_error_message
 from app.rag.chunking.table_row import TableStructureError
 
 # Sets the root format, silences noisy/secret-leaking third-party loggers
 # (httpx/httpcore/openai/anthropic/...) and attaches the redaction filter that
-# scrubs every log record before it's written - see app/core/logging_config.py
-# and plan.md "Secret redaction".
+# scrubs every log record before it's written - see app/core/observability/logging_config.py.
 configure_logging()
 logger = logging.getLogger(__name__)
 
@@ -31,16 +38,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     del app
     logger.info("Starting %s in [%s] mode", settings.APP_NAME, settings.APP_ENV)
-    # plan.md "Cutover khỏi cấu hình .env tĩnh": one-time load of the model registry
-    # snapshot from backend-java. No-op when MODEL_REGISTRY_ENABLED=false; when true,
-    # raises (and is deliberately left uncaught, failing startup) if there is no ACTIVE
-    # CHAT credential. Hot-reload (Task 7) is out of scope here.
+    # One-time load of the model registry snapshot from backend-java. No-op when
+    # MODEL_REGISTRY_ENABLED=false; when true, raises (and is deliberately left
+    # uncaught, failing startup) if there is no ACTIVE CHAT credential.
     await init_model_registry()
-    # Task 8: hot-reload the cached snapshot without a restart - subscribes to Java's
+    # Hot-reload the cached snapshot without a restart - subscribes to Java's
     # after-commit pub/sub signal and independently polls /version as a self-healing
-    # fallback (plan.md "Hot-reload consistency"). No-op when the flag above is off.
+    # fallback. No-op when the flag above is off.
     subscriber = start_asyncio_registry_subscriber()
+    # Same soft-limit posture as the reservation itself: an empty/never-loaded
+    # snapshot means no budgets are enforced, fail-open by absence - never fatal to
+    # startup even if Java is unreachable right now. Gated on the same flag as the
+    # model registry above - a process running on static .env credentials has no
+    # live backend-java to fetch a budget snapshot from either.
+    # Prices follow the same gate: without a live backend-java every call is UNPRICED.
+    budget_poller: asyncio.Task[None] | None = None
+    pricing_poller: asyncio.Task[None] | None = None
+    if settings.MODEL_REGISTRY_ENABLED:
+        await refresh_budget_snapshot()
+        budget_poller = start_budget_snapshot_poller()
+        await refresh_pricing_snapshot()
+        pricing_poller = start_pricing_snapshot_poller()
     yield
+    if budget_poller is not None:
+        budget_poller.cancel()
+    if pricing_poller is not None:
+        pricing_poller.cancel()
     await subscriber.stop()
     logger.info("Shutting down %s", settings.APP_NAME)
 
@@ -92,8 +115,7 @@ async def table_structure_error_handler(request: Request, exc: TableStructureErr
     (a row's structure doesn't match its table's expectations) - never a
     user input/config problem, unlike `ChunkValidationException`/
     `ChunkingConfigException`, which get their own `UniSageException` 4xx
-    handling above. Per plan.md's Open Questions (made explicit by an
-    additional requirement): log this at CRITICAL with full structured
+    handling above. Log this at CRITICAL with full structured
     context (document_id, block_index, table_id, row_index, expected vs
     actual cell count, a non-reversible digest of the offending row) so an
     on-call engineer can actually debug it - but the row's raw/untruncated
@@ -127,6 +149,51 @@ async def table_structure_error_handler(request: Request, exc: TableStructureErr
     return JSONResponse(
         status_code=ErrorCode.INTERNAL_ERROR.http_status,
         content=_error_content(ErrorCode.INTERNAL_ERROR.code, ErrorCode.INTERNAL_ERROR.message),
+    )
+
+
+@app.exception_handler(EmbeddingIdentityMismatchError)
+async def embedding_identity_mismatch_handler(
+    request: Request, exc: EmbeddingIdentityMismatchError
+) -> JSONResponse:
+    """Raised deep inside `app.core.registry.embedding_identity.ensure_embedding_identity` -
+    reached from a synchronous embed call (e.g. the "semantic" chunking strategy's own
+    embedding step, `POST /ingestion/chunking`), not from an endpoint that can catch and
+    translate it itself. A dedicated handler (not a `UniSageException` subclass, same reasoning
+    as `TableStructureError` above) is the one place every such call site's mismatch reaches
+    the client as a specific, actionable error instead of falling through to
+    `unhandled_exception_handler`'s generic 500.
+    """
+
+    del request
+    api_key = exc.credential.api_key if exc.credential else None
+    logger.error("Embedding identity mismatch: %s", safe_error_message(exc, api_key))
+    return JSONResponse(
+        status_code=ErrorCode.EMBEDDING_IDENTITY_MISMATCH.http_status,
+        content=_error_content(
+            ErrorCode.EMBEDDING_IDENTITY_MISMATCH.code, ErrorCode.EMBEDDING_IDENTITY_MISMATCH.message
+        ),
+    )
+
+
+@app.exception_handler(EmbeddingProviderError)
+async def embedding_provider_error_handler(
+    request: Request, exc: EmbeddingProviderError
+) -> JSONResponse:
+    """Catches every OTHER `EmbeddingProviderError` (auth/network/budget-rejection failures
+    during a synchronous embed call) - `EmbeddingIdentityMismatchError` (a subclass) is matched
+    by the more specific handler above first, since Starlette dispatches to the most specific
+    registered handler in the exception's MRO.
+    """
+
+    del request
+    api_key = exc.credential.api_key if exc.credential else None
+    logger.error("Embedding provider error: %s", safe_error_message(exc, api_key))
+    return JSONResponse(
+        status_code=ErrorCode.EMBEDDING_PROVIDER_ERROR.http_status,
+        content=_error_content(
+            ErrorCode.EMBEDDING_PROVIDER_ERROR.code, ErrorCode.EMBEDDING_PROVIDER_ERROR.message
+        ),
     )
 
 

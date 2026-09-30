@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from app.core.config import settings
-from app.core.exceptions import ChunkingConfigException
+from app.core.errors.exceptions import ChunkingConfigException
 from app.rag.ingestion.table_aware_parser import ParsedRegion
 from app.schemas.ingestion import Chunk, SourceLocator
 

@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.exceptions import InvalidTrustedContextException
+from app.core.errors.exceptions import InvalidTrustedContextException
 from app.graph.nodes.security_context import parse_security_headers, resolve_clarification_guard
 from app.schemas.clarification import PendingClarification
 

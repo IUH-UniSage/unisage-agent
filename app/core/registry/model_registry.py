@@ -191,10 +191,10 @@ def set_current_snapshot(snapshot: ModelRegistrySnapshot) -> None:
     single name rebind atomic, so a request that already called `get_current_snapshot()` and
     is holding the old object keeps seeing consistent (if stale) data for the rest of its
     lifetime — it never observes a half-updated snapshot, and it is never mutated out from
-    under it. The caller (`app.core.registry_subscriber`) is responsible for only calling this
-    with a snapshot whose `version` is newer than the current one and for serializing calls
-    (its own lock) so two concurrent reloads don't race pointlessly; this function itself does
-    no version check and no locking — it is deliberately just the swap.
+    under it. The caller (`app.core.registry.registry_subscriber`) is responsible for only
+    calling this with a snapshot whose `version` is newer than the current one and for
+    serializing calls (its own lock) so two concurrent reloads don't race pointlessly; this
+    function itself does no version check and no locking — it is deliberately just the swap.
     """
 
     global _current_snapshot

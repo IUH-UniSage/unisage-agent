@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import AsyncGenerator
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import StreamingResponse
@@ -12,20 +14,24 @@ from app.api.deps import (
     get_graph_models,
     get_session_factory,
 )
+from app.core.budget.tracker import get_default_tracker
 from app.core.config import settings
-from app.core.exceptions import (
+from app.core.errors.exceptions import (
     BackendJavaUnavailableException,
     ConversationRejectedException,
     InvalidQueryException,
     UsageLimitExceededException,
 )
-from app.core.sanitizer import sanitize_input_text
-from app.core.security import verify_internal_secret
+from app.core.security.sanitizer import sanitize_input_text
+from app.core.security.security import verify_internal_secret
+from app.core.usage.cost_calculator import estimate as estimate_cost
+from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import get_db_session
 from app.graph.nodes.greeting import is_first_turn
 from app.graph.nodes.security_context import parse_security_headers
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.streaming import BudgetContext
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import (
@@ -40,6 +46,7 @@ from app.schemas.security import AcademicSecurityContext
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)])
+
 
 async def _load_history(
     java_client: BackendJavaClient,
@@ -77,7 +84,7 @@ _background_tasks: set[asyncio.Task[None]] = set()
 def _resolve_client_ip(http_request: Request, x_forwarded_for: str | None) -> str | None:
     """Best client IP available for this request, for trace/log correlation only.
 
-    Threaded into `GraphTrace` (see `app/core/graph_trace.py`) so each log
+    Threaded into `GraphTrace` (see `app/core/observability/graph_trace.py`) so each log
     line can be tied back to a caller - it is NOT sent to backend-java.
     Guest-conversation ownership there is now checked via
     `X-Guest-Session-Token` (see `_resolve_guest_session_token` below), not
@@ -122,6 +129,30 @@ def _resolve_guest_session_token(http_request: Request) -> str | None:
     return http_request.cookies.get(GUEST_SESSION_COOKIE_NAME)
 
 
+def _estimate_chat_call_cost_usd(message: str, models: GraphModels) -> Decimal:
+    """Upper-bound reservation estimate for ONE LLM call (used for every
+    PROVIDER-scope acquire; `streaming_session.py` multiplies this up for the
+    request-level SYSTEM/PURPOSE reservation, which must cover every attempt
+    across every node, not just one).
+
+    A rough char/4 heuristic stands in for a real tokenizer here - this is only
+    ever an upper bound for a Redis reservation that gets settled to the real
+    cost afterward, not a billing figure, so exactness doesn't matter as much as
+    never under-reserving.
+    """
+
+    if models.generation_credential is None:
+        return Decimal("0")
+    input_tokens_estimate = max(1, len(message) // 4)
+    return estimate_cost(
+        provider=models.generation_credential.provider,
+        model_name=models.generation_credential.model_name,
+        source_type=models.generation_credential.source_type,
+        input_tokens=input_tokens_estimate,
+        max_output_tokens=settings.BUDGET_ESTIMATE_MAX_OUTPUT_TOKENS,
+    )
+
+
 def _usage_limit_errors(body: object) -> dict[str, str]:
     """The `window` / `resetAt` detail of Java's 429, or {} when the body has none."""
 
@@ -143,8 +174,8 @@ async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenera
     which does the real work, runs in an independent `asyncio.create_task()`
     and is never awaited here.
 
-    Per plan.md "SSE error contract": `event: done` is always the last event
-    emitted, no matter what was queued before it - the loop below only ever
+    `event: done` is always the last event emitted, no matter what was queued
+    before it - the loop below only ever
     breaks on `DoneItem`, so every `TokenItem`/`ErrorItem` queued ahead of it
     is drained and emitted first. `run_and_persist` only ever queues at most
     one `ErrorItem`, immediately before its own `DoneItem` put, so `event:
@@ -220,7 +251,7 @@ async def chat_stream_endpoint(
     )
 
     try:
-        await java_client.create_message(
+        user_message = await java_client.create_message(
             conversation_id=request.conversation_id,
             role="USER",
             content=clean_message,
@@ -248,6 +279,26 @@ async def chat_stream_endpoint(
         raise BackendJavaUnavailableException() from exc
 
     assistant_message_id = str(assistant_message["id"])
+    user_message_id = str(user_message["id"])
+
+    request_id = str(uuid.uuid4())
+    budget_tracker = get_default_tracker()
+    usage_recorder = UsageRecorder(
+        request_id=request_id,
+        purpose="CHAT",
+        conversation_id=request.conversation_id,
+        user_message_id=user_message_id,
+        assistant_message_id=assistant_message_id,
+        user_id=security.user_id,
+        guest_ip=client_ip if security.is_guest else None,
+        budget_tracker=budget_tracker,
+    )
+    budget = BudgetContext(
+        tracker=budget_tracker,
+        request_id=request_id,
+        reserve_seq=usage_recorder.reserve_budget_seq,
+        per_attempt_estimate_usd=_estimate_chat_call_cost_usd(clean_message, models),
+    )
 
     clarification_repo = ClarificationStateRepository(db_session)
     pending_clarification = await clarification_repo.get_pending_clarification(
@@ -276,8 +327,10 @@ async def chat_stream_endpoint(
             client_ip=client_ip,
             graph_input=graph_input,
             models=models,
+            usage_recorder=usage_recorder,
             queue=queue,
             session_factory=session_factory,
+            budget=budget,
         )
     )
     _background_tasks.add(task)

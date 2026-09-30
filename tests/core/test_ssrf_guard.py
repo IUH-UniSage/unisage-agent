@@ -10,7 +10,7 @@ from pathlib import Path
 import httpcore
 import pytest
 
-from app.core.ssrf_guard import (
+from app.core.security.ssrf_guard import (
     PinnedNetworkBackend,
     SsrfBlockedError,
     SsrfSyntaxError,
@@ -19,9 +19,9 @@ from app.core.ssrf_guard import (
 )
 
 _VECTORS = json.loads(
-    (Path(__file__).resolve().parents[2] / "contracts" / "vendor" / "ssrf-url-vectors.json").read_text(
-        encoding="utf-8"
-    )
+    (
+        Path(__file__).resolve().parents[2] / "contracts" / "vendor" / "ssrf-url-vectors.json"
+    ).read_text(encoding="utf-8")
 )
 
 
@@ -73,8 +73,12 @@ class _FakeDelegate(httpcore.AsyncNetworkBackend):
 
 
 @pytest.mark.asyncio
-async def test_pinned_backend_connects_to_resolved_ip_not_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.core.ssrf_guard.resolve_all", lambda host, port: ["93.184.216.34"])
+async def test_pinned_backend_connects_to_resolved_ip_not_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.core.security.ssrf_guard.resolve_all", lambda host, port: ["93.184.216.34"]
+    )
     delegate = _FakeDelegate()
     backend = PinnedNetworkBackend(allowlist=frozenset())
     backend._delegate = delegate
@@ -87,7 +91,9 @@ async def test_pinned_backend_connects_to_resolved_ip_not_hostname(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_pinned_backend_rejects_blocked_resolved_ip(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.core.ssrf_guard.resolve_all", lambda host, port: ["169.254.169.254"])
+    monkeypatch.setattr(
+        "app.core.security.ssrf_guard.resolve_all", lambda host, port: ["169.254.169.254"]
+    )
     delegate = _FakeDelegate()
     backend = PinnedNetworkBackend(allowlist=frozenset())
     backend._delegate = delegate
@@ -99,8 +105,10 @@ async def test_pinned_backend_rejects_blocked_resolved_ip(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_pinned_backend_allowlisted_host_bypasses_block(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.core.ssrf_guard.resolve_all", lambda host, port: ["10.0.5.5"])
+async def test_pinned_backend_allowlisted_host_bypasses_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.core.security.ssrf_guard.resolve_all", lambda host, port: ["10.0.5.5"])
     delegate = _FakeDelegate()
     backend = PinnedNetworkBackend(allowlist=frozenset({"internal-llm.corp"}))
     backend._delegate = delegate
@@ -112,11 +120,15 @@ async def test_pinned_backend_allowlisted_host_bypasses_block(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_pinned_backend_dns_rebinding_second_lookup_never_happens(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_pinned_backend_dns_rebinding_second_lookup_never_happens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Simulates rebinding: the resolver used for validation and the one the real backend would
     use are different callables — this proves connect_tcp is given the literal IP, so the
     backend never gets a chance to re-resolve and land on a different (rebound) address."""
-    monkeypatch.setattr("app.core.ssrf_guard.resolve_all", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(
+        "app.core.security.ssrf_guard.resolve_all", lambda host, port: ["93.184.216.34"]
+    )
     delegate = _FakeDelegate()
     backend = PinnedNetworkBackend(allowlist=frozenset())
     backend._delegate = delegate

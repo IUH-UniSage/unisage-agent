@@ -14,7 +14,7 @@ from docx.table import Table as DocxTable
 from docx.table import _Row as DocxRow
 from docx.text.paragraph import Paragraph as DocxParagraph
 
-from app.core.exceptions import UnsupportedFileTypeException
+from app.core.errors.exceptions import UnsupportedFileTypeException
 from app.rag.ingestion.canonical_table import (
     TableBlock,
     build_table_from_plain_rows,

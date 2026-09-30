@@ -4,8 +4,8 @@ from minio import Minio
 from minio.error import S3Error
 
 from app.core.config import settings
-from app.core.error_codes import ErrorCode
-from app.core.exceptions import UniSageException
+from app.core.errors.error_codes import ErrorCode
+from app.core.errors.exceptions import UniSageException
 
 
 class ObjectNotFoundException(UniSageException):

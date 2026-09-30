@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-import app.core.alerting as alerting_module
+import app.core.observability.alerting as alerting_module
 from app.api.deps import get_session_factory
 from app.core.config import settings
 from app.database.models import Base
@@ -55,7 +55,7 @@ def _in_memory_sqlite_engine_and_sessions() -> tuple[AsyncEngine, async_sessionm
 @pytest.fixture(autouse=True)
 def _no_live_slack_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same "no live external service in the default test run" rule as the
-    in-memory SQLite engine above, applied to Slack: `app.core.alerting`
+    in-memory SQLite engine above, applied to Slack: `app.core.observability.alerting`
     calls the real `send_slack_alert()` (a live HTTP POST to whatever
     `SLACK_APIKEY_ALERT_WEBHOOK_URL` is configured in the environment/`.env`)
     unless a test explicitly monkeypatches it - several tests that exercise a

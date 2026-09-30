@@ -1,13 +1,15 @@
 import json
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-import app.core.model_registry as model_registry
-import app.core.model_router as model_router_module
-from app.core.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.model_router import ModelRouter, NoAvailableCredentialError
+import app.core.registry.model_registry as model_registry
+import app.core.registry.model_router as model_router_module
+import app.core.usage.usage_outbox as usage_outbox_module
+from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
+from app.core.registry.model_router import ModelRouter, NoAvailableCredentialError
 from app.rag.enrichment.multi_representation import (
     MalformedExtractionResponseError,
     MultiRepresentationEnricher,
@@ -15,38 +17,61 @@ from app.rag.enrichment.multi_representation import (
 from app.schemas.ingestion import Chunk, RegionType
 
 
-def _mock_client(content: str) -> MagicMock:
-    client = MagicMock()
-    client.chat.completions.create.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(content=content))]
-    )
-    return client
+@pytest.fixture
+def captured_outbox(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    captured: list[dict[str, Any]] = []
+
+    async def _fake_enqueue(payload: dict[str, Any], *, redis_client: Any = None) -> None:
+        del redis_client
+        captured.append(json.loads(json.dumps(payload)))
+
+    monkeypatch.setattr(usage_outbox_module, "enqueue_usage_payload", _fake_enqueue)
+    return captured
+
+
+def _function_model(text: str) -> FunctionModel:
+    """A `FunctionModel` whose `run()` returns `text` as one plain-text response - same
+    double `tests/llm_mocks.py`'s `make_sync_llm_model` builds, inlined here so a
+    failing-call variant (below) can live next to it."""
+
+    def function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=text)])
+
+    return FunctionModel(function=function)
+
+
+def _failing_model(exc: Exception) -> FunctionModel:
+    def function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        raise exc
+
+    return FunctionModel(function=function)
+
+
+def _success_payload(*, questions: int = 3) -> str:
+    return json.dumps({"summary": "ok", "questions": [f"Q{i}?" for i in range(1, questions + 1)]})
+
+
+def _chunk() -> Chunk:
+    return Chunk(chunk_index=0, content="Some chunk content.", region_type=RegionType.TEXT)
 
 
 def test_enrich_returns_summary_and_configured_question_count() -> None:
-    payload = json.dumps(
-        {
-            "summary": "A short summary.",
-            "questions": ["Q1?", "Q2?", "Q3?"],
-        }
+    model = _function_model(
+        json.dumps({"summary": "A short summary.", "questions": ["Q1?", "Q2?", "Q3?"]})
     )
-    client = _mock_client(payload)
-    enricher = MultiRepresentationEnricher(model="gpt-4o-mini", question_count=3, client=client)
-    chunk = Chunk(chunk_index=0, content="Some chunk content.", region_type=RegionType.TEXT)
+    enricher = MultiRepresentationEnricher(model=model, question_count=3)
 
-    enriched = enricher.enrich(chunk)
+    enriched = enricher.enrich(_chunk())
 
     assert enriched.summary == "A short summary."
     assert enriched.questions == ["Q1?", "Q2?", "Q3?"]
-    assert enriched.chunk == chunk
+    assert enriched.chunk == _chunk()
 
 
 def test_enrich_falls_back_to_empty_on_malformed_json() -> None:
-    client = _mock_client("not valid json")
-    enricher = MultiRepresentationEnricher(model="gpt-4o-mini", question_count=3, client=client)
-    chunk = Chunk(chunk_index=0, content="Some chunk content.", region_type=RegionType.TEXT)
+    enricher = MultiRepresentationEnricher(model=_function_model("not valid json"), question_count=3)
 
-    enriched = enricher.enrich(chunk)
+    enriched = enricher.enrich(_chunk())
 
     assert enriched.summary == ""
     assert enriched.questions == []
@@ -54,23 +79,39 @@ def test_enrich_falls_back_to_empty_on_malformed_json() -> None:
 
 def test_enrich_falls_back_to_empty_on_short_question_list() -> None:
     payload = json.dumps({"summary": "A short summary.", "questions": ["Only one?"]})
-    client = _mock_client(payload)
-    enricher = MultiRepresentationEnricher(model="gpt-4o-mini", question_count=3, client=client)
-    chunk = Chunk(chunk_index=0, content="Some chunk content.", region_type=RegionType.TEXT)
+    enricher = MultiRepresentationEnricher(model=_function_model(payload), question_count=3)
 
-    enriched = enricher.enrich(chunk)
+    enriched = enricher.enrich(_chunk())
 
     assert enriched.summary == ""
     assert enriched.questions == []
 
 
-# ── model_router-driven failover (todo.md Task 12) ─────────────────────────
+def test_enrich_accepts_json_wrapped_in_a_code_fence() -> None:
+    """Nothing forces strict JSON mode the way OpenAI's `response_format=json_object` used to
+    (no provider-agnostic equivalent) - `_extract_json_object` must tolerate a code fence the
+    same way `message_classification._load_json_object` already does for CHAT."""
+
+    payload = "```json\n" + _success_payload() + "\n```"
+    enricher = MultiRepresentationEnricher(model=_function_model(payload), question_count=3)
+
+    enriched = enricher.enrich(_chunk())
+
+    assert enriched.summary == "ok"
+    assert enriched.questions == ["Q1?", "Q2?", "Q3?"]
+
+
+# ── model_router-driven failover ─────────────────────────
 #
-# These tests exercise the registry-resolved path (no `model`/`client` injected),
-# so `enrich()` goes through `model_router`. Same spirit as
-# `tests/core/test_model_router.py`/`tests/api/test_chat_stream_errors.py`: a
-# hand-rolled fake Redis + fake `backend-java` client installed as the process-wide
-# default router, no live Redis/backend-java anywhere here.
+# These tests exercise the registry-resolved path (no `model` injected), so
+# `enrich()`/`enrich_tracked()` goes through `model_router` AND
+# `app.graph.streaming.run_agent_text_with_failover`. Same spirit as
+# `tests/api/test_chat_stream_errors.py`: a hand-rolled fake Redis + fake
+# `backend-java` client installed as the process-wide default router, `build_model`
+# monkeypatched (in BOTH the module that picks the first credential and
+# `app.graph.streaming`, which builds every failover replacement) so a credential
+# resolves to a `FunctionModel` double instead of a real provider SDK object - no live
+# Redis/backend-java/provider network access anywhere here.
 
 
 class _FakeRedis:
@@ -116,12 +157,12 @@ def fake_router(monkeypatch: pytest.MonkeyPatch) -> tuple[ModelRouter, _FakeBack
     return router, backend
 
 
-def _credential(credential_id: str, priority: int) -> CredentialConfig:
+def _credential(credential_id: str, priority: int, *, provider: str = "openai") -> CredentialConfig:
     return CredentialConfig(
         id=credential_id,
         revision=1,
         source_type="CLOUD_API",
-        provider="openai",
+        provider=provider,
         model_name="gpt-4o-mini",
         api_base_url="https://api.openai.com/v1",
         priority=priority,
@@ -142,8 +183,21 @@ def _set_extraction_snapshot(*, version: int, extraction: tuple[CredentialConfig
     model_registry._current_snapshot = snapshot
 
 
-def _chunk() -> Chunk:
-    return Chunk(chunk_index=0, content="Some chunk content.", region_type=RegionType.TEXT)
+def _patch_build_model(
+    monkeypatch: pytest.MonkeyPatch, models_by_credential_id: dict[str, FunctionModel]
+) -> None:
+    """`enrich_tracked` builds the FIRST credential's model itself
+    (`app.rag.enrichment.multi_representation.build_model`); every failover replacement is
+    built by `run_agent_text_with_failover` instead (`app.graph.streaming.build_model`) - both
+    names must resolve to the same fake or a failover attempt would try a real provider SDK."""
+
+    def fake_build_model(credential: CredentialConfig) -> FunctionModel:
+        return models_by_credential_id[credential.id]
+
+    monkeypatch.setattr(
+        "app.rag.enrichment.multi_representation.build_model", fake_build_model
+    )
+    monkeypatch.setattr("app.graph.streaming.build_model", fake_build_model)
 
 
 def test_provider_failure_falls_back_to_next_extraction_credential(
@@ -155,22 +209,19 @@ def test_provider_failure_falls_back_to_next_extraction_credential(
     cred_fallback = _credential("cred-fallback", priority=2)
     _set_extraction_snapshot(version=1, extraction=(cred_primary, cred_fallback))
 
-    failing_client = MagicMock()
-    failing_client.chat.completions.create.side_effect = RuntimeError("primary down")
-    success_payload = json.dumps({"summary": "ok", "questions": ["Q1?", "Q2?", "Q3?"]})
-    fallback_client = _mock_client(success_payload)
-
-    def fake_build_client(self: MultiRepresentationEnricher, credential: CredentialConfig) -> MagicMock:
-        return failing_client if credential.id == "cred-primary" else fallback_client
-
-    monkeypatch.setattr(MultiRepresentationEnricher, "_build_client", fake_build_client)
+    _patch_build_model(
+        monkeypatch,
+        {
+            "cred-primary": _failing_model(RuntimeError("primary down")),
+            "cred-fallback": _function_model(_success_payload()),
+        },
+    )
 
     enricher = MultiRepresentationEnricher(question_count=3)
     enriched = enricher.enrich(_chunk())
 
     assert enriched.summary == "ok"
     assert enriched.questions == ["Q1?", "Q2?", "Q3?"]
-    fallback_client.chat.completions.create.assert_called_once()
     # The primary credential's failure was reported to Java before falling back.
     assert len(backend.reports) == 1
     assert backend.reports[0]["credential_id"] == "cred-primary"
@@ -193,22 +244,14 @@ def test_malformed_response_on_fallback_credential_reported_permanent(
         version=1, extraction=(cred_primary, cred_fallback_bad, cred_fallback_good)
     )
 
-    failing_client = MagicMock()
-    failing_client.chat.completions.create.side_effect = RuntimeError("primary down")
-    malformed_client = _mock_client("not valid json")
-    success_payload = json.dumps({"summary": "ok", "questions": ["Q1?", "Q2?", "Q3?"]})
-    good_client = _mock_client(success_payload)
-
-    clients = {
-        "cred-primary": failing_client,
-        "cred-fallback-bad": malformed_client,
-        "cred-fallback-good": good_client,
-    }
-
-    def fake_build_client(self: MultiRepresentationEnricher, credential: CredentialConfig) -> MagicMock:
-        return clients[credential.id]
-
-    monkeypatch.setattr(MultiRepresentationEnricher, "_build_client", fake_build_client)
+    _patch_build_model(
+        monkeypatch,
+        {
+            "cred-primary": _failing_model(RuntimeError("primary down")),
+            "cred-fallback-bad": _function_model("not valid json"),
+            "cred-fallback-good": _function_model(_success_payload()),
+        },
+    )
 
     real_record_failure = model_router_module.record_failure
     recorded_calls: list[tuple[CredentialConfig, Exception, int]] = []
@@ -234,9 +277,7 @@ def test_malformed_response_on_fallback_credential_reported_permanent(
     assert enriched.questions == ["Q1?", "Q2?", "Q3?"]
 
     malformed_reports = [
-        (cred, exc)
-        for cred, exc, _version in recorded_calls
-        if cred.id == "cred-fallback-bad"
+        (cred, exc) for cred, exc, _version in recorded_calls if cred.id == "cred-fallback-bad"
     ]
     assert len(malformed_reports) == 1
     reported_credential, reported_exc = malformed_reports[0]
@@ -260,13 +301,8 @@ def test_total_credential_exhaustion_propagates_instead_of_returning_empty(
     cred_only = _credential("cred-only", priority=1)
     _set_extraction_snapshot(version=1, extraction=(cred_only,))
 
-    permanent_failure_client = MagicMock()
-    permanent_failure_client.chat.completions.create.side_effect = RuntimeError("provider outage")
-
-    monkeypatch.setattr(
-        MultiRepresentationEnricher,
-        "_build_client",
-        lambda self, credential: permanent_failure_client,
+    _patch_build_model(
+        monkeypatch, {"cred-only": _failing_model(RuntimeError("provider outage"))}
     )
 
     # RuntimeError classifies as TRANSIENT (unrecognized -> fail open), so the exclusion
@@ -298,24 +334,20 @@ def test_snapshot_version_reported_is_the_one_captured_at_failure_not_a_later_dr
     cred_fallback = _credential("cred-fallback", priority=2)
     _set_extraction_snapshot(version=1, extraction=(cred_primary, cred_fallback))
 
-    success_payload = json.dumps({"summary": "ok", "questions": ["Q1?", "Q2?", "Q3?"]})
-    fallback_client = _mock_client(success_payload)
-
-    failing_client = MagicMock()
-
-    def _fail_and_drift_snapshot(*_args: Any, **_kwargs: Any) -> None:
+    def _fail_and_drift_snapshot(
+        _messages: list[ModelMessage], _agent_info: AgentInfo
+    ) -> ModelResponse:
         # Simulates a hot-reload landing while the primary credential's call is in
         # flight - the snapshot version bumps before `record_failure()` is called.
         _set_extraction_snapshot(version=99, extraction=(cred_primary, cred_fallback))
         raise RuntimeError("primary down")
 
-    failing_client.chat.completions.create.side_effect = _fail_and_drift_snapshot
-
-    clients = {"cred-primary": failing_client, "cred-fallback": fallback_client}
-    monkeypatch.setattr(
-        MultiRepresentationEnricher,
-        "_build_client",
-        lambda self, credential: clients[credential.id],
+    _patch_build_model(
+        monkeypatch,
+        {
+            "cred-primary": FunctionModel(function=_fail_and_drift_snapshot),
+            "cred-fallback": _function_model(_success_payload()),
+        },
     )
 
     enricher = MultiRepresentationEnricher(question_count=3)
@@ -325,3 +357,124 @@ def test_snapshot_version_reported_is_the_one_captured_at_failure_not_a_later_dr
     assert len(backend.reports) == 1
     assert backend.reports[0]["credential_id"] == "cred-primary"
     assert backend.reports[0]["snapshot_version"] == 1
+
+
+def test_enrich_works_regardless_of_which_provider_the_credential_is(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of routing through `app.core.llm.provider_models.build_model()`
+    (the same factory `get_graph_models()`/CHAT uses) instead of always speaking the OpenAI
+    wire format directly: an EXTRACTION credential with `provider="google"` must work exactly
+    like one with `provider="openai"` - no special-cased base URL, no 404."""
+
+    cred = _credential("cred-google", priority=1, provider="google")
+    _set_extraction_snapshot(version=1, extraction=(cred,))
+    _patch_build_model(monkeypatch, {"cred-google": _function_model(_success_payload())})
+
+    enriched = MultiRepresentationEnricher(question_count=3).enrich(_chunk())
+
+    assert enriched.summary == "ok"
+    assert enriched.questions == ["Q1?", "Q2?", "Q3?"]
+
+
+# --- Usage recording: one enrich() call = one purpose=EXTRACTION request ---
+
+
+def test_enrich_success_records_one_line_with_purpose_extraction(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    _router, _backend = fake_router
+    cred = _credential("cred-1", priority=1)
+    _set_extraction_snapshot(version=1, extraction=(cred,))
+    _patch_build_model(monkeypatch, {"cred-1": _function_model(_success_payload())})
+
+    enricher = MultiRepresentationEnricher(question_count=3)
+    enricher.enrich(_chunk())
+
+    assert len(captured_outbox) == 1
+    payload = captured_outbox[0]
+    assert payload["purpose"] == "EXTRACTION"
+    assert payload["conversationId"] is None
+    assert payload["userMessageId"] is None
+    assert payload["status"] == "SUCCESS"
+    assert len(payload["lines"]) == 1
+    line = payload["lines"][0]
+    assert line["nodeName"] == "multi_representation_enrich"
+    assert line["chatModelId"] == "cred-1"
+
+
+def test_enrich_failover_records_error_then_success_line_different_credentials(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    _router, _backend = fake_router
+    cred_primary = _credential("cred-primary", priority=1)
+    cred_fallback = _credential("cred-fallback", priority=2)
+    _set_extraction_snapshot(version=1, extraction=(cred_primary, cred_fallback))
+
+    _patch_build_model(
+        monkeypatch,
+        {
+            "cred-primary": _failing_model(RuntimeError("primary down")),
+            "cred-fallback": _function_model(_success_payload()),
+        },
+    )
+
+    enricher = MultiRepresentationEnricher(question_count=3)
+    enricher.enrich(_chunk())
+
+    assert len(captured_outbox) == 1
+    payload = captured_outbox[0]
+    assert payload["purpose"] == "EXTRACTION"
+    assert payload["conversationId"] is None
+    assert payload["userMessageId"] is None
+    # A failover recovered - the graph-level result succeeded, so the parent downgrades
+    # from what would be SUCCESS to PARTIAL because one line failed along the way.
+    assert payload["status"] == "PARTIAL"
+
+    lines = payload["lines"]
+    assert len(lines) == 2
+    assert lines[0]["status"] == "ERROR"
+    assert lines[0]["attempt"] == 0
+    assert lines[0]["chatModelId"] == "cred-primary"
+    assert lines[0]["errorCode"] == "RuntimeError"
+
+    assert lines[1]["status"] == "SUCCESS"
+    assert lines[1]["attempt"] == 1
+    assert lines[1]["chatModelId"] == "cred-fallback"
+
+
+def test_enrich_with_injected_model_records_nothing(
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    """Test-injected model (no registry credential resolved) skips the registry/router
+    entirely - matches OpenAIEmbedder's identical precedent."""
+
+    enricher = MultiRepresentationEnricher(
+        model=_function_model(_success_payload()), question_count=3
+    )
+
+    enricher.enrich(_chunk())
+
+    assert captured_outbox == []
+
+
+@pytest.mark.asyncio
+async def test_enrich_called_from_a_running_event_loop_still_records_usage(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    cred = _credential("cred-1", priority=1)
+    _set_extraction_snapshot(version=1, extraction=(cred,))
+    _patch_build_model(monkeypatch, {"cred-1": _function_model(_success_payload())})
+
+    result = MultiRepresentationEnricher(question_count=3).enrich(_chunk())
+
+    assert result.summary == "ok"
+    assert len(captured_outbox) == 1
+    assert captured_outbox[0]["status"] == "SUCCESS"

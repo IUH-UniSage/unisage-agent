@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.exceptions import UnsupportedFileTypeException
+from app.core.errors.exceptions import UnsupportedFileTypeException
 from app.rag.ingestion.parser import extract_raw_text
 from tests.fixtures.documents import make_docx_bytes, make_pdf_bytes
 

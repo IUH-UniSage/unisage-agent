@@ -92,7 +92,9 @@ def _get_chat_model(sa_client: httpx.Client, purpose: str, priority: int | None 
 
 
 def _claim_one(backend_internal_client: httpx.Client) -> dict:
-    resp = backend_internal_client.post("/internal/model-registry/verifications/claim", params={"limit": 1})
+    resp = backend_internal_client.post(
+        "/internal/model-registry/verifications/claim", params={"limit": 1}
+    )
     resp.raise_for_status()
     jobs = resp.json()
     assert jobs, "expected exactly one claimable job - none returned"
@@ -111,7 +113,9 @@ def _submit_result(
     )
 
 
-def _trigger_new_candidate(sa_client: httpx.Client, chat_model: dict, new_api_key: str, new_base_url: str | None = None) -> None:
+def _trigger_new_candidate(
+    sa_client: httpx.Client, chat_model: dict, new_api_key: str, new_base_url: str | None = None
+) -> None:
     """PUT /chat-models/{id} with a new apiKey - plan.md "Credential rotation":
     never writes the field directly, creates a QUEUED verification job instead."""
 
@@ -177,7 +181,7 @@ class _RedisChannelCounter:
 def test_seed_reset_produces_expected_purposes_and_status(
     sa_client: httpx.Client, registry_reset_fn
 ) -> None:
-    """"Seeder đã mở rộng theo schema mới; reset tuần tự vẫn chạy lặp không lỗi" -
+    """ "Seeder đã mở rộng theo schema mới; reset tuần tự vẫn chạy lặp không lỗi" -
     runs the reset a second time (module fixture already ran it once) and
     asserts the resulting rows match plan.md's seed shape: 2x CHAT (priority
     1/2), 1x EMBEDDING, 1x EXTRACTION, all ACTIVE, revision 1."""
@@ -188,7 +192,9 @@ def test_seed_reset_produces_expected_purposes_and_status(
         resp = sa_client.get("/chat-models", params={"modelPurpose": purpose})
         resp.raise_for_status()
         rows = resp.json()["data"]["data"]
-        assert len(rows) == expected_count, f"{purpose}: expected {expected_count} row(s), got {rows}"
+        assert len(rows) == expected_count, (
+            f"{purpose}: expected {expected_count} row(s), got {rows}"
+        )
         for row in rows:
             assert row["status"] == "ACTIVE", row
             assert row["revision"] == 1, row
@@ -288,7 +294,9 @@ def test_duplicate_result_applied_once_revision_and_version_bump_once(
     finally:
         counter.close()
 
-    assert message_count == 1, f"expected exactly 1 publish on the registry channel, saw {message_count}"
+    assert message_count == 1, (
+        f"expected exactly 1 publish on the registry channel, saw {message_count}"
+    )
 
     version_after = _version(backend_internal_client)
     assert version_after == version_before + 1
@@ -324,7 +332,9 @@ def test_rotation_race_superseded_job_result_rejected_no_promotion_no_event(
         # job N's lease is still valid and its token is still correct - the
         # only thing that changed is candidate_generation - so this must 409,
         # never promote key-n, per todo.md R4.2/plan.md "Verify OK" note.
-        stale_ok = _submit_result(backend_internal_client, job_n["jobId"], job_n["leaseToken"], "OK")
+        stale_ok = _submit_result(
+            backend_internal_client, job_n["jobId"], job_n["leaseToken"], "OK"
+        )
         assert stale_ok.status_code == 409, stale_ok.text
         message_count = counter.count_within(2.0)
     finally:
@@ -337,11 +347,15 @@ def test_rotation_race_superseded_job_result_rejected_no_promotion_no_event(
 
     # Now let job N+1 (the current one) succeed - only then does the key change.
     job_n_plus_1 = _claim_one(backend_internal_client)
-    ok_resp = _submit_result(backend_internal_client, job_n_plus_1["jobId"], job_n_plus_1["leaseToken"], "OK")
+    ok_resp = _submit_result(
+        backend_internal_client, job_n_plus_1["jobId"], job_n_plus_1["leaseToken"], "OK"
+    )
     assert ok_resp.status_code == 200, ok_resp.text
     assert ok_resp.json()["applied"] is True
 
-    assert _snapshot_key_for(backend_internal_client, chat_model["id"]) == "rotation-race-key-n-plus-1"
+    assert (
+        _snapshot_key_for(backend_internal_client, chat_model["id"]) == "rotation-race-key-n-plus-1"
+    )
 
 
 def test_rotation_has_no_downtime_snapshot_keeps_old_key_while_candidate_pending(
@@ -367,7 +381,9 @@ def test_rotation_has_no_downtime_snapshot_keeps_old_key_while_candidate_pending
     ok_resp = _submit_result(backend_internal_client, job["jobId"], job["leaseToken"], "OK")
     assert ok_resp.status_code == 200, ok_resp.text
 
-    assert _snapshot_key_for(backend_internal_client, chat_model["id"]) == "no-downtime-candidate-key"
+    assert (
+        _snapshot_key_for(backend_internal_client, chat_model["id"]) == "no-downtime-candidate-key"
+    )
 
 
 # --- Stale health report ----------------------------------------------------
@@ -421,7 +437,9 @@ def test_seeded_key_plaintext_never_appears_in_sa_responses_or_java_logs(
         resp.raise_for_status()
         body = resp.text
         for canary in canaries:
-            assert canary not in body, f"seed key leaked via SA-facing /chat-models?modelPurpose={purpose}"
+            assert canary not in body, (
+                f"seed key leaked via SA-facing /chat-models?modelPurpose={purpose}"
+            )
 
     container = docker_client.containers.get("e2e-backend-java-1")
     logs = container.logs(tail=5000).decode("utf-8", errors="replace")

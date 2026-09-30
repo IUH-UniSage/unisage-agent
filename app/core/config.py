@@ -48,9 +48,9 @@ class Settings(BaseSettings):
     # --- Single-var external systems: naming the system is enough on its
     # own, a prefix group of one adds nothing ---
     # DB 0 only - registry/circuit-breaker/lock/event use (key prefix `mr:`).
-    # Celery's own broker/backend use their own DBs below - see plan.md's "Hot-reload
-    # consistency": the three were sharing this one DB, which meant a Celery `purge`
-    # or the registry's key sweep could clobber each other's keys.
+    # Celery's own broker/backend use their own DBs below - the three used to share
+    # this one DB, which meant a Celery `purge` or the registry's key sweep could
+    # clobber each other's keys.
     REDIS_URL: str = "redis://localhost:6379/0"
     BACKEND_JAVA_BASE_URL: str = "http://localhost:8401/api/v1"
     # Slack Incoming Webhook URL for operational alerts. Empty by default -
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     SLACK_APIKEY_ALERT_WEBHOOK_URL: str = ""
     # Set true only when Python <-> Java is actually TLS/mTLS or an encrypted private network.
     INTERNAL_NETWORK_ENCRYPTED: bool = False
-    # Rollout flag (plan.md "Cutover khỏi cấu hình .env tĩnh"): the model registry snapshot
+    # Rollout flag: the model registry snapshot
     # from Java is now the only source of provider credentials - there is no `.env` fallback
     # path left in the code to fall back to. Startup fails loudly if the snapshot has no
     # ACTIVE CHAT credential. Kept as a flag (rather than deleted outright) only so a process
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     # a deploy step that hasn't seeded credentials yet) - flipping it off does not resurrect
     # any static-credential behavior, it just means every provider call site raises.
     MODEL_REGISTRY_ENABLED: bool = True
-    # Hot-reload poll fallback (plan.md "Hot-reload consistency", Task 8): every process
+    # Hot-reload poll fallback: every process
     # independently re-checks `/internal/model-registry/version` on this interval regardless of
     # whether Redis pub/sub is connected or a message was dropped, so it self-heals within this
     # many seconds no matter what. The integration harness may shorten this the same way it
@@ -86,23 +86,22 @@ class Settings(BaseSettings):
     # run's or another service's queue.
     CELERY_QUEUE_PREFIX: str = "unisage"
     # Redis pub/sub channel the Java side publishes `{"version": N}` to after a
-    # registry-affecting commit (plan.md "Hot-reload consistency" - "Publish after
-    # commit"). Pub/sub isn't namespaced by DB, so the channel name itself is what
-    # separates one harness run's Java from another's.
+    # registry-affecting commit. Pub/sub isn't namespaced by DB, so the channel name
+    # itself is what separates one harness run's Java from another's.
     MODEL_REGISTRY_CHANNEL: str = "model-registry:updates"
     # How often Celery Beat's own heartbeat task runs - the one thing this task's
-    # integration harness needs Beat to visibly do before Task 8 gives it a real
-    # verify-poll schedule to run. The harness's integration profile overrides this
+    # integration harness needs Beat to visibly do before it has a real verify-poll
+    # schedule to run. The harness's integration profile overrides this
     # to a couple seconds so `test_model_registry_smoke.py` doesn't wait 15s+ for
     # a tick.
     CELERY_BEAT_HEARTBEAT_INTERVAL_SECONDS: int = 15
-    # Verify-before-active claim loop (plan.md "Verification lifecycle"): how often Beat wakes
+    # Verify-before-active claim loop: how often Beat wakes
     # it up on its own, independent of the verification-requested pub/sub nudge below - this is
     # the backstop that guarantees a queued job eventually gets claimed even if every publish is
     # missed. The integration harness may shorten this the same way it shortens the heartbeat.
     MODEL_REGISTRY_VERIFICATION_INTERVAL_SECONDS: float = 15.0
-    # Channel backend-java publishes to right after committing a new/superseded verification job
-    # (plan.md "Contract files dùng chung" -> Verification lifecycle step 1) - distinct from
+    # Channel backend-java publishes to right after committing a new/superseded verification job -
+    # distinct from
     # MODEL_REGISTRY_CHANNEL (config/version changes), since this one only ever means "there may
     # be a job to claim", never carries a version to compare.
     MODEL_REGISTRY_VERIFICATION_CHANNEL: str = "model-registry:verification-requested"
@@ -141,6 +140,36 @@ class Settings(BaseSettings):
     # existing behavior; flip off in .env if the false positives outweigh
     # the (rare) real misses it exists to catch.
     CHAT_ALLOW_REPAIR_JSON: bool = True
+
+    # --- Cost tracking & budget ---
+    # Must match backend-java's app.timezone: DAILY/MONTHLY budget periodKeys are cut
+    # in this zone.
+    APP_TIMEZONE: str = "Asia/Ho_Chi_Minh"
+    # Used by app/core/usage/cost_calculator.py when backend-java has no price
+    # for a model - a conservative non-zero placeholder so budget reservation
+    # never silently estimates $0 for an unpriced model.
+    BUDGET_RESERVATION_FALLBACK_USD: float = 0.05
+    # Request-level Chat reservation = primary model's estimate x this, to cover the
+    # 2-3 secondary LLM calls (classification, query transformation) the request-level
+    # reservation is taken before any of them run.
+    BUDGET_RESERVATION_MULTIPLIER_CHAT: float = 1.5
+    # TTL past which a reservation hash is considered stale/abandoned (process crash) -
+    # release_expired_reservations sweeps these.
+    BUDGET_RESERVATION_TTL_SECONDS: int = 600
+    # How often BudgetSnapshot re-polls GET /internal/budgets/snapshot, independent of
+    # the config_version pub/sub nudge (same "self-heal on a timer" posture as
+    # MODEL_REGISTRY_POLL_INTERVAL_SECONDS).
+    BUDGET_SNAPSHOT_REFRESH_SECONDS: float = 60.0
+    # How often PricingSnapshot re-polls GET /internal/model-pricing/snapshot. A price an SA
+    # edits applies to new calls within this window.
+    MODEL_PRICING_SNAPSHOT_REFRESH_SECONDS: float = 60.0
+    # How often Beat runs drain_usage_outbox.
+    USAGE_OUTBOX_DRAIN_INTERVAL_SECONDS: float = 5.0
+    # Upper-bound output tokens assumed for the request-level Chat reservation
+    # estimate - deliberately generous (a real response rarely reaches this),
+    # since under-reserving would let a request through that a THROTTLE/BLOCK
+    # budget should have caught.
+    BUDGET_ESTIMATE_MAX_OUTPUT_TOKENS: int = 2000
 
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":

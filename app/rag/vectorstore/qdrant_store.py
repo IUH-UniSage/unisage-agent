@@ -56,8 +56,8 @@ def get_collection_dimension(client: QdrantClient) -> int | None:
     """The configured vector size of the collection's named vectors, or `None` if the
     collection doesn't exist yet. All 3 named vectors (`_VECTOR_NAMES`) are always created with
     the same size (`ensure_collection`), so reading `content_vector`'s is representative — used
-    by the embedding identity guard (`app.core.embedding_identity`) to sanity-check a registered
-    identity's `dimension` against what the collection is actually configured with."""
+    by the embedding identity guard (`app.core.registry.embedding_identity`) to sanity-check a
+    registered identity's `dimension` against what the collection is actually configured with."""
 
     if not client.collection_exists(settings.QDRANT_COLLECTION):
         return None

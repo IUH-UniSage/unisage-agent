@@ -1,7 +1,7 @@
 import pytest
 import tiktoken
 
-from app.core.exceptions import ChunkingConfigException
+from app.core.errors.exceptions import ChunkingConfigException
 from app.rag.chunking.table_row import TableRowChunker, TableStructureError
 from app.rag.ingestion.table_aware_parser import ParsedRegion, TableBlock
 from app.schemas.ingestion import HeaderSource, RegionType, SourceType

@@ -1,0 +1,8 @@
+version: '3'
+
+tasks:
+  replay-dead:
+    desc: "Chuyển toàn bộ item trong usage:outbox:dead về lại outbox để drain thử lại"
+    dotenv: ['.env']
+    cmds:
+      - '{{.UV_RUN}} app.tools.replay_dead_letter'

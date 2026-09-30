@@ -176,10 +176,22 @@ class EmbeddingAcceptedResponse(BaseModel):
 
 
 class TaskProgress(BaseModel):
-    """One embedding task's current progress, read from the Celery result backend."""
+    """One embedding task's current progress, read from the Celery result backend.
+
+    `state` is Celery's own state (PENDING/PROGRESS/SUCCESS/FAILURE) EXCEPT for one
+    override: `embed_chunks` isolates each chunk's failure (never aborts the batch for
+    an ordinary per-chunk error, only for `EmbeddingProviderError`), so the task itself
+    can end Celery-SUCCESS even when some or every chunk failed to embed - `state` is
+    forced to `"FAILURE"` here whenever `failed_chunk_count > 0`, so a client reading
+    only this field never sees a false "done" for a job that didn't actually finish.
+    """
 
     percent: int
     state: str
+    failed_chunk_count: int = 0
+    total_chunk_count: int = 0
+    error_code: int | None = None
+    message: str | None = None
 
 
 class IngestionJobResponse(BaseModel):
@@ -198,6 +210,8 @@ class IngestionJobResponse(BaseModel):
     task_id: str | None = None
     task_state: str | None = None
     task_percent: int | None = None
+    task_error_code: int | None = None
+    task_message: str | None = None
 
     @classmethod
     def from_draft(
@@ -212,4 +226,6 @@ class IngestionJobResponse(BaseModel):
             task_id=draft.celery_task_id,
             task_state=task_progress.state if task_progress else None,
             task_percent=task_progress.percent if task_progress else None,
+            task_error_code=task_progress.error_code if task_progress else None,
+            task_message=task_progress.message if task_progress else None,
         )

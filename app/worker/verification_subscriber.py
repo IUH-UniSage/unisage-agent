@@ -1,13 +1,14 @@
 """Wakes the verify-before-active claim loop (`app.worker.verification_tasks`) immediately
 when backend-java publishes to the verification-requested channel, instead of always waiting
-for Celery Beat's next tick (plan.md "Verification lifecycle" step 1-2 - Java publishes after
-committing a new/superseded job, Python "chạy ngay khi nhận event").
+for Celery Beat's next tick (Java publishes right after committing a new/superseded job,
+Python reacts immediately on that event).
 
-Structurally mirrors `app.core.registry_subscriber`'s reconnect-loop shape, but simpler: there
-is no version to compare here - any message on this channel just means "there may be a job to
-claim now", so it enqueues the same Celery task Beat already runs on a schedule. The
-distributed lock inside `verify_pending_credentials` (see `app.worker.celery_app`) is what
-keeps a Beat tick and this wake-up from both running the claim loop at once, not this module.
+Structurally mirrors `app.core.registry.registry_subscriber`'s reconnect-loop shape, but
+simpler: there is no version to compare here - any message on this channel just means "there
+may be a job to claim now", so it enqueues the same Celery task Beat already runs on a
+schedule. The distributed lock inside `verify_pending_credentials` (see
+`app.worker.celery_app`) is what keeps a Beat tick and this wake-up from both running the
+claim loop at once, not this module.
 
 Only wired from the Celery worker process (`app.worker.celery_app`'s `worker_process_init`) -
 the FastAPI process has no business running verification at all.
@@ -25,8 +26,9 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Same short, unconfigurable reconnect delay as `app.core.registry_subscriber` - only affects
-# how quickly the pub/sub socket recovers, never correctness (Beat's schedule is the backstop).
+# Same short, unconfigurable reconnect delay as `app.core.registry.registry_subscriber` - only
+# affects how quickly the pub/sub socket recovers, never correctness (Beat's schedule is the
+# backstop).
 _RECONNECT_DELAY_SECONDS = 2.0
 
 
@@ -78,7 +80,7 @@ async def _listen_forever(*, channel: str, redis_url: str) -> None:
 
 def start_thread_verification_subscriber() -> threading.Thread | None:
     """Call once from Celery's `worker_process_init` handler, alongside
-    `app.core.registry_subscriber.start_thread_registry_subscriber`.
+    `app.core.registry.registry_subscriber.start_thread_registry_subscriber`.
 
     Returns `None` (and starts nothing) when `MODEL_REGISTRY_ENABLED` is false. Otherwise
     starts a **daemon** thread running its own asyncio event loop - same rationale as the

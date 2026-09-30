@@ -3,7 +3,7 @@ import logging
 import pytest
 
 from app.core.config import settings
-from app.core.graph_trace import GraphTrace
+from app.core.observability.graph_trace import GraphTrace
 
 
 def _trace() -> GraphTrace:

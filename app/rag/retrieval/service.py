@@ -5,7 +5,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import ScoredPoint
 
 from app.core.config import settings
-from app.rag.embeddings.openai_embedder import OpenAIEmbedder
+from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
 from app.rag.vectorstore.qdrant_store import build_access_filter, get_client, search_chunks
 from app.schemas.ingestion import SourceLocator
 from app.schemas.retrieval import RetrievedChunk
@@ -39,7 +39,7 @@ class RetrievalService:
     """
 
     client: QdrantClient | None = None
-    embedder: OpenAIEmbedder = field(default_factory=OpenAIEmbedder)
+    embedder: EmbeddingProvider = field(default_factory=build_embedder)
 
     def retrieve(
         self,

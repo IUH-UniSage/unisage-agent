@@ -136,14 +136,21 @@ tiết và các khoảng trống đã biết.
   `X-Internal-Secret` cho mọi request `/api/v1/ai/**` đi qua nó, nên một endpoint "nội bộ" ở Python
   thực chất ai qua Gateway cũng gọi được — không phải hàng rào thật. Verify credential luôn đi theo
   chiều Python gọi Java (pull), không có chiều ngược lại.
-- **Danh sách `llmProvider` được phép tạo (`openai`, `google`, `groq`, `mistral`, cộng
+- **Danh sách `llmProvider` được phép tạo (`openai`, `google`, cộng
   `SELF_HOSTED` cho server tương thích OpenAI) chỉ gồm provider đã chứng minh nhận được HTTP
   client đã pin SSRF của Python — không phải mọi provider mà `pydantic-ai` hỗ trợ.** `anthropic`
   chưa vào danh sách vì SDK của nó chỉ nhận `httpx2.AsyncClient`, khác hẳn client `httpx` đang
   dùng để pin; `xai` không có client HTTP nào để pin (SDK dùng gRPC); `deepseek` cố định sẵn base
   URL nên không khớp cách factory hiện tại truyền `base_url` theo credential. Java và Python giữ
   đúng cùng danh sách này — SA không thể tạo được một credential mà Python chắc chắn không dùng
-  được.
+  được. `groq` và `mistral` đã bị gỡ khỏi danh sách (quyết định sản phẩm, không phải lý do
+  SSRF); model groq/mistral tạo từ trước bị chuyển sang INACTIVE và không được định tuyến nữa.
+- **Giá model do backend-java quản lý, agent chỉ đọc.** Mỗi lượt gọi provider được tính tiền theo
+  giá của đúng cặp (provider, model) trong bảng giá: giá đồng bộ hằng ngày từ LiteLLM cho `openai`
+  và `google`, hoặc giá SA sửa tay (giá sửa tay luôn thắng, đồng bộ không ghi đè). Chỉ dùng giá tier
+  Standard. Model chưa có giá → lượt gọi ghi **UNPRICED** với chi phí ước tính cố định, được hiển
+  thị riêng và vẫn trừ vào ngân sách; `SELF_HOSTED` luôn miễn phí. Giá mới áp dụng cho các lượt gọi
+  sau tối đa 60 giây; chi phí đã ghi của lượt gọi cũ không bao giờ bị tính lại.
 
 ## Glossary
 

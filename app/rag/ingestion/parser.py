@@ -3,7 +3,7 @@ from pathlib import PurePosixPath
 import pymupdf
 from bs4 import BeautifulSoup
 
-from app.core.exceptions import UnsupportedFileTypeException
+from app.core.errors.exceptions import UnsupportedFileTypeException
 
 _FITZ_SUPPORTED_EXTENSIONS = {"pdf", "docx"}
 

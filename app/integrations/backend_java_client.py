@@ -9,7 +9,7 @@ this client never sends a separate service secret.
 This client bypasses the API Gateway and talks to `backend-java` directly
 (`settings.BACKEND_JAVA_BASE_URL`), so it also always sends
 `X-Internal-Secret` (the same shared-secret gate this service itself
-enforces on its own inbound endpoints via `app/core/security.py`) - Java
+enforces on its own inbound endpoints via `app/core/security/security.py`) - Java
 uses this to (a) authenticate the caller as `unisage-agent` itself, and (b)
 decide whether to trust an accompanying `X-Guest-Session-Token` header for
 the guest-conversation ownership check, since Python is the one calling
@@ -276,25 +276,53 @@ class BackendJavaClient:
         return dict(result) if result is not None else {}
 
     async def get_model_registry_version(self) -> int:
-        """`GET /internal/model-registry/version` (plan.md "Internal API contract" endpoint #2).
+        """`GET /internal/model-registry/version`.
 
-        No secret in the response - used for the periodic hot-reload poll (Task 7, out of
-        scope here). No `Authorization` is sent: `/internal/**` grants on
-        `X-Internal-Secret` + caller IP alone, never on a JWT.
+        No secret in the response - used for the periodic hot-reload poll. No
+        `Authorization` is sent: `/internal/**` grants on `X-Internal-Secret` + caller
+        IP alone, never on a JWT.
         """
 
         result = await self._request("GET", "/internal/model-registry/version", authorization=None)
         return int(result["version"]) if result else 0
 
     async def get_model_registry_snapshot(self) -> dict[str, Any]:
-        """`GET /internal/model-registry/snapshot` (plan.md "Internal API contract" endpoint #1) -
-        the only source of provider credentials for this service once the registry is enabled
-        (plan.md "Cutover khỏi cấu hình .env tĩnh"). The response carries plaintext API keys -
-        callers must parse it into `app.core.model_registry.ModelRegistrySnapshot` immediately
-        and never log or repr the raw dict this returns.
+        """`GET /internal/model-registry/snapshot` - the only source of provider
+        credentials for this service once the registry is enabled. The response
+        carries plaintext API keys - callers must parse it into
+        `app.core.registry.model_registry.ModelRegistrySnapshot` immediately and never log or
+        repr the raw dict this returns.
         """
 
         result = await self._request("GET", "/internal/model-registry/snapshot", authorization=None)
+        return dict(result) if result else {}
+
+    async def get_budget_snapshot(self) -> dict[str, Any]:
+        """`GET /internal/budgets/snapshot` - enabled budgets + the current config
+        version. No secret in the response."""
+
+        result = await self._request("GET", "/internal/budgets/snapshot", authorization=None)
+        return dict(result) if result else {}
+
+    async def get_model_pricing_snapshot(self) -> dict[str, Any]:
+        """`GET /internal/model-pricing/snapshot` - prices per 1M tokens + the current config
+        version. No secret in the response."""
+
+        result = await self._request("GET", "/internal/model-pricing/snapshot", authorization=None)
+        return dict(result) if result else {}
+
+    async def get_period_totals(self, *, period: str, period_key: str) -> dict[str, Any]:
+        """`GET /internal/usage-logs/period-totals` - the DB's real total spend for
+        one period+periodKey, broken down by every scope at once
+        (`{"totals": {"SYSTEM": micro_usd, "PURPOSE:<name>": ..., "PROVIDER:<name>": ...}}`).
+        No secret in the response."""
+
+        result = await self._request(
+            "GET",
+            "/internal/usage-logs/period-totals",
+            authorization=None,
+            params={"period": period, "periodKey": period_key},
+        )
         return dict(result) if result else {}
 
     async def report_health(
@@ -308,10 +336,10 @@ class BackendJavaClient:
         message: str,
         occurred_at: str,
     ) -> dict[str, Any]:
-        """`POST /internal/model-registry/credentials/{id}/health` (plan.md "Internal
-        API contract" endpoint #3) - called by `app.core.model_router` after a
-        provider-call failure. `message` must already be redacted
-        (`app.core.redaction.safe_error_message`) before it reaches this method; this
+        """`POST /internal/model-registry/credentials/{id}/health` - called by
+        `app.core.registry.model_router` after a provider-call failure. `message` must already
+        be redacted
+        (`app.core.security.redaction.safe_error_message`) before it reaches this method; this
         client does not redact anything itself.
 
         No secret in the response. No `Authorization` is sent, matching every other
@@ -334,11 +362,26 @@ class BackendJavaClient:
         )
         return dict(result) if result else {}
 
+    async def ingest_usage_log(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """`POST /internal/usage-logs` - called by the outbox drain worker
+        (`app.worker.usage_outbox_tasks`), never from the request path itself.
+        `payload` is already the exact wire shape
+        `UsageRecorder.close()` built; this method sends it as-is.
+
+        Idempotent on Java's side via `requestId` - a retried send after a prior
+        4xx/5xx (still sitting in the outbox) is always safe to resend.
+        """
+
+        result = await self._request(
+            "POST", "/internal/usage-logs", authorization=None, json_body=payload
+        )
+        return dict(result) if result else {}
+
     async def get_embedding_index_identity(self, *, collection: str) -> dict[str, Any] | None:
-        """`GET /internal/model-registry/embedding-index/{collection}/identity` (plan.md
-        "Internal API contract" endpoint #6) - the identity currently registered for `collection`,
-        or `None` if none has been established yet (Java answers with an empty 404 body for that
-        case, which this unwraps into `None` rather than raising).
+        """`GET /internal/model-registry/embedding-index/{collection}/identity` - the
+        identity currently registered for `collection`, or `None` if none has been
+        established yet (Java answers with an empty 404 body for that case, which this
+        unwraps into `None` rather than raising).
 
         No secret in the response - no `Authorization` is sent, matching every other
         `/internal/**` call this client makes.
@@ -368,15 +411,13 @@ class BackendJavaClient:
         fingerprint: list[float],
         established_by: str,
     ) -> dict[str, Any]:
-        """`PUT /internal/model-registry/embedding-index/{collection}/identity` (plan.md
-        "Internal API contract" endpoint #7) - only-if-absent, called by the bootstrap CLI
-        (`established_by="bootstrap-cli"`) or by the first ingest batch into an empty collection
-        (`established_by="first-upsert"`).
+        """`PUT /internal/model-registry/embedding-index/{collection}/identity` - only-
+        if-absent, called by the bootstrap CLI (`established_by="bootstrap-cli"`) or by
+        the first ingest batch into an empty collection (`established_by="first-upsert"`).
 
-        Raises `BackendJavaHTTPError` with `status_code == 409` when an identity already exists
-        for `collection` - callers must then `get_embedding_index_identity` and compare rather
-        than treat this as a generic failure (plan.md "Embedding identity guard": "đã có → 409
-        `EMBEDDING_INDEX_IDENTITY_EXISTS`, không bao giờ ghi đè").
+        Raises `BackendJavaHTTPError` with `status_code == 409` when an identity already
+        exists for `collection` - callers must then `get_embedding_index_identity` and
+        compare rather than treat this as a generic failure or overwrite it.
         """
 
         body = {
@@ -397,9 +438,9 @@ class BackendJavaClient:
         return dict(result) if result else {}
 
     async def claim_verifications(self, *, limit: int) -> list[dict[str, Any]]:
-        """`POST /internal/model-registry/verifications/claim?limit=N` (plan.md "Internal API
-        contract" endpoint #4) - claims up to `limit` queued/lease-expired verification jobs,
-        each with a freshly-minted `leaseToken`. The response carries each job's candidate
+        """`POST /internal/model-registry/verifications/claim?limit=N` - claims up to
+        `limit` queued/lease-expired verification jobs, each with a freshly-minted
+        `leaseToken`. The response carries each job's candidate
         credential in plaintext - callers must not log or repr the raw list this returns.
 
         No `Authorization` is sent, matching every other `/internal/**` call this client makes.
@@ -424,13 +465,13 @@ class BackendJavaClient:
         embedding_dimension: int | None = None,
         embedding_fingerprint: list[float] | None = None,
     ) -> dict[str, Any]:
-        """`POST /internal/model-registry/verifications/{jobId}/result` (plan.md "Internal API
-        contract" endpoint #5) - reports the outcome of trying `job_id`'s candidate credential.
+        """`POST /internal/model-registry/verifications/{jobId}/result` - reports the
+        outcome of trying `job_id`'s candidate credential.
 
         `lease_token` must be the exact token from the matching `claim_verifications` entry -
         Java rejects a stale/mismatched one with `409` (raised here as `BackendJavaHTTPError`
-        with `status_code == 409`; callers must not retry that case, see plan.md "Verification
-        lifecycle"). `message` must already be redacted (`app.core.redaction.safe_error_message`)
+        with `status_code == 409`; callers must not retry that case). `message` must already
+        be redacted (`app.core.security.redaction.safe_error_message`)
         before it reaches this method - this client does not redact anything itself.
         `embedding_dimension`/`embedding_fingerprint` are only meaningful for an EMBEDDING
         candidate's `OK` result.

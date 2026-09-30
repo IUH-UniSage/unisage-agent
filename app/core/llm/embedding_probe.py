@@ -69,9 +69,7 @@ def measure_fingerprint(embed: Callable[[list[str]], list[list[float]]]) -> Embe
     )
 
 
-def unflatten_fingerprint(
-    flat: Sequence[float], dimension: int
-) -> tuple[tuple[float, ...], ...]:
+def unflatten_fingerprint(flat: Sequence[float], dimension: int) -> tuple[tuple[float, ...], ...]:
     """Inverse of `EmbeddingFingerprint.flattened()` — splits a flat array (as read back from
     Java) into `len(PROBE_SENTENCES)` vectors of `dimension` values each."""
 

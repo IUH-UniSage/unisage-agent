@@ -61,9 +61,7 @@ class RebindingResolver:
             self._query_count += 1
             answer_ip = self.safe_ip if self._query_count == 1 else self.decoy_ip
 
-        logger.info(
-            "rebind.test query #%d -> %s", self._query_count, answer_ip
-        )
+        logger.info("rebind.test query #%d -> %s", self._query_count, answer_ip)
         reply.add_answer(RR(qname, QTYPE.A, rdata=A(answer_ip), ttl=0))
         return reply
 
@@ -76,11 +74,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=int(os.environ.get("DNS_PORT", "53")))
     parser.add_argument(
-        "--safe-ip", default=os.environ.get("REBIND_SAFE_IP", "127.0.0.1"),
+        "--safe-ip",
+        default=os.environ.get("REBIND_SAFE_IP", "127.0.0.1"),
         help="IP returned on the first query - the fake LLM provider's address",
     )
     parser.add_argument(
-        "--decoy-ip", default=os.environ.get("REBIND_DECOY_IP", "127.0.0.2"),
+        "--decoy-ip",
+        default=os.environ.get("REBIND_DECOY_IP", "127.0.0.2"),
         help="IP returned on every subsequent query - the decoy 'internal' service",
     )
     args = parser.parse_args()
@@ -90,7 +90,9 @@ def main() -> None:
     server = DNSServer(resolver, port=args.port, address="0.0.0.0", tcp=False)
     logger.info(
         "rebinding DNS server listening on :%d (safe=%s decoy=%s)",
-        args.port, args.safe_ip, args.decoy_ip,
+        args.port,
+        args.safe_ip,
+        args.decoy_ip,
     )
     server.start()
 

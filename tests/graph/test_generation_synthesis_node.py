@@ -4,7 +4,7 @@ import pytest
 from pydantic_ai.models.function import FunctionModel
 
 from app.core.config import settings
-from app.core.graph_trace import GraphTrace
+from app.core.observability.graph_trace import GraphTrace
 from app.graph.nodes.generation_synthesis import (
     build_generation_agent,
     collect_confirmed_metadata_updates,

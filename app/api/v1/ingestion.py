@@ -20,8 +20,8 @@ from app.api.deps import (
     require_document_permission,
 )
 from app.core.config import settings
-from app.core.events import ingestion_event_stream
-from app.core.exceptions import (
+from app.core.errors.error_codes import ErrorCode
+from app.core.errors.exceptions import (
     DepartmentAccessDeniedException,
     EmbeddingChunkSetMismatchException,
     EmbeddingDraftLegacyException,
@@ -30,7 +30,10 @@ from app.core.exceptions import (
     IngestionJobNotFoundException,
     UniSageException,
 )
-from app.core.security import verify_internal_secret
+from app.core.observability.events import ingestion_event_stream
+from app.core.security.security import verify_internal_secret
+from app.graph.nodes.security_context import parse_security_headers
+from app.schemas.security import AcademicSecurityContext
 from app.database.models import DocumentProcessStep
 from app.database.repositories.ingestion_job import (
     DraftDTO,
@@ -79,13 +82,21 @@ async def preview_document(
 async def chunk_document(
     request: ChunkingRequest,
     context: TrustedContext = Depends(require_document_permission),
+    security: AcademicSecurityContext = Depends(parse_security_headers),
     db_session: AsyncSession = Depends(get_db_session),
 ) -> ApiResponse[ChunkingResponse]:
     """Fetch the stored object fresh and chunk it with the requested strategy."""
 
     require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
-    chunks = strategy.dispatch(request.strategy, request.params, content, request.object_key)
+    chunks = await strategy.dispatch(
+        request.strategy,
+        request.params,
+        content,
+        request.object_key,
+        document_id=request.document_id,
+        user_id=security.user_id,
+    )
     if not chunks:
         raise EmptyDocumentTextException()
     validate_chunks(chunks)
@@ -139,6 +150,7 @@ async def get_ingestion_job(
 async def embed_document(
     request: EmbeddingRequest,
     context: TrustedContext = Depends(require_document_permission),
+    security: AcademicSecurityContext = Depends(parse_security_headers),
     db_session: AsyncSession = Depends(get_db_session),
 ) -> ApiResponse[EmbeddingAcceptedResponse]:
     """Dispatch a chunk list for background enrichment + embedding.
@@ -165,6 +177,7 @@ async def embed_document(
         request.department_id,
         request.access_level,
         request.is_public,
+        user_id=security.user_id,
     )
     await mark_embedding(db_session, document_id=request.document_id, celery_task_id=task.id)
     return ApiResponse.success(EmbeddingAcceptedResponse(task_id=task.id))
@@ -241,14 +254,44 @@ def _require_department_access_within_grant(
 
 
 def _read_task_progress(task_id: str) -> TaskProgress:
-    """Read one embedding task's current {percent, state} from the Celery result backend."""
+    """Read one embedding task's current progress from the Celery result backend.
+
+    `embed_chunks` isolates each chunk's failure and still ends Celery-SUCCESS even
+    when some/every chunk failed (see `TaskProgress`'s docstring) - `failed_chunk_count`
+    read off the task's own return value is what overrides `state` to `"FAILURE"` here,
+    not `result.state` alone.
+    """
 
     result = AsyncResult(task_id, app=celery_app)
     percent = 0
+    failed_chunk_count = 0
+    total_chunk_count = 0
     info = result.info
-    if isinstance(info, dict) and "percent" in info:
-        percent = int(info["percent"])
-    return TaskProgress(percent=percent, state=result.state)
+    if isinstance(info, dict):
+        if "percent" in info:
+            percent = int(info["percent"])
+        failed_chunk_count = int(info.get("failed_chunk_count") or 0)
+        total_chunk_count = int(info.get("total_chunk_count") or 0)
+
+    state = result.state
+    error_code = None
+    message = None
+    if state == "SUCCESS" and failed_chunk_count > 0:
+        state = "FAILURE"
+        error_code = ErrorCode.EMBEDDING_JOB_FAILED.code
+        message = f"{failed_chunk_count}/{total_chunk_count} đoạn nạp liệu thất bại."
+    elif state == "FAILURE":
+        error_code = ErrorCode.EMBEDDING_JOB_FAILED.code
+        message = ErrorCode.EMBEDDING_JOB_FAILED.message
+
+    return TaskProgress(
+        percent=percent,
+        state=state,
+        failed_chunk_count=failed_chunk_count,
+        total_chunk_count=total_chunk_count,
+        error_code=error_code,
+        message=message,
+    )
 
 
 def _draft_task_progress(draft: DraftDTO) -> TaskProgress | None:
@@ -276,7 +319,9 @@ async def ingestion_events(
     caller is granted access to.
     """
 
-    if not x_internal_secret or not hmac.compare_digest(x_internal_secret, settings.APP_INTERNAL_SECRET_KEY):
+    if not x_internal_secret or not hmac.compare_digest(
+        x_internal_secret, settings.APP_INTERNAL_SECRET_KEY
+    ):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     try:

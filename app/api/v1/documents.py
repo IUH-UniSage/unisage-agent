@@ -5,7 +5,7 @@ from qdrant_client import QdrantClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import TrustedContext, require_department_membership, require_document_permission
-from app.core.security import verify_internal_secret
+from app.core.security.security import verify_internal_secret
 from app.database.repositories.chunk import ChunkRepository
 from app.database.session import get_db_session
 from app.rag.vectorstore import qdrant_store

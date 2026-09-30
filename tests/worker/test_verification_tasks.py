@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from app.core.llm.embedding_probe import EmbeddingFingerprint
-from app.core.ssrf_guard import SsrfBlockedError
+from app.core.security.ssrf_guard import SsrfBlockedError
 from app.integrations.backend_java_client import BackendJavaConnectionError, BackendJavaHTTPError
 from app.worker import verification_tasks
 
@@ -71,7 +71,9 @@ def _embedding_job(job_id: str = "job-2", lease_token: str = "lease-2") -> dict[
 
 
 @pytest.mark.asyncio
-async def test_success_path_submits_ok_with_matching_lease_token(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_success_path_submits_ok_with_matching_lease_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_completion(credential: Any) -> None:
         del credential
 
@@ -91,10 +93,14 @@ async def test_success_path_submits_ok_with_matching_lease_token(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_transient_provider_failure_submits_transient(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_transient_provider_failure_submits_transient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_completion(credential: Any) -> None:
         del credential
-        raise ConnectionError("connect timed out")  # unrecognized -> classify_llm_error fails open TRANSIENT
+        raise ConnectionError(
+            "connect timed out"
+        )  # unrecognized -> classify_llm_error fails open TRANSIENT
 
     monkeypatch.setattr(verification_tasks, "_run_minimal_completion", fake_completion)
 
@@ -105,7 +111,9 @@ async def test_transient_provider_failure_submits_transient(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_permanent_provider_failure_submits_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_permanent_provider_failure_submits_permanent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_completion(credential: Any) -> None:
         del credential
         raise SsrfBlockedError("blocked host")  # classify_llm_error always -> PERMANENT
@@ -158,6 +166,48 @@ async def test_embedding_job_result_includes_dimension_and_fingerprint(
     assert call["result_type"] == "OK"
     assert call["embedding_dimension"] == 2
     assert call["embedding_fingerprint"] == fingerprint.flattened()
+
+
+def _embedding_credential(provider: str) -> Any:
+    from app.core.registry.model_registry import CredentialConfig
+
+    return CredentialConfig(
+        id="cand-1",
+        revision=0,
+        source_type="CLOUD_API",
+        provider=provider,
+        model_name="some-embedding-model",
+        api_base_url="https://example.test",
+        priority=None,
+        max_rpm=None,
+        api_key="sk-test",
+    )
+
+
+def test_embedding_fingerprint_dispatches_google_credentials_to_the_google_prober(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `provider="google"` candidate must go through Gemini's native `embedContent` prober,
+    not the OpenAI-wire-format one - the exact bug that made adding a Google EMBEDDING
+    credential 404 (Google's native REST API has no `/embeddings` path)."""
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        verification_tasks,
+        "_measure_embedding_fingerprint_google_sync",
+        lambda credential: (calls.append("google"), None)[1],
+    )
+    monkeypatch.setattr(
+        verification_tasks,
+        "_measure_embedding_fingerprint_openai_sync",
+        lambda credential: (calls.append("openai"), None)[1],
+    )
+
+    verification_tasks._measure_embedding_fingerprint_sync(_embedding_credential("google"))
+    assert calls == ["google"]
+
+    verification_tasks._measure_embedding_fingerprint_sync(_embedding_credential("openai"))
+    assert calls == ["google", "openai"]
 
 
 @pytest.mark.asyncio

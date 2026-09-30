@@ -4,14 +4,14 @@ from dataclasses import dataclass
 from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.exceptions import (
+from app.core.errors.exceptions import (
     DepartmentAccessDeniedException,
     InsufficientDocumentPermissionException,
     InvalidTrustedContextException,
     MissingTrustedContextException,
 )
 from app.core.llm.provider_models import build_model
-from app.core.model_registry import get_current_snapshot, require_top_priority_credential
+from app.core.registry.model_registry import get_current_snapshot, require_top_priority_credential
 from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient

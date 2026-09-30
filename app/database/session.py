@@ -10,7 +10,7 @@ engine = create_async_engine(
     # forces the "sqlalchemy.engine.Engine" logger to INFO and attaches its
     # own handler that bypasses the level app/main.py sets on it, printing
     # every statement twice. settings.APP_DEBUG now means "dump the generation
-    # prompt" (see app/core/graph_trace.py), not "echo SQL".
+    # prompt" (see app/core/observability/graph_trace.py), not "echo SQL".
     echo=False,
 )
 

@@ -245,8 +245,15 @@ Từng kiểm và loại: `anthropic` — SDK hiện tại chỉ nhận `httpx2.
 khác hẳn `httpx`), nên không có cách gắn transport đã pin vào nó; `xai` — SDK của xAI dùng gRPC,
 không tồn tại một HTTP client nào để pin; `deepseek` — SDK chấp nhận `httpx.AsyncClient` bình
 thường, nhưng constructor cố định sẵn base URL, không nhận `base_url` theo từng credential như
-cách factory hiện tại dựng client. Google (Gemini), Groq, Mistral đều đã thử thật và nhận đúng
-client đã pin, nên được thêm vào cùng OpenAI.
+cách factory hiện tại dựng client. Google (Gemini) đã thử thật và nhận đúng client đã pin, nên
+được thêm vào cùng OpenAI.
+
+Groq và Mistral từng được thêm (SDK của chúng cũng nhận client đã pin), sau đó bị gỡ (29-09-2026)
+vì sản phẩm chỉ cần OpenAI và Google. Giữ thêm provider nghĩa là giữ thêm SDK, thêm nhánh phân loại
+lỗi và thêm nguồn giá phải đồng bộ cho Cost Tracking, trong khi không ai dùng. Gỡ ở cả 3 tầng (web,
+allowlist Java, factory + error classifier Python) để SA không tạo được credential mà Python không
+dựng được. Model đã tạo từ trước không bị xoá mà chuyển sang INACTIVE (migration V28 bên
+backend-java), kèm huỷ verification job đang mở, để lịch sử usage vẫn trỏ được về model đó.
 
 Luật nằm ở: `PRODUCT.md` › Business rules.
 
@@ -290,6 +297,107 @@ trị cũ hơn). Verify FAIL thì báo lỗi ngay cho SA, row không đổi, h�
 provider thật, và không giải quyết được trường hợp Python đang không sống để verify ngay lúc đó).
 
 Luật nằm ở: `PRODUCT.md` › Glossary (staged credential rotation).
+
+## Cost Tracking — nguồn usage/token
+
+Chi tiết đầy đủ nằm ở
+`backend-java/changes/23-09-2026-Cost-Tracking-Budget-Management/plan.md`. Mục
+này là kết quả spike Task 0 (bảng dưới), **đã cập nhật ở Task 6** khi implement
+thật phát hiện `result.usage()` sai — trong bản `pydantic-ai-slim` đang dùng,
+`usage` là **property** (`result.usage`, không gọi hàm) trên cả
+`AgentRunResult` (non-streaming) lẫn `StreamedRunResult` (streaming); gọi như
+hàm ném `TypeError: 'RunUsage' object is not callable` — bắt bằng test thật
+(`tests/graph/test_message_classification_node.py` đỏ ngay), không chỉ đọc
+tài liệu PydanticAI.
+
+### Bảng nguồn usage theo loại call
+
+| Loại call | Nơi gọi LLM | Cách lấy usage | Provider/model/`chatModelId` thực tế (sau failover) | Latency |
+|---|---|---|---|---|
+| Chat (non-streaming: classification, query transformation) | `run_agent_text_with_failover()` (`app/graph/streaming.py`), `agent.run(prompt)` | `result = await active_agent.run(prompt)` → `result.usage` (property, PydanticAI `RunUsage`: `input_tokens`/`output_tokens`/`cache_read_tokens`). Đọc ngay khi thành công, trước khi trả `result.output` | Biến local `active_credential` tại đúng vòng lặp `while True` đang chạy — không phải credential lúc bắt đầu request | Đo bằng `time.monotonic()` quanh `await active_agent.run(prompt)`, truyền vào `on_attempt` (Task 6) |
+| Chat (streaming: generation synthesis, ticket fallback) | `stream_agent_text()` (`app/graph/streaming.py`), `agent.run_stream(prompt)` | `result.usage` (property) đọc **bên trong** `async with active_agent.run_stream(prompt) as result:`, ngay sau vòng `async for chunk in result.stream_text(delta=True):` kết thúc, **trước** khi thoát context manager — PydanticAI chốt usage khi stream hoàn tất, không phải sau khi context exit | Biến local `active_credential` trong cùng vòng lặp | Đo bằng `time.monotonic()` quanh khối `try:`/`async with`, truyền vào `on_attempt` (Task 6) |
+| Embedding | `OpenAIEmbedder._call_provider()` (`app/rag/embeddings/openai_embedder.py`), `client.embeddings.create(...)`, raw OpenAI SDK — **chưa migrate sang PydanticAI/model_router** | `response.usage.prompt_tokens` — **hiện vẫn bị bỏ qua** (Task 8 sẽ nối), chỉ `response.data[*].embedding` được đọc. Nhiều batch/1 lần `embed()` → phải cộng dồn usage qua các batch | `self.credential` (property), lấy 1 lần từ `require_top_priority_credential("EMBEDDING")` — **không auto-failover** nên không có "sau failover" | Chưa đo (Task 8), cần thêm quanh mỗi lần gọi `_call_provider()` |
+| Extraction (multi-representation) | `MultiRepresentationEnricher._call_and_parse()` (`app/rag/enrichment/multi_representation.py`), `client.chat.completions.create(...)`, raw OpenAI SDK — **chưa migrate** | `response.usage.prompt_tokens`/`completion_tokens` — hiện vẫn bị bỏ qua (Task 8 sẽ nối), chỉ `response.choices[0].message.content` được đọc | Biến local `credential`/`resolved_model` trong vòng lặp `while True:`, lấy từ `model_router.get_next_credential("EXTRACTION")` mỗi lần thử | Chưa đo (Task 8), cần thêm quanh `_call_and_parse()` |
+
+Embedding và Extraction hiện vẫn dùng OpenAI SDK trực tiếp (không phải PydanticAI
+`Agent`), nên hình dạng usage khác Chat (`response.usage.prompt_tokens` kiểu
+OpenAI SDK, không phải `result.usage` kiểu PydanticAI `RunUsage`) —
+`cost_calculator`/`UsageRecorder` (Task 5/6) phải chuẩn hoá 2 hình dạng này về
+cùng 1 kiểu trước khi gửi Java, không giả định mọi nơi đều là PydanticAI.
+
+### Vì sao không có "1 hook duy nhất trước/sau mỗi attempt" sẵn có — và quyết định mở rộng chỗ nào?
+
+Trước Cost Tracking, `model_router`/`streaming.py` chỉ cần biết "attempt này
+lỗi hay không" để quyết định failover — nên hook duy nhất tồn tại là
+`record_failure()` (sau khi lỗi) và `on_failover` (sau khi đã chọn được
+credential thay thế), cả hai đều chỉ chạy trên **nhánh lỗi**. Không có hook nào
+chạy sau một attempt **thành công** — usage/latency của attempt thành công đơn
+giản là bị vứt đi ngay tại chỗ (`result.output`/`response.data` được đọc,
+`result`/`response` bị bỏ qua ngay sau).
+
+Quyết định (thực hiện ở Task 6, không phải Task 0): **không thêm hook thứ hai**
+— mở rộng trực tiếp 2 hàm `stream_agent_text()`/`run_agent_text_with_failover()`
+đã là điểm hội tụ duy nhất của mọi lệnh gọi PydanticAI (module docstring của
+`streaming.py` đã khẳng định đây là "ONLY place" gọi `run_stream()`). Thêm
+tham số `on_attempt` (keyword-only, cùng nhóm với `on_failover`), gọi ở
+**cả 2 nhánh** (`return` thành công và `except` trước khi raise/failover), với
+đủ trường Cost cần: `credential` (→ `chatModelId`/provider/model snapshot),
+`attempt` (đếm từ 0), usage (khi thành công) hoặc `None` (khi lỗi), latency đo
+bằng `time.monotonic()` quanh đúng lệnh gọi provider, `status`
+(SUCCESS/ERROR). Vì cả 2 hàm dùng chung 1 vòng `while True:`, "trước mỗi
+attempt" chính là đầu mỗi vòng lặp — không cần callback riêng, `UsageRecorder`
+(Task 6) tự đặt mốc `time.monotonic()` ngay trước dòng gọi `agent.run(...)`/
+`run_stream(...)` trong closure truyền vào qua `on_attempt`.
+
+Đã cân và loại: thêm `UsageRecorder` như một tham số length riêng đi xuyên qua
+`Agent`/PydanticAI (yêu cầu sửa hợp đồng của thư viện ngoài) · dùng
+`contextvars` để "ngầm" ghi nhận attempt (khó test, khó theo dõi luồng dữ liệu
+hơn một tham số tường minh).
+
+Embedding/Extraction (raw OpenAI SDK) không dùng `stream_agent_text`/
+`run_agent_text_with_failover`, nên Task 8 thêm đo lường **tại chỗ** quanh
+`_call_provider()`/`_call_and_parse()` — không cố dùng chung 1 hook với Chat vì
+2 đường này còn khác cả hình dạng response.
+
+### Vì sao `litellm` chỉ dùng để định giá, và vì sao cần ép `LITELLM_LOCAL_MODEL_COST_MAP=True`?
+
+Không còn áp dụng: agent đã gỡ hẳn `litellm` (29-09-2026). Xem mục kế tiếp.
+
+### Vì sao giá model lấy từ backend-java (đồng bộ LiteLLM + SA ghi đè), không dùng bảng `litellm` offline hay cào trang giá provider?
+
+Bản đầu tính cost bằng `litellm.cost_per_token()` trên bảng giá đóng gói sẵn trong package,
+tra theo **tên model trần**. Có 3 vấn đề:
+
+- **Lệch key:** bảng đó đặt model Gemini API dưới key `gemini/<model>`, nên tra `gemini-2.5-flash`
+  không ra giá và lượt gọi bị ghi UNPRICED dù có giá.
+- **Giá đứng yên và không sửa được:** giá chỉ đổi khi nâng version `litellm`; SA không sửa được một
+  giá sai hay thêm giá cho model mới.
+- **Hai nguồn lệch nhau:** tab Bảng giá trên web đọc một bảng chép tay khác, nên số UI hiển thị có
+  thể khác số budget đang trừ.
+
+Quyết định: giá nằm trong bảng `model_prices` của backend-java, khoá `(provider, model)`, đơn vị
+USD per 1M token. Backend đồng bộ hằng ngày từ file JSON giá của LiteLLM; SA sửa được và giá sửa tay
+không bị đồng bộ ghi đè. Agent tải giá qua `GET /internal/model-pricing/snapshot`
+(`app/core/pricing/snapshot.py`), cùng cơ chế snapshot + `config_version` với budget, và
+`cost_calculator` chỉ còn là phép tính:
+`(input − cached) × giá input + cached × giá cached (không có thì dùng giá input) + output × giá output`.
+Test so khớp từng số với kết quả `litellm.cost_per_token()` cũ cho cùng đơn giá, nên việc chuyển
+nguồn không làm đổi chi phí của một lượt gọi.
+
+Hệ quả phụ có lợi: gỡ `litellm` gỡ luôn nguy cơ network call ngầm lúc `import litellm` (mục trên),
+và sửa được `uv.lock` bị lệch (`litellm` có trong `pyproject.toml` nhưng không có trong lock, nên
+image Docker dựng bằng `uv sync --frozen` không có `litellm`).
+
+Đã cân và loại:
+- **Cào HTML trang giá của provider:** một phần bảng giá OpenAI render bằng JS nên không có trong
+  HTML tĩnh; trang AI Studio chỉ là vỏ JS; nhiều tier (Standard/Batch/Flex/Priority), giá theo loại
+  dữ liệu và theo độ dài context khiến parser phải đoán; provider đổi giao diện là hỏng không báo
+  lỗi, trong khi budget chặn request dựa trên con số này.
+- **Giữ `litellm` offline:** không sửa được cả 3 vấn đề trên.
+- **Chỉ nhập tay:** SA phải tự cập nhật mọi model, dễ quên.
+
+Luật nằm ở: `PRODUCT.md` › Business rules (giá model). Chi tiết thiết kế: ADR 0006 bên
+`unisage-backend/docs/adr/0006-model-pricing-source.md`.
 
 ## Cấu hình
 

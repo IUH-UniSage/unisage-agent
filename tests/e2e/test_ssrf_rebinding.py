@@ -18,7 +18,7 @@ needs, on their own throwaway network:
   successful rebind would have reached) - both admin-controllable, so this
   test can read `request_count` off each afterwards via `docker exec`.
 - `ssrf-probe` (`tests/e2e/ssrf_probe/`, new for this test) - a minimal image
-  containing only `app/core/ssrf_guard.py` + `app/core/llm/http_client.py`
+  containing only `app/core/security/ssrf_guard.py` + `app/core/llm/http_client.py`
   (not the full agent image - see its Dockerfile) that makes exactly one
   real GET through `build_provider_http_client_sync` against
   `http://rebind.test:8000/healthz`, with its own DNS resolver (`docker run
@@ -50,8 +50,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]  # unisage-agent/
 
 
 _HEALTHZ_PROBE = (
-    "import urllib.request; "
-    "urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+    "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
 )
 _ADMIN_STATE_PROBE = (
     "import urllib.request; "

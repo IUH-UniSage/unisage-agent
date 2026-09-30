@@ -14,7 +14,7 @@ missing webhook URL specifically is logged as a no-op, not an error: not
 every environment has Slack configured, and that's expected.
 
 What payload to send and when to call this is decided elsewhere
-(`app.core.alerting`) - this client only knows how to POST one.
+(`app.core.observability.alerting`) - this client only knows how to POST one.
 """
 
 import logging
@@ -49,7 +49,5 @@ async def send_slack_alert(payload: dict[str, Any]) -> None:
         return
 
     if response.status_code >= 300:
-        logger.warning(
-            "Slack alert failed - HTTP %s: %s", response.status_code, response.text
-        )
+        logger.warning("Slack alert failed - HTTP %s: %s", response.status_code, response.text)
         return

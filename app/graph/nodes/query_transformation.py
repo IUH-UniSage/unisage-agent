@@ -18,9 +18,15 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from app.core.config import settings
-from app.core.model_registry import CredentialConfig
-from app.core.model_router import ModelRouter
-from app.graph.streaming import AgentFactory, FailoverCallback, run_agent_text_with_failover
+from app.core.registry.model_registry import CredentialConfig
+from app.core.registry.model_router import ModelRouter
+from app.graph.streaming import (
+    AgentFactory,
+    AttemptRecorder,
+    BudgetContext,
+    FailoverCallback,
+    run_agent_text_with_failover,
+)
 from app.rag.prompting import append_recent_history, get_templates
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, RoutingMode
@@ -64,12 +70,14 @@ async def transform_query(
     agent_factory: AgentFactory | None = None,
     router: ModelRouter | None = None,
     on_failover: FailoverCallback | None = None,
+    on_attempt: AttemptRecorder | None = None,
+    budget: BudgetContext | None = None,
 ) -> str:
     """HyDE retrieval text: the self-contained question, then the document.
 
     `purpose`/`credential`/`snapshot_version`/`agent_factory`/`router`/
-    `on_failover` are the same opt-in failover wiring as
-    `run_agent_text_with_failover()`.
+    `on_failover`/`on_attempt`/`budget` are the same opt-in failover/usage/budget
+    wiring as `run_agent_text_with_failover()`.
     """
 
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
@@ -82,6 +90,8 @@ async def transform_query(
         agent_factory=agent_factory,
         router=router,
         on_failover=on_failover,
+        on_attempt=on_attempt,
+        budget=budget,
     )
 
 
@@ -118,12 +128,14 @@ async def decompose_query(
     agent_factory: AgentFactory | None = None,
     router: ModelRouter | None = None,
     on_failover: FailoverCallback | None = None,
+    on_attempt: AttemptRecorder | None = None,
+    budget: BudgetContext | None = None,
 ) -> list[str]:
     """Up to `CHAT_MAX_SUB_QUERIES` sub-queries; an unusable output gives `[]`.
 
     `purpose`/`credential`/`snapshot_version`/`agent_factory`/`router`/
-    `on_failover` are the same opt-in failover wiring as
-    `run_agent_text_with_failover()`.
+    `on_failover`/`on_attempt`/`budget` are the same opt-in failover/usage/budget
+    wiring as `run_agent_text_with_failover()`.
     """
 
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
@@ -136,6 +148,8 @@ async def decompose_query(
         agent_factory=agent_factory,
         router=router,
         on_failover=on_failover,
+        on_attempt=on_attempt,
+        budget=budget,
     )
     return _parse_sub_queries(output)
 
@@ -155,6 +169,8 @@ async def _transform_task(
     decomposer_agent_factory: AgentFactory | None,
     router: ModelRouter | None,
     on_failover: FailoverCallback | None,
+    on_attempt: AttemptRecorder | None,
+    budget: BudgetContext | None,
 ) -> list[SubQuery]:
     if mode == "MULTI" and decomposer_agent is not None:
         sub_queries = await decompose_query(
@@ -168,6 +184,8 @@ async def _transform_task(
             agent_factory=decomposer_agent_factory,
             router=router,
             on_failover=on_failover,
+            on_attempt=on_attempt,
+            budget=budget,
         )
         # Fewer than 2 sub-queries is not a decomposition - fall back to HyDE.
         if len(sub_queries) >= 2:
@@ -184,6 +202,8 @@ async def _transform_task(
         agent_factory=hyde_agent_factory,
         router=router,
         on_failover=on_failover,
+        on_attempt=on_attempt,
+        budget=budget,
     )
     return [SubQuery(question=task.query, retrieval_text=retrieval_text)]
 
@@ -202,16 +222,22 @@ async def transform_tasks(
     decomposer_agent_factory: AgentFactory | None = None,
     router: ModelRouter | None = None,
     on_failover: FailoverCallback | None = None,
+    on_attempt: AttemptRecorder | None = None,
+    budget: BudgetContext | None = None,
 ) -> list[SubQuery]:
     """Every task's sub-queries, flattened in task order.
 
     `purpose`/`credential`/`snapshot_version`/`hyde_agent_factory`/
-    `decomposer_agent_factory`/`router`/`on_failover` are the same opt-in
-    failover wiring as `run_agent_text_with_failover()` - each concurrent
-    task gets its own independent retry loop, so one task's failover never
-    touches another's (or the original `hyde_agent`/`decomposer_agent`)
-    mid-flight; `on_failover` still fires per task, so whichever task fails
-    over first is what the caller sees update the shared model state with.
+    `decomposer_agent_factory`/`router`/`on_failover`/`on_attempt`/`budget` are
+    the same opt-in failover/usage/budget wiring as `run_agent_text_with_failover()` -
+    each concurrent task gets its own independent retry loop, so one task's
+    failover never touches another's (or the original `hyde_agent`/
+    `decomposer_agent`) mid-flight; `on_failover` still fires per task, so
+    whichever task fails over first is what the caller sees update the
+    shared model state with. `on_attempt` is called from every concurrent
+    task's coroutine - safe because `UsageRecorder.record_attempt()` never
+    awaits, so no two calls can interleave mid-append even though the tasks
+    themselves run concurrently.
     """
 
     per_task = await asyncio.gather(
@@ -230,6 +256,8 @@ async def transform_tasks(
                 decomposer_agent_factory=decomposer_agent_factory,
                 router=router,
                 on_failover=on_failover,
+                on_attempt=on_attempt,
+                budget=budget,
             )
             for task, mode in tasks
         )

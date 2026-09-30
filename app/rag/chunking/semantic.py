@@ -1,15 +1,30 @@
+import asyncio
+import logging
 import math
 import re
+import uuid
+from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 import tiktoken
+from redis import asyncio as redis_asyncio
 
+from app.core.budget.tracker import BudgetTracker, RequestBudgetRejectedError
 from app.core.config import settings
-from app.core.exceptions import ChunkingConfigException
-from app.rag.embeddings.openai_embedder import OpenAIEmbedder
-from app.rag.embeddings.provider import EmbeddingProvider
+from app.core.errors.exceptions import ChunkingConfigException
+from app.core.usage.usage_recorder import UsageRecorder
+from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
 from app.rag.ingestion.table_aware_parser import ParsedRegion
 from app.schemas.ingestion import Chunk, SourceLocator
+
+logger = logging.getLogger(__name__)
+
+# `list[str]` sentences in, one embedding vector per sentence out - `split()`'s plain path
+# wraps the sync `EmbeddingProvider.embed()` in a trivial async shim; `split_tracked()`'s
+# production path awaits `OpenAIEmbedder.embed_tracked()` against a shared `UsageRecorder`.
+_EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
@@ -111,7 +126,7 @@ class SemanticChunker:
     overlap_ratio: float = 0.2
     similarity_threshold: float = 0.5
     min_tokens: int = 48
-    embedder: EmbeddingProvider = field(default_factory=OpenAIEmbedder)
+    embedder: EmbeddingProvider = field(default_factory=build_embedder)
 
     @property
     def max_tokens(self) -> int:
@@ -131,8 +146,88 @@ class SemanticChunker:
         restricted to chunks from the SAME region (`block_index`) so two
         different regions' headings/pages are never silently glued
         together.
+
+        Untracked - no usage/cost record at all (matches `OpenAIEmbedder.embed()`'s own
+        "test-injected client skips the registry entirely" precedent; every unit test in
+        `tests/test_chunking_semantic.py` injects a bare fake embedder this way). The
+        production entry point (`app.rag.chunking.strategy.dispatch`) calls
+        `split_tracked()` instead.
         """
 
+        async def _plain_embed(texts: list[str]) -> list[list[float]]:
+            return self.embedder.embed(texts)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._split_async(regions, _plain_embed))
+        # A caller already inside a running loop (e.g. `strategy.dispatch()` awaiting a
+        # sibling call) - offload to a fresh thread/loop rather than nesting asyncio.run().
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, self._split_async(regions, _plain_embed)).result()
+
+    async def split_tracked(
+        self, regions: list[ParsedRegion], *, document_id: str, user_id: str | None = None
+    ) -> list[Chunk]:
+        """Same grouping as `split()`, but every region's embedding call in this ONE
+        chunking request shares a single `UsageRecorder` (`purpose="SEMANTIC_CHUNKING"`,
+        `document_id`, `user_id` = whoever called `POST /ingestion/chunking`) - one
+        business/cost-history request per document per chunking pass, not one per region
+        (a document can have dozens of regions, each previously its own untracked
+        purpose=EMBEDDING request with no document/user attribution at all).
+
+        Requires an `embedder` with `embed_tracked()` (`OpenAIEmbedder`/`GoogleEmbedder`, picked
+        by `app.rag.embeddings.provider.build_embedder()`) - the generic `EmbeddingProvider`
+        Protocol only promises the untracked `embed()` method `split()` uses; only
+        `app.rag.chunking.strategy.dispatch()`, which always builds a real embedder via
+        `build_embedder()`, calls this.
+        """
+
+        embedder = self.embedder
+        if not hasattr(embedder, "embed_tracked"):
+            raise TypeError(
+                "split_tracked() requires an embedder with embed_tracked(), got "
+                f"{type(embedder).__name__}"
+            )
+
+        redis_client = redis_asyncio.Redis.from_url(settings.REDIS_URL)
+        budget_tracker = BudgetTracker(redis_client=redis_client)
+        recorder = UsageRecorder(
+            request_id=str(uuid.uuid4()),
+            purpose="SEMANTIC_CHUNKING",
+            document_id=document_id,
+            user_id=user_id,
+            budget_tracker=budget_tracker,
+        )
+        status = "ERROR"
+        try:
+            reserve_result = await budget_tracker.reserve_request(
+                request_id=recorder.request_id,
+                purpose="SEMANTIC_CHUNKING",
+                estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
+            )
+            if reserve_result != "OK":
+                raise RequestBudgetRejectedError("SEMANTIC_CHUNKING", reserve_result)
+
+            async def _tracked_embed(texts: list[str]) -> list[list[float]]:
+                return await embedder.embed_tracked(texts, recorder, budget_tracker)
+
+            chunks = await self._split_async(regions, _tracked_embed)
+            status = "SUCCESS"
+            return chunks
+        finally:
+            try:
+                await recorder.close(status=status)
+            finally:
+                try:
+                    await redis_client.aclose()
+                except Exception:
+                    logger.debug(
+                        "SemanticChunker.split_tracked: closing the Redis client failed",
+                        exc_info=True,
+                    )
+
+    async def _split_async(self, regions: list[ParsedRegion], embed_fn: _EmbedFn) -> list[Chunk]:
         raw_chunks: list[Chunk] = []
         prefixes: dict[int | None, str] = {}
         usable_max_tokens_by_block: dict[int | None, int] = {}
@@ -152,7 +247,7 @@ class SemanticChunker:
             sentences = self._prepare_sentences(region.content, usable_max_tokens)
             if not sentences:
                 continue
-            embeddings = self.embedder.embed(sentences)
+            embeddings = await embed_fn(sentences)
             for group in self._group_sentences(sentences, embeddings, usable_max_tokens):
                 raw_chunks.append(
                     Chunk(

@@ -12,7 +12,7 @@ shared `GraphModels` instance every node reads from.
 
 from pydantic_ai.models.function import FunctionModel
 
-from app.core.model_registry import CredentialConfig
+from app.core.registry.model_registry import CredentialConfig
 from app.graph.streaming_graph import _make_failover_applier
 from app.graph.streaming_state import GraphModels
 

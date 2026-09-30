@@ -1,4 +1,4 @@
-"""Hot-reload for `app.core.model_registry`'s cached snapshot (plan.md "Hot-reload
+"""Hot-reload for `app.core.registry.model_registry`'s cached snapshot (plan.md "Hot-reload
 consistency", todo.md Task 8).
 
 Two independent signals feed the same swap logic:
@@ -47,7 +47,11 @@ from typing import Any, Protocol
 import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
-from app.core.model_registry import get_current_snapshot, parse_snapshot, set_current_snapshot
+from app.core.registry.model_registry import (
+    get_current_snapshot,
+    parse_snapshot,
+    set_current_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +288,11 @@ def start_asyncio_registry_subscriber(
 
     resolved_client: RegistryClient = client if client is not None else BackendJavaClient()
     lock = asyncio.Lock()
-    interval = poll_interval if poll_interval is not None else settings.MODEL_REGISTRY_POLL_INTERVAL_SECONDS
+    interval = (
+        poll_interval
+        if poll_interval is not None
+        else settings.MODEL_REGISTRY_POLL_INTERVAL_SECONDS
+    )
     channel = settings.MODEL_REGISTRY_CHANNEL
     redis_url = settings.REDIS_URL
 
@@ -339,7 +347,11 @@ def start_thread_registry_subscriber(
     from app.integrations.backend_java_client import BackendJavaClient
 
     resolved_client: RegistryClient = client if client is not None else BackendJavaClient()
-    interval = poll_interval if poll_interval is not None else settings.MODEL_REGISTRY_POLL_INTERVAL_SECONDS
+    interval = (
+        poll_interval
+        if poll_interval is not None
+        else settings.MODEL_REGISTRY_POLL_INTERVAL_SECONDS
+    )
 
     def _run() -> None:
         asyncio.run(_run_subscriber_forever(client=resolved_client, poll_interval=interval))

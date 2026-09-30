@@ -37,7 +37,7 @@ failure mode of skipping the alert entirely is total silence during exactly the 
 outage a human most needs to hear about. Between those two, a duplicate message is the
 better failure.
 
-Every message is redacted (`app.core.redaction.redact`) right before it is handed to
+Every message is redacted (`app.core.security.redaction.redact`) right before it is handed to
 `send_slack_alert()`, passing the credential's own API key as the known secret — defense
 in depth even though `reason` should already have gone through `safe_error_message()`
 at the call site, matching how the Java side re-redacts `error_message` on its own end
@@ -53,8 +53,8 @@ from typing import Any, Protocol
 import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
-from app.core.model_registry import CredentialConfig
-from app.core.redaction import redact
+from app.core.registry.model_registry import CredentialConfig
+from app.core.security.redaction import redact
 from app.integrations.slack_notifier import send_slack_alert
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,9 @@ def _credential_label(credential: CredentialConfig) -> str:
     in a Slack message forces whoever reads it to go cross-reference the
     admin UI just to know which credential failed."""
 
-    return f"{credential.display_name} ({credential.id})" if credential.display_name else credential.id
+    return (
+        f"{credential.display_name} ({credential.id})" if credential.display_name else credential.id
+    )
 
 
 def _scope_id(credential: CredentialConfig | None, purpose: str | None) -> str:
@@ -186,12 +188,12 @@ def _build_slack_payload(
     if purpose:
         fields.append({"type": "mrkdwn", "text": f"*Purpose:*\n{purpose}"})
     if credential is not None:
-        fields.append({"type": "mrkdwn", "text": f"*Provider:*\n{credential.provider or 'unknown'}"})
+        fields.append(
+            {"type": "mrkdwn", "text": f"*Provider:*\n{credential.provider or 'unknown'}"}
+        )
         fields.append({"type": "mrkdwn", "text": f"*Model:*\n{credential.model_name or 'unknown'}"})
         fields.append({"type": "mrkdwn", "text": f"*Credential:*\n{_credential_label(credential)}"})
-    fields.append(
-        {"type": "mrkdwn", "text": f"*Time:*\n{datetime.now(UTC).isoformat()}"}
-    )
+    fields.append({"type": "mrkdwn", "text": f"*Time:*\n{datetime.now(UTC).isoformat()}"})
 
     return {
         "text": _format_message(credential, incident_type, reason, purpose),

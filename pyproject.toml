@@ -14,7 +14,6 @@ dependencies = [
     "gunicorn>=22.0.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
-    "pydantic-ai-slim[anthropic,google,groq,mistral,openai]>=1.0.0",
     "pydantic-graph>=1.80.0",
     "sqlalchemy[asyncio]>=2.0.35",
     "alembic>=1.13.0",
@@ -37,6 +36,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "beautifulsoup4>=4.12.0",
     "lxml>=5.0.0",
+    "pydantic-ai-slim[anthropic,google,openai]>=1.0.0",
 ]
 
 [project.optional-dependencies]

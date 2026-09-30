@@ -1,4 +1,4 @@
-from app.core.error_codes import ErrorCode
+from app.core.errors.error_codes import ErrorCode
 
 
 class UniSageException(Exception):

@@ -31,9 +31,15 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from app.core.config import settings
-from app.core.graph_trace import GraphTrace
-from app.core.model_registry import CredentialConfig
-from app.graph.streaming import FailoverCallback, TokenSink, stream_agent_text
+from app.core.observability.graph_trace import GraphTrace
+from app.core.registry.model_registry import CredentialConfig
+from app.graph.streaming import (
+    AttemptRecorder,
+    BudgetContext,
+    FailoverCallback,
+    TokenSink,
+    stream_agent_text,
+)
 from app.rag.prompting import (
     build_json_repair_prompt,
     build_multi_intent_prompt,
@@ -105,6 +111,8 @@ async def _repair_missing_ask_form(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     token_sink: TokenSink,
+    credential: CredentialConfig | None = None,
+    on_attempt: AttemptRecorder | None = None,
 ) -> str:
     """Second-chance fixup for a known model failure mode: the response reads
     like a clarification request in prose but the mandatory
@@ -126,6 +134,13 @@ async def _repair_missing_ask_form(
     Streams nothing to `token_sink` until the repair call itself has
     produced a valid JSON block - a partial/garbage repair attempt (or a
     literal "NONE") never reaches the client mid-stream.
+
+    `credential`/`on_attempt`: this repair
+    call has no failover wiring of its own (no retry, no `purpose`), so
+    `credential` is whatever the caller's primary call started with - if THAT
+    call failed over mid-flight, this snapshot is stale (a pre-existing gap,
+    not introduced by usage recording: the repair call already reused the
+    same possibly-stale local `agent` variable before this field existed).
     """
 
     if _extract_json_blocks(full_text):
@@ -142,7 +157,9 @@ async def _repair_missing_ask_form(
     async def _capture_sink(_token: str) -> None:
         return None
 
-    repaired = await stream_agent_text(agent, repair_prompt, _capture_sink)
+    repaired = await stream_agent_text(
+        agent, repair_prompt, _capture_sink, credential=credential, on_attempt=on_attempt
+    )
     match = _JSON_BLOCK_PATTERN.search(repaired)
     if match is None:
         return full_text
@@ -178,6 +195,8 @@ async def run_generation_synthesis(
     credential: CredentialConfig | None = None,
     snapshot_version: int | None = None,
     on_failover: FailoverCallback | None = None,
+    on_attempt: AttemptRecorder | None = None,
+    budget: BudgetContext | None = None,
 ) -> GenerationResult:
     # A single HyDE question uses the advisory frame; several sub-queries
     # (a decomposed comparison, or several different questions in one
@@ -218,6 +237,8 @@ async def run_generation_synthesis(
         snapshot_version=snapshot_version,
         agent_factory=build_generation_agent,
         on_failover=on_failover,
+        on_attempt=on_attempt,
+        budget=budget,
     )
     if settings.CHAT_ALLOW_REPAIR_JSON:
         full_text = await _repair_missing_ask_form(
@@ -227,6 +248,8 @@ async def run_generation_synthesis(
             security=security,
             confirmed_metadata=confirmed_metadata,
             token_sink=token_sink,
+            credential=credential,
+            on_attempt=on_attempt,
         )
     confirmed_updates = collect_confirmed_metadata_updates(full_text, previous=previous_pending)
     updated_confirmed_metadata = (

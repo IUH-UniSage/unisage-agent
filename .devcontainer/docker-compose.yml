@@ -27,8 +27,15 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
+    # AOF persistence, fsynced at most once a second - the usage outbox, its
+    # dead-letter queue, and every budget reservation/counter live only in
+    # Redis, so a plain container restart without this would silently drop
+    # whatever hadn't reached backend-java yet.
+    command: redis-server --appendonly yes --appendfsync everysec
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
 
   qdrant:
     image: qdrant/qdrant:v1.15.4
@@ -39,5 +46,46 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  # Same base image and workspace mount as `app` - attach a terminal (VS Code's
+  # "Attach to Running Container", or `docker compose exec celery-worker sh`)
+  # and run `task be:worker` inside it, same as `app` expects for `task be:dev`.
+  # Not auto-started with a real command: the venv this depends on is created
+  # by hand inside whichever container it's meant to run in (Windows/Linux venv
+  # layouts differ), so there is nothing safe to hardcode here.
+  celery-worker:
+    image: mcr.microsoft.com/devcontainers/python:1-3.12-bullseye
+    volumes:
+      - ..:/workspace:cached
+    command: sleep infinity
+    environment:
+      - DB_URL=postgresql+asyncpg://postgres:123456@host.docker.internal:5433/unisage_agent_db
+      - MINIO_ENDPOINT=host.docker.internal:9100
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+      - qdrant
+
+  celery-beat:
+    image: mcr.microsoft.com/devcontainers/python:1-3.12-bullseye
+    volumes:
+      - ..:/workspace:cached
+    command: sleep infinity
+    environment:
+      - DB_URL=postgresql+asyncpg://postgres:123456@host.docker.internal:5433/unisage_agent_db
+      - MINIO_ENDPOINT=host.docker.internal:9100
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+      - qdrant
+
 volumes:
   qdrant_data:
+  redis_data:

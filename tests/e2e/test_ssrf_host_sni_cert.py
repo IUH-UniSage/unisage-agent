@@ -3,7 +3,7 @@ factory client - todo.md Task 0.6's "Test Host/SNI/cert" item.
 
 Runs entirely on loopback, no Docker: a real `ssl.SSLContext`-wrapped
 `http.server.HTTPServer` on `127.0.0.1` stands in for the fake LLM provider,
-and `app.core.ssrf_guard.resolve_all` is monkeypatched to resolve
+and `app.core.security.ssrf_guard.resolve_all` is monkeypatched to resolve
 `fake-provider.test` to `127.0.0.1` (there is no real DNS entry for it here -
 the real-DNS case is `test_ssrf_rebinding.py`'s job; this file is about what
 happens *after* resolution: does the client keep the original hostname for
@@ -118,7 +118,7 @@ def _resolve_fake_provider_test_to_loopback(monkeypatch: pytest.MonkeyPatch) -> 
     anything else (nothing else is looked up in this file, but fail-open-to-real
     is safer than silently redirecting unrelated hostnames)."""
 
-    import app.core.ssrf_guard as ssrf_guard
+    import app.core.security.ssrf_guard as ssrf_guard
 
     real_resolve_all = ssrf_guard.resolve_all
 

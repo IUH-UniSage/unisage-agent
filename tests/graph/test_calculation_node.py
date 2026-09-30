@@ -9,7 +9,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.core.config import settings
-from app.core.graph_trace import GraphTrace
+from app.core.observability.graph_trace import GraphTrace
+from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
@@ -19,6 +20,15 @@ from app.schemas.security import AcademicSecurityContext
 from tests.llm_mocks import make_classification_llm_model
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
+
+
+def _usage_recorder() -> UsageRecorder:
+    # A fresh instance per call, not a shared module-level constant like _TRACE -
+    # UsageRecorder is stateful (closes exactly once), so sharing one across tests
+    # would leak `_closed`/`_lines` state between them.
+    return UsageRecorder(request_id="test-request", purpose="CHAT")
+
+
 _CHUNK = RetrievedChunk(
     chunk_id="c1", content="Quy trình đăng ký tốt nghiệp", source="s", score=0.9
 )
@@ -126,6 +136,7 @@ async def test_calculation_only_turn_returns_placeholder_without_retrieval(
             models,
             _sink(tokens),
             _TRACE,
+            _usage_recorder(),
         )
 
     assert result.response_text == CALCULATION_PLACEHOLDER_TEMPLATE
@@ -155,7 +166,9 @@ async def test_calculation_plus_procedure_answers_both_parts(
     tokens: list[str] = []
 
     with caplog.at_level("INFO", logger="unisage.graph"):
-        result = await run_graph(_input(_MIXED_MESSAGE), models, _sink(tokens), _TRACE)
+        result = await run_graph(
+            _input(_MIXED_MESSAGE), models, _sink(tokens), _TRACE, _usage_recorder()
+        )
 
     expected = f"Thủ tục gồm 3 bước [1].\n\n{CALCULATION_PLACEHOLDER_TEMPLATE}"
     assert result.response_text == expected
@@ -185,7 +198,7 @@ async def test_mixed_turn_retrieves_on_the_advisory_question_only(
         retrieval=retrieval,
     )
 
-    await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE)
+    await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE, _usage_recorder())
 
     (query,) = retrieval.queries
     assert query.startswith(_ADVISORY_QUERY)
@@ -205,7 +218,7 @@ async def test_mixed_turn_keeps_the_clarification_raised_by_the_advisory_part(
         retrieval=_RecordingRetrieval([_CHUNK]),
     )
 
-    result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE)
+    result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE, _usage_recorder())
 
     assert result.pending_clarification is not None
     assert result.pending_clarification.missing_fields == ["training_type"]
@@ -227,7 +240,7 @@ async def test_mixed_turn_without_context_falls_back_then_appends_the_placeholde
         retrieval=_RecordingRetrieval([_CHUNK]),
     )
 
-    result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE)
+    result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE, _usage_recorder())
 
     assert result.used_ticket_fallback is True
     assert result.response_text.endswith(f"\n\n{CALCULATION_PLACEHOLDER_TEMPLATE}")
@@ -297,7 +310,7 @@ async def test_two_advisory_questions_run_node_06_per_task_and_search_both(
         retrieval=retrieval,
     )
 
-    await run_graph(_input(message), models, _sink([]), _TRACE)
+    await run_graph(_input(message), models, _sink([]), _TRACE, _usage_recorder())
 
     assert retrieval.queries == [
         "Câu hỏi độc lập: Học phí ngành CNTT bao nhiêu?\n\nVăn bản HyDE.",
@@ -323,7 +336,7 @@ async def test_single_advisory_question_still_passes_its_resolved_query(
         retrieval=_RecordingRetrieval([_CHUNK]),
     )
 
-    await run_graph(_input(message), models, _sink([]), _TRACE)
+    await run_graph(_input(message), models, _sink([]), _TRACE, _usage_recorder())
 
     (prompt,) = generation_prompts
     assert f"Câu hỏi độc lập: {message}" in prompt
