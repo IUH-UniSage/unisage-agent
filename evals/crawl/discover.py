@@ -363,7 +363,7 @@ DISCOVERED_FIELDS = ["pdf_url", "source_page", "link_text", "host", "unit", "cam
 def write_sources(path: Path, sites: Iterable[Site], insecure_hosts: set[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=SOURCES_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=SOURCES_FIELDS, lineterminator="\n")
         writer.writeheader()
         for site in sites:
             writer.writerow(
@@ -386,7 +386,7 @@ def write_sources(path: Path, sites: Iterable[Site], insecure_hosts: set[str]) -
 def write_discovered(path: Path, pdfs: Iterable[DiscoveredPdf]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=DISCOVERED_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=DISCOVERED_FIELDS, lineterminator="\n")
         writer.writeheader()
         for pdf in sorted(pdfs, key=lambda p: (p.host, p.pdf_url)):
             writer.writerow(pdf.__dict__)
