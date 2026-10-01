@@ -73,7 +73,9 @@ class TestOpenAI:
         response = _openai_response(
             429,
             error={
-                "message": "You exceeded your current quota, please check your plan and billing details.",
+                "message": (
+                    "You exceeded your current quota, please check your plan and billing details."
+                ),
                 "type": "insufficient_quota",
                 "code": "insufficient_quota",
             },

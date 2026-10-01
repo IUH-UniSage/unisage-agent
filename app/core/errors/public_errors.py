@@ -33,7 +33,9 @@ _USER_FIXABLE_MESSAGES = {
 }
 _BUDGET_MESSAGES = {
     FailureReason.BUDGET_EXCEEDED: "Hệ thống đã đạt giới hạn sử dụng. Vui lòng thử lại sau.",
-    FailureReason.BUDGET_THROTTLED: "Hệ thống đang xử lý nhiều yêu cầu cùng lúc. Vui lòng thử lại sau ít giây.",
+    FailureReason.BUDGET_THROTTLED: (
+        "Hệ thống đang xử lý nhiều yêu cầu cùng lúc. Vui lòng thử lại sau ít giây."
+    ),
 }
 TEMPORARY_MESSAGE = "Trợ lý AI đang bận hoặc tạm thời gián đoạn, bạn thử lại sau ít phút nhé."
 SYSTEM_MESSAGE = (

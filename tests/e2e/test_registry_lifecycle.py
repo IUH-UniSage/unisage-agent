@@ -31,6 +31,10 @@ import pytest
 import pytest_asyncio
 import redis as redis_sync
 
+_EXPIRE_LEASE_SQL = (
+    "UPDATE chat_model_verifications SET lease_until = now() - interval '1 minute' WHERE id = $1"
+)
+
 pytestmark = pytest.mark.integration
 
 SA_LOGIN_CODE = "SA-001"
@@ -223,7 +227,7 @@ async def test_stale_lease_result_is_rejected_after_expiry(
     # direct SQL).
     async with java_db_pool.acquire() as conn:
         await conn.execute(
-            "UPDATE chat_model_verifications SET lease_until = now() - interval '1 minute' WHERE id = $1",
+            _EXPIRE_LEASE_SQL,
             uuid.UUID(job["jobId"]),
         )
 
@@ -247,7 +251,7 @@ async def test_lease_reclaimed_after_expiry_old_token_409_new_token_applies(
 
     async with java_db_pool.acquire() as conn:
         await conn.execute(
-            "UPDATE chat_model_verifications SET lease_until = now() - interval '1 minute' WHERE id = $1",
+            _EXPIRE_LEASE_SQL,
             uuid.UUID(first_claim["jobId"]),
         )
 

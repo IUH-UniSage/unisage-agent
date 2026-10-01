@@ -18,17 +18,17 @@ from app.core.security.ssrf_guard import PinnedNetworkBackend
 
 
 def _credential(**overrides: object) -> CredentialConfig:
-    defaults: dict[str, object] = dict(
-        id="11111111-1111-1111-1111-111111111111",
-        revision=3,
-        source_type="CLOUD_API",
-        provider="openai",
-        model_name="gpt-4o-mini",
-        api_base_url="https://api.openai.com/v1",
-        priority=1,
-        max_rpm=500,
-        api_key="sk-real-secret-value",
-    )
+    defaults: dict[str, object] = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "revision": 3,
+        "source_type": "CLOUD_API",
+        "provider": "openai",
+        "model_name": "gpt-4o-mini",
+        "api_base_url": "https://api.openai.com/v1",
+        "priority": 1,
+        "max_rpm": 500,
+        "api_key": "sk-real-secret-value",
+    }
     defaults.update(overrides)
     return CredentialConfig(**defaults)  # type: ignore[arg-type]
 
