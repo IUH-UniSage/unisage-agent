@@ -58,8 +58,9 @@ from app.schemas.ingestion import (
     TaskProgress,
 )
 from app.schemas.security import AcademicSecurityContext
-from app.worker.celery_app import celery_app, embed_chunks
+from app.worker.celery_app import celery_app
 from app.worker.embedding_job_errors import IngestionJobFailedError, partial_failure_message
+from app.worker.tasks.ingestion import embed_chunks
 
 logger = logging.getLogger(__name__)
 

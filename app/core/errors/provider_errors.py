@@ -17,7 +17,7 @@ class EmbeddingProviderError(Exception):
     the embedding identity guard (`app.core.registry.embedding_identity`) refused to use
     it. Embedding never auto-fails-over — there is no other credential to
     route to, so this is always terminal for the job. Every caller
-    (`OpenAIEmbedder.embed`, and transitively `app.worker.celery_app.embed_chunks` and
+    (`OpenAIEmbedder.embed`, and transitively `app.worker.tasks.ingestion.embed_chunks` and
     `app.rag.retrieval.service.RetrievalService`) must let this escape uncaught rather than
     treat it as a per-chunk data problem.
 

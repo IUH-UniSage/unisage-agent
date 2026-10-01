@@ -2,7 +2,7 @@
 terminal exception Celery stores, which failures abort the whole job, and the
 client-facing reason for a single failed chunk.
 
-Kept out of `celery_app` so the API (`GET /ingestion/jobs/{id}`) can read a stored
+Kept out of `app.worker.tasks.ingestion` so the API (`GET /ingestion/jobs/{id}`) can read a stored
 failure without depending on the task module's internals.
 """
 
@@ -34,7 +34,7 @@ class IngestionJobFailedError(Exception):
 
 
 # Failures that mean the EMBEDDING/EXTRACTION model is unusable for the whole job (not just
-# for one chunk) - see `app.worker.celery_app._run_embed_chunks`.
+# for one chunk) - see `app.worker.tasks.ingestion._run_embed_chunks`.
 JOB_FATAL_ERRORS: tuple[type[Exception], ...] = (
     EmbeddingProviderError,
     NoAvailableCredentialError,

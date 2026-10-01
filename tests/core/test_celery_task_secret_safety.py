@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import inspect
 
+import app.worker.tasks  # noqa: F401 - registers every task on celery_app
 from app.worker.celery_app import celery_app
 
 # plan.md "Secret redaction" — see module docstring for why this is

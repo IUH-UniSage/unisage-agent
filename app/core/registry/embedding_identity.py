@@ -6,7 +6,7 @@ different embedding models produce vectors that are not comparable even at the s
 a silent swap corrupts retrieval instead of erroring, which is exactly what this guard exists to
 prevent. There is no fallback path here: a mismatch always raises, and it's the same exception
 type (`EmbeddingProviderError`, via the `EmbeddingIdentityMismatchError` subclass below) that
-`app.worker.celery_app.embed_chunks` already lets escape the per-chunk try/except.
+`app.worker.tasks.ingestion.embed_chunks` already lets escape the per-chunk try/except.
 
 Wired into `app.rag.embeddings.openai_embedder.OpenAIEmbedder.embed()` — the single class both
 ingest (`embed_chunks`) and query-time retrieval (`app.rag.retrieval.service.RetrievalService`)

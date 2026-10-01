@@ -48,7 +48,7 @@ class OpenAIEmbedder:
 
     When `model`/`client` are resolved from the registry (not injected), every `embed()` call is
     gated by `app.core.registry.embedding_identity.ensure_embedding_identity` - this is the
-    one chokepoint both ingest (`app.worker.celery_app.embed_chunks`) and
+    one chokepoint both ingest (`app.worker.tasks.ingestion.embed_chunks`) and
     query-time retrieval (`app.rag.retrieval.service.RetrievalService`, which builds its embedder
     from this same class) go through, so neither path can silently embed with a credential that
     doesn't match the Qdrant collection's established vector space. A failed provider call, a
@@ -77,8 +77,8 @@ class OpenAIEmbedder:
     @property
     def credential(self) -> CredentialConfig | None:
         """The registry credential this instance resolved, if any - lets a caller several
-        frames away (`app.worker.celery_app.embed_chunks`) build a `report_health` call after an
-        `EmbeddingProviderError` without having to re-derive which credential failed."""
+        frames away (`app.worker.tasks.ingestion.embed_chunks`) build a `report_health` call
+        after an `EmbeddingProviderError` without having to re-derive which credential failed."""
 
         return self._resolved.get("credential")
 
@@ -90,7 +90,7 @@ class OpenAIEmbedder:
 
         One `embed()` call is one business request (`purpose=EMBEDDING`, no
         conversation/message ids). Self-contained: builds and closes its own `UsageRecorder`,
-        so `app.worker.celery_app.embed_chunks` (the one production caller) needs
+        so `app.worker.tasks.ingestion.embed_chunks` (the one production caller) needs
         no changes. Only recorded when a registry credential was actually resolved
         - a test that injects `model`/`client` directly (skipping the registry
         entirely) has no credential to snapshot and records nothing, same as the
@@ -131,7 +131,7 @@ class OpenAIEmbedder:
         budget_tracker: BudgetTracker,
     ) -> list[list[float]]:
         """Embed within a CALLER-managed `UsageRecorder`/`BudgetTracker` - the ingestion
-        pipeline's shared per-document recorder (`app.worker.celery_app.embed_chunks`), which
+        pipeline's shared per-document recorder (`app.worker.tasks.ingestion.embed_chunks`), which
         reserves/settles the request-level budget once for the whole document rather than once
         per `embed()` call. Unlike `embed()`, never builds/closes its own recorder or reserves/
         settles a request-level budget - only the one PROVIDER-scope acquire/release pair
@@ -173,7 +173,7 @@ class OpenAIEmbedder:
             )
             if reserve_result != "OK":
                 # Reuses `EmbeddingProviderError` (not `RequestBudgetRejectedError`) so
-                # `app.worker.celery_app.embed_chunks`'s existing "abort the whole job"
+                # `app.worker.tasks.ingestion.embed_chunks`'s existing "abort the whole job"
                 # handling for that type applies here too - a budget rejection is not a
                 # per-chunk data-quality problem, it means embedding should stop entirely.
                 raise EmbeddingBudgetRejectedError(

@@ -11,8 +11,9 @@ from app.core.registry.model_registry import (
     ModelRegistryError,
     ModelRegistrySnapshot,
 )
-from app.worker.celery_app import celery_app, embed_chunks
+from app.worker.celery_app import celery_app
 from app.worker.embedding_job_errors import IngestionJobFailedError
+from app.worker.tasks.ingestion import embed_chunks
 
 celery_app.conf.update(
     broker_url="memory://",
@@ -27,9 +28,9 @@ def _chunk_payload(index: int) -> dict[str, object]:
     return {"chunk_index": index, "content": f"chunk content {index}", "region_type": "text"}
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_runs_enrich_embed_upsert_in_order(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -74,9 +75,9 @@ def test_embed_chunks_runs_enrich_embed_upsert_in_order(
     assert chunk_ids == ["doc-1:0", "doc-1:1"]
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_reports_strictly_increasing_progress_to_100(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -112,9 +113,9 @@ def test_embed_chunks_reports_strictly_increasing_progress_to_100(
     assert result["percent"] == 100
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_records_per_chunk_failure_without_aborting_batch(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -148,10 +149,10 @@ def test_embed_chunks_records_per_chunk_failure_without_aborting_batch(
     assert result["total_chunk_count"] == 2
 
 
-@patch("app.worker.celery_app.publish_ingestion_event")
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.publish_ingestion_event")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_publishes_completed_failure_when_a_chunk_failed(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -183,11 +184,11 @@ def test_embed_chunks_publishes_completed_failure_when_a_chunk_failed(
     assert completed_frames[0]["total_chunk_count"] == 2
 
 
-@patch("app.worker.celery_app.publish_ingestion_event")
-@patch("app.worker.celery_app.BackendJavaClient")
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.publish_ingestion_event")
+@patch("app.worker.tasks.ingestion.BackendJavaClient")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -226,7 +227,7 @@ def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
 
     with (
         patch(
-            "app.worker.celery_app.get_current_snapshot",
+            "app.worker.tasks.ingestion.get_current_snapshot",
             return_value=ModelRegistrySnapshot(
                 version=1, generated_at=None, purposes={}, embedding_index_identity=None
             ),
@@ -263,9 +264,9 @@ def test_embed_chunks_aborts_and_raises_on_embedding_provider_error(
     assert health_kwargs["error_type"] == "TRANSIENT"
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -318,9 +319,9 @@ def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
     assert point_kwargs["parse_warnings"] == ["garbled_text_raw_kept"]
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_defaults_is_public_to_false_when_omitted(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -337,9 +338,9 @@ def test_embed_chunks_defaults_is_public_to_false_when_omitted(
     assert mock_qdrant_store.ChunkPoint.call_args.kwargs["is_public"] is False
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_passes_is_public_true_through_to_chunk_point(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -358,10 +359,10 @@ def test_embed_chunks_passes_is_public_true_through_to_chunk_point(
     assert mock_qdrant_store.ChunkPoint.call_args.kwargs["is_public"] is True
 
 
-@patch("app.worker.celery_app.publish_ingestion_event")
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.publish_ingestion_event")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_aborts_with_specific_reason_when_extraction_is_unusable(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -397,10 +398,10 @@ def test_embed_chunks_aborts_with_specific_reason_when_extraction_is_unusable(
     assert exc_info.value.message == completed_frames[0]["message"]
 
 
-@patch("app.worker.celery_app.publish_ingestion_event")
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.publish_ingestion_event")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_partial_failure_message_names_the_first_reason(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,

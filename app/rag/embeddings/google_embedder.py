@@ -104,7 +104,7 @@ class GoogleEmbedder:
     This class is the Google-native counterpart, selected by
     `app.rag.embeddings.provider.build_embedder()` purely from the ACTIVE EMBEDDING credential's
     `provider` field - same public contract as `OpenAIEmbedder` (`embed()`/`embed_tracked()`/
-    `identity_key`/`credential`), so every caller (`app.worker.celery_app.embed_chunks`,
+    `identity_key`/`credential`), so every caller (`app.worker.tasks.ingestion.embed_chunks`,
     `app.rag.chunking.semantic.SemanticChunker`, `app.rag.retrieval.service.RetrievalService`)
     can use either interchangeably without knowing which one it got.
 

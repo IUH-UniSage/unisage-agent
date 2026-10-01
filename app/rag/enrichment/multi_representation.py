@@ -130,7 +130,7 @@ class MultiRepresentationEnricher:
 
         Registry-resolved (the production path, `self.model is None`): one `enrich()` call is
         one purpose=EXTRACTION business request, self-contained - builds and closes its own
-        `UsageRecorder`, same as `OpenAIEmbedder.embed()`. `app.worker.celery_app.embed_chunks`
+        `UsageRecorder`, same as `OpenAIEmbedder.embed()`. `app.worker.tasks.ingestion.embed_chunks`
         instead calls `enrich_tracked()` directly with a document-wide shared recorder.
         """
 
@@ -194,7 +194,7 @@ class MultiRepresentationEnricher:
         budget_tracker: BudgetTracker,
     ) -> EnrichedChunk:
         """Enrich within a CALLER-managed `UsageRecorder`/`BudgetTracker` - the ingestion
-        pipeline's shared per-document recorder (`app.worker.celery_app.embed_chunks`), which
+        pipeline's shared per-document recorder (`app.worker.tasks.ingestion.embed_chunks`), which
         reserves/settles the request-level budget once for the whole document rather than once
         per `enrich()` call. Registry-resolved only - there is no test-injected `model` bypass
         here, unlike `enrich()`.
@@ -202,8 +202,8 @@ class MultiRepresentationEnricher:
         `NoAvailableCredentialError`/`NoBudgetAvailableError` (every EXTRACTION
         credential exhausted) propagates uncaught - deliberately NOT folded into the
         "log + return empty" path used for a single malformed-looking response. The caller
-        (`app.worker.celery_app.embed_chunks`) already treats any exception from this method as a
-        per-chunk `FAILED` result without aborting the rest of the batch.
+        (`app.worker.tasks.ingestion.embed_chunks`) aborts the whole job on these (every later
+        chunk would fail the same way); any other exception is a per-chunk `FAILED` result.
         """
 
         try:
