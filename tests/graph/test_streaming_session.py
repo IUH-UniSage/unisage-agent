@@ -9,8 +9,8 @@ import pytest
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
 from app.core.errors.llm_failure import FailureReason
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import ModelRegistryError
 from app.core.usage.usage_recorder import UsageRecorder

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.errors.error_codes import ErrorCode
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import (
     CredentialConfig,

@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from qdrant_client import QdrantClient
 
 from app.core.config import settings
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.llm.embedding_probe import (
     EmbeddingFingerprint,
     fingerprints_match,

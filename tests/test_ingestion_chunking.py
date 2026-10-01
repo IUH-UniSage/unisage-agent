@@ -123,7 +123,7 @@ def test_chunking_semantic_strategy_reports_other_embedding_provider_errors_clea
     client as a specific error, not a generic 500 - `EmbeddingIdentityMismatchError`'s more
     specific handler must not swallow this broader case."""
 
-    from app.core.errors.llm_error_classifier import EmbeddingProviderError
+    from app.core.errors.provider_errors import EmbeddingProviderError
     from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 
     async def _fake_embed_tracked(
@@ -280,7 +280,7 @@ def test_chunking_semantic_strategy_names_the_provider_auth_failure(
     import httpx2
     import openai
 
-    from app.core.errors.llm_error_classifier import EmbeddingProviderError
+    from app.core.errors.provider_errors import EmbeddingProviderError
     from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 
     async def _fake_embed_tracked(

@@ -17,12 +17,9 @@ from app.core.budget.snapshot import refresh_budget_snapshot
 from app.core.budget.tracker import BudgetTracker, RequestBudgetRejectedError
 from app.core.config import settings
 from app.core.errors.error_codes import ErrorCode
-from app.core.errors.llm_error_classifier import (
-    EmbeddingProviderError,
-    ErrorType,
-    classify_llm_error,
-)
+from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
 from app.core.errors.llm_failure import describe_llm_failure
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.observability.alerting import alert_credential_failure
 from app.core.observability.events import publish_ingestion_event
 from app.core.observability.logging_config import configure_logging

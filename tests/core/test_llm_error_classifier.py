@@ -20,11 +20,8 @@ import openai
 import pytest
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from app.core.errors.llm_error_classifier import (
-    ErrorType,
-    MalformedExtractionResponseError,
-    classify_llm_error,
-)
+from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.security.ssrf_guard import SsrfBlockedError
 
 

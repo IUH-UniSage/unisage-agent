@@ -10,8 +10,8 @@ from typing import Any
 
 from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.errors.error_codes import ErrorCode
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
 from app.core.errors.llm_failure import describe_llm_failure, is_model_failure
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import ModelRegistryError

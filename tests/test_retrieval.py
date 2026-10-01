@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from qdrant_client.http.models import QueryResponse, ScoredPoint
 
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.retrieval.service import RetrievalService
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry

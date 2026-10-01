@@ -11,10 +11,6 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.errors.error_codes import ErrorCode
-from app.core.errors.llm_error_classifier import (
-    EmbeddingBudgetRejectedError,
-    EmbeddingProviderError,
-)
 from app.core.errors.llm_failure import (
     FailureReason,
     LLMFailure,
@@ -22,6 +18,7 @@ from app.core.errors.llm_failure import (
     describe_llm_failure,
     is_model_failure,
 )
+from app.core.errors.provider_errors import EmbeddingBudgetRejectedError, EmbeddingProviderError
 from app.core.errors.public_errors import (
     can_see_ai_details,
     permissions_from_header,

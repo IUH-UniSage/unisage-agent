@@ -32,12 +32,14 @@ from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.errors.error_codes import ErrorCode
 from app.core.errors.exceptions import UniSageException
 from app.core.errors.llm_error_classifier import (
-    EmbeddingBudgetRejectedError,
-    EmbeddingProviderError,
-    MalformedExtractionResponseError,
     is_quota_exhausted,
     provider_error_details,
     provider_status_code,
+)
+from app.core.errors.provider_errors import (
+    EmbeddingBudgetRejectedError,
+    EmbeddingProviderError,
+    MalformedExtractionResponseError,
 )
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError

@@ -356,7 +356,7 @@ def test_embed_chunks_calls_alert_on_embedding_provider_error(
     mock_backend_client_cls: MagicMock,
     mock_publish: MagicMock,
 ) -> None:
-    from app.core.errors.llm_error_classifier import EmbeddingProviderError
+    from app.core.errors.provider_errors import EmbeddingProviderError
     from app.worker.celery_app import celery_app, embed_chunks
     from app.worker.embedding_job_errors import IngestionJobFailedError
 

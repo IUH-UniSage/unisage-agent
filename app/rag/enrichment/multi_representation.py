@@ -16,7 +16,7 @@ from redis import asyncio as redis_asyncio
 
 from app.core.budget.tracker import BudgetTracker, RequestBudgetRejectedError
 from app.core.config import settings
-from app.core.errors.llm_error_classifier import MalformedExtractionResponseError
+from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.llm.provider_models import build_model
 from app.core.registry import model_router
 from app.core.registry.errors import NoAvailableCredentialError

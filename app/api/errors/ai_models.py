@@ -11,8 +11,8 @@ from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 
 from app.api.errors.envelope import error_content, new_reference, public_chat_error
 from app.core.budget.tracker import RequestBudgetRejectedError
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
 from app.core.errors.llm_failure import describe_llm_failure
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import ModelRegistryError

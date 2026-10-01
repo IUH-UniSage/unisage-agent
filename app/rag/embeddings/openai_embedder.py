@@ -12,10 +12,7 @@ from redis import asyncio as redis_asyncio
 
 from app.core.budget.tracker import BudgetTracker
 from app.core.config import settings
-from app.core.errors.llm_error_classifier import (
-    EmbeddingBudgetRejectedError,
-    EmbeddingProviderError,
-)
+from app.core.errors.provider_errors import EmbeddingBudgetRejectedError, EmbeddingProviderError
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 from app.core.registry.embedding_identity import ensure_embedding_identity
 from app.core.registry.model_registry import (
