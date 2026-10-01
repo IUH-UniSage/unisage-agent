@@ -146,7 +146,9 @@ def _measure_embedding_fingerprint_sync(credential: CredentialConfig) -> Embeddi
     return _measure_embedding_fingerprint_openai_sync(credential)
 
 
-def _measure_embedding_fingerprint_openai_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
+def _measure_embedding_fingerprint_openai_sync(
+    credential: CredentialConfig,
+) -> EmbeddingFingerprint:
     """Through the same SSRF-pinned sync factory `app.rag.embeddings.openai_embedder.OpenAIEmbedder`
     uses."""
 
@@ -167,7 +169,9 @@ def _measure_embedding_fingerprint_openai_sync(credential: CredentialConfig) -> 
     return measure_fingerprint(_embed)
 
 
-def _measure_embedding_fingerprint_google_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
+def _measure_embedding_fingerprint_google_sync(
+    credential: CredentialConfig,
+) -> EmbeddingFingerprint:
     """Through the same SSRF-pinned sync factory + `embedContent` batching
     `app.rag.embeddings.google_embedder.GoogleEmbedder` uses."""
 

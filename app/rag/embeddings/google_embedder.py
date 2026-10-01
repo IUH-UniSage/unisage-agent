@@ -165,7 +165,9 @@ class GoogleEmbedder:
             return []
 
         model, client = self._ensure_resolved()
-        return await self._call_provider_tracked(client, model, texts, usage_recorder, budget_tracker)
+        return await self._call_provider_tracked(
+            client, model, texts, usage_recorder, budget_tracker
+        )
 
     def _ensure_resolved(self) -> tuple[str, Client]:
         model = self.model
@@ -198,7 +200,9 @@ class GoogleEmbedder:
                     reason=reserve_result,
                     credential=credential,
                 )
-            vectors = await self._call_provider_tracked(client, model, texts, recorder, budget_tracker)
+            vectors = await self._call_provider_tracked(
+                client, model, texts, recorder, budget_tracker
+            )
             status = "SUCCESS"
             return vectors
         finally:

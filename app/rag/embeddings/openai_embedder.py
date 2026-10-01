@@ -152,7 +152,9 @@ class OpenAIEmbedder:
             model = self._resolved["model"]
             client = self._resolved["client"]
 
-        return await self._call_provider_tracked(client, model, texts, usage_recorder, budget_tracker)
+        return await self._call_provider_tracked(
+            client, model, texts, usage_recorder, budget_tracker
+        )
 
     async def _embed_recorded(
         self, client: OpenAI, model: str, texts: list[str], credential: CredentialConfig
