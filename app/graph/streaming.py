@@ -49,10 +49,10 @@ from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage
 
 from app.core.llm.provider_models import build_model
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import (
     ModelRouter,
-    NoAvailableCredentialError,
     get_default_router,
     select_credential_with_budget,
 )
@@ -183,7 +183,7 @@ async def stream_agent_text(
     replacement credential is fetched via `model_router.get_next_credential()`,
     a fresh `Agent` is built around it (`agent_factory`), and the SAME prompt
     is retried from scratch. This repeats until either a call succeeds or
-    `model_router.NoAvailableCredentialError` propagates (the
+    `NoAvailableCredentialError` propagates (the
     `LLM_UNAVAILABLE` case - handled by the caller, not here).
 
     `on_failover`, when supplied, is called once right after a replacement

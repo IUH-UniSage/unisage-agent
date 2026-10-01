@@ -5,13 +5,14 @@ import pytest
 
 from app.core.errors.error_codes import ErrorCode
 from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import (
     CredentialConfig,
     ModelRegistryError,
     ModelRegistrySnapshot,
 )
-from app.core.registry.model_router import NoAvailableCredentialError
-from app.worker.celery_app import IngestionJobFailedError, celery_app, embed_chunks
+from app.worker.celery_app import celery_app, embed_chunks
+from app.worker.embedding_job_errors import IngestionJobFailedError
 
 celery_app.conf.update(
     broker_url="memory://",
@@ -81,9 +82,7 @@ def test_embed_chunks_reports_strictly_increasing_progress_to_100(
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
-        return_value=[[0.1], [0.2], [0.3]]
-    )
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
     mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
         return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
@@ -272,9 +271,7 @@ def test_embed_chunks_passes_structural_fields_through_to_chunk_point(
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
-        return_value=[[0.1], [0.2], [0.3]]
-    )
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
     mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
         return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
@@ -329,9 +326,7 @@ def test_embed_chunks_defaults_is_public_to_false_when_omitted(
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
-        return_value=[[0.1], [0.2], [0.3]]
-    )
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
     mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
         return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )
@@ -350,9 +345,7 @@ def test_embed_chunks_passes_is_public_true_through_to_chunk_point(
     mock_enricher_cls: MagicMock,
     mock_qdrant_store: MagicMock,
 ) -> None:
-    mock_embedder_cls.return_value.embed_tracked = AsyncMock(
-        return_value=[[0.1], [0.2], [0.3]]
-    )
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
     mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
         return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
     )

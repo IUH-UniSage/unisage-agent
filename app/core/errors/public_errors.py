@@ -16,24 +16,24 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 
-from app.core.errors.llm_failure import LLMFailure
+from app.core.errors.llm_failure import FailureReason, LLMFailure
 
 # Anyone allowed to see the AI model configuration may see why a model call failed.
 AI_ADMIN_PERMISSIONS = frozenset({"CHAT_MODEL_ALL", "CHAT_MODEL_READ"})
 
 # Things the user can fix by changing what they ask.
 _USER_FIXABLE_MESSAGES = {
-    "LLM_CONTENT_FILTERED": (
+    FailureReason.LLM_CONTENT_FILTERED: (
         "Câu hỏi này bị bộ lọc an toàn của trợ lý AI chặn, bạn thử diễn đạt lại nhé."
     ),
-    "LLM_INPUT_TOO_LARGE": (
+    FailureReason.LLM_INPUT_TOO_LARGE: (
         "Câu hỏi hoặc cuộc hội thoại đã quá dài, bạn thử rút ngắn câu hỏi hoặc mở cuộc "
         "hội thoại mới nhé."
     ),
 }
 _BUDGET_MESSAGES = {
-    "BUDGET_EXCEEDED": "Hệ thống đã đạt giới hạn sử dụng. Vui lòng thử lại sau.",
-    "BUDGET_THROTTLED": "Hệ thống đang xử lý nhiều yêu cầu cùng lúc. Vui lòng thử lại sau ít giây.",
+    FailureReason.BUDGET_EXCEEDED: "Hệ thống đã đạt giới hạn sử dụng. Vui lòng thử lại sau.",
+    FailureReason.BUDGET_THROTTLED: "Hệ thống đang xử lý nhiều yêu cầu cùng lúc. Vui lòng thử lại sau ít giây.",
 }
 TEMPORARY_MESSAGE = "Trợ lý AI đang bận hoặc tạm thời gián đoạn, bạn thử lại sau ít phút nhé."
 SYSTEM_MESSAGE = (

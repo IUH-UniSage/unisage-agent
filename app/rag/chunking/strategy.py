@@ -5,9 +5,7 @@ from typing import Any, Protocol
 from app.core.config import settings
 from app.core.errors.exceptions import (
     ChunkingConfigException,
-    DocumentUnreadableException,
     StrategyFileTypeMismatchException,
-    UniSageException,
 )
 from app.rag.chunking.excel_rows import ExcelRowChunker
 from app.rag.chunking.markdown_aware import MarkdownAwareChunker
@@ -15,7 +13,7 @@ from app.rag.chunking.recursive import RecursiveChunker
 from app.rag.chunking.semantic import SemanticChunker
 from app.rag.chunking.table_row import TableRowChunker
 from app.rag.chunking.token_based import TokenBasedChunker
-from app.rag.ingestion.parser import get_extension
+from app.rag.ingestion.parser import get_extension, parse_or_raise
 from app.rag.ingestion.table_aware_parser import ParsedRegion, split_regions
 from app.schemas.ingestion import Chunk, ChunkingStrategyName, RegionType
 
@@ -104,20 +102,6 @@ def _with_valid_params[T](build: Callable[[], T]) -> T:
         return build()
     except (TypeError, ValueError) as exc:
         raise ChunkingConfigException(f"Tham số chia đoạn không hợp lệ: {exc}") from exc
-
-
-def parse_or_raise[T](parse: Callable[[], T], filename: str) -> T:
-    """Runs a file parser, turning "these bytes aren't a valid file of this type" (corrupt
-    PDF/DOCX/XLSX, renamed file, password-protected, non-UTF-8 text, ...) into a specific
-    422 instead of a generic 500. Our own `UniSageException`s pass through untouched."""
-
-    try:
-        return parse()
-    except UniSageException:
-        raise
-    except Exception as exc:
-        logger.warning("Failed to parse %s", filename, exc_info=True)
-        raise DocumentUnreadableException(filename, type(exc).__name__) from exc
 
 
 def _build_text_chunker(strategy: ChunkingStrategyName, params: dict[str, Any]) -> _RegionChunker:

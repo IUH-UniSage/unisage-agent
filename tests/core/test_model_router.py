@@ -16,8 +16,9 @@ import openai
 import pytest
 
 import app.core.registry.model_registry as model_registry
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.registry.model_router import ModelRouter, NoAvailableCredentialError, _state_key
+from app.core.registry.model_router import ModelRouter, _state_key
 
 # ── fixtures / test doubles ─────────────────────────────────────────────────
 

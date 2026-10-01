@@ -18,8 +18,9 @@ import pytest
 
 import app.core.observability.alerting as alerting
 import app.core.registry.model_registry as model_registry
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.registry.model_router import ModelRouter, NoAvailableCredentialError
+from app.core.registry.model_router import ModelRouter
 from app.core.security.ssrf_guard import SsrfBlockedError
 
 # ── shared fixtures / test doubles ──────────────────────────────────────────
@@ -356,7 +357,8 @@ def test_embed_chunks_calls_alert_on_embedding_provider_error(
     mock_publish: MagicMock,
 ) -> None:
     from app.core.errors.llm_error_classifier import EmbeddingProviderError
-    from app.worker.celery_app import IngestionJobFailedError, celery_app, embed_chunks
+    from app.worker.celery_app import celery_app, embed_chunks
+    from app.worker.embedding_job_errors import IngestionJobFailedError
 
     celery_app.conf.update(
         broker_url="memory://",

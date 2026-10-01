@@ -3,19 +3,21 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import httpx
+import httpx2
 import openai
 import pytest
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.errors.llm_failure import FailureReason
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import ModelRegistryError
-from app.core.registry.model_router import NoAvailableCredentialError
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
-from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED, LLM_UNAVAILABLE
+from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
 from app.graph.streaming_session import _error_item_for, run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
@@ -351,7 +353,7 @@ async def test_run_and_persist_reports_llm_unavailable_when_credentials_exhauste
 
     error_item = await queue.get()
     assert isinstance(error_item, ErrorItem)
-    assert error_item.code == LLM_UNAVAILABLE
+    assert error_item.code == FailureReason.LLM_UNAVAILABLE
     assert error_item.retryable is False
     assert isinstance(await queue.get(), DoneItem)
 
@@ -376,7 +378,7 @@ def _embedding_not_configured() -> EmbeddingProviderError:
                 "CHAT",
                 last_error=openai.AuthenticationError(
                     "bad key",
-                    response=httpx.Response(401, request=httpx.Request("POST", "http://p.test")),
+                    response=httpx2.Response(401, request=httpx2.Request("POST", "http://p.test")),
                     body=None,
                 ),
             ),
@@ -408,7 +410,7 @@ def _auth_failure() -> NoAvailableCredentialError:
         "CHAT",
         last_error=openai.AuthenticationError(
             "bad key",
-            response=httpx.Response(401, request=httpx.Request("POST", "http://p.test")),
+            response=httpx2.Response(401, request=httpx2.Request("POST", "http://p.test")),
             body=None,
         ),
     )
@@ -421,7 +423,7 @@ def _auth_failure() -> NoAvailableCredentialError:
         (
             NoAvailableCredentialError(
                 "CHAT",
-                last_error=openai.APITimeoutError(request=httpx.Request("POST", "http://p.test")),
+                last_error=openai.APITimeoutError(request=httpx2.Request("POST", "http://p.test")),
             ),
             "Trợ lý AI đang bận hoặc tạm thời gián đoạn",
             True,

@@ -27,11 +27,12 @@ import app.core.registry.model_registry as model_registry
 import app.core.registry.model_router as model_router_module
 from app.api.v1.chat import _sse_token_generator
 from app.core.config import settings
+from app.core.errors.llm_failure import FailureReason
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.registry.model_router import ModelRouter
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
-from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED, LLM_UNAVAILABLE
+from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
@@ -460,7 +461,7 @@ async def test_error_before_first_chunk_credential_exhausted_is_llm_unavailable(
     assert not any(isinstance(item, TokenItem) for item in items)
     assert isinstance(items[-1], DoneItem)
     assert isinstance(items[-2], ErrorItem)
-    assert items[-2].code == LLM_UNAVAILABLE
+    assert items[-2].code == FailureReason.LLM_UNAVAILABLE
     assert items[-2].retryable is False
     assert patched["body"]["status"] == "ERROR"
 

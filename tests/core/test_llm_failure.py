@@ -3,7 +3,7 @@ message - never the generic "có lỗi xảy ra" - and never leak provider text 
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import openai
 import pytest
 from google.genai import errors as google_errors
@@ -16,6 +16,7 @@ from app.core.errors.llm_error_classifier import (
     EmbeddingProviderError,
 )
 from app.core.errors.llm_failure import (
+    FailureReason,
     LLMFailure,
     admin_failure_message,
     describe_llm_failure,
@@ -28,14 +29,14 @@ from app.core.errors.public_errors import (
 )
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
+from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import ModelRegistryError
-from app.core.registry.model_router import NoAvailableCredentialError, NoBudgetAvailableError
 
-_REQUEST = httpx.Request("POST", "https://api.example.test/v1/chat/completions")
+_REQUEST = httpx2.Request("POST", "https://api.example.test/v1/chat/completions")
 
 
 def _openai_status_error(status: int, body: dict[str, object] | None = None) -> openai.APIError:
-    response = httpx.Response(status, request=_REQUEST)
+    response = httpx2.Response(status, request=_REQUEST)
     return openai.APIStatusError("sk-secret-should-not-leak", response=response, body=body)
 
 
@@ -226,7 +227,7 @@ def test_context_length_400_is_input_too_large() -> None:
 )
 def test_public_chat_message_categories(reason: str, retryable: bool, expected_start: str) -> None:
     failure = LLMFailure(
-        reason=reason,
+        reason=FailureReason(reason),
         error_code=ErrorCode.LLM_PROVIDER_ERROR,
         message="Mô hình Chat: chi tiết kỹ thuật",
         retryable=retryable,

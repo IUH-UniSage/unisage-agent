@@ -90,6 +90,7 @@ def _error_item_for(
     """
 
     failure: LLMFailure | None = None
+    code: str
     if is_model_failure(exc):
         failure = describe_llm_failure(exc, purpose="CHAT")
         code, message, retryable = failure.reason, failure.message, failure.retryable

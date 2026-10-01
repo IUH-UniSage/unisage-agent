@@ -66,7 +66,7 @@ def test_get_object_bytes_reports_unreachable_minio_as_storage_unavailable(
     mock_get_client: MagicMock,
 ) -> None:
     mock_client = MagicMock()
-    mock_client.get_object.side_effect = urllib3.exceptions.MaxRetryError(None, "/x")
+    mock_client.get_object.side_effect = urllib3.exceptions.ProtocolError("connection reset")
     mock_get_client.return_value = mock_client
 
     with pytest.raises(StorageUnavailableException):

@@ -1,9 +1,17 @@
+import logging
+from collections.abc import Callable
 from pathlib import PurePosixPath
 
 import pymupdf
 from bs4 import BeautifulSoup
 
-from app.core.errors.exceptions import UnsupportedFileTypeException
+from app.core.errors.exceptions import (
+    DocumentUnreadableException,
+    UniSageException,
+    UnsupportedFileTypeException,
+)
+
+logger = logging.getLogger(__name__)
 
 _FITZ_SUPPORTED_EXTENSIONS = {"pdf", "docx"}
 
@@ -40,3 +48,17 @@ def extract_raw_text(content: bytes, filename: str) -> str:
         finally:
             document.close()
     raise UnsupportedFileTypeException(filename)
+
+
+def parse_or_raise[T](parse: Callable[[], T], filename: str) -> T:
+    """Runs a file parser, turning "these bytes aren't a valid file of this type" (corrupt
+    PDF/DOCX/XLSX, renamed file, password-protected, non-UTF-8 text, ...) into a specific
+    422 instead of a generic 500. Our own `UniSageException`s pass through untouched."""
+
+    try:
+        return parse()
+    except UniSageException:
+        raise
+    except Exception as exc:
+        logger.warning("Failed to parse %s", filename, exc_info=True)
+        raise DocumentUnreadableException(filename, type(exc).__name__) from exc

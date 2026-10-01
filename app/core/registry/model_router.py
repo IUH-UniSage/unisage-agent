@@ -52,7 +52,9 @@ import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.llm_failure import admin_failure_message, describe_llm_failure
 from app.core.observability.alerting import alert_credential_failure
+from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import CredentialConfig, active_credentials_for
 from app.integrations.backend_java_client import BackendJavaClient
 
@@ -69,47 +71,6 @@ _DEFAULT_COOLDOWN_SECONDS = 30.0
 # thing doing the real work (Java setting the row DISABLED, and the next snapshot
 # reload dropping it, is), just the immediate stop-gap until that's picked up.
 _EXCLUDED_TTL_SECONDS = 24 * 60 * 60.0
-
-
-class NoAvailableCredentialError(Exception):
-    """No usable (non-cooling-down, non-excluded) credential exists for `purpose` -
-    the trigger condition for the "no available credential" alert.
-
-    `last_error`, when set, is the provider failure that just knocked out the last
-    usable credential within the same call (see `app.graph.streaming`'s failover
-    loops) - the real cause the client should be told about (e.g. a 401), rather
-    than the generic "nothing left to try".
-
-    `suspension_reasons` is the stored reason (an `llm_failure` reason code such as
-    "LLM_AUTH_FAILED") of each candidate that is cooling down/excluded - so even when
-    the failure happened in an EARLIER request, the client still learns why."""
-
-    def __init__(
-        self,
-        purpose: str,
-        *,
-        last_error: BaseException | None = None,
-        suspension_reasons: tuple[str, ...] = (),
-    ) -> None:
-        self.purpose = purpose
-        self.last_error = last_error
-        self.suspension_reasons = suspension_reasons
-        super().__init__(f"No available credential for purpose={purpose!r}")
-
-
-class NoBudgetAvailableError(Exception):
-    """Every remaining candidate for `purpose` was denied by budget enforcement
-    (PROVIDER-scope BLOCK/THROTTLE), distinct from `NoAvailableCredentialError` so
-    callers can map it to a budget-specific error response instead of
-    LLM_UNAVAILABLE."""
-
-    def __init__(self, purpose: str, last_deny_reason: str) -> None:
-        self.purpose = purpose
-        self.last_deny_reason = last_deny_reason
-        super().__init__(
-            f"Every credential for purpose={purpose!r} was denied by budget "
-            f"enforcement (last reason: {last_deny_reason})"
-        )
 
 
 class _RedisLike(Protocol):
@@ -404,15 +365,12 @@ class ModelRouter:
         transient error into one Slack message.
         """
 
-        # Local import: `llm_failure` imports this module (for `NoAvailableCredentialError`).
-        from app.core.errors.llm_failure import admin_failure_message, describe_llm_failure
-
         error_type = classify_llm_error(exc)
         key = _state_key(credential.id, credential.revision)
         message = admin_failure_message(exc, purpose=purpose, api_key=credential.api_key)
         # Kept as the marker's value so a LATER request that finds this credential
         # suspended can still tell the client why (see `NoAvailableCredentialError`).
-        reason = describe_llm_failure(exc, purpose).reason
+        reason = describe_llm_failure(exc, purpose).reason.value
 
         if error_type is ErrorType.PERMANENT:
             await self._mark(key, self._excluded_ttl_seconds, reason)

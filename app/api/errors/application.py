@@ -18,11 +18,10 @@ from app.rag.chunking.table_row import TableStructureError
 logger = logging.getLogger(__name__)
 
 
-async def unisage_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+async def unisage_exception_handler(request: Request, exc: UniSageException) -> JSONResponse:
     """Map application exceptions to the same envelope backend-java's
     `GlobalExceptionHandler` produces for its `AppException`."""
 
-    assert isinstance(exc, UniSageException)
     message, errors = exc.message, exc.errors
     if isinstance(exc, LLMCallException):
         # e.g. "no CHAT credential" raised before the chat stream starts.
@@ -37,7 +36,7 @@ async def unisage_exception_handler(request: Request, exc: Exception) -> JSONRes
     )
 
 
-async def table_structure_error_handler(request: Request, exc: Exception) -> JSONResponse:
+async def table_structure_error_handler(request: Request, exc: TableStructureError) -> JSONResponse:
     """`TableStructureError` is an internal chunker BUG/invariant failure
     (a row's structure doesn't match its table's expectations) - never a
     user input/config problem, unlike `ChunkValidationException`/
@@ -51,7 +50,6 @@ async def table_structure_error_handler(request: Request, exc: Exception) -> JSO
     in a production log line. The client still only sees a generic 500.
     """
 
-    assert isinstance(exc, TableStructureError)
     document_id = "unknown"
     try:
         body = await request.json()
@@ -80,13 +78,14 @@ async def table_structure_error_handler(request: Request, exc: Exception) -> JSO
     )
 
 
-async def validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     """Map Pydantic/FastAPI request-validation failures, mirroring Java's
     `MethodArgumentNotValidException` handler: one `errors` entry per
     invalid field."""
 
     del request
-    assert isinstance(exc, RequestValidationError)
     field_errors = {
         ".".join(str(part) for part in error["loc"][1:]) or str(error["loc"][-1]): error["msg"]
         for error in exc.errors()

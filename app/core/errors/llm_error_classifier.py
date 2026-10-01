@@ -21,12 +21,13 @@ understood.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import google.genai.errors as google_errors
+import httpx
 import openai
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.exceptions import ModelHTTPError
 
 from app.core.security.ssrf_guard import SsrfBlockedError
 
@@ -71,7 +72,7 @@ class MalformedExtractionResponseError(Exception):
     against the exact same credential."""
 
 
-class ErrorType(str, Enum):
+class ErrorType(StrEnum):
     """Mirrors the Java-side `CredentialHealthErrorType` enum's two values and their meaning —
     same names, separate enum, since nothing here is serialized directly to that Java type
     (Task 10 builds the health-report body from this)."""
@@ -128,7 +129,7 @@ def _dict_signals_quota_exhaustion(body: dict[str, Any]) -> bool:
     )
 
 
-def _quota_exhausted(*sources: object | None) -> bool:
+def is_quota_exhausted(*sources: object | None) -> bool:
     """True if any of `sources` (a 429 response body, a status string, a message, ...) looks
     like a quota/credit exhaustion signal rather than a plain rate limit."""
 
@@ -149,12 +150,52 @@ def _classify_by_status_code(status_code: int, *quota_text_sources: object | Non
     if status_code in (401, 403):
         return ErrorType.PERMANENT
     if status_code == 429:
-        return ErrorType.PERMANENT if _quota_exhausted(*quota_text_sources) else ErrorType.TRANSIENT
+        return (
+            ErrorType.PERMANENT if is_quota_exhausted(*quota_text_sources) else ErrorType.TRANSIENT
+        )
     if status_code >= 500:
         return ErrorType.TRANSIENT
     # Any other 4xx (400/404/409/422/...) is unrecognized here — fail open toward TRANSIENT
     # per todo.md, rather than guessing it's a permanent credential problem.
     return ErrorType.TRANSIENT
+
+
+def provider_status_code(exc: BaseException) -> int | None:
+    """The HTTP status of a failed provider call, whichever layer raised it - `None` for a
+    failure with no HTTP response (connection refused, timeout, ...).
+
+    - PydanticAI (ADR 0005) usually re-wraps an HTTP failure into `ModelHTTPError` before a
+      call site sees it; a connection/timeout failure becomes the status-less
+      `ModelAPIError` instead.
+    - openai SDK (`openai` provider and `SELF_HOSTED`'s OpenAI-compatible transport):
+      `APIStatusError` and its subclasses (`AuthenticationError`, `RateLimitError`, ...).
+    - google-genai SDK: every failure is `errors.APIError`, told apart only by `exc.code`.
+    """
+
+    if isinstance(exc, ModelHTTPError | openai.APIStatusError):
+        return exc.status_code
+    if isinstance(exc, google_errors.APIError):
+        return exc.code if isinstance(exc.code, int) else None
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    return None
+
+
+def provider_error_details(exc: BaseException) -> tuple[object | None, ...]:
+    """Whatever text/body a provider attached to its error, for marker checks (quota
+    exhausted, context too long, ...).
+
+    openai's `exc.body` is already the unwrapped inner `error` object (so `body["code"]` is
+    directly e.g. "insufficient_quota"). For google-genai the free-text explanation lives in
+    `exc.message`/`exc.details`; its `exc.status` ("RESOURCE_EXHAUSTED") is deliberately not
+    used - Google returns the same value for a quota-exhausted and a plain rate-limited 429.
+    """
+
+    if isinstance(exc, ModelHTTPError | openai.APIStatusError):
+        return (exc.body,)
+    if isinstance(exc, google_errors.APIError):
+        return (exc.message, exc.details)
+    return (str(exc),)
 
 
 def classify_llm_error(exc: Exception) -> ErrorType:
@@ -168,39 +209,9 @@ def classify_llm_error(exc: Exception) -> ErrorType:
     if isinstance(exc, MalformedExtractionResponseError):
         return ErrorType.PERMANENT
 
-    # --- PydanticAI's own wrapping layer (ADR 0005) — checked before any raw SDK type, since a
-    # provider call site normally sees these instead of the raw SDK exception. ---
-    if isinstance(exc, ModelHTTPError):
-        return _classify_by_status_code(exc.status_code, exc.body)
-    if isinstance(exc, ModelAPIError):
-        # PydanticAI's generic wrap with no HTTP status attached — a provider's
-        # `_map_api_errors` (e.g. openai.py) routes a connection/timeout failure
-        # here, never into `ModelHTTPError`. No status code to inspect, so: connection error →
-        # TRANSIENT.
-        return ErrorType.TRANSIENT
-
-    # --- openai SDK (`openai` provider, and `SELF_HOSTED`'s OpenAI-compatible transport — the
-    # same SDK, so the same exception hierarchy applies to both). ---
-    if isinstance(exc, openai.APIConnectionError):
-        # Covers `openai.APITimeoutError` too (subclasses `APIConnectionError`).
-        return ErrorType.TRANSIENT
-    if isinstance(exc, openai.APIStatusError):
-        # Covers `AuthenticationError` (401), `PermissionDeniedError` (403), `RateLimitError`
-        # (429), `InternalServerError` (5xx) and any other status via the generic base class.
-        # `exc.body` here is already the unwrapped inner `error` object (openai's own
-        # `_make_status_error` does `body.get("error", body)` before constructing the
-        # exception), so `exc.body.get("code")` is directly e.g. `"insufficient_quota"`.
-        return _classify_by_status_code(exc.status_code, exc.body)
-
-    # --- google-genai SDK (`google` provider, `GoogleModel`/`GoogleProvider`) — no dedicated
-    # AuthenticationError/RateLimitError subclasses; every failure is `errors.APIError` (or its
-    # `ClientError`/`ServerError` subclasses), differentiated by `exc.code` (the HTTP status, an
-    # int). `exc.status` (e.g. "RESOURCE_EXHAUSTED") is Google's own status enum, already
-    # unwrapped from the response body by the SDK's `_get_status` — but it's the *same* value
-    # for a quota-exhausted 429 and a plain rate-limited 429, so it isn't passed as a quota
-    # signal here; `exc.message`/`exc.details` (which carry the actual free-text explanation)
-    # are what `_classify_by_status_code` checks for a quota marker instead. ---
-    if isinstance(exc, google_errors.APIError):
-        return _classify_by_status_code(exc.code, exc.message, exc.details)
-
+    status_code = provider_status_code(exc)
+    if status_code is not None:
+        return _classify_by_status_code(status_code, *provider_error_details(exc))
+    # No HTTP status: a connection error/timeout (openai `APIConnectionError`, PydanticAI
+    # `ModelAPIError`, ...) or something unrecognized - both fail open toward retrying.
     return ErrorType.TRANSIENT

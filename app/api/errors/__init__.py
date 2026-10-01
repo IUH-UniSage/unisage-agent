@@ -27,9 +27,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     """Order doesn't matter: Starlette picks the handler of the most specific registered
     class in the raised exception's MRO."""
 
-    app.add_exception_handler(UniSageException, unisage_exception_handler)
-    app.add_exception_handler(TableStructureError, table_structure_error_handler)
-    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    # The decorator form, unlike `add_exception_handler`, accepts a handler typed with the
+    # concrete exception class it is registered for.
+    app.exception_handler(UniSageException)(unisage_exception_handler)
+    app.exception_handler(TableStructureError)(table_structure_error_handler)
+    app.exception_handler(RequestValidationError)(validation_exception_handler)
     for exception_type in AI_MODEL_EXCEPTION_TYPES:
         app.add_exception_handler(exception_type, ai_model_failure_handler)
     for exception_type, error_code, component in INFRASTRUCTURE_FAILURES:

@@ -22,30 +22,33 @@ from app.core.errors.llm_error_classifier import (
     ErrorType,
     classify_llm_error,
 )
-from app.core.errors.llm_failure import describe_llm_failure, is_model_failure
-from app.core.llm.provider_models import UnsupportedProviderError
+from app.core.errors.llm_failure import describe_llm_failure
 from app.core.observability.alerting import alert_credential_failure
 from app.core.observability.events import publish_ingestion_event
 from app.core.observability.logging_config import configure_logging
 from app.core.pricing.snapshot import refresh_pricing_snapshot
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.model_registry import (
-    ModelRegistryError,
     get_current_snapshot,
     init_model_registry,
 )
-from app.core.registry.model_router import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.registry_subscriber import start_thread_registry_subscriber
 from app.core.security.redaction import safe_error_message
+from app.core.usage.usage_recorder import UsageRecorder
 from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
 from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
-from app.core.usage.usage_recorder import UsageRecorder
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
 from app.worker.budget_reconciliation_tasks import (
     reconcile_budget_committed_once,
     release_expired_reservations_once,
+)
+from app.worker.embedding_job_errors import (
+    JOB_FATAL_ERRORS,
+    IngestionJobFailedError,
+    chunk_failure_reason,
+    partial_failure_message,
 )
 from app.worker.usage_outbox_tasks import drain_usage_outbox_once
 from app.worker.verification_subscriber import start_thread_verification_subscriber
@@ -233,56 +236,6 @@ def reconcile_budget_committed() -> None:
         )
 
 
-class IngestionJobFailedError(Exception):
-    """Terminal failure of an `embed_chunks` job, raised so Celery records the task FAILED.
-
-    `args` are `(message, error_code)` - `message` is already the friendly, client-facing
-    reason (see `describe_llm_failure`). Celery's result backend stores the exception as
-    its type + args and rebuilds it on read (this module is imported by the API process,
-    so the type resolves), which is how `GET /ingestion/jobs/{id}` (`_read_task_progress`)
-    shows the same specific reason the live WebSocket frame did.
-    """
-
-    def __init__(self, message: str, error_code: int = ErrorCode.EMBEDDING_JOB_FAILED.code) -> None:
-        super().__init__(message, error_code)
-        self.message = message
-        self.error_code = error_code
-
-
-# Failures that mean the EMBEDDING/EXTRACTION model is unusable for the whole job (not just
-# for one chunk) - see `_run_embed_chunks`.
-_JOB_FATAL_ERRORS: tuple[type[Exception], ...] = (
-    EmbeddingProviderError,
-    NoAvailableCredentialError,
-    NoBudgetAvailableError,
-    RequestBudgetRejectedError,
-    ModelRegistryError,
-    UnsupportedProviderError,
-)
-
-
-def _chunk_failure_reason(exc: Exception) -> str:
-    """A client-safe explanation of one chunk's failure (no provider text)."""
-
-    if is_model_failure(exc):
-        return describe_llm_failure(exc, purpose="EXTRACTION").message
-    if type(exc).__module__.startswith("qdrant_client"):
-        return ErrorCode.VECTOR_STORE_ERROR.message
-    return f"Lỗi nội bộ khi xử lý đoạn ({type(exc).__name__})."
-
-
-def partial_failure_message(results: list[dict[str, Any]], total: int) -> str:
-    """The "N/M đoạn nạp liệu thất bại." line plus the first failed chunk's reason, so the client
-    learns why, not just how many."""
-
-    failed = [r for r in results if r.get("status") == "FAILED"]
-    message = f"{len(failed)}/{total} đoạn nạp liệu thất bại."
-    first_reason = next((r.get("reason") for r in failed if r.get("reason")), None)
-    if first_reason:
-        message += f" Lỗi đầu tiên (đoạn #{failed[0]['chunk_index']}): {first_reason}"
-    return message
-
-
 @celery_app.task(bind=True, name="embed_chunks")
 def embed_chunks(
     self: Any,
@@ -420,8 +373,7 @@ async def _run_embed_chunks(
         reserve_result = await budget_tracker.reserve_request(
             request_id=recorder.request_id,
             purpose="INGEST",
-            estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD))
-            * max(total, 1),
+            estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)) * max(total, 1),
         )
         if reserve_result != "OK":
             raise RequestBudgetRejectedError("INGEST", reserve_result)
@@ -478,7 +430,7 @@ async def _run_embed_chunks(
                     ),
                 )
                 results.append({"chunk_index": chunk.chunk_index, "status": "SUCCESS"})
-            except _JOB_FATAL_ERRORS:
+            except JOB_FATAL_ERRORS:
                 # The EMBEDDING/EXTRACTION model itself is unusable (bad key, not
                 # configured, quota, budget, identity guard, every credential cooling
                 # down...) - never a per-chunk data problem, and every later chunk would
@@ -500,7 +452,7 @@ async def _run_embed_chunks(
                         "chunk_index": chunk.chunk_index,
                         "status": "FAILED",
                         "error": safe_error_message(exc),
-                        "reason": _chunk_failure_reason(exc),
+                        "reason": chunk_failure_reason(exc),
                     }
                 )
 
@@ -532,7 +484,7 @@ async def _run_embed_chunks(
             "failed_chunk_count": failed_chunk_count,
             "total_chunk_count": total,
         }
-    except _JOB_FATAL_ERRORS as exc:
+    except JOB_FATAL_ERRORS as exc:
         overall_status = "ERROR"
         failure = describe_llm_failure(exc)
         # One terminal shape - "completed" with state=FAILURE - not a separate "failed"

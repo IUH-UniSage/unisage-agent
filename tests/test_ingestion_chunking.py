@@ -277,7 +277,7 @@ def test_chunking_semantic_strategy_names_the_provider_auth_failure(
     """A 401 from the EMBEDDING provider must reach the client as "bad API key", with the
     purpose named - not the generic embedding-provider message."""
 
-    import httpx
+    import httpx2
     import openai
 
     from app.core.errors.llm_error_classifier import EmbeddingProviderError
@@ -287,7 +287,7 @@ def test_chunking_semantic_strategy_names_the_provider_auth_failure(
         self: OpenAIEmbedder, texts: list[str], usage_recorder: object, budget_tracker: object
     ) -> list[list[float]]:
         del self, texts, usage_recorder, budget_tracker
-        response = httpx.Response(401, request=httpx.Request("POST", "http://p.test"))
+        response = httpx2.Response(401, request=httpx2.Request("POST", "http://p.test"))
         cause = openai.AuthenticationError("bad key", response=response, body=None)
         raise EmbeddingProviderError("auth failed") from cause
 

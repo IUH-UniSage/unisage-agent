@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from enum import StrEnum
 
-import google.genai.errors as google_errors
 import httpx
 import openai
 from pydantic_ai.exceptions import (
     ContentFilterError,
     ModelAPIError,
-    ModelHTTPError,
     UnexpectedModelBehavior,
 )
 
@@ -36,12 +35,14 @@ from app.core.errors.llm_error_classifier import (
     EmbeddingBudgetRejectedError,
     EmbeddingProviderError,
     MalformedExtractionResponseError,
-    _quota_exhausted,
+    is_quota_exhausted,
+    provider_error_details,
+    provider_status_code,
 )
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
+from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import ModelRegistryError, active_credentials_for
-from app.core.registry.model_router import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.security.redaction import safe_error_message
 from app.core.security.ssrf_guard import SsrfBlockedError
 
@@ -54,16 +55,52 @@ _PURPOSE_LABELS = {
 _CHECK_CONFIG = "Kiểm tra trang Cấu hình AI."
 
 
+class FailureReason(StrEnum):
+    """Why an AI-model call failed - stable, machine-readable. Sent as the SSE
+    `event: error` code and the HTTP `errors.reason`, and stored as a suspended
+    credential's circuit-breaker marker (`ModelRouter.record_failure`)."""
+
+    LLM_NOT_CONFIGURED = "LLM_NOT_CONFIGURED"
+    LLM_UNAVAILABLE = "LLM_UNAVAILABLE"
+    LLM_AUTH_FAILED = "LLM_AUTH_FAILED"
+    LLM_QUOTA_EXHAUSTED = "LLM_QUOTA_EXHAUSTED"
+    LLM_RATE_LIMITED = "LLM_RATE_LIMITED"
+    LLM_MODEL_NOT_FOUND = "LLM_MODEL_NOT_FOUND"
+    LLM_TIMEOUT = "LLM_TIMEOUT"
+    LLM_CONFLICT = "LLM_CONFLICT"
+    LLM_INPUT_TOO_LARGE = "LLM_INPUT_TOO_LARGE"
+    LLM_REQUEST_REJECTED = "LLM_REQUEST_REJECTED"
+    LLM_PROVIDER_ERROR = "LLM_PROVIDER_ERROR"
+    LLM_CONNECTION_ERROR = "LLM_CONNECTION_ERROR"
+    LLM_CONTENT_FILTERED = "LLM_CONTENT_FILTERED"
+    LLM_MALFORMED_RESPONSE = "LLM_MALFORMED_RESPONSE"
+    LLM_PROVIDER_UNSUPPORTED = "LLM_PROVIDER_UNSUPPORTED"
+    LLM_URL_BLOCKED = "LLM_URL_BLOCKED"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    BUDGET_THROTTLED = "BUDGET_THROTTLED"
+    EMBEDDING_IDENTITY_MISMATCH = "EMBEDDING_IDENTITY_MISMATCH"
+    EMBEDDING_PROVIDER_ERROR = "EMBEDDING_PROVIDER_ERROR"
+    LLM_UNKNOWN_ERROR = "LLM_UNKNOWN_ERROR"
+
+
 @dataclass(frozen=True)
 class LLMFailure:
     """`reason` is a stable machine-readable cause (also the SSE `event: error` code);
     `message` is the friendly, purpose-specific sentence to show as-is."""
 
-    reason: str
+    reason: FailureReason
     error_code: ErrorCode
     message: str
     retryable: bool
     purpose: str | None
+
+    def details(self) -> dict[str, str]:
+        """The `errors` map of an HTTP error response: which purpose failed, and why."""
+
+        details = {"reason": self.reason.value}
+        if self.purpose:
+            details["purpose"] = self.purpose
+        return details
 
 
 class LLMCallException(UniSageException):
@@ -71,10 +108,7 @@ class LLMCallException(UniSageException):
     `app.api.errors`' handler renders it with the failure's own status/code/message."""
 
     def __init__(self, failure: LLMFailure) -> None:
-        errors = {"reason": failure.reason}
-        if failure.purpose:
-            errors["purpose"] = failure.purpose
-        super().__init__(failure.error_code, message=failure.message, errors=errors)
+        super().__init__(failure.error_code, message=failure.message, errors=failure.details())
         self.failure = failure
 
 
@@ -82,26 +116,6 @@ def _label(purpose: str | None) -> str:
     if purpose is None:
         return "Mô hình AI"
     return f"Mô hình {_PURPOSE_LABELS.get(purpose, purpose)}"
-
-
-def _status_code(exc: BaseException) -> int | None:
-    if isinstance(exc, ModelHTTPError):
-        return exc.status_code
-    if isinstance(exc, openai.APIStatusError):
-        return exc.status_code
-    if isinstance(exc, google_errors.APIError):
-        return exc.code if isinstance(exc.code, int) else None
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code
-    return None
-
-
-def _quota_sources(exc: BaseException) -> tuple[object | None, ...]:
-    if isinstance(exc, ModelHTTPError | openai.APIStatusError):
-        return (exc.body,)
-    if isinstance(exc, google_errors.APIError):
-        return (exc.message, exc.details)
-    return (str(exc),)
 
 
 def _root_cause(exc: BaseException) -> BaseException:
@@ -138,7 +152,12 @@ def _purpose_of(exc: BaseException, default: str | None) -> str | None:
 
 
 def _failure(
-    reason: str, error_code: ErrorCode, message: str, *, retryable: bool, purpose: str | None
+    reason: FailureReason,
+    error_code: ErrorCode,
+    message: str,
+    *,
+    retryable: bool,
+    purpose: str | None,
 ) -> LLMFailure:
     return LLMFailure(
         reason=reason,
@@ -162,7 +181,9 @@ _INPUT_TOO_LARGE_MARKERS = (
 
 
 def _input_too_large(exc: BaseException) -> bool:
-    text = " ".join(str(source) for source in _quota_sources(exc) if source is not None).lower()
+    text = " ".join(
+        str(source) for source in provider_error_details(exc) if source is not None
+    ).lower()
     return any(marker in text for marker in _INPUT_TOO_LARGE_MARKERS)
 
 
@@ -170,7 +191,7 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
     who = _label(purpose)
     if status == 401:
         return _failure(
-            "LLM_AUTH_FAILED",
+            FailureReason.LLM_AUTH_FAILED,
             ErrorCode.LLM_AUTH_FAILED,
             f"{who}: API key không hợp lệ hoặc đã bị thu hồi (HTTP 401). {_CHECK_CONFIG}",
             retryable=False,
@@ -178,7 +199,7 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
         )
     if status == 403:
         return _failure(
-            "LLM_AUTH_FAILED",
+            FailureReason.LLM_AUTH_FAILED,
             ErrorCode.LLM_AUTH_FAILED,
             f"{who}: API key không có quyền dùng mô hình này hoặc dự án chưa bật API "
             f"(HTTP 403). {_CHECK_CONFIG}",
@@ -187,7 +208,7 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
         )
     if status == 404:
         return _failure(
-            "LLM_MODEL_NOT_FOUND",
+            FailureReason.LLM_MODEL_NOT_FOUND,
             ErrorCode.LLM_MODEL_NOT_FOUND,
             f"{who}: nhà cung cấp không tìm thấy mô hình/endpoint (HTTP 404) - kiểm tra "
             f"tên model và base URL. {_CHECK_CONFIG}",
@@ -196,7 +217,7 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
         )
     if status == 408:
         return _failure(
-            "LLM_TIMEOUT",
+            FailureReason.LLM_TIMEOUT,
             ErrorCode.LLM_TIMEOUT,
             f"{who}: nhà cung cấp phản hồi quá lâu (HTTP 408), thử lại sau nhé.",
             retryable=True,
@@ -204,7 +225,7 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
         )
     if status == 409:
         return _failure(
-            "LLM_CONFLICT",
+            FailureReason.LLM_CONFLICT,
             ErrorCode.LLM_REQUEST_REJECTED,
             f"{who}: nhà cung cấp báo xung đột yêu cầu (HTTP 409), thử lại sau ít giây.",
             retryable=True,
@@ -212,16 +233,16 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
         )
     if status == 413 or (400 <= status < 500 and _input_too_large(root)):
         return _failure(
-            "LLM_INPUT_TOO_LARGE",
+            FailureReason.LLM_INPUT_TOO_LARGE,
             ErrorCode.LLM_REQUEST_REJECTED,
             f"{who}: nội dung gửi đi vượt giới hạn độ dài/context của mô hình (HTTP {status}).",
             retryable=False,
             purpose=purpose,
         )
     if status == 429:
-        if _quota_exhausted(*_quota_sources(root)):
+        if is_quota_exhausted(*provider_error_details(root)):
             return _failure(
-                "LLM_QUOTA_EXHAUSTED",
+                FailureReason.LLM_QUOTA_EXHAUSTED,
                 ErrorCode.LLM_QUOTA_EXHAUSTED,
                 f"{who}: tài khoản nhà cung cấp đã hết hạn mức/credit (HTTP 429). "
                 f"Nạp thêm credit hoặc đổi API key. {_CHECK_CONFIG}",
@@ -229,7 +250,7 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
                 purpose=purpose,
             )
         return _failure(
-            "LLM_RATE_LIMITED",
+            FailureReason.LLM_RATE_LIMITED,
             ErrorCode.LLM_RATE_LIMITED,
             f"{who}: nhà cung cấp đang giới hạn tốc độ gọi (HTTP 429), thử lại sau ít phút.",
             retryable=True,
@@ -237,7 +258,7 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
         )
     if 400 <= status < 500:
         return _failure(
-            "LLM_REQUEST_REJECTED",
+            FailureReason.LLM_REQUEST_REJECTED,
             ErrorCode.LLM_REQUEST_REJECTED,
             f"{who}: nhà cung cấp từ chối yêu cầu (HTTP {status}) - có thể do model không "
             f"hỗ trợ tham số/tính năng này hoặc nội dung quá dài. {_CHECK_CONFIG}",
@@ -245,7 +266,7 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
             purpose=purpose,
         )
     return _failure(
-        "LLM_PROVIDER_ERROR",
+        FailureReason.LLM_PROVIDER_ERROR,
         ErrorCode.LLM_PROVIDER_ERROR,
         f"{who}: máy chủ nhà cung cấp đang gặp sự cố (HTTP {status}), thử lại sau nhé.",
         retryable=True,
@@ -254,28 +275,28 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
 
 
 # Short phrase per stored circuit-breaker reason (see `ModelRouter.record_failure`).
-_SUSPENSION_PHRASES = {
-    "LLM_AUTH_FAILED": "API key không hợp lệ hoặc không có quyền",
-    "LLM_QUOTA_EXHAUSTED": "hết hạn mức/credit",
-    "LLM_RATE_LIMITED": "bị giới hạn tốc độ gọi",
-    "LLM_MODEL_NOT_FOUND": "sai tên model hoặc base URL",
-    "LLM_REQUEST_REJECTED": "nhà cung cấp từ chối yêu cầu",
-    "LLM_CONFLICT": "nhà cung cấp báo xung đột",
-    "LLM_PROVIDER_ERROR": "máy chủ nhà cung cấp gặp sự cố",
-    "LLM_TIMEOUT": "nhà cung cấp phản hồi quá lâu",
-    "LLM_CONNECTION_ERROR": "không kết nối được tới nhà cung cấp",
-    "LLM_URL_BLOCKED": "base URL bị chặn vì lý do bảo mật",
-    "LLM_PROVIDER_UNSUPPORTED": "nhà cung cấp không được hỗ trợ",
-    "LLM_MALFORMED_RESPONSE": "mô hình trả về sai định dạng",
-    "LLM_CONTENT_FILTERED": "nội dung bị nhà cung cấp chặn",
+_SUSPENSION_PHRASES: dict[str, str] = {
+    FailureReason.LLM_AUTH_FAILED: "API key không hợp lệ hoặc không có quyền",
+    FailureReason.LLM_QUOTA_EXHAUSTED: "hết hạn mức/credit",
+    FailureReason.LLM_RATE_LIMITED: "bị giới hạn tốc độ gọi",
+    FailureReason.LLM_MODEL_NOT_FOUND: "sai tên model hoặc base URL",
+    FailureReason.LLM_REQUEST_REJECTED: "nhà cung cấp từ chối yêu cầu",
+    FailureReason.LLM_CONFLICT: "nhà cung cấp báo xung đột",
+    FailureReason.LLM_PROVIDER_ERROR: "máy chủ nhà cung cấp gặp sự cố",
+    FailureReason.LLM_TIMEOUT: "nhà cung cấp phản hồi quá lâu",
+    FailureReason.LLM_CONNECTION_ERROR: "không kết nối được tới nhà cung cấp",
+    FailureReason.LLM_URL_BLOCKED: "base URL bị chặn vì lý do bảo mật",
+    FailureReason.LLM_PROVIDER_UNSUPPORTED: "nhà cung cấp không được hỗ trợ",
+    FailureReason.LLM_MALFORMED_RESPONSE: "mô hình trả về sai định dạng",
+    FailureReason.LLM_CONTENT_FILTERED: "nội dung bị nhà cung cấp chặn",
 }
-_TRANSIENT_REASONS = frozenset(
+_TRANSIENT_REASONS: frozenset[str] = frozenset(
     {
-        "LLM_RATE_LIMITED",
-        "LLM_PROVIDER_ERROR",
-        "LLM_TIMEOUT",
-        "LLM_CONNECTION_ERROR",
-        "LLM_CONFLICT",
+        FailureReason.LLM_RATE_LIMITED,
+        FailureReason.LLM_PROVIDER_ERROR,
+        FailureReason.LLM_TIMEOUT,
+        FailureReason.LLM_CONNECTION_ERROR,
+        FailureReason.LLM_CONFLICT,
     }
 )
 
@@ -293,7 +314,7 @@ def _budget_failure(reason: str, purpose: str | None) -> LLMFailure:
     who = _label(purpose)
     if "THROTTLED" in reason:
         return _failure(
-            "BUDGET_THROTTLED",
+            FailureReason.BUDGET_THROTTLED,
             ErrorCode.LLM_BUDGET_EXCEEDED,
             f"{who}: hệ thống đang xử lý nhiều yêu cầu cùng lúc (giới hạn ngân sách), "
             "thử lại sau ít giây.",
@@ -301,7 +322,7 @@ def _budget_failure(reason: str, purpose: str | None) -> LLMFailure:
             purpose=purpose,
         )
     return _failure(
-        "BUDGET_EXCEEDED",
+        FailureReason.BUDGET_EXCEEDED,
         ErrorCode.LLM_BUDGET_EXCEEDED,
         f"{who}: đã đạt giới hạn ngân sách sử dụng, thử lại sau khi ngân sách được làm mới.",
         retryable=False,
@@ -317,10 +338,10 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
     purpose = _purpose_of(exc, purpose)
     if isinstance(exc, NoAvailableCredentialError) and exc.last_error is not None:
         cause = describe_llm_failure(exc.last_error, purpose)
-        if cause.reason != "LLM_UNKNOWN_ERROR":
+        if cause.reason != FailureReason.LLM_UNKNOWN_ERROR:
             return cause
         return _failure(
-            "LLM_UNAVAILABLE",
+            FailureReason.LLM_UNAVAILABLE,
             ErrorCode.LLM_ALL_CREDENTIALS_SUSPENDED,
             f"{_label(purpose)}: mọi credential đều gọi thất bại (lỗi cuối: "
             f"{type(_root_cause(exc.last_error)).__name__}). {_CHECK_CONFIG}",
@@ -335,7 +356,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         isinstance(root, NoAvailableCredentialError) and not active_credentials_for(root.purpose)
     ):
         return _failure(
-            "LLM_NOT_CONFIGURED",
+            FailureReason.LLM_NOT_CONFIGURED,
             ErrorCode.LLM_NOT_CONFIGURED,
             f"{who}: chưa có credential nào đang hoạt động. Thêm/kích hoạt credential cho "
             f"mục đích {_PURPOSE_LABELS.get(purpose or '', purpose or 'này')} trong trang "
@@ -355,7 +376,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
             reason in _TRANSIENT_REASONS for reason in root.suspension_reasons
         )
         return _failure(
-            "LLM_UNAVAILABLE",
+            FailureReason.LLM_UNAVAILABLE,
             ErrorCode.LLM_ALL_CREDENTIALS_SUSPENDED,
             f"{who}: mọi credential đang bị tạm ngưng {detail}. "
             + ("Thử lại sau ít phút." if retryable else _CHECK_CONFIG),
@@ -370,7 +391,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         return _budget_failure(root.reason, purpose)
     if isinstance(root, EmbeddingIdentityMismatchError):
         return _failure(
-            "EMBEDDING_IDENTITY_MISMATCH",
+            FailureReason.EMBEDDING_IDENTITY_MISMATCH,
             ErrorCode.EMBEDDING_IDENTITY_MISMATCH,
             ErrorCode.EMBEDDING_IDENTITY_MISMATCH.message,
             retryable=False,
@@ -378,7 +399,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         )
     if isinstance(root, UnsupportedProviderError):
         return _failure(
-            "LLM_PROVIDER_UNSUPPORTED",
+            FailureReason.LLM_PROVIDER_UNSUPPORTED,
             ErrorCode.LLM_PROVIDER_UNSUPPORTED,
             f"{who}: nhà cung cấp '{root.provider}' chưa được hệ thống hỗ trợ. {_CHECK_CONFIG}",
             retryable=False,
@@ -386,7 +407,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         )
     if isinstance(root, SsrfBlockedError):
         return _failure(
-            "LLM_URL_BLOCKED",
+            FailureReason.LLM_URL_BLOCKED,
             ErrorCode.LLM_PROVIDER_UNSUPPORTED,
             f"{who}: base URL của credential trỏ tới địa chỉ mạng bị chặn vì lý do bảo mật. "
             f"{_CHECK_CONFIG}",
@@ -394,7 +415,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
             purpose=purpose,
         )
 
-    status = _status_code(root)
+    status = provider_status_code(root)
     if status is not None:
         return _by_status(status, root, purpose)
 
@@ -402,7 +423,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         root, openai.APITimeoutError | httpx.TimeoutException | asyncio.TimeoutError | TimeoutError
     ):
         return _failure(
-            "LLM_TIMEOUT",
+            FailureReason.LLM_TIMEOUT,
             ErrorCode.LLM_TIMEOUT,
             f"{who}: nhà cung cấp phản hồi quá lâu (timeout), thử lại sau nhé.",
             retryable=True,
@@ -410,7 +431,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         )
     if isinstance(root, openai.APIConnectionError | httpx.TransportError | ModelAPIError):
         return _failure(
-            "LLM_CONNECTION_ERROR",
+            FailureReason.LLM_CONNECTION_ERROR,
             ErrorCode.LLM_CONNECTION_ERROR,
             f"{who}: không kết nối được tới nhà cung cấp - kiểm tra base URL và kết nối mạng "
             "của máy chủ.",
@@ -419,7 +440,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         )
     if isinstance(root, ContentFilterError):
         return _failure(
-            "LLM_CONTENT_FILTERED",
+            FailureReason.LLM_CONTENT_FILTERED,
             ErrorCode.LLM_REQUEST_REJECTED,
             f"{who}: nhà cung cấp chặn nội dung này theo chính sách an toàn, hãy diễn đạt lại.",
             retryable=False,
@@ -427,7 +448,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         )
     if isinstance(root, MalformedExtractionResponseError | UnexpectedModelBehavior):
         return _failure(
-            "LLM_MALFORMED_RESPONSE",
+            FailureReason.LLM_MALFORMED_RESPONSE,
             ErrorCode.LLM_PROVIDER_ERROR,
             f"{who}: mô hình trả về phản hồi không đúng định dạng, thử lại hoặc đổi mô hình.",
             retryable=True,
@@ -438,7 +459,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         # Raised with only a message (no provider exception underneath) - e.g. the identity
         # registration call to backend-java failed.
         return _failure(
-            "EMBEDDING_PROVIDER_ERROR",
+            FailureReason.EMBEDDING_PROVIDER_ERROR,
             ErrorCode.EMBEDDING_PROVIDER_ERROR,
             ErrorCode.EMBEDDING_PROVIDER_ERROR.message,
             retryable=True,
@@ -446,7 +467,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
         )
 
     return _failure(
-        "LLM_UNKNOWN_ERROR",
+        FailureReason.LLM_UNKNOWN_ERROR,
         ErrorCode.LLM_PROVIDER_ERROR,
         f"{who}: gọi mô hình thất bại ({type(root).__name__}). Xem log máy chủ để biết chi tiết.",
         retryable=True,
@@ -465,7 +486,7 @@ def is_model_failure(exc: BaseException) -> bool:
 
     if isinstance(exc, EmbeddingProviderError | NoAvailableCredentialError):
         return True
-    if describe_llm_failure(exc).reason != "LLM_UNKNOWN_ERROR":
+    if describe_llm_failure(exc).reason != FailureReason.LLM_UNKNOWN_ERROR:
         return True
     module = type(_root_cause(exc)).__module__ or ""
     return module.startswith(_PROVIDER_MODULE_PREFIXES)

@@ -14,8 +14,8 @@ from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.errors.llm_error_classifier import EmbeddingProviderError
 from app.core.errors.llm_failure import describe_llm_failure
 from app.core.llm.provider_models import UnsupportedProviderError
+from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import ModelRegistryError
-from app.core.registry.model_router import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.security.redaction import safe_error_message
 from app.core.security.ssrf_guard import SsrfBlockedError
 
@@ -59,10 +59,7 @@ async def ai_model_failure_handler(request: Request, exc: Exception) -> JSONResp
         reference,
         safe_error_message(exc, api_key),
     )
-    message = failure.message
-    errors = {"reason": failure.reason}
-    if failure.purpose:
-        errors["purpose"] = failure.purpose
+    message, errors = failure.message, failure.details()
     public = public_chat_error(request, failure, reference=reference)
     if public is not None:
         message, errors = public

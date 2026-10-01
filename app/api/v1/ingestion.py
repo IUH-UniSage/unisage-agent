@@ -44,7 +44,7 @@ from app.graph.nodes.security_context import parse_security_headers
 from app.rag.chunking import strategy
 from app.rag.chunking.validation import validate_chunks
 from app.rag.ingestion import minio_client
-from app.rag.ingestion.parser import extract_raw_text
+from app.rag.ingestion.parser import extract_raw_text, parse_or_raise
 from app.schemas.common import ApiResponse
 from app.schemas.ingestion import (
     Chunk,
@@ -58,12 +58,8 @@ from app.schemas.ingestion import (
     TaskProgress,
 )
 from app.schemas.security import AcademicSecurityContext
-from app.worker.celery_app import (
-    IngestionJobFailedError,
-    celery_app,
-    embed_chunks,
-    partial_failure_message,
-)
+from app.worker.celery_app import celery_app, embed_chunks
+from app.worker.embedding_job_errors import IngestionJobFailedError, partial_failure_message
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +75,7 @@ async def preview_document(
 
     require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
-    raw_text = strategy.parse_or_raise(
+    raw_text = parse_or_raise(
         lambda: extract_raw_text(content, request.object_key), request.object_key
     )
     return ApiResponse.success(PreviewResponse(raw_text=raw_text))

@@ -109,7 +109,7 @@ def test_failed_task_progress_shows_the_jobs_specific_reason(
     that reason, not the generic EMBEDDING_JOB_FAILED sentence."""
 
     from app.api.v1 import ingestion
-    from app.worker.celery_app import IngestionJobFailedError
+    from app.worker.embedding_job_errors import IngestionJobFailedError
 
     class _FakeResult:
         state = "FAILURE"
