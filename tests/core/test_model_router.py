@@ -454,3 +454,110 @@ async def test_new_revision_after_rotation_starts_with_clean_state() -> None:
 
     selected = await router.get_next_credential("CHAT")
     assert selected.revision == 2
+
+
+# ── suspension reasons ──────────────────────────────────────────────────────
+
+
+class ValueStoringRedis(FakeAsyncRedis):
+    """`FakeAsyncRedis` that also keeps each marker's value and supports `get` - enough to
+    read back why a credential was suspended."""
+
+    def __init__(self, clock: _Clock) -> None:
+        super().__init__(clock)
+        self.values: dict[str, Any] = {}
+
+    async def set(self, name: str, value: Any, *, ex: int | None = None) -> Any:
+        self.values[name] = value
+        return await super().set(name, value, ex=ex)
+
+    async def get(self, name: str) -> bytes | None:
+        if not await self.exists(name):
+            return None
+        return str(self.values[name]).encode()
+
+
+@pytest.mark.asyncio
+async def test_marker_stores_the_failure_reason() -> None:
+    cred_a = _credential(id="a")
+    _set_snapshot(version=1, chat=(cred_a,))
+    redis_client = ValueStoringRedis(_Clock())
+    router, _ = _router(redis_client=redis_client)
+
+    await router.record_failure(cred_a, _permanent_error(), snapshot_version=1, purpose="CHAT")
+
+    assert redis_client.values[_state_key("a", 1)] == "LLM_AUTH_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_no_available_credential_carries_each_suspension_reason() -> None:
+    """A later request that finds every credential suspended must still learn WHY - the
+    failure that suspended them happened in an earlier request."""
+
+    from app.core.errors.llm_failure import describe_llm_failure
+
+    cred_a = _credential(id="a", priority=1)
+    cred_b = _credential(id="b", priority=2)
+    _set_snapshot(version=1, chat=(cred_a, cred_b))
+    router, _ = _router(redis_client=ValueStoringRedis(_Clock()))
+
+    await router.record_failure(cred_a, _permanent_error(), snapshot_version=1, purpose="CHAT")
+    await router.record_failure(cred_b, _connection_error(), snapshot_version=1, purpose="CHAT")
+
+    with pytest.raises(NoAvailableCredentialError) as exc_info:
+        await router.get_next_credential("CHAT")
+
+    assert exc_info.value.suspension_reasons == ("LLM_AUTH_FAILED", "LLM_CONNECTION_ERROR")
+    failure = describe_llm_failure(exc_info.value)
+    assert failure.reason == "LLM_UNAVAILABLE"
+    assert "API key không hợp lệ" in failure.message
+    assert "không kết nối được" in failure.message
+    assert failure.retryable is False  # one cause (bad key) won't clear on its own
+
+
+@pytest.mark.asyncio
+async def test_only_transient_suspensions_are_retryable() -> None:
+    from app.core.errors.llm_failure import describe_llm_failure
+
+    cred_a = _credential(id="a")
+    _set_snapshot(version=1, chat=(cred_a,))
+    router, _ = _router(redis_client=ValueStoringRedis(_Clock()))
+
+    await router.record_failure(cred_a, _connection_error(), snapshot_version=1, purpose="CHAT")
+
+    with pytest.raises(NoAvailableCredentialError) as exc_info:
+        await router.get_next_credential("CHAT")
+
+    failure = describe_llm_failure(exc_info.value)
+    assert failure.retryable is True
+    assert "Thử lại sau ít phút" in failure.message
+
+
+@pytest.mark.asyncio
+async def test_suspension_reasons_survive_redis_outage_via_in_memory_state() -> None:
+    cred_a = _credential(id="a")
+    _set_snapshot(version=1, chat=(cred_a,))
+    router, _ = _router(redis_client=DownRedis())
+
+    await router.record_failure(cred_a, _permanent_error(), snapshot_version=1, purpose="CHAT")
+
+    with pytest.raises(NoAvailableCredentialError) as exc_info:
+        await router.get_next_credential("CHAT")
+
+    assert exc_info.value.suspension_reasons == ("LLM_AUTH_FAILED",)
+
+
+@pytest.mark.asyncio
+async def test_unknown_reason_markers_are_ignored() -> None:
+    """A fake without `get` (or a pre-existing "1" marker) just means "reason unknown"."""
+
+    cred_a = _credential(id="a")
+    _set_snapshot(version=1, chat=(cred_a,))
+    router, _ = _router(clock=_Clock())
+
+    await router.record_failure(cred_a, _permanent_error(), snapshot_version=1)
+
+    with pytest.raises(NoAvailableCredentialError) as exc_info:
+        await router.get_next_credential("CHAT")
+
+    assert exc_info.value.suspension_reasons == ()

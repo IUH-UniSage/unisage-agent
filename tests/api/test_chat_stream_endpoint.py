@@ -39,8 +39,10 @@ class _JavaBackend:
         *,
         reject_user_message: int | None = None,
         reject_body: dict[str, Any] | None = None,
+        reject_history: int | None = None,
     ) -> None:
         self.calls: list[dict[str, Any]] = []
+        self._reject_history = reject_history
         self._next_id = 1
         self._reject_user_message = reject_user_message
         self._reject_body = reject_body
@@ -70,6 +72,8 @@ class _JavaBackend:
             )
 
         if request.method == "GET" and request.url.path.startswith("/messages/conversation/"):
+            if self._reject_history is not None:
+                return httpx.Response(self._reject_history, json={"message": "rejected"})
             return httpx.Response(200, json=[])
 
         if request.method == "POST" and request.url.path == "/messages":
@@ -239,10 +243,13 @@ def test_java_usage_limit_429_without_detail_still_returns_429_2130(
     assert response.json()["code"] == 2130
 
 
-def test_java_other_rejections_are_still_access_denied_or_not_found(
+def test_java_rejections_map_to_not_found_access_denied_or_unavailable(
     client: TestClient, mock_graph_models: GraphModels
 ) -> None:
-    for java_status, expected_status in ((404, 404), (403, 403), (500, 403)):
+    """Only 401/403/404 mean "not your conversation"; a Java 5xx is Java failing and must
+    say so (502 BACKEND_JAVA_UNAVAILABLE), not claim the caller lacks access."""
+
+    for java_status, expected_status in ((404, 404), (403, 403), (401, 403), (500, 502)):
         java = _JavaBackend(reject_user_message=java_status)
         _override_java(java)
         _override_models(mock_graph_models)
@@ -399,3 +406,24 @@ def test_no_guest_session_cookie_omits_the_header(
     message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
     assert len(message_posts) == 2
     assert all(c["x_guest_session_token"] is None for c in message_posts)
+
+
+def test_history_lookup_failures_are_mapped_before_any_message_is_created(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    """The history fetch is the first Java call - a foreign/missing conversation or a Java
+    outage there must be reported specifically, not as a generic 500."""
+
+    for java_status, expected_status, expected_code in ((404, 404, 4044), (500, 502, 5004)):
+        java = _JavaBackend(reject_history=java_status)
+        _override_java(java)
+        _override_models(mock_graph_models)
+
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"conversation_id": "conv-1", "message": "hi"},
+        )
+
+        assert response.status_code == expected_status, java_status
+        assert response.json()["code"] == expected_code
+        assert not [c for c in java.calls if c["method"] == "POST"]

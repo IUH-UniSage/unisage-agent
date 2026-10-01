@@ -265,13 +265,19 @@ class MultiRepresentationEnricher:
                 chunk.chunk_index,
                 succeeded_credential.id,
             )
+            malformed = MalformedExtractionResponseError(
+                f"fallback credential {succeeded_credential.id!r} returned a malformed "
+                f"multi-representation response for chunk {chunk.chunk_index}"
+            )
             await model_router.record_failure(
                 succeeded_credential,
-                MalformedExtractionResponseError(
-                    f"fallback credential {succeeded_credential.id!r} returned a malformed "
-                    f"multi-representation response for chunk {chunk.chunk_index}"
-                ),
+                malformed,
                 snapshot_version=snapshot_version,
                 purpose="EXTRACTION",
             )
-            credential = await model_router.get_next_credential("EXTRACTION")
+            try:
+                credential = await model_router.get_next_credential("EXTRACTION")
+            except model_router.NoAvailableCredentialError:
+                raise model_router.NoAvailableCredentialError(
+                    "EXTRACTION", last_error=malformed
+                ) from malformed

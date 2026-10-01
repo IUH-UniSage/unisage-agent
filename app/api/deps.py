@@ -10,8 +10,13 @@ from app.core.errors.exceptions import (
     InvalidTrustedContextException,
     MissingTrustedContextException,
 )
-from app.core.llm.provider_models import build_model
-from app.core.registry.model_registry import get_current_snapshot, require_top_priority_credential
+from app.core.errors.llm_failure import LLMCallException, describe_llm_failure
+from app.core.llm.provider_models import UnsupportedProviderError, build_model
+from app.core.registry.model_registry import (
+    ModelRegistryError,
+    get_current_snapshot,
+    require_top_priority_credential,
+)
 from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
@@ -55,8 +60,14 @@ def get_graph_models() -> GraphModels:
     it does not paper over the gap.
     """
 
-    credential = require_top_priority_credential("CHAT")
-    model = build_model(credential)
+    try:
+        credential = require_top_priority_credential("CHAT")
+        model = build_model(credential)
+    except (ModelRegistryError, UnsupportedProviderError) as exc:
+        # Raised before the SSE stream exists, so this is the client's only chance to
+        # learn why chat is unusable ("no CHAT credential", "unsupported provider")
+        # instead of a generic 500.
+        raise LLMCallException(describe_llm_failure(exc, purpose="CHAT")) from exc
     snapshot = get_current_snapshot()
 
     return GraphModels(

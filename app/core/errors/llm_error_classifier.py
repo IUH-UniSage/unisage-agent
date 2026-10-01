@@ -50,6 +50,18 @@ class EmbeddingProviderError(Exception):
         self.credential = credential
 
 
+class EmbeddingBudgetRejectedError(EmbeddingProviderError):
+    """An embedding call was refused by budget enforcement (request-level reservation or the
+    PROVIDER-scope acquire) before any provider call was made. A subclass so every existing
+    "abort the whole job" handling of `EmbeddingProviderError` still applies, but distinct so
+    the client can be told it is a budget limit, not a broken credential. `reason` is the
+    tracker's result string (e.g. "REJECT_EXCEEDED", "DENY_THROTTLED")."""
+
+    def __init__(self, message: str, *, reason: str, credential: Any = None) -> None:
+        super().__init__(message, credential=credential)
+        self.reason = reason
+
+
 class MalformedExtractionResponseError(Exception):
     """Raised by a caller (never by a provider SDK itself) when a credential's response parsed
     fine at the transport level but didn't match the shape the caller actually needed - e.g. a

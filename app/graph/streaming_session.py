@@ -43,19 +43,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.config import settings
+from app.core.errors.llm_failure import describe_llm_failure, is_model_failure
 from app.core.observability.graph_trace import GraphTrace
-from app.core.registry.model_router import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import async_session_factory
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
 from app.graph.stream_error_codes import (
-    BUDGET_EXCEEDED,
-    BUDGET_THROTTLED,
     LLM_STREAM_INTERRUPTED,
-    LLM_UNAVAILABLE,
     MESSAGES,
     RETRYABLE,
+    VECTOR_STORE_ERROR,
 )
 from app.graph.streaming import BudgetContext
 from app.graph.streaming_graph import run_graph
@@ -68,26 +66,27 @@ logger = logging.getLogger(__name__)
 def _error_item_for(exc: Exception, *, streamed_any: bool) -> ErrorItem:
     """Maps a graph-execution failure to the `event: error` payload.
 
-    `NoAvailableCredentialError`, `NoBudgetAvailableError`, and
-    `RequestBudgetRejectedError` only ever surface before any chunk of the
-    generation/ticket-fallback response streamed (each one either raises before
-    any provider call is even attempted, or from `stream_agent_text()`'s own
-    pre-first-chunk failover boundary) - so they always map deterministically
-    regardless of `streamed_any`. Every other exception that reaches here either
-    happened after a chunk already streamed (the "no retry past this point"
-    boundary in `stream_agent_text()`) or before any chunk streamed for a
-    different reason - both map to `LLM_STREAM_INTERRUPTED`.
+    An AI-model failure (the CHAT model in any node, or the EMBEDDING model during
+    retrieval) gets `describe_llm_failure`'s specific code/message - which purpose failed
+    and why (bad API key, quota, model not found, not configured, budget, ...) - so the
+    user/admin sees an actionable reason instead of a generic one. A Qdrant failure gets
+    its own code; anything else (a bug) stays `LLM_STREAM_INTERRUPTED`, with the
+    exception's class name appended so it can still be traced in the logs.
     """
 
-    if isinstance(exc, NoAvailableCredentialError):
-        code = LLM_UNAVAILABLE
-    elif isinstance(exc, RequestBudgetRejectedError):
-        code = BUDGET_THROTTLED if "THROTTLED" in exc.reason else BUDGET_EXCEEDED
-    elif isinstance(exc, NoBudgetAvailableError):
-        code = BUDGET_THROTTLED if "THROTTLED" in exc.last_deny_reason else BUDGET_EXCEEDED
+    if is_model_failure(exc):
+        failure = describe_llm_failure(exc, purpose="CHAT")
+        code, message, retryable = failure.reason, failure.message, failure.retryable
+    elif type(exc).__module__.startswith("qdrant_client"):
+        code = VECTOR_STORE_ERROR
+        message, retryable = MESSAGES[code], RETRYABLE[code]
     else:
         code = LLM_STREAM_INTERRUPTED
-    return ErrorItem(code=code, message=MESSAGES[code], retryable=RETRYABLE[code])
+        message = f"{MESSAGES[code]} (lỗi nội bộ: {type(exc).__name__})"
+        retryable = RETRYABLE[code]
+    if streamed_any and code != LLM_STREAM_INTERRUPTED:
+        message = f"Câu trả lời bị gián đoạn giữa chừng. {message}"
+    return ErrorItem(code=code, message=message, retryable=retryable)
 
 
 async def run_and_persist(

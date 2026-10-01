@@ -268,3 +268,95 @@ def test_chunking_scanned_pdf_without_text_returns_a_clear_error(
 
     assert response.status_code == 422
     assert response.json()["code"] == 4221
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_chunking_semantic_strategy_names_the_provider_auth_failure(
+    mock_get_object_bytes: MagicMock, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 401 from the EMBEDDING provider must reach the client as "bad API key", with the
+    purpose named - not the generic embedding-provider message."""
+
+    import httpx
+    import openai
+
+    from app.core.errors.llm_error_classifier import EmbeddingProviderError
+    from app.rag.embeddings.openai_embedder import OpenAIEmbedder
+
+    async def _fake_embed_tracked(
+        self: OpenAIEmbedder, texts: list[str], usage_recorder: object, budget_tracker: object
+    ) -> list[list[float]]:
+        del self, texts, usage_recorder, budget_tracker
+        response = httpx.Response(401, request=httpx.Request("POST", "http://p.test"))
+        cause = openai.AuthenticationError("bad key", response=response, body=None)
+        raise EmbeddingProviderError("auth failed") from cause
+
+    monkeypatch.setattr(OpenAIEmbedder, "embed_tracked", _fake_embed_tracked)
+    mock_get_object_bytes.return_value = make_pdf_bytes("A paragraph for chunking.")
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "semantic",
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    body = response.json()
+    assert response.status_code == 502
+    assert body["code"] == 5008
+    assert body["message"].startswith("Mô hình Embedding")
+    assert "HTTP 401" in body["message"]
+    assert body["errors"] == {"reason": "LLM_AUTH_FAILED", "purpose": "EMBEDDING"}
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_chunking_corrupt_pdf_returns_422_document_unreadable(
+    mock_get_object_bytes: MagicMock, client: TestClient
+) -> None:
+    mock_get_object_bytes.return_value = b"not really a pdf"
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "recursive",
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == 4222
+    assert "docs/handbook.pdf" in response.json()["message"]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"chunk_size": 0}, {"chunk_size": "abc"}, {"chunk_size": 100, "overlap": 100}],
+)
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_chunking_invalid_params_return_422_not_500(
+    mock_get_object_bytes: MagicMock, client: TestClient, params: dict[str, object]
+) -> None:
+    mock_get_object_bytes.return_value = make_pdf_bytes("A paragraph for chunking.")
+
+    response = client.post(
+        "/api/v1/ingestion/chunking",
+        json={
+            "document_id": "doc-1",
+            "department_id": "CNTT",
+            "object_key": "docs/handbook.pdf",
+            "strategy": "recursive",
+            "params": params,
+        },
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == 4010
+    assert response.json()["message"].startswith("Tham số chia đoạn không hợp lệ")

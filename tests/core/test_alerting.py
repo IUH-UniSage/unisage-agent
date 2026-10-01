@@ -356,7 +356,7 @@ def test_embed_chunks_calls_alert_on_embedding_provider_error(
     mock_publish: MagicMock,
 ) -> None:
     from app.core.errors.llm_error_classifier import EmbeddingProviderError
-    from app.worker.celery_app import celery_app, embed_chunks
+    from app.worker.celery_app import IngestionJobFailedError, celery_app, embed_chunks
 
     celery_app.conf.update(
         broker_url="memory://",
@@ -386,7 +386,7 @@ def test_embed_chunks_calls_alert_on_embedding_provider_error(
                 version=1, generated_at=None, purposes={}, embedding_index_identity=None
             ),
         ),
-        pytest.raises(EmbeddingProviderError),
+        pytest.raises(IngestionJobFailedError),
     ):
         embed_chunks.apply(
             args=(

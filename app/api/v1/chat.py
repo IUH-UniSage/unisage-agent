@@ -36,7 +36,7 @@ from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import (
     BackendJavaClient,
-    BackendJavaConnectionError,
+    BackendJavaError,
     BackendJavaHTTPError,
 )
 from app.schemas.chat import ChatStreamRequest
@@ -79,6 +79,10 @@ async def _load_history(
 # done-callback discards it once the task (run_and_persist) finishes, so the
 # set doesn't grow unbounded.
 _background_tasks: set[asyncio.Task[None]] = set()
+
+# Java statuses meaning "this conversation doesn't exist / isn't the caller's" - every other
+# error status is Java failing, reported as such.
+_CONVERSATION_REJECTED_STATUSES = (401, 403, 404)
 
 
 def _resolve_client_ip(http_request: Request, x_forwarded_for: str | None) -> str | None:
@@ -241,14 +245,23 @@ async def chat_stream_endpoint(
     client_ip = _resolve_client_ip(http_request, x_forwarded_for)
     guest_session_token = _resolve_guest_session_token(http_request)
 
-    first_turn = await is_first_turn(
-        java_client, conversation_id=request.conversation_id, authorization=authorization
-    )
-    # Fetched BEFORE this turn's own USER message is persisted below, so it
-    # never includes it (see `_load_history`).
-    history = await _load_history(
-        java_client, conversation_id=request.conversation_id, authorization=authorization
-    )
+    try:
+        first_turn = await is_first_turn(
+            java_client, conversation_id=request.conversation_id, authorization=authorization
+        )
+        # Fetched BEFORE this turn's own USER message is persisted below, so it
+        # never includes it (see `_load_history`).
+        history = await _load_history(
+            java_client, conversation_id=request.conversation_id, authorization=authorization
+        )
+    except BackendJavaHTTPError as exc:
+        # The first Java calls of the request - a conversation that doesn't exist or
+        # isn't the caller's surfaces here already, before `create_message` below.
+        if exc.status_code in _CONVERSATION_REJECTED_STATUSES:
+            raise ConversationRejectedException(exc.status_code) from exc
+        raise BackendJavaUnavailableException() from exc
+    except BackendJavaError as exc:
+        raise BackendJavaUnavailableException() from exc
 
     try:
         user_message = await java_client.create_message(
@@ -262,8 +275,11 @@ async def chat_stream_endpoint(
     except BackendJavaHTTPError as exc:
         if exc.status_code == 429:
             raise UsageLimitExceededException(_usage_limit_errors(exc.body)) from exc
-        raise ConversationRejectedException(exc.status_code) from exc
-    except BackendJavaConnectionError as exc:
+        if exc.status_code in _CONVERSATION_REJECTED_STATUSES:
+            raise ConversationRejectedException(exc.status_code) from exc
+        # A Java 5xx/400 is not "this conversation isn't yours" - don't say it is.
+        raise BackendJavaUnavailableException() from exc
+    except BackendJavaError as exc:
         raise BackendJavaUnavailableException() from exc
 
     try:
@@ -275,7 +291,7 @@ async def chat_stream_endpoint(
             authorization=authorization,
             guest_session_token=guest_session_token,
         )
-    except (BackendJavaHTTPError, BackendJavaConnectionError) as exc:
+    except BackendJavaError as exc:
         raise BackendJavaUnavailableException() from exc
 
     assistant_message_id = str(assistant_message["id"])

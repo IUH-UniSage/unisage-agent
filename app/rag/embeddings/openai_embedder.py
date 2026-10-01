@@ -12,7 +12,10 @@ from redis import asyncio as redis_asyncio
 
 from app.core.budget.tracker import BudgetTracker
 from app.core.config import settings
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.errors.llm_error_classifier import (
+    EmbeddingBudgetRejectedError,
+    EmbeddingProviderError,
+)
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 from app.core.registry.embedding_identity import ensure_embedding_identity
 from app.core.registry.model_registry import (
@@ -174,8 +177,9 @@ class OpenAIEmbedder:
                 # `app.worker.celery_app.embed_chunks`'s existing "abort the whole job"
                 # handling for that type applies here too - a budget rejection is not a
                 # per-chunk data-quality problem, it means embedding should stop entirely.
-                raise EmbeddingProviderError(
+                raise EmbeddingBudgetRejectedError(
                     f"EMBEDDING budget reservation rejected: {reserve_result}",
+                    reason=reserve_result,
                     credential=credential,
                 )
             vectors = await self._call_provider_tracked(
@@ -269,8 +273,10 @@ class OpenAIEmbedder:
             estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
         )
         if acquire_result != "OK":
-            raise EmbeddingProviderError(
-                f"EMBEDDING provider budget denied: {acquire_result}", credential=credential
+            raise EmbeddingBudgetRejectedError(
+                f"EMBEDDING provider budget denied: {acquire_result}",
+                reason=acquire_result,
+                credential=credential,
             )
 
         started_at = time.monotonic()

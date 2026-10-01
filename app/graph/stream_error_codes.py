@@ -32,6 +32,13 @@ BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
 # seconds as in-flight requests finish, so it is safe to retry shortly after.
 BUDGET_THROTTLED = "BUDGET_THROTTLED"
 
+# Retrieval could not reach the vector store (Qdrant) - not a model failure.
+VECTOR_STORE_ERROR = "VECTOR_STORE_ERROR"
+
+# Every AI-model failure (CHAT/EMBEDDING/EXTRACTION) uses its own, more specific
+# code and message from `app.core.errors.llm_failure.describe_llm_failure` (its
+# `reason`, e.g. "LLM_AUTH_FAILED") - the table below only covers the rest.
+
 MESSAGES: dict[str, str] = {
     LLM_STREAM_INTERRUPTED: ("Đã có lỗi xảy ra trong khi tạo câu trả lời. Vui lòng thử lại."),
     LLM_UNAVAILABLE: (
@@ -39,6 +46,9 @@ MESSAGES: dict[str, str] = {
     ),
     BUDGET_EXCEEDED: ("Hệ thống đã đạt giới hạn sử dụng. Vui lòng thử lại sau."),
     BUDGET_THROTTLED: ("Hệ thống đang xử lý nhiều yêu cầu cùng lúc. Vui lòng thử lại sau ít giây."),
+    VECTOR_STORE_ERROR: (
+        "Không truy cập được kho dữ liệu tài liệu (Qdrant) để tìm thông tin. Vui lòng thử lại sau."
+    ),
 }
 
 RETRYABLE: dict[str, bool] = {
@@ -46,4 +56,5 @@ RETRYABLE: dict[str, bool] = {
     LLM_UNAVAILABLE: False,
     BUDGET_EXCEEDED: False,
     BUDGET_THROTTLED: True,
+    VECTOR_STORE_ERROR: True,
 }

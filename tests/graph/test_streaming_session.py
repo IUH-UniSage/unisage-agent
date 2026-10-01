@@ -3,17 +3,20 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import httpx
+import openai
 import pytest
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.registry.model_registry import ModelRegistryError
 from app.core.registry.model_router import NoAvailableCredentialError
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED, LLM_UNAVAILABLE
-from app.graph.streaming_session import run_and_persist
+from app.graph.streaming_session import _error_item_for, run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
 from app.schemas.security import AcademicSecurityContext
@@ -315,6 +318,11 @@ async def test_run_and_persist_reports_llm_unavailable_when_credentials_exhauste
         raise NoAvailableCredentialError("CHAT")
 
     monkeypatch.setattr("app.graph.streaming_session.run_graph", _boom)
+    # CHAT credentials exist (just all cooling down/excluded) - with none configured at
+    # all this would instead be the more specific LLM_NOT_CONFIGURED.
+    monkeypatch.setattr(
+        "app.core.errors.llm_failure.active_credentials_for", lambda _purpose: ("cred",)
+    )
 
     java_client = BackendJavaClient(
         base_url="http://java.test",
@@ -346,3 +354,50 @@ async def test_run_and_persist_reports_llm_unavailable_when_credentials_exhauste
     assert error_item.code == LLM_UNAVAILABLE
     assert error_item.retryable is False
     assert isinstance(await queue.get(), DoneItem)
+
+
+def _embedding_not_configured() -> EmbeddingProviderError:
+    """What retrieval raises when no EMBEDDING credential is active (see
+    `OpenAIEmbedder._resolve_from_registry`)."""
+
+    try:
+        raise ModelRegistryError("no ACTIVE EMBEDDING credential")
+    except ModelRegistryError as cause:
+        error = EmbeddingProviderError(str(cause))
+        error.__cause__ = cause
+        return error
+
+
+@pytest.mark.parametrize(
+    ("exc", "code", "message_fragment"),
+    [
+        (
+            NoAvailableCredentialError(
+                "CHAT",
+                last_error=openai.AuthenticationError(
+                    "bad key",
+                    response=httpx.Response(401, request=httpx.Request("POST", "http://p.test")),
+                    body=None,
+                ),
+            ),
+            "LLM_AUTH_FAILED",
+            "HTTP 401",
+        ),
+        (
+            _embedding_not_configured(),
+            "LLM_NOT_CONFIGURED",
+            "Mô hình Embedding",
+        ),
+        (KeyError("bug"), "LLM_STREAM_INTERRUPTED", "KeyError"),
+    ],
+)
+def test_error_item_names_the_actual_cause(
+    exc: Exception, code: str, message_fragment: str
+) -> None:
+    """The SSE `event: error` must tell the user which model failed and why (bad key,
+    retrieval embedding not configured, ...) - not one generic sentence for everything."""
+
+    item = _error_item_for(exc, streamed_any=False)
+
+    assert item.code == code
+    assert message_fragment in item.message

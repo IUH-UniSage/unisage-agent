@@ -1,7 +1,14 @@
+import logging
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from app.core.config import settings
-from app.core.errors.exceptions import StrategyFileTypeMismatchException
+from app.core.errors.exceptions import (
+    ChunkingConfigException,
+    DocumentUnreadableException,
+    StrategyFileTypeMismatchException,
+    UniSageException,
+)
 from app.rag.chunking.excel_rows import ExcelRowChunker
 from app.rag.chunking.markdown_aware import MarkdownAwareChunker
 from app.rag.chunking.recursive import RecursiveChunker
@@ -11,6 +18,8 @@ from app.rag.chunking.token_based import TokenBasedChunker
 from app.rag.ingestion.parser import get_extension
 from app.rag.ingestion.table_aware_parser import ParsedRegion, split_regions
 from app.schemas.ingestion import Chunk, ChunkingStrategyName, RegionType
+
+logger = logging.getLogger(__name__)
 
 
 class _RegionChunker(Protocol):
@@ -50,20 +59,29 @@ async def dispatch(
     if strategy == ChunkingStrategyName.EXCEL_ROW:
         if extension != "xlsx":
             raise StrategyFileTypeMismatchException(strategy, filename)
-        rows_per_chunk = int(params.get("rows_per_chunk", 1))
-        return ExcelRowChunker(rows_per_chunk=rows_per_chunk).split(content)
+        excel_chunker = _with_valid_params(
+            lambda: ExcelRowChunker(rows_per_chunk=int(params.get("rows_per_chunk", 1)))
+        )
+        return parse_or_raise(lambda: excel_chunker.split(content), filename)
 
     if extension == "xlsx":
         raise StrategyFileTypeMismatchException(strategy, filename)
 
-    regions = split_regions(content, filename, extension)
+    # Build (and so validate) every chunker from the client's params BEFORE parsing - a bad
+    # param is the client's input error, reported as such, not a 500.
+    table_chunker = _with_valid_params(
+        lambda: TableRowChunker(
+            max_tokens=int(params.get("table_max_tokens", settings.INGEST_TABLE_CHUNK_MAX_TOKENS))
+        )
+    )
+    chunker: _RegionChunker = _with_valid_params(lambda: _build_text_chunker(strategy, params))
+
+    regions = parse_or_raise(lambda: split_regions(content, filename, extension), filename)
     table_regions = [region for region in regions if region.region_type == RegionType.TABLE]
     text_regions = [region for region in regions if region.region_type != RegionType.TABLE]
 
-    table_max_tokens = int(params.get("table_max_tokens", settings.INGEST_TABLE_CHUNK_MAX_TOKENS))
-    table_chunks = TableRowChunker(max_tokens=table_max_tokens).split(table_regions)
+    table_chunks = table_chunker.split(table_regions)
 
-    chunker: _RegionChunker = _build_text_chunker(strategy, params)
     if isinstance(chunker, SemanticChunker):
         text_chunks = await chunker.split_tracked(
             text_regions, document_id=document_id, user_id=user_id
@@ -76,6 +94,30 @@ async def dispatch(
         key=lambda chunk: (chunk.block_index is None, chunk.block_index or 0),
     )
     return [chunk.model_copy(update={"chunk_index": i}) for i, chunk in enumerate(merged)]
+
+
+def _with_valid_params[T](build: Callable[[], T]) -> T:
+    """Runs a chunker constructor, turning a bad client param (non-numeric value, a
+    non-positive size, overlap >= size, ...) into a 422 instead of a generic 500."""
+
+    try:
+        return build()
+    except (TypeError, ValueError) as exc:
+        raise ChunkingConfigException(f"Tham số chia đoạn không hợp lệ: {exc}") from exc
+
+
+def parse_or_raise[T](parse: Callable[[], T], filename: str) -> T:
+    """Runs a file parser, turning "these bytes aren't a valid file of this type" (corrupt
+    PDF/DOCX/XLSX, renamed file, password-protected, non-UTF-8 text, ...) into a specific
+    422 instead of a generic 500. Our own `UniSageException`s pass through untouched."""
+
+    try:
+        return parse()
+    except UniSageException:
+        raise
+    except Exception as exc:
+        logger.warning("Failed to parse %s", filename, exc_info=True)
+        raise DocumentUnreadableException(filename, type(exc).__name__) from exc
 
 
 def _build_text_chunker(strategy: ChunkingStrategyName, params: dict[str, Any]) -> _RegionChunker:

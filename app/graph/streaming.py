@@ -52,6 +52,7 @@ from app.core.llm.provider_models import build_model
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import (
     ModelRouter,
+    NoAvailableCredentialError,
     get_default_router,
     select_credential_with_budget,
 )
@@ -119,6 +120,24 @@ def _credential_label(credential: CredentialConfig) -> str:
     without cross-referencing a UUID against the admin UI."""
 
     return credential.display_name or credential.id
+
+
+async def _next_credential_or_raise(
+    router: ModelRouter, purpose: str, failure: Exception
+) -> CredentialConfig:
+    """`router.get_next_credential(purpose)`, but when nothing is left the raised
+    `NoAvailableCredentialError` carries `failure` - the provider error that just took
+    out the last candidate - so the client is told the real cause (bad API key, quota,
+    ...) instead of a generic "no credential available"."""
+
+    try:
+        return await router.get_next_credential(purpose)
+    except NoAvailableCredentialError as exhausted:
+        if exhausted.last_error is not None:
+            raise
+        raise NoAvailableCredentialError(
+            purpose, last_error=failure, suspension_reasons=exhausted.suspension_reasons
+        ) from failure
 
 
 TokenSink = Callable[[str], Awaitable[None]]
@@ -299,11 +318,11 @@ async def stream_agent_text(
             await failover_router.record_failure(
                 active_credential, exc, snapshot_version=snapshot_version, purpose=purpose
             )
-            # Raises `NoAvailableCredentialError` if every credential for
-            # `purpose` is cooling down/excluded - left uncaught here, it
-            # propagates to the caller as the `LLM_UNAVAILABLE` trigger.
+            # Raises `NoAvailableCredentialError` (carrying `exc` as its
+            # `last_error`) if every credential for `purpose` is cooling
+            # down/excluded - left uncaught here, it propagates to the caller.
             failed_credential = active_credential
-            active_credential = await failover_router.get_next_credential(purpose)
+            active_credential = await _next_credential_or_raise(failover_router, purpose, exc)
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
             attempt_index += 1
@@ -418,7 +437,7 @@ async def run_agent_text_with_failover(
                 active_credential, exc, snapshot_version=snapshot_version, purpose=purpose
             )
             failed_credential = active_credential
-            active_credential = await failover_router.get_next_credential(purpose)
+            active_credential = await _next_credential_or_raise(failover_router, purpose, exc)
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
             attempt_index += 1
