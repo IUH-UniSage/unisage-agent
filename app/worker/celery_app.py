@@ -124,7 +124,7 @@ celery_app.conf.beat_schedule = {
 
 @worker_process_init.connect
 def _load_model_registry_on_worker_start(**kwargs: Any) -> None:
-    """Mirrors `app.main`'s lifespan load — each prefork worker process gets its own
+    """Mirrors `app.core.lifespan` load — each prefork worker process gets its own
     snapshot, since it doesn't share memory with gunicorn
     workers or other worker processes. No-op when `MODEL_REGISTRY_ENABLED=false`; when true, an
     uncaught `ModelRegistryError` here is deliberately fatal (Celery aborts the worker process

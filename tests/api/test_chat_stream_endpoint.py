@@ -427,3 +427,50 @@ def test_history_lookup_failures_are_mapped_before_any_message_is_created(
         assert response.status_code == expected_status, java_status
         assert response.json()["code"] == expected_code
         assert not [c for c in java.calls if c["method"] == "POST"]
+
+
+def _models_not_configured() -> GraphModels:
+    from app.core.errors.llm_failure import LLMCallException, describe_llm_failure
+    from app.core.registry.model_registry import ModelRegistryError
+
+    raise LLMCallException(
+        describe_llm_failure(ModelRegistryError("no CHAT credential"), purpose="CHAT")
+    )
+
+
+def test_chat_hides_technical_detail_from_students_and_guests(client: TestClient) -> None:
+    """A student/guest can't fix "no CHAT credential" and mustn't learn the setup from it -
+    they get a plain system message with a reference code instead."""
+
+    _override_java(_JavaBackend())
+    app.dependency_overrides[get_graph_models] = _models_not_configured
+
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "hi"},
+        headers={"X-User-Permissions": "[]"},
+    )
+
+    body = response.json()
+    assert response.status_code == 503
+    assert body["message"].startswith("Trợ lý AI đang tạm ngưng do sự cố hệ thống.")
+    assert "Mô hình Chat" not in body["message"]
+    assert "credential" not in body["message"]
+    assert set(body["errors"]) == {"reference"}
+    assert body["errors"]["reference"] in body["message"]
+
+
+def test_chat_shows_technical_detail_to_ai_admins(client: TestClient) -> None:
+    _override_java(_JavaBackend())
+    app.dependency_overrides[get_graph_models] = _models_not_configured
+
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "hi"},
+        headers={"X-User-Permissions": '["CHAT_MODEL_READ"]'},
+    )
+
+    body = response.json()
+    assert response.status_code == 503
+    assert body["message"].startswith("Mô hình Chat: chưa có credential")
+    assert body["errors"]["reason"] == "LLM_NOT_CONFIGURED"

@@ -68,7 +68,7 @@ class LLMFailure:
 
 class LLMCallException(UniSageException):
     """A UniSageException built from an `LLMFailure`, for HTTP (non-streaming) endpoints -
-    `app.main`'s handler renders it with the failure's own status/code/message."""
+    `app.api.errors`' handler renders it with the failure's own status/code/message."""
 
     def __init__(self, failure: LLMFailure) -> None:
         errors = {"reason": failure.reason}
@@ -149,6 +149,23 @@ def _failure(
     )
 
 
+# Provider wording for "the prompt is longer than the model's context window" - usually a
+# plain 400, so the status alone can't tell it apart from any other bad request.
+_INPUT_TOO_LARGE_MARKERS = (
+    "context_length_exceeded",
+    "maximum context length",
+    "context window",
+    "too many tokens",
+    "input token count",
+    "exceeds the maximum number of tokens",
+)
+
+
+def _input_too_large(exc: BaseException) -> bool:
+    text = " ".join(str(source) for source in _quota_sources(exc) if source is not None).lower()
+    return any(marker in text for marker in _INPUT_TOO_LARGE_MARKERS)
+
+
 def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFailure:
     who = _label(purpose)
     if status == 401:
@@ -193,11 +210,11 @@ def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFail
             retryable=True,
             purpose=purpose,
         )
-    if status == 413:
+    if status == 413 or (400 <= status < 500 and _input_too_large(root)):
         return _failure(
-            "LLM_REQUEST_REJECTED",
+            "LLM_INPUT_TOO_LARGE",
             ErrorCode.LLM_REQUEST_REJECTED,
-            f"{who}: nội dung gửi đi quá lớn so với giới hạn của nhà cung cấp (HTTP 413).",
+            f"{who}: nội dung gửi đi vượt giới hạn độ dài/context của mô hình (HTTP {status}).",
             retryable=False,
             purpose=purpose,
         )

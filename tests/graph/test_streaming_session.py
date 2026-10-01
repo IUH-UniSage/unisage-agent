@@ -401,3 +401,56 @@ def test_error_item_names_the_actual_cause(
 
     assert item.code == code
     assert message_fragment in item.message
+
+
+def _auth_failure() -> NoAvailableCredentialError:
+    return NoAvailableCredentialError(
+        "CHAT",
+        last_error=openai.AuthenticationError(
+            "bad key",
+            response=httpx.Response(401, request=httpx.Request("POST", "http://p.test")),
+            body=None,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("exc", "message_start", "retryable"),
+    [
+        (_auth_failure(), "Trợ lý AI đang tạm ngưng do sự cố hệ thống.", False),
+        (
+            NoAvailableCredentialError(
+                "CHAT",
+                last_error=openai.APITimeoutError(request=httpx.Request("POST", "http://p.test")),
+            ),
+            "Trợ lý AI đang bận hoặc tạm thời gián đoạn",
+            True,
+        ),
+        (KeyError("bug"), "Trợ lý AI đang tạm ngưng do sự cố hệ thống.", True),
+    ],
+)
+def test_error_item_for_students_is_a_plain_category(
+    exc: Exception, message_start: str, retryable: bool
+) -> None:
+    item = _error_item_for(exc, streamed_any=False, detailed=False, reference="a1b2c3d4")
+
+    assert item.message.startswith(message_start)
+    assert item.message.endswith("(Mã tham chiếu: a1b2c3d4)")
+    assert "HTTP" not in item.message and "KeyError" not in item.message
+    assert item.retryable is retryable
+    # The precise cause still travels as the code - for logs/support, not for display.
+    assert item.code != ""
+
+
+def test_error_item_for_admins_keeps_the_detail_and_reference() -> None:
+    item = _error_item_for(_auth_failure(), streamed_any=False, detailed=True, reference="a1b2c3d4")
+
+    assert item.code == "LLM_AUTH_FAILED"
+    assert "HTTP 401" in item.message
+    assert "a1b2c3d4" in item.message
+
+
+def test_partial_answer_failure_is_flagged_for_students() -> None:
+    item = _error_item_for(_auth_failure(), streamed_any=True, detailed=False, reference=None)
+
+    assert item.message.startswith("Câu trả lời bị gián đoạn giữa chừng.")

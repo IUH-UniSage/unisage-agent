@@ -85,7 +85,7 @@ def test_chunking_semantic_strategy_reports_embedding_identity_mismatch_clearly(
     mock_get_object_bytes: MagicMock, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An `EmbeddingIdentityMismatchError` raised deep inside the semantic strategy's embedding
-    step must reach the client as a specific, actionable error (`app.main`'s dedicated handler),
+    step must reach the client as a specific, actionable error (`app.api.errors`' dedicated handler),
     not `unhandled_exception_handler`'s generic "Có lỗi xảy ra, bạn thử lại sau nhé." 500."""
 
     from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError

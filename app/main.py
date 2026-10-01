@@ -1,86 +1,19 @@
-import asyncio
 import logging
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
-from typing import Any
 
-import google.genai.errors as google_errors
-import openai
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from kombu.exceptions import (  # type: ignore[import-untyped]
-    OperationalError as KombuOperationalError,
-)
-from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
-from qdrant_client.http.exceptions import ApiException as QdrantApiException
-from redis.exceptions import RedisError
-from sqlalchemy.exc import SQLAlchemyError
+from fastapi import FastAPI
 
+from app.api.errors import register_exception_handlers
 from app.api.v1 import chat, documents, health, ingestion
-from app.core.budget.poller import start_budget_snapshot_poller
-from app.core.budget.snapshot import refresh_budget_snapshot
-from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.config import settings
-from app.core.errors.error_codes import ErrorCode
-from app.core.errors.exceptions import UniSageException
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
-from app.core.errors.llm_failure import describe_llm_failure
-from app.core.llm.provider_models import UnsupportedProviderError
+from app.core.lifespan import lifespan
 from app.core.observability.logging_config import configure_logging
 from app.core.observability.middleware import request_logging_middleware
-from app.core.pricing.poller import start_pricing_snapshot_poller
-from app.core.pricing.snapshot import refresh_pricing_snapshot
-from app.core.registry.model_registry import ModelRegistryError, init_model_registry
-from app.core.registry.model_router import NoAvailableCredentialError, NoBudgetAvailableError
-from app.core.registry.registry_subscriber import start_asyncio_registry_subscriber
-from app.core.security.redaction import safe_error_message
-from app.core.security.ssrf_guard import SsrfBlockedError
-from app.integrations.backend_java_client import BackendJavaError
-from app.rag.chunking.table_row import TableStructureError
 
 # Sets the root format, silences noisy/secret-leaking third-party loggers
 # (httpx/httpcore/openai/anthropic/...) and attaches the redaction filter that
 # scrubs every log record before it's written - see app/core/observability/logging_config.py.
 configure_logging()
 logger = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Log application startup and shutdown boundaries."""
-
-    del app
-    logger.info("Starting %s in [%s] mode", settings.APP_NAME, settings.APP_ENV)
-    # One-time load of the model registry snapshot from backend-java. No-op when
-    # MODEL_REGISTRY_ENABLED=false; when true, raises (and is deliberately left
-    # uncaught, failing startup) if there is no ACTIVE CHAT credential.
-    await init_model_registry()
-    # Hot-reload the cached snapshot without a restart - subscribes to Java's
-    # after-commit pub/sub signal and independently polls /version as a self-healing
-    # fallback. No-op when the flag above is off.
-    subscriber = start_asyncio_registry_subscriber()
-    # Same soft-limit posture as the reservation itself: an empty/never-loaded
-    # snapshot means no budgets are enforced, fail-open by absence - never fatal to
-    # startup even if Java is unreachable right now. Gated on the same flag as the
-    # model registry above - a process running on static .env credentials has no
-    # live backend-java to fetch a budget snapshot from either.
-    # Prices follow the same gate: without a live backend-java every call is UNPRICED.
-    budget_poller: asyncio.Task[None] | None = None
-    pricing_poller: asyncio.Task[None] | None = None
-    if settings.MODEL_REGISTRY_ENABLED:
-        await refresh_budget_snapshot()
-        budget_poller = start_budget_snapshot_poller()
-        await refresh_pricing_snapshot()
-        pricing_poller = start_pricing_snapshot_poller()
-    yield
-    if budget_poller is not None:
-        budget_poller.cancel()
-    if pricing_poller is not None:
-        pricing_poller.cancel()
-    await subscriber.stop()
-    logger.info("Shutting down %s", settings.APP_NAME)
-
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -99,180 +32,7 @@ app = FastAPI(
 # ("http://localhost:5173, *"), which browsers reject outright.
 app.middleware("http")(request_logging_middleware)
 
-
-def _error_content(code: int, message: str, errors: dict[str, str] | None = None) -> dict[str, Any]:
-    """Build the `{code, message, errors}` envelope - `data` and `errors` are
-    omitted when absent, matching Java's `@JsonInclude(NON_NULL)` on
-    `ApiResponse`."""
-
-    content: dict[str, Any] = {"code": code, "message": message}
-    if errors:
-        content["errors"] = errors
-    return content
-
-
-@app.exception_handler(UniSageException)
-async def unisage_exception_handler(request: Request, exc: UniSageException) -> JSONResponse:
-    """Map application exceptions to the same envelope backend-java's
-    `GlobalExceptionHandler` produces for its `AppException`."""
-
-    del request
-    return JSONResponse(
-        status_code=exc.error_code.http_status,
-        content=_error_content(exc.error_code.code, exc.message, exc.errors),
-    )
-
-
-@app.exception_handler(TableStructureError)
-async def table_structure_error_handler(request: Request, exc: TableStructureError) -> JSONResponse:
-    """`TableStructureError` is an internal chunker BUG/invariant failure
-    (a row's structure doesn't match its table's expectations) - never a
-    user input/config problem, unlike `ChunkValidationException`/
-    `ChunkingConfigException`, which get their own `UniSageException` 4xx
-    handling above. Log this at CRITICAL with full structured
-    context (document_id, block_index, table_id, row_index, expected vs
-    actual cell count, a non-reversible digest of the offending row) so an
-    on-call engineer can actually debug it - but the row's raw/untruncated
-    text (which may hold PII pulled straight from an uploaded document) is
-    only ever logged when `settings.APP_DEBUG` is on (local/test runs), never
-    in a production log line. The client still only sees a generic 500.
-    """
-
-    document_id = "unknown"
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            document_id = str(body.get("document_id", "unknown"))
-    except Exception:  # pragma: no cover - defensive only, body may be unreadable/non-JSON
-        pass
-
-    context: dict[str, Any] = {
-        "document_id": document_id,
-        "block_index": exc.block_index,
-        "table_id": exc.table_id,
-        "row_index": exc.row_index,
-        "expected_cell_count": exc.expected_cell_count,
-        "actual_cell_count": exc.actual_cell_count,
-        "row_sample_digest": exc.row_sample_digest,
-    }
-    if settings.APP_DEBUG:
-        # Debug/test only - never reached in production, where APP_DEBUG=False.
-        context["raw_row"] = exc.raw_row
-    logger.critical("TableStructureError: internal chunker invariant violated: %s", context)
-
-    return JSONResponse(
-        status_code=ErrorCode.INTERNAL_ERROR.http_status,
-        content=_error_content(ErrorCode.INTERNAL_ERROR.code, ErrorCode.INTERNAL_ERROR.message),
-    )
-
-
-async def llm_failure_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Every AI-model failure that escapes a synchronous endpoint (e.g. the "semantic"
-    chunking strategy's embedding step, `POST /ingestion/chunking`) - a broken/missing
-    EMBEDDING/EXTRACTION/CHAT credential, a provider HTTP error, a budget rejection, an
-    embedding identity mismatch. `describe_llm_failure` turns it into a specific code and
-    message (which purpose, and why: 401, quota, model not found, not configured, ...)
-    instead of `unhandled_exception_handler`'s generic 500. Registered per exception type
-    below; Starlette dispatches by MRO, so subclasses (`EmbeddingIdentityMismatchError`,
-    `openai.AuthenticationError`, ...) land here too.
-    """
-
-    del request
-    failure = describe_llm_failure(exc)
-    credential = getattr(exc, "credential", None)
-    api_key = getattr(credential, "api_key", None)
-    logger.error(
-        "AI model failure (%s, purpose=%s): %s",
-        failure.reason,
-        failure.purpose,
-        safe_error_message(exc, api_key),
-    )
-    errors = {"reason": failure.reason}
-    if failure.purpose:
-        errors["purpose"] = failure.purpose
-    return JSONResponse(
-        status_code=failure.error_code.http_status,
-        content=_error_content(failure.error_code.code, failure.message, errors),
-    )
-
-
-for _llm_exception_type in (
-    EmbeddingProviderError,
-    ModelRegistryError,
-    NoAvailableCredentialError,
-    NoBudgetAvailableError,
-    RequestBudgetRejectedError,
-    UnsupportedProviderError,
-    SsrfBlockedError,
-    ModelAPIError,
-    UnexpectedModelBehavior,
-    openai.APIError,
-    google_errors.APIError,
-):
-    app.add_exception_handler(_llm_exception_type, llm_failure_handler)
-
-
-def _infrastructure_handler(error_code: ErrorCode, component: str) -> Any:
-    """A handler for one backing service (Postgres, Qdrant, Redis/Celery, backend-java)
-    being down or rejecting a call: logs the real exception, answers with that service's
-    own code/message so the client knows WHAT is unavailable instead of a generic 500."""
-
-    async def _handler(request: Request, exc: Exception) -> JSONResponse:
-        del request
-        logger.error("%s failure: %s", component, safe_error_message(exc), exc_info=exc)
-        return JSONResponse(
-            status_code=error_code.http_status,
-            content=_error_content(error_code.code, error_code.message, {"component": component}),
-        )
-
-    return _handler
-
-
-for _infra_exception_type, _infra_error_code, _component in (
-    (SQLAlchemyError, ErrorCode.DATABASE_ERROR, "postgres"),
-    (QdrantApiException, ErrorCode.VECTOR_STORE_ERROR, "qdrant"),
-    (RedisError, ErrorCode.TASK_QUEUE_UNAVAILABLE, "redis"),
-    (KombuOperationalError, ErrorCode.TASK_QUEUE_UNAVAILABLE, "celery-broker"),
-    (BackendJavaError, ErrorCode.BACKEND_JAVA_UNAVAILABLE, "backend-java"),
-):
-    app.add_exception_handler(
-        _infra_exception_type, _infrastructure_handler(_infra_error_code, _component)
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
-    """Map Pydantic/FastAPI request-validation failures, mirroring Java's
-    `MethodArgumentNotValidException` handler: one `errors` entry per
-    invalid field."""
-
-    del request
-    field_errors = {
-        ".".join(str(part) for part in error["loc"][1:]) or str(error["loc"][-1]): error["msg"]
-        for error in exc.errors()
-    }
-    return JSONResponse(
-        status_code=ErrorCode.VALIDATION_ERROR.http_status,
-        content=_error_content(
-            ErrorCode.VALIDATION_ERROR.code, ErrorCode.VALIDATION_ERROR.message, field_errors
-        ),
-    )
-
-
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch-all fallback, mirroring Java's `Exception.class` handler: log the
-    full traceback server-side, return a generic 500 to the client."""
-
-    del request
-    logger.exception("Unhandled exception", exc_info=exc)
-    return JSONResponse(
-        status_code=ErrorCode.INTERNAL_ERROR.http_status,
-        content=_error_content(ErrorCode.INTERNAL_ERROR.code, ErrorCode.INTERNAL_ERROR.message),
-    )
-
+register_exception_handlers(app)
 
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")

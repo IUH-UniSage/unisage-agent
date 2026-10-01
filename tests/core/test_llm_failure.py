@@ -16,9 +16,15 @@ from app.core.errors.llm_error_classifier import (
     EmbeddingProviderError,
 )
 from app.core.errors.llm_failure import (
+    LLMFailure,
     admin_failure_message,
     describe_llm_failure,
     is_model_failure,
+)
+from app.core.errors.public_errors import (
+    can_see_ai_details,
+    permissions_from_header,
+    public_chat_message,
 )
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
@@ -197,3 +203,52 @@ def test_admin_failure_message_puts_the_cause_first_and_redacts() -> None:
     assert "Chi tiết:" in message
     assert "sk-secret" not in message
     assert len(message) <= 500
+
+
+def test_context_length_400_is_input_too_large() -> None:
+    exc = _openai_status_error(
+        400, {"code": "context_length_exceeded", "message": "maximum context length is 8192"}
+    )
+
+    assert describe_llm_failure(exc, purpose="CHAT").reason == "LLM_INPUT_TOO_LARGE"
+
+
+@pytest.mark.parametrize(
+    ("reason", "retryable", "expected_start"),
+    [
+        ("LLM_CONTENT_FILTERED", False, "Câu hỏi này bị bộ lọc an toàn"),
+        ("LLM_INPUT_TOO_LARGE", False, "Câu hỏi hoặc cuộc hội thoại đã quá dài"),
+        ("BUDGET_EXCEEDED", False, "Hệ thống đã đạt giới hạn sử dụng"),
+        ("LLM_RATE_LIMITED", True, "Trợ lý AI đang bận"),
+        ("LLM_AUTH_FAILED", False, "Trợ lý AI đang tạm ngưng do sự cố hệ thống"),
+        ("LLM_NOT_CONFIGURED", False, "Trợ lý AI đang tạm ngưng do sự cố hệ thống"),
+    ],
+)
+def test_public_chat_message_categories(reason: str, retryable: bool, expected_start: str) -> None:
+    failure = LLMFailure(
+        reason=reason,
+        error_code=ErrorCode.LLM_PROVIDER_ERROR,
+        message="Mô hình Chat: chi tiết kỹ thuật",
+        retryable=retryable,
+        purpose="CHAT",
+    )
+
+    message, _ = public_chat_message(failure, reference="ref12345")
+
+    assert message.startswith(expected_start)
+    assert "chi tiết kỹ thuật" not in message
+    assert message.endswith("(Mã tham chiếu: ref12345)")
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ('["CHAT_MODEL_ALL"]', True),
+        ('["CHAT_MODEL_READ", "DOCUMENT_ALL"]', True),
+        ('["DOCUMENT_ALL"]', False),
+        ("not-json", False),
+        (None, False),
+    ],
+)
+def test_ai_admin_detection(header: str | None, expected: bool) -> None:
+    assert can_see_ai_details(permissions_from_header(header)) is expected

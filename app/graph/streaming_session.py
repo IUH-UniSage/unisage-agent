@@ -43,7 +43,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.config import settings
-from app.core.errors.llm_failure import describe_llm_failure, is_model_failure
+from app.core.errors.llm_failure import LLMFailure, describe_llm_failure, is_model_failure
+from app.core.errors.public_errors import (
+    can_see_ai_details,
+    public_chat_message,
+    short_reference,
+)
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
@@ -63,17 +68,28 @@ from app.integrations.backend_java_client import BackendJavaClient
 logger = logging.getLogger(__name__)
 
 
-def _error_item_for(exc: Exception, *, streamed_any: bool) -> ErrorItem:
+def _error_item_for(
+    exc: Exception,
+    *,
+    streamed_any: bool,
+    detailed: bool = True,
+    reference: str | None = None,
+) -> ErrorItem:
     """Maps a graph-execution failure to the `event: error` payload.
 
-    An AI-model failure (the CHAT model in any node, or the EMBEDDING model during
-    retrieval) gets `describe_llm_failure`'s specific code/message - which purpose failed
-    and why (bad API key, quota, model not found, not configured, budget, ...) - so the
-    user/admin sees an actionable reason instead of a generic one. A Qdrant failure gets
-    its own code; anything else (a bug) stays `LLM_STREAM_INTERRUPTED`, with the
-    exception's class name appended so it can still be traced in the logs.
+    `code` is always the precise cause - `describe_llm_failure`'s reason for an AI-model
+    failure (CHAT in any node, EMBEDDING during retrieval: "LLM_AUTH_FAILED", ...),
+    `VECTOR_STORE_ERROR` for Qdrant, `LLM_STREAM_INTERRUPTED` for anything else (a bug).
+
+    `message` depends on `detailed`: the full technical explanation for a caller who can
+    fix it (an AI admin - see `can_see_ai_details`), otherwise one of
+    `public_chat_message`'s plain categories (fix your question / try again later /
+    system problem) - a student or guest can't act on "API key không hợp lệ" and must not
+    learn the infrastructure from it. `reference` (the request's short id, also in the
+    server log line) is appended either way so a reported error can be traced.
     """
 
+    failure: LLMFailure | None = None
     if is_model_failure(exc):
         failure = describe_llm_failure(exc, purpose="CHAT")
         code, message, retryable = failure.reason, failure.message, failure.retryable
@@ -84,7 +100,15 @@ def _error_item_for(exc: Exception, *, streamed_any: bool) -> ErrorItem:
         code = LLM_STREAM_INTERRUPTED
         message = f"{MESSAGES[code]} (lỗi nội bộ: {type(exc).__name__})"
         retryable = RETRYABLE[code]
-    if streamed_any and code != LLM_STREAM_INTERRUPTED:
+
+    if detailed:
+        if reference:
+            message = f"{message} (Mã tham chiếu: {reference})"
+    else:
+        message, retryable = public_chat_message(failure, reference=reference)
+        if code == VECTOR_STORE_ERROR:
+            retryable = True
+    if streamed_any and not (detailed and code == LLM_STREAM_INTERRUPTED):
         message = f"Câu trả lời bị gián đoạn giữa chừng. {message}"
     return ErrorItem(code=code, message=message, retryable=retryable)
 
@@ -161,14 +185,21 @@ async def run_and_persist(
             response_text = graph_output.response_text
             status = "COMPLETED"
         except Exception as exc:
+            reference = short_reference(usage_recorder.request_id)
             logger.exception(
-                "graph execution failed for conversation_id=%s, message_id=%s",
+                "graph execution failed for conversation_id=%s, message_id=%s, ref=%s",
                 conversation_id,
                 assistant_message_id,
+                reference,
             )
             response_text = "".join(accumulated)
             status = "ERROR"
-            error_item = _error_item_for(exc, streamed_any=bool(accumulated))
+            error_item = _error_item_for(
+                exc,
+                streamed_any=bool(accumulated),
+                detailed=can_see_ai_details(graph_input.security.permissions),
+                reference=reference,
+            )
 
         try:
             await java_client.update_message(
