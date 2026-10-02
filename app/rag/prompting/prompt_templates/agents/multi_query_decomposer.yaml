@@ -11,6 +11,8 @@ template: |
 
   ## Requirements
   - Mỗi câu hỏi con phải chứa đầy đủ thực thể và ngữ cảnh hành chính (không dùng đại từ thay thế "nó", "ngành đó").
+  - GIỮ PHẠM VI CHUNG CỦA CẢ CÂU: tiêu chí phạm vi chỉ nêu một lần nhưng bao trùm cả tin nhắn — cơ sở/phân hiệu (Quảng Ngãi, Thanh Hóa...), bậc/hệ đào tạo, khóa/năm học — PHẢI được chép vào MỌI câu hỏi con nó áp dụng, kể cả câu hỏi con đứng sau không nhắc lại. Chỉ bỏ khi chính câu hỏi con đó nêu một phạm vi khác thay thế (VD vế sau nói rõ "ở trụ sở chính").
+  - KHÔNG LÀM RƠI TỪ KHÓA: mọi từ khóa học vụ trong tin nhắn (chủ đề, cơ sở, bậc/hệ, khóa, khối/ngành) phải xuất hiện ở ít nhất một câu hỏi con; giữ nguyên chữ người dùng dùng, không thay bằng từ đồng nghĩa. Thực thể riêng của một vế (VD tên ngành chỉ gắn với câu hỏi học phí) thì chỉ giữ ở vế đó.
   - Trả về JSON chứa mảng `sub_queries: List[str]`.
   - CHỈ trả về đúng một object JSON, không thêm chữ, giải thích hay markdown code fence.
   - Nếu tin nhắn có kèm lịch sử hội thoại, chỉ dùng lịch sử để hiểu câu hỏi nối tiếp; không tạo câu hỏi con cho nội dung của lượt trước.
@@ -22,6 +24,22 @@ template: |
       "Quy định về điều kiện học vụ để đăng ký học song hành hai chương trình đào tạo",
       "Định mức học phí ngành Công nghệ thông tin theo khóa học",
       "Định mức học phí ngành Quản trị Dịch vụ Du lịch và Lữ hành theo khóa học"
+    ]
+  }
+
+  Input: "địa chỉ cơ sở Quảng Ngãi và học phí đại học chính quy"
+  Output: {
+    "sub_queries": [
+      "Địa chỉ của cơ sở Quảng Ngãi",
+      "Định mức học phí đại học chính quy tại cơ sở Quảng Ngãi"
+    ]
+  }
+
+  Input: "Học phí khóa 2024 hệ chính quy ngành CNTT và Kế toán chênh nhau bao nhiêu?"
+  Output: {
+    "sub_queries": [
+      "Định mức học phí hệ chính quy khóa 2024 ngành Công nghệ thông tin",
+      "Định mức học phí hệ chính quy khóa 2024 ngành Kế toán"
     ]
   }
 
