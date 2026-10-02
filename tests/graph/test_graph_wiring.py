@@ -734,3 +734,53 @@ async def test_all_sub_queries_with_chunks_never_search_the_web(
 
     assert calls == []
     assert result.used_web_search is False
+
+
+# ── LLMRerankNode (09a, EXTRACTION model) ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_keyword_only_chunk_is_judged_irrelevant_so_the_web_is_searched(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    calls = _fake_web_search(monkeypatch, [_WEB_PAGE])
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("Lịch thi học kỳ 1"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+        rerank=mock_sync_llm_model('{"SQ1": []}'),
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+        )
+
+    assert "09a_LLMRerankNode" in _traced_nodes(caplog)
+    assert calls == [["Lịch thi học kỳ 1"]]
+    (prompt,) = seen_prompts
+    assert "dummy retrieved content" not in prompt
+    assert result.used_web_search is True
+
+
+@pytest.mark.asyncio
+async def test_missing_extraction_model_skips_the_llm_rerank_and_warns_admins(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    models = _models(mock_sync_llm_model, mock_streaming_llm_model)
+    models.rerank_unavailable = "Mô hình Extraction chưa được cấu hình."
+
+    result = await run_graph(_single_question_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.response_text == "Câu trả lời cuối cùng [1]."
+    (warning,) = result.admin_warnings
+    assert warning.code == "LLM_RERANK_UNAVAILABLE"
+    assert warning.message.endswith("Mô hình Extraction chưa được cấu hình.")

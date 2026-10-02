@@ -26,6 +26,7 @@ from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
 from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, plan_route
+from app.graph.nodes.llm_rerank import build_llm_rerank_agent, llm_rerank
 from app.graph.nodes.message_classification import build_classification_agent, classify_intent
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
@@ -43,14 +44,20 @@ from app.graph.nodes.security_context import (
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
 from app.graph.nodes.web_search import search_web
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
-from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
-from app.integrations.tavily_client import WebSearchUnavailableError
+from app.graph.streaming_state import AdminWarning, GraphInput, GraphModels, GraphOutput
 from app.rag.prompting.citations import build_citations
 from app.schemas.clarification import PendingClarification
 from app.schemas.intent import ClassifiedTask, RoutingMode
 from app.schemas.web_search import WebSearchResult
 
 _ORIGIN_NODE_QUERY_TRANSFORMATION = "QueryTransformationNode"
+
+
+# Prefixes of the AI-admin warnings (`event: warning`) this module raises.
+_LLM_RERANK_SKIPPED = "Bỏ qua bước lọc độ liên quan của tài liệu (mô hình Extraction): "
+_WEB_SEARCH_FAILED = (
+    "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
+)
 
 
 def _make_failover_applier(models: GraphModels) -> FailoverCallback:
@@ -299,19 +306,54 @@ async def _run_advisory_flow(
     # PostRetrievalRerankNode (per sub-query, then merged).
     trace.node("09_PostRetrievalRerankNode")
     rerank_result = rerank_chunks(per_query_chunks)
+    # The standalone question of each sub-query (HyDE's rewrite, or the decomposed
+    # question itself) - what the LLM rerank judges against and what web search looks up.
+    questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]
+    admin_warnings: list[AdminWarning] = []
 
-    # WebSearchNode: only the sub-queries rerank left with no chunk.
-    failed_sub_queries = [
-        extract_standalone_question(sub_queries[index].retrieval_text)
-        for index in rerank_result.failed_query_indexes
-    ]
+    # LLMRerankNode: keep only the chunks that answer each sub-query (EXTRACTION model).
+    if settings.CHAT_LLM_RERANK_ENABLED and rerank_result.has_valid_context:
+        if models.rerank is not None:
+            trace.node("09a_LLMRerankNode", model=models.rerank)
+            llm_rerank_outcome = await llm_rerank(
+                build_llm_rerank_agent(models.rerank),
+                questions,
+                rerank_result,
+                credential=models.rerank_credential,
+                snapshot_version=models.snapshot_version,
+                on_attempt=usage_recorder.bind("LLMRerankNode"),
+                budget=budget,
+            )
+            rerank_result = llm_rerank_outcome.result
+            if llm_rerank_outcome.failure is not None:
+                admin_warnings.append(
+                    AdminWarning(
+                        code="LLM_RERANK_FAILED",
+                        message=f"{_LLM_RERANK_SKIPPED}{llm_rerank_outcome.failure}",
+                    )
+                )
+        elif models.rerank_unavailable is not None:
+            admin_warnings.append(
+                AdminWarning(
+                    code="LLM_RERANK_UNAVAILABLE",
+                    message=f"{_LLM_RERANK_SKIPPED}{models.rerank_unavailable}",
+                )
+            )
+
+    # WebSearchNode: only the sub-queries left with no chunk.
+    failed_sub_queries = [questions[index] for index in rerank_result.failed_query_indexes]
     web_results: list[WebSearchResult] = []
-    web_search_failure: WebSearchUnavailableError | None = None
     if failed_sub_queries and settings.CHAT_WEB_SEARCH_ENABLED:
         trace.node("09b_WebSearchNode")
         web_outcome = await search_web(failed_sub_queries)
         web_results = web_outcome.results
-        web_search_failure = web_outcome.failure
+        if web_outcome.failure is not None:
+            admin_warnings.append(
+                AdminWarning(
+                    code=web_outcome.failure.code,
+                    message=f"{_WEB_SEARCH_FAILED}{web_outcome.failure}",
+                )
+            )
         for result in web_results:
             trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
 
@@ -338,7 +380,7 @@ async def _run_advisory_flow(
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
             used_ticket_fallback=True,
-            web_search_failure=web_search_failure,
+            admin_warnings=admin_warnings,
         )
 
     # GenerationSynthesisNode (streaming).
@@ -377,5 +419,5 @@ async def _run_advisory_flow(
             generation_result.response_text, rerank_result.chunks, web_results
         ),
         used_web_search=bool(web_results),
-        web_search_failure=web_search_failure,
+        admin_warnings=admin_warnings,
     )

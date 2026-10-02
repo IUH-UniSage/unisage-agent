@@ -141,6 +141,12 @@ class Settings(BaseSettings):
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
+    # LLMRerankNode: one call to the EXTRACTION model per turn checks which reranked chunks
+    # actually answer which sub-query - the score threshold alone lets a chunk through on
+    # shared keywords. A sub-query left with none goes to WebSearchNode. Each chunk is shown
+    # to the model cut to SNIPPET_CHARS.
+    CHAT_LLM_RERANK_ENABLED: bool = True
+    CHAT_LLM_RERANK_SNIPPET_CHARS: int = Field(default=800, ge=100)
     # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
     # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),

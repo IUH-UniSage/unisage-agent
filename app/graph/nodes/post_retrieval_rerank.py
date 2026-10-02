@@ -43,19 +43,26 @@ class TurnRerankResult:
 
 
 def rerank_chunks(per_query_chunks: Sequence[Sequence[RetrievedChunk]]) -> TurnRerankResult:
-    per_query = [rerank(chunks) for chunks in per_query_chunks]
     best_scores = [
         max((chunk.score for chunk in chunks), default=0.0) for chunks in per_query_chunks
     ]
-    if len(per_query) == 1:
-        return TurnRerankResult(
-            per_query=per_query, chunks=per_query[0].chunks, best_scores=best_scores
-        )
-    return TurnRerankResult(
-        per_query=per_query,
-        best_scores=best_scores,
-        chunks=_merge_by_best_score([result.chunks for result in per_query]),
+    return turn_result(
+        [rerank(chunks).chunks for chunks in per_query_chunks], best_scores=best_scores
     )
+
+
+def turn_result(
+    per_query_kept: Sequence[list[RetrievedChunk]], *, best_scores: list[float]
+) -> TurnRerankResult:
+    """Builds the turn's result from each query's kept chunks - shared with
+    LLMRerankNode, which narrows those lists further."""
+
+    per_query = [
+        RerankResult(has_valid_context=bool(chunks), chunks=list(chunks))
+        for chunks in per_query_kept
+    ]
+    merged = per_query[0].chunks if len(per_query) == 1 else _merge_by_best_score(per_query_kept)
+    return TurnRerankResult(per_query=per_query, chunks=merged, best_scores=best_scores)
 
 
 def _merge_by_best_score(results: Sequence[list[RetrievedChunk]]) -> list[RetrievedChunk]:

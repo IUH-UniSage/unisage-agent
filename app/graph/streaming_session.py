@@ -114,20 +114,17 @@ def _error_item_for(
     return ErrorItem(code=code, message=message, retryable=retryable)
 
 
-_WEB_SEARCH_WARNING_PREFIX = (
-    "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
-)
+def _admin_warnings(graph_output: GraphOutput, graph_input: GraphInput) -> list[WarningItem]:
+    """`event: warning`s for an AI admin (web search or the LLM rerank failed,
+    the Extraction model is missing, ...) - everyone else just gets the answer,
+    with no mention of what was skipped."""
 
-
-def _web_search_warning(graph_output: GraphOutput, graph_input: GraphInput) -> WarningItem | None:
-    """`event: warning` for an AI admin when web search failed (out of Tavily
-    credits, bad key, timeout, ...) - everyone else just gets the answer the
-    turn fell back to, with no mention of web search."""
-
-    failure = graph_output.web_search_failure
-    if failure is None or not can_see_ai_details(graph_input.security.permissions):
-        return None
-    return WarningItem(code=failure.code, message=f"{_WEB_SEARCH_WARNING_PREFIX}{failure}")
+    if not can_see_ai_details(graph_input.security.permissions):
+        return []
+    return [
+        WarningItem(code=warning.code, message=warning.message)
+        for warning in graph_output.admin_warnings
+    ]
 
 
 async def run_and_persist(
@@ -201,8 +198,7 @@ async def run_and_persist(
             )
             response_text = graph_output.response_text
             status = "COMPLETED"
-            warning = _web_search_warning(graph_output, graph_input)
-            if warning is not None:
+            for warning in _admin_warnings(graph_output, graph_input):
                 await queue.put(warning)
         except Exception as exc:
             reference = short_reference(usage_recorder.request_id)

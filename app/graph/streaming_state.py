@@ -6,7 +6,6 @@ from typing import Any
 from pydantic_ai.models import Model
 
 from app.core.registry.model_registry import CredentialConfig
-from app.integrations.tavily_client import WebSearchUnavailableError
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
@@ -27,6 +26,11 @@ class GraphModels:
     retrieval: RetrievalServiceProtocol
     generation_credential: CredentialConfig | None = None
     snapshot_version: int | None = None
+    # LLMRerankNode's model - the top-priority EXTRACTION credential, not CHAT's.
+    # None skips the node; `rerank_unavailable` then says why (for the AI-admin warning).
+    rerank: Model | str | None = None
+    rerank_credential: CredentialConfig | None = None
+    rerank_unavailable: str | None = None
 
 
 @dataclass
@@ -41,6 +45,12 @@ class GraphInput:
     history: list[HistoryMessage] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class AdminWarning:
+    code: str
+    message: str
+
+
 @dataclass
 class GraphOutput:
     response_text: str
@@ -48,6 +58,7 @@ class GraphOutput:
     pending_clarification: PendingClarification | None = None
     used_ticket_fallback: bool = False
     used_web_search: bool = False
-    # Why web search found nothing, when it failed - shown to AI admins only.
-    web_search_failure: WebSearchUnavailableError | None = None
+    # Things an AI admin should fix that did not stop the turn (web search or the
+    # LLM rerank failing, ...) - sent to AI admins only, as `event: warning`.
+    admin_warnings: list[AdminWarning] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)

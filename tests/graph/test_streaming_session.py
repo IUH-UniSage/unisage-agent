@@ -18,10 +18,9 @@ from app.database.repositories.clarification_state import ClarificationStateRepo
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
-from app.graph.streaming_session import _error_item_for, _web_search_warning, run_and_persist
-from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
+from app.graph.streaming_session import _admin_warnings, _error_item_for, run_and_persist
+from app.graph.streaming_state import AdminWarning, GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
-from app.integrations.tavily_client import WebSearchFailureReason, WebSearchUnavailableError
 from app.schemas.security import AcademicSecurityContext
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
@@ -463,10 +462,12 @@ def _out_of_credits() -> GraphOutput:
     return GraphOutput(
         response_text="Hiện chưa có quy định...",
         used_ticket_fallback=True,
-        web_search_failure=WebSearchUnavailableError(
-            WebSearchFailureReason.CREDITS_EXHAUSTED,
-            "Tài khoản Tavily đã hết credit hoặc chạm giới hạn chi tiêu (HTTP 432).",
-        ),
+        admin_warnings=[
+            AdminWarning(
+                code="WEB_SEARCH_CREDITS_EXHAUSTED",
+                message="Tìm kiếm web thất bại ...: Tài khoản Tavily đã hết credit (HTTP 432).",
+            )
+        ],
     )
 
 
@@ -479,21 +480,13 @@ def _input_with(permissions: list[str], user_id: str | None = "u1") -> GraphInpu
     )
 
 
-def test_ai_admin_is_told_why_web_search_was_not_used() -> None:
-    warning = _web_search_warning(_out_of_credits(), _input_with(["LLM_TRACE_LOG_READ"]))
+def test_ai_admin_is_told_what_was_skipped() -> None:
+    (warning,) = _admin_warnings(_out_of_credits(), _input_with(["LLM_TRACE_LOG_READ"]))
 
-    assert warning is not None
     assert warning.code == "WEB_SEARCH_CREDITS_EXHAUSTED"
-    assert warning.message.startswith("Tìm kiếm web thất bại")
     assert "hết credit" in warning.message
 
 
 @pytest.mark.parametrize("permissions", [[], ["MESSAGE_SEND", "CHAT_MODEL_READ"]])
-def test_students_and_guests_get_no_web_search_warning(permissions: list[str]) -> None:
-    assert _web_search_warning(_out_of_credits(), _input_with(permissions)) is None
-
-
-def test_no_warning_when_web_search_did_not_fail() -> None:
-    output = GraphOutput(response_text="ok")
-
-    assert _web_search_warning(output, _input_with(["CHAT_MODEL_ALL"])) is None
+def test_students_and_guests_get_no_admin_warning(permissions: list[str]) -> None:
+    assert _admin_warnings(_out_of_credits(), _input_with(permissions)) == []
