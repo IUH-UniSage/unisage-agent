@@ -38,6 +38,11 @@ PURPOSE = "EXTRACTION"
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _SUB_QUERY_KEY = re.compile(r"^SQ(\d+)$")
 _CHUNK_KEY = re.compile(r"^\[?C?(\d+)\]?$")
+# Table chunks carry a breadcrumb line above each group of rows, e.g.
+# "[A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.1 Khóa tuyển sinh năm học 2025-2026]".
+_SECTION_LINE = re.compile(r"^\[([^\]]*[^\]\s-][^\]]*)\]$")
+# Upper bound on the outline so a chunk with dozens of row groups can't crowd the prompt.
+_MAX_OUTLINE_CHARS = 1200
 
 
 class MalformedRerankOutputError(ValueError):
@@ -164,10 +169,30 @@ def _build_prompt(questions: Sequence[str], chunks: Sequence[RetrievedChunk]) ->
     chunk_lines = "\n\n".join(
         f"[C{index}] (Tài liệu: {chunk.source}"
         + (f"; Mục: {' > '.join(chunk.heading_path)}" if chunk.heading_path else "")
-        + f")\n{chunk.content[:max_chars]}"
+        + ")"
+        + _outline_line(chunk)
+        + f"\n{chunk.content[:max_chars]}"
         for index, chunk in enumerate(chunks, 1)
     )
     return f"Câu hỏi con:\n{question_lines}\n\nĐoạn văn bản:\n{chunk_lines}"
+
+
+def _outline_line(chunk: RetrievedChunk) -> str:
+    """Every section breadcrumb inside the chunk, in order - the model only sees
+    the first SNIPPET_CHARS of the text, and the row it is looking for (e.g.
+    Khối Công nghệ of the current intake) is often further down a fee table."""
+
+    sections: list[str] = []
+    for line in chunk.content.splitlines():
+        match = _SECTION_LINE.match(line.strip())
+        if match is not None and match.group(1) not in sections:
+            sections.append(match.group(1))
+    if not sections:
+        return ""
+    outline = "; ".join(sections)
+    if len(outline) > _MAX_OUTLINE_CHARS:
+        outline = outline[:_MAX_OUTLINE_CHARS].rstrip() + "…"
+    return f"\nMục có trong đoạn (kể cả phần bị cắt bên dưới): {outline}"
 
 
 def _parse_relevance(

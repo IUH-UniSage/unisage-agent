@@ -161,3 +161,43 @@ async def test_each_sub_query_decision_is_logged_with_its_reason(
 
     assert "SQ1 'Chương trình khung CNTT': kept []; dropped [C1 to-hop" in caplog.text
     assert "kept [C3 chinh-quy > 3 Đại học chính quy (0.80): có dòng Khối Công nghệ" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sections_past_the_snippet_cut_are_still_listed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fee row the question needs is often far down a table chunk - the
+    model must still see that the chunk has that section."""
+
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_SNIPPET_CHARS", 100)
+    seen: list[str] = []
+
+    def judge(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        seen.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        return ModelResponse(parts=[TextPart(content='{"SQ1": {"C1": "có Khối Công nghệ"}}')])
+
+    fee_table = "\n".join(
+        [
+            "[A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.1 Khóa 2025-2026]",
+            "| 3.1 | - Khối Kinh tế | | 36.260.000 |",
+            *["| 3.1 | + Môn lý thuyết | 980.000 | |"] * 10,
+            "[-]",
+            "[A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.1 Khóa 2025-2026 > Khối Công nghệ]",
+            "| 3.1 | - Khối Công nghệ: | | 38.350.000 |",
+        ]
+    )
+    await llm_rerank(
+        build_llm_rerank_agent(FunctionModel(function=judge)),
+        ["Học phí CNTT chính quy"],
+        rerank_chunks([[_chunk("fees", 0.6, fee_table)]]),
+    )
+
+    (prompt,) = seen
+    assert "38.350.000" not in prompt  # past the 100-char snippet
+    assert (
+        "Mục có trong đoạn (kể cả phần bị cắt bên dưới): "
+        "A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.1 Khóa 2025-2026; "
+        "A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.1 Khóa 2025-2026 > Khối Công nghệ"
+    ) in prompt
+    assert "; -" not in prompt
