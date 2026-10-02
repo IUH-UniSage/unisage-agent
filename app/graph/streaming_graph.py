@@ -301,14 +301,15 @@ async def _run_advisory_flow(
 
     # WebSearchNode: only the sub-queries rerank left with no chunk.
     failed_sub_queries = [
-        sub_queries[index].retrieval_text for index in rerank_result.failed_query_indexes
+        extract_standalone_question(sub_queries[index].retrieval_text)
+        for index in rerank_result.failed_query_indexes
     ]
     web_results: list[WebSearchResult] = []
     if failed_sub_queries and settings.CHAT_WEB_SEARCH_ENABLED:
         trace.node("09b_WebSearchNode")
         web_results = await search_web(failed_sub_queries)
         for result in web_results:
-            trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}")
+            trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
 
     if not rerank_result.has_valid_context and not web_results:
         # TicketFallbackNode (streaming).

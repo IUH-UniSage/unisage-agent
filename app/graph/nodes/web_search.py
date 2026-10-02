@@ -55,6 +55,15 @@ async def _search_one(client: WebSearchClient, query: str) -> list[WebSearchResu
     except WebSearchUnavailableError as exc:
         logger.warning("Web search failed for a sub-query - continuing without it: %s", exc)
         return []
+    if settings.APP_DEBUG:
+        dump = "\n".join(f"[{result.score:.2f}] {result.url}\n{result.content}" for result in results)
+        logger.info(
+            "web search query=%r min_score=%s raw_results=%d:\n%s",
+            query,
+            settings.CHAT_WEB_SEARCH_MIN_SCORE,
+            len(results),
+            dump,
+        )
     relevant = [result for result in results if result.score >= settings.CHAT_WEB_SEARCH_MIN_SCORE]
     return sorted(relevant, key=lambda result: result.score, reverse=True)
 
