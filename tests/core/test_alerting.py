@@ -18,8 +18,9 @@ import pytest
 
 import app.core.observability.alerting as alerting
 import app.core.registry.model_registry as model_registry
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.registry.model_router import ModelRouter, NoAvailableCredentialError
+from app.core.registry.model_router import ModelRouter
 from app.core.security.ssrf_guard import SsrfBlockedError
 
 # ── shared fixtures / test doubles ──────────────────────────────────────────
@@ -35,17 +36,17 @@ def _reset_cached_snapshot() -> Any:
 def _credential(
     *, id: str = "cred-1", api_key: str = "sk-canary-secret-value", **overrides: Any
 ) -> CredentialConfig:
-    defaults: dict[str, Any] = dict(
-        id=id,
-        revision=1,
-        source_type="CLOUD_API",
-        provider="openai",
-        model_name="gpt-4o-mini",
-        api_base_url="https://api.openai.com/v1",
-        priority=1,
-        max_rpm=None,
-        api_key=api_key,
-    )
+    defaults: dict[str, Any] = {
+        "id": id,
+        "revision": 1,
+        "source_type": "CLOUD_API",
+        "provider": "openai",
+        "model_name": "gpt-4o-mini",
+        "api_base_url": "https://api.openai.com/v1",
+        "priority": 1,
+        "max_rpm": None,
+        "api_key": api_key,
+    }
     defaults.update(overrides)
     return CredentialConfig(**defaults)
 
@@ -343,11 +344,11 @@ async def test_model_router_exhaustion_calls_alert_with_no_credential(
 # ── wiring: app.worker.celery_app (embed_chunks) ────────────────────────────
 
 
-@patch("app.worker.celery_app.publish_ingestion_event")
-@patch("app.worker.celery_app.BackendJavaClient")
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.publish_ingestion_event")
+@patch("app.worker.tasks.ingestion.BackendJavaClient")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embed_chunks_calls_alert_on_embedding_provider_error(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -355,8 +356,10 @@ def test_embed_chunks_calls_alert_on_embedding_provider_error(
     mock_backend_client_cls: MagicMock,
     mock_publish: MagicMock,
 ) -> None:
-    from app.core.errors.llm_error_classifier import EmbeddingProviderError
-    from app.worker.celery_app import celery_app, embed_chunks
+    from app.core.errors.provider_errors import EmbeddingProviderError
+    from app.worker.celery_app import celery_app
+    from app.worker.embedding_job_errors import IngestionJobFailedError
+    from app.worker.tasks.ingestion import embed_chunks
 
     celery_app.conf.update(
         broker_url="memory://",
@@ -379,14 +382,14 @@ def test_embed_chunks_calls_alert_on_embedding_provider_error(
     alert_mock = AsyncMock()
 
     with (
-        patch("app.worker.celery_app.alert_credential_failure", alert_mock),
+        patch("app.worker.tasks.ingestion.alert_credential_failure", alert_mock),
         patch(
-            "app.worker.celery_app.get_current_snapshot",
+            "app.worker.tasks.ingestion.get_current_snapshot",
             return_value=ModelRegistrySnapshot(
                 version=1, generated_at=None, purposes={}, embedding_index_identity=None
             ),
         ),
-        pytest.raises(EmbeddingProviderError),
+        pytest.raises(IngestionJobFailedError),
     ):
         embed_chunks.apply(
             args=(

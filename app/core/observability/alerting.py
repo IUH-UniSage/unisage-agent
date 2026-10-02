@@ -12,7 +12,7 @@ happened, never by adding new polling elsewhere):
   time it happens, not only after the circuit breaker gives up on the credential
   entirely — the 15-minute debounce below is what keeps this from flooding the
   channel during a sustained blip, not withholding the alert in the first place.
-- `model_router.NoAvailableCredentialError` — every credential for a purpose is
+- `NoAvailableCredentialError` — every credential for a purpose is
   cooling down or excluded.
 - An embedding job aborted by `EmbeddingProviderError`/`EmbeddingIdentityMismatchError`
   escaping `embed_chunks`'s per-chunk loop — that failure mode never auto-fails-over,

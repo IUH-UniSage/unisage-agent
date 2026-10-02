@@ -3,17 +3,22 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import httpx
+import httpx2
+import openai
 import pytest
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.registry.model_router import NoAvailableCredentialError
+from app.core.errors.llm_failure import FailureReason
+from app.core.errors.provider_errors import EmbeddingProviderError
+from app.core.registry.errors import NoAvailableCredentialError
+from app.core.registry.model_registry import ModelRegistryError
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
-from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED, LLM_UNAVAILABLE
-from app.graph.streaming_session import run_and_persist
+from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
+from app.graph.streaming_session import _error_item_for, run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
 from app.schemas.security import AcademicSecurityContext
@@ -315,6 +320,11 @@ async def test_run_and_persist_reports_llm_unavailable_when_credentials_exhauste
         raise NoAvailableCredentialError("CHAT")
 
     monkeypatch.setattr("app.graph.streaming_session.run_graph", _boom)
+    # CHAT credentials exist (just all cooling down/excluded) - with none configured at
+    # all this would instead be the more specific LLM_NOT_CONFIGURED.
+    monkeypatch.setattr(
+        "app.core.errors.llm_failure.active_credentials_for", lambda _purpose: ("cred",)
+    )
 
     java_client = BackendJavaClient(
         base_url="http://java.test",
@@ -343,6 +353,106 @@ async def test_run_and_persist_reports_llm_unavailable_when_credentials_exhauste
 
     error_item = await queue.get()
     assert isinstance(error_item, ErrorItem)
-    assert error_item.code == LLM_UNAVAILABLE
+    assert error_item.code == FailureReason.LLM_UNAVAILABLE
     assert error_item.retryable is False
     assert isinstance(await queue.get(), DoneItem)
+
+
+def _embedding_not_configured() -> EmbeddingProviderError:
+    """What retrieval raises when no EMBEDDING credential is active (see
+    `OpenAIEmbedder._resolve_from_registry`)."""
+
+    try:
+        raise ModelRegistryError("no ACTIVE EMBEDDING credential")
+    except ModelRegistryError as cause:
+        error = EmbeddingProviderError(str(cause))
+        error.__cause__ = cause
+        return error
+
+
+@pytest.mark.parametrize(
+    ("exc", "code", "message_fragment"),
+    [
+        (
+            NoAvailableCredentialError(
+                "CHAT",
+                last_error=openai.AuthenticationError(
+                    "bad key",
+                    response=httpx2.Response(401, request=httpx2.Request("POST", "http://p.test")),
+                    body=None,
+                ),
+            ),
+            "LLM_AUTH_FAILED",
+            "HTTP 401",
+        ),
+        (
+            _embedding_not_configured(),
+            "LLM_NOT_CONFIGURED",
+            "Mô hình Embedding",
+        ),
+        (KeyError("bug"), "LLM_STREAM_INTERRUPTED", "KeyError"),
+    ],
+)
+def test_error_item_names_the_actual_cause(
+    exc: Exception, code: str, message_fragment: str
+) -> None:
+    """The SSE `event: error` must tell the user which model failed and why (bad key,
+    retrieval embedding not configured, ...) - not one generic sentence for everything."""
+
+    item = _error_item_for(exc, streamed_any=False)
+
+    assert item.code == code
+    assert message_fragment in item.message
+
+
+def _auth_failure() -> NoAvailableCredentialError:
+    return NoAvailableCredentialError(
+        "CHAT",
+        last_error=openai.AuthenticationError(
+            "bad key",
+            response=httpx2.Response(401, request=httpx2.Request("POST", "http://p.test")),
+            body=None,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("exc", "message_start", "retryable"),
+    [
+        (_auth_failure(), "Trợ lý AI đang tạm ngưng do sự cố hệ thống.", False),
+        (
+            NoAvailableCredentialError(
+                "CHAT",
+                last_error=openai.APITimeoutError(request=httpx2.Request("POST", "http://p.test")),
+            ),
+            "Trợ lý AI đang bận hoặc tạm thời gián đoạn",
+            True,
+        ),
+        (KeyError("bug"), "Trợ lý AI đang tạm ngưng do sự cố hệ thống.", True),
+    ],
+)
+def test_error_item_for_students_is_a_plain_category(
+    exc: Exception, message_start: str, retryable: bool
+) -> None:
+    item = _error_item_for(exc, streamed_any=False, detailed=False, reference="a1b2c3d4")
+
+    assert item.message.startswith(message_start)
+    assert item.message.endswith("(Mã tham chiếu: a1b2c3d4)")
+    assert "HTTP" not in item.message and "KeyError" not in item.message
+    assert item.retryable is retryable
+    # The precise cause still travels as the code - for logs/support, not for display.
+    assert item.code != ""
+
+
+def test_error_item_for_admins_keeps_the_detail_and_reference() -> None:
+    item = _error_item_for(_auth_failure(), streamed_any=False, detailed=True, reference="a1b2c3d4")
+
+    assert item.code == "LLM_AUTH_FAILED"
+    assert "HTTP 401" in item.message
+    assert "a1b2c3d4" in item.message
+
+
+def test_partial_answer_failure_is_flagged_for_students() -> None:
+    item = _error_item_for(_auth_failure(), streamed_any=True, detailed=False, reference=None)
+
+    assert item.message.startswith("Câu trả lời bị gián đoạn giữa chừng.")

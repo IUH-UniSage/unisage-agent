@@ -49,6 +49,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage
 
 from app.core.llm.provider_models import build_model
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import (
     ModelRouter,
@@ -121,6 +122,24 @@ def _credential_label(credential: CredentialConfig) -> str:
     return credential.display_name or credential.id
 
 
+async def _next_credential_or_raise(
+    router: ModelRouter, purpose: str, failure: Exception
+) -> CredentialConfig:
+    """`router.get_next_credential(purpose)`, but when nothing is left the raised
+    `NoAvailableCredentialError` carries `failure` - the provider error that just took
+    out the last candidate - so the client is told the real cause (bad API key, quota,
+    ...) instead of a generic "no credential available"."""
+
+    try:
+        return await router.get_next_credential(purpose)
+    except NoAvailableCredentialError as exhausted:
+        if exhausted.last_error is not None:
+            raise
+        raise NoAvailableCredentialError(
+            purpose, last_error=failure, suspension_reasons=exhausted.suspension_reasons
+        ) from failure
+
+
 TokenSink = Callable[[str], Awaitable[None]]
 
 # Rebuilds an `Agent` around a freshly-built fallback `Model` - the two
@@ -164,7 +183,7 @@ async def stream_agent_text(
     replacement credential is fetched via `model_router.get_next_credential()`,
     a fresh `Agent` is built around it (`agent_factory`), and the SAME prompt
     is retried from scratch. This repeats until either a call succeeds or
-    `model_router.NoAvailableCredentialError` propagates (the
+    `NoAvailableCredentialError` propagates (the
     `LLM_UNAVAILABLE` case - handled by the caller, not here).
 
     `on_failover`, when supplied, is called once right after a replacement
@@ -299,11 +318,11 @@ async def stream_agent_text(
             await failover_router.record_failure(
                 active_credential, exc, snapshot_version=snapshot_version, purpose=purpose
             )
-            # Raises `NoAvailableCredentialError` if every credential for
-            # `purpose` is cooling down/excluded - left uncaught here, it
-            # propagates to the caller as the `LLM_UNAVAILABLE` trigger.
+            # Raises `NoAvailableCredentialError` (carrying `exc` as its
+            # `last_error`) if every credential for `purpose` is cooling
+            # down/excluded - left uncaught here, it propagates to the caller.
             failed_credential = active_credential
-            active_credential = await failover_router.get_next_credential(purpose)
+            active_credential = await _next_credential_or_raise(failover_router, purpose, exc)
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
             attempt_index += 1
@@ -418,7 +437,7 @@ async def run_agent_text_with_failover(
                 active_credential, exc, snapshot_version=snapshot_version, purpose=purpose
             )
             failed_credential = active_credential
-            active_credential = await failover_router.get_next_credential(purpose)
+            active_credential = await _next_credential_or_raise(failover_router, purpose, exc)
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
             attempt_index += 1

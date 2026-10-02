@@ -16,9 +16,10 @@ from redis import asyncio as redis_asyncio
 
 from app.core.budget.tracker import BudgetTracker, RequestBudgetRejectedError
 from app.core.config import settings
-from app.core.errors.llm_error_classifier import MalformedExtractionResponseError
+from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.llm.provider_models import build_model
 from app.core.registry import model_router
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import (
     ModelRegistryError,
     get_current_snapshot,
@@ -129,7 +130,7 @@ class MultiRepresentationEnricher:
 
         Registry-resolved (the production path, `self.model is None`): one `enrich()` call is
         one purpose=EXTRACTION business request, self-contained - builds and closes its own
-        `UsageRecorder`, same as `OpenAIEmbedder.embed()`. `app.worker.celery_app.embed_chunks`
+        `UsageRecorder`, same as `OpenAIEmbedder.embed()`. `app.worker.tasks.ingestion.embed_chunks`
         instead calls `enrich_tracked()` directly with a document-wide shared recorder.
         """
 
@@ -175,7 +176,7 @@ class MultiRepresentationEnricher:
             status = "SUCCESS"
             return result
         finally:
-            # `model_router.NoAvailableCredentialError`/`NoBudgetAvailableError` (every
+            # `NoAvailableCredentialError`/`NoBudgetAvailableError` (every
             # EXTRACTION credential exhausted) can propagate out of
             # `enrich_tracked` uncaught - `status` stays "ERROR" in that case.
             try:
@@ -193,22 +194,22 @@ class MultiRepresentationEnricher:
         budget_tracker: BudgetTracker,
     ) -> EnrichedChunk:
         """Enrich within a CALLER-managed `UsageRecorder`/`BudgetTracker` - the ingestion
-        pipeline's shared per-document recorder (`app.worker.celery_app.embed_chunks`), which
+        pipeline's shared per-document recorder (`app.worker.tasks.ingestion.embed_chunks`), which
         reserves/settles the request-level budget once for the whole document rather than once
         per `enrich()` call. Registry-resolved only - there is no test-injected `model` bypass
         here, unlike `enrich()`.
 
-        `model_router.NoAvailableCredentialError`/`NoBudgetAvailableError` (every EXTRACTION
+        `NoAvailableCredentialError`/`NoBudgetAvailableError` (every EXTRACTION
         credential exhausted) propagates uncaught - deliberately NOT folded into the
         "log + return empty" path used for a single malformed-looking response. The caller
-        (`app.worker.celery_app.embed_chunks`) already treats any exception from this method as a
-        per-chunk `FAILED` result without aborting the rest of the batch.
+        (`app.worker.tasks.ingestion.embed_chunks`) aborts the whole job on these (every later
+        chunk would fail the same way); any other exception is a per-chunk `FAILED` result.
         """
 
         try:
             credential = require_top_priority_credential("EXTRACTION")
         except ModelRegistryError as exc:
-            raise model_router.NoAvailableCredentialError("EXTRACTION") from exc
+            raise NoAvailableCredentialError("EXTRACTION") from exc
 
         snapshot = get_current_snapshot()
         snapshot_version = snapshot.version if snapshot is not None else 0
@@ -223,7 +224,9 @@ class MultiRepresentationEnricher:
             # "malformed on a FALLBACK credential" (report + try yet another one).
             last_success: dict[str, Any] = {}
 
-            def _on_attempt(outcome: AttemptOutcome, _store: dict[str, Any] = last_success) -> Decimal:
+            def _on_attempt(
+                outcome: AttemptOutcome, _store: dict[str, Any] = last_success
+            ) -> Decimal:
                 if outcome.status == "SUCCESS":
                     _store["credential"] = outcome.credential
                     _store["attempt"] = outcome.attempt
@@ -265,13 +268,17 @@ class MultiRepresentationEnricher:
                 chunk.chunk_index,
                 succeeded_credential.id,
             )
+            malformed = MalformedExtractionResponseError(
+                f"fallback credential {succeeded_credential.id!r} returned a malformed "
+                f"multi-representation response for chunk {chunk.chunk_index}"
+            )
             await model_router.record_failure(
                 succeeded_credential,
-                MalformedExtractionResponseError(
-                    f"fallback credential {succeeded_credential.id!r} returned a malformed "
-                    f"multi-representation response for chunk {chunk.chunk_index}"
-                ),
+                malformed,
                 snapshot_version=snapshot_version,
                 purpose="EXTRACTION",
             )
-            credential = await model_router.get_next_credential("EXTRACTION")
+            try:
+                credential = await model_router.get_next_credential("EXTRACTION")
+            except NoAvailableCredentialError:
+                raise NoAvailableCredentialError("EXTRACTION", last_error=malformed) from malformed

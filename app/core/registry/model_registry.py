@@ -1,7 +1,7 @@
 """In-memory snapshot of `backend-java`'s model registry (plan.md "Internal API
 contract" endpoint #1, "Cutover khỏi cấu hình `.env` tĩnh").
 
-Loaded once at FastAPI startup (`app.main.lifespan`) and once per Celery worker
+Loaded once at FastAPI startup (`app.core.lifespan`) and once per Celery worker
 process (`app.worker.celery_app`'s `worker_process_init` handler) — Task 4 does
 not wire hot-reload/polling (that's Task 7), so within a process this snapshot
 never changes after the initial load.

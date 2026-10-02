@@ -87,7 +87,7 @@ def test_embed_records_one_line_with_purpose_embedding_and_no_message_ids(
 def test_embed_failure_records_error_line_and_still_raises(
     captured_outbox: list[dict[str, Any]],
 ) -> None:
-    from app.core.errors.llm_error_classifier import EmbeddingProviderError
+    from app.core.errors.provider_errors import EmbeddingProviderError
 
     client = MagicMock()
     client.embeddings.create.side_effect = RuntimeError("provider down")

@@ -23,6 +23,7 @@ import threading
 import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
+from app.worker.tasks.periodic import verify_pending_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +34,6 @@ _RECONNECT_DELAY_SECONDS = 2.0
 
 
 async def _listen_forever(*, channel: str, redis_url: str) -> None:
-    # Deferred import: `app.worker.celery_app` imports this module at module scope (to wire
-    # `start_thread_verification_subscriber` into `worker_process_init`), so importing the task
-    # back at module scope here would be circular. By the time this coroutine actually runs
-    # (inside a thread this module's own start function spins up), `celery_app` has finished
-    # importing and the task is registered.
-    from app.worker.celery_app import verify_pending_credentials
-
     while True:
         conn = None
         pubsub = None

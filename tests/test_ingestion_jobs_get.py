@@ -1,6 +1,7 @@
 import json
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.fixtures.documents import make_pdf_bytes
@@ -99,3 +100,25 @@ def test_rechunking_replaces_rather_than_duplicates_the_draft(client: TestClient
 
     assert response.status_code == 200
     assert response.json()["data"]["chunking_strategy"] == "token_based"
+
+
+def test_failed_task_progress_shows_the_jobs_specific_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`embed_chunks` ends with `IngestionJobFailedError(message, code)` - polling must show
+    that reason, not the generic EMBEDDING_JOB_FAILED sentence."""
+
+    from app.api.v1 import ingestion
+    from app.worker.embedding_job_errors import IngestionJobFailedError
+
+    class _FakeResult:
+        state = "FAILURE"
+        info = IngestionJobFailedError("Mô hình Extraction: API key không hợp lệ (HTTP 401).", 5008)
+
+    monkeypatch.setattr(ingestion, "AsyncResult", lambda *_a, **_k: _FakeResult())
+
+    progress = ingestion._read_task_progress("task-1")
+
+    assert progress.state == "FAILURE"
+    assert progress.error_code == 5008
+    assert progress.message == "Mô hình Extraction: API key không hợp lệ (HTTP 401)."

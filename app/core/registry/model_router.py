@@ -52,9 +52,10 @@ import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.llm_failure import admin_failure_message, describe_llm_failure
 from app.core.observability.alerting import alert_credential_failure
+from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import CredentialConfig, active_credentials_for
-from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import BackendJavaClient
 
 if TYPE_CHECKING:
@@ -72,30 +73,6 @@ _DEFAULT_COOLDOWN_SECONDS = 30.0
 _EXCLUDED_TTL_SECONDS = 24 * 60 * 60.0
 
 
-class NoAvailableCredentialError(Exception):
-    """No usable (non-cooling-down, non-excluded) credential exists for `purpose` -
-    the trigger condition for the "no available credential" alert."""
-
-    def __init__(self, purpose: str) -> None:
-        self.purpose = purpose
-        super().__init__(f"No available credential for purpose={purpose!r}")
-
-
-class NoBudgetAvailableError(Exception):
-    """Every remaining candidate for `purpose` was denied by budget enforcement
-    (PROVIDER-scope BLOCK/THROTTLE), distinct from `NoAvailableCredentialError` so
-    callers can map it to a budget-specific error response instead of
-    LLM_UNAVAILABLE."""
-
-    def __init__(self, purpose: str, last_deny_reason: str) -> None:
-        self.purpose = purpose
-        self.last_deny_reason = last_deny_reason
-        super().__init__(
-            f"Every credential for purpose={purpose!r} was denied by budget "
-            f"enforcement (last reason: {last_deny_reason})"
-        )
-
-
 class _RedisLike(Protocol):
     """Structural subset of `redis.asyncio.Redis` this module actually calls - lets
     tests hand in a bare fake instead of a real connection."""
@@ -105,6 +82,11 @@ class _RedisLike(Protocol):
     async def exists(self, name: str) -> int: ...
 
     async def aclose(self) -> Any: ...
+
+
+# Stored as the marker's value when the failure's reason isn't known (also what markers
+# written before reasons were stored hold: "1").
+_UNKNOWN_REASON = "1"
 
 
 def _state_key(credential_id: str, revision: int) -> str:
@@ -119,10 +101,15 @@ class _InMemoryCircuitState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._expires_at: dict[str, float] = {}
+        self._reasons: dict[str, str] = {}
 
-    def mark(self, key: str, ttl_seconds: float) -> None:
+    def mark(self, key: str, ttl_seconds: float, reason: str = _UNKNOWN_REASON) -> None:
         with self._lock:
             self._expires_at[key] = time.monotonic() + max(0.0, ttl_seconds)
+            self._reasons[key] = reason
+
+    def reason(self, key: str) -> str | None:
+        return self._reasons.get(key) if self.is_marked(key) else None
 
     def is_marked(self, key: str) -> bool:
         with self._lock:
@@ -131,6 +118,7 @@ class _InMemoryCircuitState:
                 return False
             if expiry <= time.monotonic():
                 del self._expires_at[key]
+                self._reasons.pop(key, None)
                 return False
             return True
 
@@ -237,7 +225,7 @@ class ModelRouter:
             except Exception:  # pragma: no cover - best-effort cleanup only
                 pass
 
-    async def _mark(self, key: str, ttl_seconds: float) -> None:
+    async def _mark(self, key: str, ttl_seconds: float, reason: str = _UNKNOWN_REASON) -> None:
         """Best-effort Redis write; falls back to this process's in-memory state on any
         Redis failure rather than raising. Always also marks in-memory, so an
         in-flight failure that happened to hit Redis-down keeps working even if Redis
@@ -247,7 +235,7 @@ class ModelRouter:
 
         if self._injected_redis_client is not None:
             try:
-                await self._injected_redis_client.set(key, "1", ex=ttl_int)
+                await self._injected_redis_client.set(key, reason, ex=ttl_int)
                 return
             except Exception:
                 logger.warning(
@@ -255,7 +243,7 @@ class ModelRouter:
                     key,
                     exc_info=True,
                 )
-                self._in_memory.mark(key, ttl_seconds)
+                self._in_memory.mark(key, ttl_seconds, reason)
                 return
 
         try:
@@ -266,18 +254,18 @@ class ModelRouter:
                 key,
                 exc_info=True,
             )
-            self._in_memory.mark(key, ttl_seconds)
+            self._in_memory.mark(key, ttl_seconds, reason)
             return
 
         try:
-            await conn.set(key, "1", ex=ttl_int)
+            await conn.set(key, reason, ex=ttl_int)
         except Exception:
             logger.warning(
                 "model_router: Redis unavailable marking %s - degrading to in-memory state",
                 key,
                 exc_info=True,
             )
-            self._in_memory.mark(key, ttl_seconds)
+            self._in_memory.mark(key, ttl_seconds, reason)
         finally:
             try:
                 await conn.aclose()
@@ -309,7 +297,40 @@ class ModelRouter:
             f"Every credential for purpose={purpose!r} is cooling down or excluded",
             purpose=purpose,
         )
-        raise NoAvailableCredentialError(purpose)
+        reasons = [
+            await self._suspension_reason(_state_key(credential.id, credential.revision))
+            for credential in candidates
+            if exclude_ids is None or credential.id not in exclude_ids
+        ]
+        raise NoAvailableCredentialError(
+            purpose,
+            suspension_reasons=tuple(
+                reason for reason in reasons if reason and reason != _UNKNOWN_REASON
+            ),
+        )
+
+    async def _suspension_reason(self, key: str) -> str | None:
+        """Best-effort read of why `key` is cooling down/excluded - only used to explain
+        an already-decided "no credential available", so any failure (Redis down, a test
+        fake without `get`) just means "reason unknown", never an error."""
+
+        in_memory = self._in_memory.reason(key)
+        if in_memory is not None:
+            return in_memory
+        try:
+            if self._injected_redis_client is not None:
+                raw = await self._injected_redis_client.get(key)  # type: ignore[attr-defined]
+            else:
+                conn = self._new_redis_connection()
+                try:
+                    raw = await conn.get(key)  # type: ignore[attr-defined]
+                finally:
+                    await conn.aclose()
+        except Exception:
+            return None
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="replace")
+        return raw if isinstance(raw, str) else None
 
     async def record_failure(
         self,
@@ -346,13 +367,16 @@ class ModelRouter:
 
         error_type = classify_llm_error(exc)
         key = _state_key(credential.id, credential.revision)
-        message = safe_error_message(exc, credential.api_key)
+        message = admin_failure_message(exc, purpose=purpose, api_key=credential.api_key)
+        # Kept as the marker's value so a LATER request that finds this credential
+        # suspended can still tell the client why (see `NoAvailableCredentialError`).
+        reason = describe_llm_failure(exc, purpose).reason.value
 
         if error_type is ErrorType.PERMANENT:
-            await self._mark(key, self._excluded_ttl_seconds)
+            await self._mark(key, self._excluded_ttl_seconds, reason)
         else:
             ttl = _extract_retry_after_seconds(exc) or self._default_cooldown_seconds
-            await self._mark(key, ttl)
+            await self._mark(key, ttl, reason)
 
         await alert_credential_failure(credential, error_type.value, message, purpose=purpose)
 

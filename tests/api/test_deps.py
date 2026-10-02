@@ -15,6 +15,8 @@ from pydantic_ai.models.openai import OpenAIChatModel
 import app.core.registry.model_registry as model_registry
 from app.api.deps import get_graph_models
 from app.core.config import settings
+from app.core.errors.error_codes import ErrorCode
+from app.core.errors.llm_failure import LLMCallException
 from app.core.registry.model_registry import ModelRegistryError, parse_snapshot
 from app.rag.retrieval.service import RetrievalService
 
@@ -90,8 +92,12 @@ def test_registry_enabled_with_no_chat_credential_raises(monkeypatch: pytest.Mon
     monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
     monkeypatch.setattr(model_registry, "_current_snapshot", parse_snapshot(_snapshot_payload([])))
 
-    with pytest.raises(ModelRegistryError):
+    with pytest.raises(LLMCallException) as exc_info:
         get_graph_models()
+
+    # Surfaces to the client as a specific "CHAT model not configured" error, not a generic 500.
+    assert exc_info.value.error_code is ErrorCode.LLM_NOT_CONFIGURED
+    assert isinstance(exc_info.value.__cause__, ModelRegistryError)
 
 
 def test_no_snapshot_loaded_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,8 +107,12 @@ def test_no_snapshot_loaded_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
     monkeypatch.setattr(model_registry, "_current_snapshot", None)
 
-    with pytest.raises(ModelRegistryError):
+    with pytest.raises(LLMCallException) as exc_info:
         get_graph_models()
+
+    # Surfaces to the client as a specific "CHAT model not configured" error, not a generic 500.
+    assert exc_info.value.error_code is ErrorCode.LLM_NOT_CONFIGURED
+    assert isinstance(exc_info.value.__cause__, ModelRegistryError)
 
 
 def test_registry_flag_off_still_raises_no_legacy_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,5 +124,9 @@ def test_registry_flag_off_still_raises_no_legacy_fallback(monkeypatch: pytest.M
     monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", False)
     monkeypatch.setattr(model_registry, "_current_snapshot", None)
 
-    with pytest.raises(ModelRegistryError):
+    with pytest.raises(LLMCallException) as exc_info:
         get_graph_models()
+
+    # Surfaces to the client as a specific "CHAT model not configured" error, not a generic 500.
+    assert exc_info.value.error_code is ErrorCode.LLM_NOT_CONFIGURED
+    assert isinstance(exc_info.value.__cause__, ModelRegistryError)

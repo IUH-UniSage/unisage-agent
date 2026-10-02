@@ -126,7 +126,7 @@ def resolve_all(host: str, port: int) -> list[str]:
 
     infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     seen: list[str] = []
-    for family, _, _, _, sockaddr in infos:
+    for _family, _, _, _, sockaddr in infos:
         ip = sockaddr[0]
         if ip not in seen:
             seen.append(ip)
@@ -174,7 +174,7 @@ class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
         self,
         host: str,
         port: int,
-        timeout: float | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109 - httpcore's AsyncNetworkBackend API
         local_address: str | None = None,
         socket_options=None,
     ) -> httpcore.AsyncNetworkStream:
@@ -188,7 +188,7 @@ class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
             socket_options=socket_options,
         )
 
-    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):  # noqa: ASYNC109
         raise NotImplementedError("Unix sockets are never used for provider calls")
 
 

@@ -91,7 +91,7 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
 
     if len(a) != len(b):
         raise ValueError(f"vector length mismatch: {len(a)} vs {len(b)}")
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = sum(x * x for x in a) ** 0.5
     norm_b = sum(y * y for y in b) ** 0.5
     if norm_a == 0.0 or norm_b == 0.0:
@@ -112,5 +112,6 @@ def fingerprints_match(
     if len(measured.vectors) != len(registered):
         return False
     return all(
-        cosine_similarity(v1, v2) >= threshold for v1, v2 in zip(measured.vectors, registered)
+        cosine_similarity(v1, v2) >= threshold
+        for v1, v2 in zip(measured.vectors, registered, strict=True)
     )

@@ -44,9 +44,9 @@ storage/private/
 htmlcov/
 .coverage
 
-changes
-_to_delete
-tasks
+/changes
+/_to_delete
+/tasks
 
 # Celery Beat's local schedule state (shelve DB) - runtime artifact, not code
 celerybeat-schedule*

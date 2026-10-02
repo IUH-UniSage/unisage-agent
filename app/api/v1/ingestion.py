@@ -32,8 +32,6 @@ from app.core.errors.exceptions import (
 )
 from app.core.observability.events import ingestion_event_stream
 from app.core.security.security import verify_internal_secret
-from app.graph.nodes.security_context import parse_security_headers
-from app.schemas.security import AcademicSecurityContext
 from app.database.models import DocumentProcessStep
 from app.database.repositories.ingestion_job import (
     DraftDTO,
@@ -42,10 +40,11 @@ from app.database.repositories.ingestion_job import (
     upsert_chunking_draft,
 )
 from app.database.session import get_db_session
+from app.graph.nodes.security_context import parse_security_headers
 from app.rag.chunking import strategy
 from app.rag.chunking.validation import validate_chunks
 from app.rag.ingestion import minio_client
-from app.rag.ingestion.parser import extract_raw_text
+from app.rag.ingestion.parser import extract_raw_text, parse_or_raise
 from app.schemas.common import ApiResponse
 from app.schemas.ingestion import (
     Chunk,
@@ -58,7 +57,10 @@ from app.schemas.ingestion import (
     PreviewResponse,
     TaskProgress,
 )
-from app.worker.celery_app import celery_app, embed_chunks
+from app.schemas.security import AcademicSecurityContext
+from app.worker.celery_app import celery_app
+from app.worker.embedding_job_errors import IngestionJobFailedError, partial_failure_message
+from app.worker.tasks.ingestion import embed_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +76,9 @@ async def preview_document(
 
     require_department_membership(request.department_id, context)
     content = minio_client.get_object_bytes(request.object_key)
-    raw_text = extract_raw_text(content, request.object_key)
+    raw_text = parse_or_raise(
+        lambda: extract_raw_text(content, request.object_key), request.object_key
+    )
     return ApiResponse.success(PreviewResponse(raw_text=raw_text))
 
 
@@ -267,11 +271,13 @@ def _read_task_progress(task_id: str) -> TaskProgress:
     failed_chunk_count = 0
     total_chunk_count = 0
     info = result.info
+    results: list[dict[str, object]] = []
     if isinstance(info, dict):
         if "percent" in info:
             percent = int(info["percent"])
         failed_chunk_count = int(info.get("failed_chunk_count") or 0)
         total_chunk_count = int(info.get("total_chunk_count") or 0)
+        results = list(info.get("results") or [])
 
     state = result.state
     error_code = None
@@ -279,10 +285,16 @@ def _read_task_progress(task_id: str) -> TaskProgress:
     if state == "SUCCESS" and failed_chunk_count > 0:
         state = "FAILURE"
         error_code = ErrorCode.EMBEDDING_JOB_FAILED.code
-        message = f"{failed_chunk_count}/{total_chunk_count} đoạn nạp liệu thất bại."
+        message = partial_failure_message(results, total_chunk_count)
     elif state == "FAILURE":
         error_code = ErrorCode.EMBEDDING_JOB_FAILED.code
         message = ErrorCode.EMBEDDING_JOB_FAILED.message
+        # `embed_chunks` ends every known failure (model not configured, bad API key,
+        # quota, budget, Qdrant down, ...) with `IngestionJobFailedError(message, code)` -
+        # show that specific reason rather than the generic one.
+        if isinstance(info, IngestionJobFailedError) and len(info.args) >= 2:
+            message = str(info.args[0])
+            error_code = int(info.args[1])
 
     return TaskProgress(
         percent=percent,

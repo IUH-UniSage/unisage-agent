@@ -20,11 +20,8 @@ import openai
 import pytest
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from app.core.errors.llm_error_classifier import (
-    ErrorType,
-    MalformedExtractionResponseError,
-    classify_llm_error,
-)
+from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.security.ssrf_guard import SsrfBlockedError
 
 
@@ -76,7 +73,9 @@ class TestOpenAI:
         response = _openai_response(
             429,
             error={
-                "message": "You exceeded your current quota, please check your plan and billing details.",
+                "message": (
+                    "You exceeded your current quota, please check your plan and billing details."
+                ),
                 "type": "insufficient_quota",
                 "code": "insufficient_quota",
             },

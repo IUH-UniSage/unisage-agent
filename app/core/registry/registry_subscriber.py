@@ -26,7 +26,7 @@ non-issue, not a bug: the poll loop notices the version gap on its own within on
 
 Wired from two places, matching the two process types this service runs as:
 
-- `app.main`'s lifespan: `start_asyncio_registry_subscriber()` schedules both loops as asyncio
+- `app.core.lifespan`: `start_asyncio_registry_subscriber()` schedules both loops as asyncio
   tasks on the running event loop, returns a handle whose `.stop()` cancels them cleanly on
   shutdown.
 - `app.worker.celery_app`'s `worker_process_init` handler: `start_thread_registry_subscriber()`
@@ -277,7 +277,7 @@ def start_asyncio_registry_subscriber(
     client: RegistryClient | None = None,
     poll_interval: float | None = None,
 ) -> RegistrySubscriberHandle:
-    """Call once from `app.main`'s lifespan, after `init_model_registry()`. No-op (returns a
+    """Call once from `app.core.lifespan`, after `init_model_registry()`. No-op (returns a
     handle with no tasks) when `MODEL_REGISTRY_ENABLED` is false, matching
     `init_model_registry()`'s own no-op behavior for the same flag."""
 
