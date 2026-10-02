@@ -42,7 +42,9 @@ def _two_sub_queries() -> object:
 @pytest.mark.asyncio
 async def test_keyword_only_matches_are_dropped_and_their_sub_query_fails() -> None:
     # Candidates are numbered in first-seen order: C1 to-hop, C2 cao-hoc, C3 chinh-quy.
-    agent = build_llm_rerank_agent(make_sync_llm_model('{"SQ1": [], "SQ2": [3]}'))
+    agent = build_llm_rerank_agent(
+        make_sync_llm_model('{"SQ1": {}, "SQ2": {"C3": "có dòng Khối Công nghệ chính quy"}}')
+    )
 
     outcome = await llm_rerank(
         agent, ["Chương trình khung ngành CNTT", "Học phí CNTT chính quy"], _two_sub_queries()
@@ -130,3 +132,32 @@ async def test_no_chunks_means_no_model_call() -> None:
     )
 
     assert outcome.result is empty
+
+
+@pytest.mark.asyncio
+async def test_a_chunk_kept_without_a_reason_is_dropped() -> None:
+    output = '{"SQ1": {"C1": ""}, "SQ2": {"C3": "có dòng Khối Công nghệ chính quy", "C2": " "}}'
+
+    outcome = await llm_rerank(
+        build_llm_rerank_agent(make_sync_llm_model(output)), ["a", "b"], _two_sub_queries()
+    )
+
+    assert outcome.result.failed_query_indexes == [0]
+    assert [chunk.chunk_id for chunk in outcome.result.chunks] == ["chinh-quy"]
+
+
+@pytest.mark.asyncio
+async def test_each_sub_query_decision_is_logged_with_its_reason(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    output = '{"SQ1": {}, "SQ2": {"C3": "có dòng Khối Công nghệ chính quy"}}'
+
+    with caplog.at_level("INFO", logger="app.graph.nodes.llm_rerank"):
+        await llm_rerank(
+            build_llm_rerank_agent(make_sync_llm_model(output)),
+            ["Chương trình khung CNTT", "Học phí chính quy"],
+            _two_sub_queries(),
+        )
+
+    assert "SQ1 'Chương trình khung CNTT': kept []; dropped [C1 to-hop" in caplog.text
+    assert "kept [C3 chinh-quy > 3 Đại học chính quy (0.80): có dòng Khối Công nghệ" in caplog.text

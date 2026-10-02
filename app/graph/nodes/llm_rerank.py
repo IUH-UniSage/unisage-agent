@@ -29,6 +29,7 @@ from app.core.registry.model_registry import CredentialConfig
 from app.graph.nodes.post_retrieval_rerank import TurnRerankResult, turn_result
 from app.graph.streaming import AttemptRecorder, BudgetContext, run_agent_text_with_failover
 from app.rag.prompting import get_templates
+from app.rag.prompting.citations import source_title
 from app.schemas.retrieval import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 PURPOSE = "EXTRACTION"
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _SUB_QUERY_KEY = re.compile(r"^SQ(\d+)$")
+_CHUNK_KEY = re.compile(r"^\[?C?(\d+)\]?$")
 
 
 class MalformedRerankOutputError(ValueError):
@@ -102,6 +104,7 @@ async def llm_rerank(
         for query_index in range(len(questions))
     ]
     narrowed = turn_result(per_query_kept, best_scores=rerank_result.best_scores)
+    _log_decisions(questions, candidates, relevant)
     logger.info(
         "LLM rerank kept %d of %d chunk(s); sub-queries without any: %s",
         len(narrowed.chunks),
@@ -109,6 +112,37 @@ async def llm_rerank(
         [index + 1 for index in narrowed.failed_query_indexes] or "none",
     )
     return LLMRerankOutcome(result=narrowed)
+
+
+def _chunk_label(index: int, chunk: RetrievedChunk) -> str:
+    section = f" > {chunk.heading_path[-1]}" if chunk.heading_path else ""
+    return f"C{index + 1} {source_title(chunk.source)}{section} ({chunk.score:.2f})"
+
+
+def _log_decisions(
+    questions: Sequence[str],
+    candidates: Sequence[RetrievedChunk],
+    relevant: Sequence[dict[int, str]],
+) -> None:
+    """Always logged, one line per sub-query: which chunks were kept and why,
+    and which were dropped - what to read when an answer used the wrong table."""
+
+    for query_index, question in enumerate(questions):
+        kept = relevant[query_index]
+        logger.info(
+            "LLM rerank SQ%d %r: kept [%s]; dropped [%s]",
+            query_index + 1,
+            question,
+            "; ".join(
+                f"{_chunk_label(index, candidates[index])}: {reason}"
+                for index, reason in sorted(kept.items())
+            ),
+            "; ".join(
+                _chunk_label(index, chunk)
+                for index, chunk in enumerate(candidates)
+                if index not in kept
+            ),
+        )
 
 
 def _candidate_chunks(rerank_result: TurnRerankResult) -> list[RetrievedChunk]:
@@ -136,9 +170,14 @@ def _build_prompt(questions: Sequence[str], chunks: Sequence[RetrievedChunk]) ->
     return f"Câu hỏi con:\n{question_lines}\n\nĐoạn văn bản:\n{chunk_lines}"
 
 
-def _parse_relevance(raw_output: str, *, sub_query_count: int, chunk_count: int) -> list[set[int]]:
-    """0-based chunk indexes per sub-query. Out-of-range numbers are dropped; a
-    sub-query the model left out counts as having none."""
+def _parse_relevance(
+    raw_output: str, *, sub_query_count: int, chunk_count: int
+) -> list[dict[int, str]]:
+    """Per sub-query, the kept chunks' 0-based indexes mapped to the model's
+    reason. A chunk only counts when the model gave a non-empty reason for it
+    (having to say why is what keeps a small model from keeping keyword-only
+    matches); a bare list of numbers is still accepted, with no reasons.
+    Out-of-range numbers are dropped; a sub-query left out has none."""
 
     candidate = raw_output.strip().strip("`").strip()
     match = _JSON_OBJECT_PATTERN.search(candidate)
@@ -151,19 +190,35 @@ def _parse_relevance(raw_output: str, *, sub_query_count: int, chunk_count: int)
     if not isinstance(loaded, dict):
         raise MalformedRerankOutputError("not a JSON object")
 
-    relevant: list[set[int]] = [set() for _ in range(sub_query_count)]
+    relevant: list[dict[int, str]] = [{} for _ in range(sub_query_count)]
     recognised = False
     for key, value in loaded.items():
         key_match = _SUB_QUERY_KEY.match(str(key))
-        if key_match is None or not isinstance(value, list):
+        if key_match is None:
             continue
         query_index = int(key_match.group(1)) - 1
         if not 0 <= query_index < sub_query_count:
             continue
+        if isinstance(value, dict):
+            entries = [(_chunk_number(chunk_key), reason) for chunk_key, reason in value.items()]
+            kept = {
+                number - 1: reason.strip()
+                for number, reason in entries
+                if number is not None and isinstance(reason, str) and reason.strip()
+            }
+        elif isinstance(value, list):
+            kept = {number - 1: "" for number in value if isinstance(number, int)}
+        else:
+            continue
         recognised = True
         relevant[query_index] = {
-            number - 1 for number in value if isinstance(number, int) and 1 <= number <= chunk_count
+            index: reason for index, reason in kept.items() if 0 <= index < chunk_count
         }
     if not recognised:
         raise MalformedRerankOutputError("no SQk keys")
     return relevant
+
+
+def _chunk_number(key: object) -> int | None:
+    match = _CHUNK_KEY.match(str(key).strip())
+    return int(match.group(1)) if match else None
