@@ -154,7 +154,8 @@ def test_rerank_reports_which_sub_query_found_nothing(monkeypatch: pytest.Monkey
     )
 
     assert result.has_valid_context is True
-    assert result.failed_query_indexes == [1, 2]
+    # Worst miss first: "hoc bong" found nothing (0.0), "lich thi" a 0.3 chunk.
+    assert result.failed_query_indexes == [2, 1]
     assert [c.chunk_id for c in result.chunks] == ["a"]
 
 

@@ -106,7 +106,8 @@ def test_web_search_defaults_are_off_and_domain_restricted(
     assert fresh.CHAT_WEB_SEARCH_ENABLED is False
     assert fresh.TAVILY_API_KEY == ""
     assert fresh.TAVILY_INCLUDE_DOMAINS == ["iuh.edu.vn"]
-    assert fresh.CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN == 4
+    assert fresh.CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN == 2
+    assert fresh.CHAT_WEB_SEARCH_MAX_QUERIES == 2
 
 
 def test_tavily_include_domains_parse_from_comma_separated_env(

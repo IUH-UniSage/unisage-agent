@@ -122,3 +122,16 @@ async def test_slow_tavily_is_cut_off_at_one_overall_deadline(
 
     with pytest.raises(WebSearchUnavailableError, match="timed out"):
         await _client(httpx.MockTransport(slow)).search("q", max_results=2)
+
+
+@pytest.mark.asyncio
+async def test_a_runaway_query_is_cut_before_it_reaches_tavily() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    await _client(httpx.MockTransport(handler)).search("x" * 1000, max_results=2)
+
+    assert len(json.loads(captured[0].content)["query"]) == 400

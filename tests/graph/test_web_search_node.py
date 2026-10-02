@@ -34,6 +34,7 @@ def _web_search_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "TAVILY_API_KEY", "tvly-test")
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB", 2)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN", 4)
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_QUERIES", 4)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MIN_SCORE", 0.5)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_RESULT_MAX_CHARS", 1500)
 
@@ -124,3 +125,18 @@ async def test_long_content_is_truncated(monkeypatch: pytest.MonkeyPatch) -> Non
     (result,) = await search_web(["q"], client=client)
 
     assert result.content == "x" * 100 + "…"
+
+
+@pytest.mark.asyncio
+async def test_only_the_first_max_queries_sub_queries_are_searched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_QUERIES", 2)
+    client = _FakeClient(
+        {"a": [_page("a1", 0.6)], "b": [_page("b1", 0.9)], "c": [_page("c1", 0.8)]}
+    )
+
+    results = await search_web(["a", "b", "c"], client=client)
+
+    assert [query for query, _ in client.calls] == ["a", "b"]
+    assert [r.title for r in results] == ["b1", "a1"]

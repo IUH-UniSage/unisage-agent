@@ -143,13 +143,17 @@ class Settings(BaseSettings):
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
     # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
     # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
-    # bound how much web text reaches the system prompt (~6000 chars at the defaults,
-    # about what CHAT_RETRIEVAL_MAX_CHUNKS chunks take).
+    # bound how much web text reaches the system prompt (~3000 chars at the defaults),
+    # however long the question or however many sub-queries it split into.
     CHAT_WEB_SEARCH_ENABLED: bool = False
     # Tavily bills per search, not per result, so asking for more candidates is free;
     # MIN_SCORE and PER_TURN still bound what reaches the prompt.
     CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=5, ge=1, le=20)
-    CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=4, ge=1)
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=2, ge=1)
+    # Searches per turn: a message with several tasks can leave many sub-queries without
+    # chunks, but only PER_TURN pages reach the prompt, so the rest would be paid-for
+    # searches thrown away. The worst-missed sub-queries are searched first.
+    CHAT_WEB_SEARCH_MAX_QUERIES: int = Field(default=2, ge=1)
     CHAT_WEB_SEARCH_MIN_SCORE: float = Field(default=0.5, ge=0.0, le=1.0)
     CHAT_WEB_SEARCH_RESULT_MAX_CHARS: int = Field(default=1500, ge=100)
 

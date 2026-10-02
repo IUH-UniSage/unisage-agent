@@ -33,7 +33,8 @@ class WebSearchClient(Protocol):
 async def search_web(
     queries: Sequence[str], *, client: WebSearchClient | None = None
 ) -> list[WebSearchResult]:
-    """Web pages for `queries` (the failed sub-queries), best score first."""
+    """Web pages for `queries` (the failed sub-queries, most-needed first),
+    best score first. Only the first `CHAT_WEB_SEARCH_MAX_QUERIES` are searched."""
 
     if not queries or not settings.CHAT_WEB_SEARCH_ENABLED:
         return []
@@ -42,7 +43,8 @@ async def search_web(
         return []
 
     search_client = client or TavilyClient()
-    per_query = await asyncio.gather(*(_search_one(search_client, query) for query in queries))
+    searched = queries[: settings.CHAT_WEB_SEARCH_MAX_QUERIES]
+    per_query = await asyncio.gather(*(_search_one(search_client, query) for query in searched))
     selected = _allocate(per_query, settings.CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN)
     return [_truncated(result) for result in selected]
 

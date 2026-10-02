@@ -160,9 +160,10 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `CHAT_MAX_SUB_QUERIES` | `3` | Số câu hỏi con tối đa khi decomposer tách một câu so sánh (task `MULTI`); tối thiểu 2. Mỗi câu hỏi con tốn thêm một lần embedding + tìm Qdrant, và chia nhỏ quota chunk của RetrievalFilteringNode |
 | `CHAT_WEB_SEARCH_ENABLED` | `False` | Bật WebSearchNode: tìm web (Tavily) cho mỗi câu hỏi con mà rerank không còn chunk nào, trước khi rơi xuống TicketFallbackNode |
 | `CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB` | `5` | `max_results` gửi Tavily cho mỗi câu hỏi con trượt. Tavily tính credit theo lượt tìm, không theo số kết quả, nên lấy nhiều ứng viên không tốn thêm — trang đúng thường không nằm ở top 2 với câu hỏi tiếng Việt |
-| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN` | `4` | Tổng số kết quả web tối đa đưa vào `<websearch>` một lượt — chia round-robin: mỗi câu hỏi con trượt được kết quả tốt nhất trước, phần còn lại theo điểm |
+| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN` | `2` | Tổng số trang web tối đa đưa vào `<websearch>` một lượt — chia round-robin: mỗi câu hỏi con trượt được trang tốt nhất trước, phần còn lại theo điểm. Lấy `PER_SUB` ứng viên rồi chỉ giữ ngần này trang điểm cao nhất |
+| `CHAT_WEB_SEARCH_MAX_QUERIES` | `2` | Số lần tìm Tavily tối đa một lượt. Tin nhắn nhiều task có thể có nhiều câu hỏi con trượt, nhưng chỉ `PER_TURN` trang vào prompt nên tìm thêm chỉ tốn credit. Ưu tiên câu hỏi con trượt nặng nhất (chunk tốt nhất có điểm thấp nhất) |
 | `CHAT_WEB_SEARCH_MIN_SCORE` | `0.5` | Bỏ kết quả có điểm liên quan của Tavily dưới ngưỡng này |
-| `CHAT_WEB_SEARCH_RESULT_MAX_CHARS` | `1500` | Cắt nội dung mỗi kết quả — cùng `PER_TURN` giới hạn phần web trong system prompt ở khoảng 6000 ký tự, cỡ `CHAT_RETRIEVAL_MAX_CHUNKS` chunk |
+| `CHAT_WEB_SEARCH_RESULT_MAX_CHARS` | `1500` | Cắt nội dung mỗi kết quả — cùng `PER_TURN` giới hạn phần web trong system prompt ở khoảng 3000 ký tự, bất kể câu hỏi dài hay tách thành bao nhiêu câu hỏi con |
 | `CHAT_ALLOW_REPAIR_JSON` | `True` | Bật/tắt lệnh gọi LLM sửa lỗi lần 2 khi câu trả lời quên khối `ask_user_form` bắt buộc (`generation_synthesis.py::_repair_missing_ask_form`). Heuristic phát hiện có lỗ hổng biết trước (câu mời đặt điều kiện ở cuối câu, kiểu "..., nếu bạn cần...", không bị nhận diện là câu không ràng buộc) khiến lần gọi sửa đôi khi bịa ra một form không ai hỏi. Tắt thì bỏ hẳn lần gọi sửa: một form thật sự bị quên sẽ không được vá, nhưng không bao giờ bịa form giả |
 
 ### Ví dụ thêm một biến mới

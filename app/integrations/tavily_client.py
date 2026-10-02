@@ -19,6 +19,11 @@ from pydantic import ValidationError
 from app.core.config import settings
 from app.schemas.web_search import WebSearchResult
 
+# Search queries are short questions (HyDE's standalone rewrite or a decomposed
+# sub-query); this only guards against a runaway rewrite - Tavily rejects very long
+# queries outright.
+_MAX_QUERY_CHARS = 400
+
 
 class WebSearchUnavailableError(Exception):
     """The web search provider could not answer this query."""
@@ -33,7 +38,7 @@ class TavilyClient:
             raise WebSearchUnavailableError("TAVILY_API_KEY is not set")
 
         body: dict[str, Any] = {
-            "query": query,
+            "query": query[:_MAX_QUERY_CHARS],
             "search_depth": settings.TAVILY_SEARCH_DEPTH,
             "max_results": max_results,
             "include_domains": settings.TAVILY_INCLUDE_DOMAINS,

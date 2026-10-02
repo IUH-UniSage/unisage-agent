@@ -19,10 +19,12 @@ from app.schemas.retrieval import RetrievedChunk
 @dataclass(frozen=True)
 class TurnRerankResult:
     """`per_query[i]` is query i's own rerank; `chunks` merges every query's
-    survivors."""
+    survivors; `best_scores[i]` is query i's best score before the threshold
+    (0.0 when retrieval found nothing at all)."""
 
     per_query: list[RerankResult]
     chunks: list[RetrievedChunk]
+    best_scores: list[float]
 
     @property
     def has_valid_context(self) -> bool:
@@ -30,19 +32,28 @@ class TurnRerankResult:
 
     @property
     def failed_query_indexes(self) -> list[int]:
-        """Queries rerank left with no chunk at all, in query order."""
+        """Queries rerank left with no chunk at all, worst miss first (lowest
+        best score, ties in query order) - the order web search spends its
+        limited searches in."""
 
-        return [
+        failed = [
             index for index, result in enumerate(self.per_query) if not result.has_valid_context
         ]
+        return sorted(failed, key=lambda index: self.best_scores[index])
 
 
 def rerank_chunks(per_query_chunks: Sequence[Sequence[RetrievedChunk]]) -> TurnRerankResult:
     per_query = [rerank(chunks) for chunks in per_query_chunks]
+    best_scores = [
+        max((chunk.score for chunk in chunks), default=0.0) for chunks in per_query_chunks
+    ]
     if len(per_query) == 1:
-        return TurnRerankResult(per_query=per_query, chunks=per_query[0].chunks)
+        return TurnRerankResult(
+            per_query=per_query, chunks=per_query[0].chunks, best_scores=best_scores
+        )
     return TurnRerankResult(
         per_query=per_query,
+        best_scores=best_scores,
         chunks=_merge_by_best_score([result.chunks for result in per_query]),
     )
 
