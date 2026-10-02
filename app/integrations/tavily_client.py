@@ -10,6 +10,7 @@ resort before the ticket fallback, so the caller logs it and carries on
 without web results; it never reaches the user as an error.
 """
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -40,17 +41,18 @@ class TavilyClient:
             "include_raw_content": False,
         }
         try:
-            async with httpx.AsyncClient(
-                base_url=settings.TAVILY_BASE_URL,
-                timeout=settings.TAVILY_TIMEOUT_SECONDS,
-                transport=self._transport,
-            ) as client:
-                response = await client.post(
-                    "/search",
-                    json=body,
-                    headers={"Authorization": f"Bearer {settings.TAVILY_API_KEY}"},
-                )
-        except httpx.TimeoutException as exc:
+            # One deadline for the whole call - httpx's own timeout applies per phase
+            # (connect, read, ...), so a slow connect plus a slow read could add up past it.
+            async with asyncio.timeout(settings.TAVILY_TIMEOUT_SECONDS):
+                async with httpx.AsyncClient(
+                    base_url=settings.TAVILY_BASE_URL, transport=self._transport
+                ) as client:
+                    response = await client.post(
+                        "/search",
+                        json=body,
+                        headers={"Authorization": f"Bearer {settings.TAVILY_API_KEY}"},
+                    )
+        except (TimeoutError, httpx.TimeoutException) as exc:
             raise WebSearchUnavailableError("timed out") from exc
         except httpx.RequestError as exc:
             raise WebSearchUnavailableError(f"network error: {type(exc).__name__}") from exc

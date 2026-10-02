@@ -325,7 +325,9 @@ async def test_advisory_turn_traces_nodes_with_flow_design_numbering(
     mock_sync_llm_model: Callable[[str], FunctionModel],
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
     graph_input = GraphInput(
         conversation_id="c1",
         user_message="Điều kiện học bổng là gì?",

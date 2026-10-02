@@ -124,7 +124,9 @@ class Settings(BaseSettings):
     TAVILY_INCLUDE_DOMAINS: Annotated[list[str], NoDecode] = ["iuh.edu.vn"]
     # `basic` costs 1 credit per search, `advanced` 2 but returns longer, more relevant snippets.
     TAVILY_SEARCH_DEPTH: Literal["basic", "advanced"] = "basic"
-    TAVILY_TIMEOUT_SECONDS: float = 8.0
+    # Deadline for the whole search call. Tavily usually answers in ~3s but has spikes
+    # past 10s; a timeout only drops web results, the turn still ends in the ticket fallback.
+    TAVILY_TIMEOUT_SECONDS: float = 15.0
 
     # --- INGEST_: only ever read at document-ingestion time (chunking,
     # enrichment) - never during a chat turn ---

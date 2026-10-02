@@ -131,7 +131,7 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `TAVILY_BASE_URL` | `https://api.tavily.com` | Host cố định do người triển khai đặt — không qua SSRF guard, cùng mức tin cậy với `SLACK_APIKEY_ALERT_WEBHOOK_URL` |
 | `TAVILY_INCLUDE_DOMAINS` | `iuh.edu.vn` | Danh sách domain phân tách bằng dấu phẩy, gửi làm `include_domains` — chỉ tìm trên trang chính thức của trường (và subdomain), không bao giờ diễn đàn hay trường khác |
 | `TAVILY_SEARCH_DEPTH` | `basic` | `basic` tốn 1 credit/lần tìm, `advanced` 2 credit nhưng snippet dài và sát hơn |
-| `TAVILY_TIMEOUT_SECONDS` | `8` | Quá thời gian thì coi như không có kết quả web, không chặn lượt chat |
+| `TAVILY_TIMEOUT_SECONDS` | `15` | Hạn chót cho **cả** lần gọi (không phải từng giai đoạn kết nối/đọc như timeout của httpx). Tavily thường trả lời trong ~3 giây nhưng có lúc vọt quá 10 giây; quá hạn thì coi như không có kết quả web, lượt chat vẫn đi tiếp tới TicketFallbackNode |
 
 **Hệ ngoài chỉ một biến**
 

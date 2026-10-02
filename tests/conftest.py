@@ -73,6 +73,17 @@ def _no_live_slack_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(alerting_module, "send_slack_alert", _noop)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_web_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same rule for Tavily: with `CHAT_WEB_SEARCH_ENABLED`/`TAVILY_API_KEY`
+    set in a dev `.env`, every advisory test whose rerank came back empty made
+    a real search (and waited out its timeout offline). Tests that exercise
+    web search turn it back on with their own `monkeypatch.setattr`."""
+
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", False)
+    monkeypatch.setattr(settings, "TAVILY_API_KEY", "")
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     """Create a test client with `get_db_session` backed by an in-memory SQLite DB.

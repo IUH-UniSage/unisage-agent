@@ -1,5 +1,6 @@
 """`TavilyClient` against an `httpx.MockTransport` - no real network call."""
 
+import asyncio
 import json
 
 import httpx
@@ -107,3 +108,17 @@ async def test_unexpected_body_raises(body: bytes) -> None:
 
     with pytest.raises(WebSearchUnavailableError, match="unexpected response body"):
         await _client(transport).search("q", max_results=2)
+
+
+@pytest.mark.asyncio
+async def test_slow_tavily_is_cut_off_at_one_overall_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "TAVILY_TIMEOUT_SECONDS", 0.05)
+
+    async def slow(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={"results": []})
+
+    with pytest.raises(WebSearchUnavailableError, match="timed out"):
+        await _client(httpx.MockTransport(slow)).search("q", max_results=2)
