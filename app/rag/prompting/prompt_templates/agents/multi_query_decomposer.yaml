@@ -11,8 +11,9 @@ template: |
 
   ## Requirements
   - Mỗi câu hỏi con phải chứa đầy đủ thực thể và ngữ cảnh hành chính (không dùng đại từ thay thế "nó", "ngành đó").
-  - GIỮ PHẠM VI CHUNG CỦA CẢ CÂU: tiêu chí phạm vi chỉ nêu một lần nhưng bao trùm cả tin nhắn — cơ sở/phân hiệu (Quảng Ngãi, Thanh Hóa...), bậc/hệ đào tạo, khóa/năm học — PHẢI được chép vào MỌI câu hỏi con nó áp dụng, kể cả câu hỏi con đứng sau không nhắc lại. Chỉ bỏ khi chính câu hỏi con đó nêu một phạm vi khác thay thế (VD vế sau nói rõ "ở trụ sở chính").
-  - KHÔNG LÀM RƠI TỪ KHÓA: mọi từ khóa học vụ trong tin nhắn (chủ đề, cơ sở, bậc/hệ, khóa, khối/ngành) phải xuất hiện ở ít nhất một câu hỏi con; giữ nguyên chữ người dùng dùng, không thay bằng từ đồng nghĩa. Thực thể riêng của một vế (VD tên ngành chỉ gắn với câu hỏi học phí) thì chỉ giữ ở vế đó.
+  - GIỮ PHẠM VI CỦA CẢ CÂU TRONG MỌI CÂU HỎI CON: mỗi tiêu chí phạm vi người dùng nêu — ngành/khối, bậc/hệ đào tạo (chính quy, cao học...), cơ sở/phân hiệu (Quảng Ngãi, Thanh Hóa...), khóa/năm học — PHẢI được chép vào MỌI câu hỏi con, dù người dùng chỉ nói một lần, ở đầu hay cuối tin nhắn. Chỉ bỏ khi chính câu hỏi con đó nêu một giá trị khác thay thế (VD câu so sánh hai ngành: mỗi câu hỏi con giữ ngành của nó; vế sau nói rõ "ở trụ sở chính").
+  - Thừa một tiêu chí phạm vi chỉ làm tìm kiếm hẹp hơn một chút; THIẾU tiêu chí làm tìm ra số liệu của ngành/hệ/cơ sở khác. Không chắc tiêu chí có áp dụng cho vế đó không → vẫn chép.
+  - KHÔNG LÀM RƠI TỪ KHÓA: giữ nguyên chữ người dùng dùng cho chủ đề và tiêu chí, không thay bằng từ đồng nghĩa.
   - Trả về JSON chứa mảng `sub_queries: List[str]`.
   - CHỈ trả về đúng một object JSON, không thêm chữ, giải thích hay markdown code fence.
   - Nếu tin nhắn có kèm lịch sử hội thoại, chỉ dùng lịch sử để hiểu câu hỏi nối tiếp; không tạo câu hỏi con cho nội dung của lượt trước.
@@ -35,6 +36,14 @@ template: |
     ]
   }
 
+  Input: "Chương trình khung ngành công nghệ thông tin và học phí. chương trình chính quy"
+  Output: {
+    "sub_queries": [
+      "Chương trình khung ngành Công nghệ thông tin hệ chính quy",
+      "Định mức học phí ngành Công nghệ thông tin hệ chính quy"
+    ]
+  }
+
   Input: "Học phí khóa 2024 hệ chính quy ngành CNTT và Kế toán chênh nhau bao nhiêu?"
   Output: {
     "sub_queries": [
@@ -47,6 +56,6 @@ template: |
   Output: {
     "sub_queries": [
       "Định mức học phí ngành Công nghệ thông tin theo khóa học",
-      "Điều kiện xét cấp học bổng"
+      "Điều kiện xét cấp học bổng ngành Công nghệ thông tin"
     ]
   }
