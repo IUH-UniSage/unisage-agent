@@ -56,7 +56,9 @@ async def _search_one(client: WebSearchClient, query: str) -> list[WebSearchResu
         logger.warning("Web search failed for a sub-query - continuing without it: %s", exc)
         return []
     if settings.APP_DEBUG:
-        dump = "\n".join(f"[{result.score:.2f}] {result.url}\n{result.content}" for result in results)
+        dump = "\n".join(
+            f"[{result.score:.2f}] {result.url}\n{result.content}" for result in results
+        )
         logger.info(
             "web search query=%r min_score=%s raw_results=%d:\n%s",
             query,

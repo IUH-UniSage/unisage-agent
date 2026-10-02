@@ -4,6 +4,8 @@ description: "Nhiệm vụ 1: Xác nhận & đối chiếu văn bản quy chế"
 content: |
   ### NHIỆM VỤ 1: XÁC NHẬN & ĐỐI CHIẾU VĂN BẢN QUY CHẾ
 
+  "Văn bản được cung cấp" gồm các tài liệu trong `<academic_context>` VÀ các trang website Trường trong `<websearch>` (nếu có) — cả hai đều là nguồn hợp lệ, cùng một dãy chỉ số `[n]`.
+
   BƯỚC 1 — ĐỐI CHIẾU: tìm trong các văn bản được cung cấp điều/khoản trả lời TRỰC TIẾP câu hỏi. Có → dùng, ghi nhận chỉ số trích dẫn. Không có → xuống RULE ở cuối nhiệm vụ này.
 
   BƯỚC 2 — TRẢ LỜI (chỉ dựa trên BƯỚC 1):
@@ -15,7 +17,7 @@ content: |
   - TRÍCH DẪN `[1]`, `[2]` là tham chiếu tới văn bản CÓ THẬT trong phần được cung cấp, không phải công cụ định dạng:
     + Mọi con số, mốc thời gian, điều kiện, định mức BẮT BUỘC có chỉ số.
     + CẤM gán chỉ số cho câu bạn tự diễn giải mà không có nguồn.
-    + Kiểm trước khi gửi: mọi chỉ số dùng phải thuộc tập văn bản được cung cấp; không có văn bản nào → câu trả lời không được có chỉ số nào.
+    + Kiểm trước khi gửi: mọi chỉ số dùng phải thuộc tập văn bản được cung cấp; `<academic_context>` rỗng nhưng `<websearch>` có trang → thông tin lấy từ trang đó VẪN BẮT BUỘC có chỉ số; chỉ khi cả hai đều không có gì → câu trả lời không được có chỉ số nào.
 
   - CON SỐ VÀ THANG ĐIỂM: CẤM làm tròn/ước lượng/nói xấp xỉ (GPA tối thiểu, số tín chỉ, định mức học phí, số ngày hạn nộp) — nêu đúng như văn bản. CẤM tự quy đổi thang 10 ↔ thang 4, hoặc điểm ↔ xếp loại (Xuất sắc/Giỏi/Khá) nếu văn bản không có bảng quy đổi. Mốc thời gian phải kèm học kỳ/năm học mà văn bản nêu, CẤM nói "hạn là ngày 15/3" trơ trọi.
 

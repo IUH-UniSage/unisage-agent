@@ -159,7 +159,7 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở PostRetrievalRerankNode. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |
 | `CHAT_MAX_SUB_QUERIES` | `3` | Số câu hỏi con tối đa khi decomposer tách một câu so sánh (task `MULTI`); tối thiểu 2. Mỗi câu hỏi con tốn thêm một lần embedding + tìm Qdrant, và chia nhỏ quota chunk của RetrievalFilteringNode |
 | `CHAT_WEB_SEARCH_ENABLED` | `False` | Bật WebSearchNode: tìm web (Tavily) cho mỗi câu hỏi con mà rerank không còn chunk nào, trước khi rơi xuống TicketFallbackNode |
-| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB` | `2` | `max_results` gửi Tavily cho mỗi câu hỏi con trượt |
+| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB` | `5` | `max_results` gửi Tavily cho mỗi câu hỏi con trượt. Tavily tính credit theo lượt tìm, không theo số kết quả, nên lấy nhiều ứng viên không tốn thêm — trang đúng thường không nằm ở top 2 với câu hỏi tiếng Việt |
 | `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN` | `4` | Tổng số kết quả web tối đa đưa vào `<websearch>` một lượt — chia round-robin: mỗi câu hỏi con trượt được kết quả tốt nhất trước, phần còn lại theo điểm |
 | `CHAT_WEB_SEARCH_MIN_SCORE` | `0.5` | Bỏ kết quả có điểm liên quan của Tavily dưới ngưỡng này |
 | `CHAT_WEB_SEARCH_RESULT_MAX_CHARS` | `1500` | Cắt nội dung mỗi kết quả — cùng `PER_TURN` giới hạn phần web trong system prompt ở khoảng 6000 ký tự, cỡ `CHAT_RETRIEVAL_MAX_CHUNKS` chunk |

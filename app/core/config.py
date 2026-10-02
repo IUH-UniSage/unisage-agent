@@ -144,7 +144,9 @@ class Settings(BaseSettings):
     # bound how much web text reaches the system prompt (~6000 chars at the defaults,
     # about what CHAT_RETRIEVAL_MAX_CHUNKS chunks take).
     CHAT_WEB_SEARCH_ENABLED: bool = False
-    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=2, ge=1)
+    # Tavily bills per search, not per result, so asking for more candidates is free;
+    # MIN_SCORE and PER_TURN still bound what reaches the prompt.
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=5, ge=1, le=20)
     CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=4, ge=1)
     CHAT_WEB_SEARCH_MIN_SCORE: float = Field(default=0.5, ge=0.0, le=1.0)
     CHAT_WEB_SEARCH_RESULT_MAX_CHARS: int = Field(default=1500, ge=100)
