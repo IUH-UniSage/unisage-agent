@@ -1,5 +1,5 @@
 """RetrievalFilteringNode - searches every retrieval text of the turn with
-the caller's permission filter, merging several into one ranked list."""
+the caller's permission filter, one ranked chunk list per query."""
 
 import math
 from collections.abc import Sequence
@@ -14,26 +14,13 @@ def retrieve_chunks(
     queries: Sequence[str],
     retrieval_service: RetrievalServiceProtocol,
     security: AcademicSecurityContext,
-) -> list[RetrievedChunk]:
+) -> list[list[RetrievedChunk]]:
+    """Results stay per query (in query order) so rerank can tell which
+    sub-query found nothing; `rerank_chunks` merges them afterwards."""
+
     if len(queries) == 1:
-        return retrieval_service.retrieve(queries[0], security=security)
+        return [retrieval_service.retrieve(queries[0], security=security)]
 
     # A per-query quota keeps one sub-query from filling the whole top-k.
     quota = math.ceil(settings.CHAT_RETRIEVAL_MAX_CHUNKS / len(queries))
-    return _merge_by_best_score(
-        [retrieval_service.retrieve(query, security=security, limit=quota) for query in queries]
-    )
-
-
-def _merge_by_best_score(results: Sequence[list[RetrievedChunk]]) -> list[RetrievedChunk]:
-    """Keep each chunk once at its best score (earlier query wins ties),
-    ranked and capped at `CHAT_RETRIEVAL_MAX_CHUNKS`."""
-
-    best: dict[str, RetrievedChunk] = {}
-    for chunks in results:
-        for chunk in chunks:
-            existing = best.get(chunk.chunk_id)
-            if existing is None or chunk.score > existing.score:
-                best[chunk.chunk_id] = chunk
-    ranked = sorted(best.values(), key=lambda chunk: chunk.score, reverse=True)
-    return ranked[: settings.CHAT_RETRIEVAL_MAX_CHUNKS]
+    return [retrieval_service.retrieve(query, security=security, limit=quota) for query in queries]
