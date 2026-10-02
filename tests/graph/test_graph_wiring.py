@@ -12,6 +12,7 @@ from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.greeting import GREETING_TEMPLATE
 from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
+from app.graph.nodes.web_search import WebSearchOutcome
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels
@@ -586,9 +587,9 @@ def _fake_web_search(
 ) -> list[list[str]]:
     calls: list[list[str]] = []
 
-    async def search_web(queries: Sequence[str]) -> list[WebSearchResult]:
+    async def search_web(queries: Sequence[str]) -> WebSearchOutcome:
         calls.append(list(queries))
-        return pages
+        return WebSearchOutcome(results=pages)
 
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", True)
     monkeypatch.setattr("app.graph.streaming_graph.search_web", search_web)

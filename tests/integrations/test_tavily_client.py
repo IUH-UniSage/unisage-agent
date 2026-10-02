@@ -7,7 +7,11 @@ import httpx
 import pytest
 
 from app.core.config import settings
-from app.integrations.tavily_client import TavilyClient, WebSearchUnavailableError
+from app.integrations.tavily_client import (
+    TavilyClient,
+    WebSearchFailureReason,
+    WebSearchUnavailableError,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -67,35 +71,67 @@ async def test_missing_api_key_raises_without_calling_tavily(
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError("must not call Tavily without a key")
 
-    with pytest.raises(WebSearchUnavailableError, match="TAVILY_API_KEY"):
+    with pytest.raises(WebSearchUnavailableError, match="TAVILY_API_KEY") as exc_info:
         await _client(httpx.MockTransport(handler)).search("q", max_results=2)
 
-
-@pytest.mark.parametrize("status", [401, 429, 500])
-@pytest.mark.asyncio
-async def test_http_error_status_raises(status: int) -> None:
-    transport = httpx.MockTransport(lambda _request: httpx.Response(status, json={}))
-
-    with pytest.raises(WebSearchUnavailableError, match=f"HTTP {status}") as exc_info:
-        await _client(transport).search("q", max_results=2)
-
-    assert "tvly-secret" not in str(exc_info.value)
+    assert exc_info.value.reason is WebSearchFailureReason.NOT_CONFIGURED
 
 
 @pytest.mark.parametrize(
-    ("error", "message"),
+    ("status", "reason", "says"),
     [
-        (httpx.ReadTimeout("slow"), "timed out"),
-        (httpx.ConnectError("refused"), "network error"),
+        (401, WebSearchFailureReason.AUTH_FAILED, "Kiểm tra TAVILY_API_KEY"),
+        (432, WebSearchFailureReason.CREDITS_EXHAUSTED, "hết credit"),
+        (433, WebSearchFailureReason.CREDITS_EXHAUSTED, "hết credit"),
+        (429, WebSearchFailureReason.RATE_LIMITED, "giới hạn tốc độ"),
+        (400, WebSearchFailureReason.REQUEST_REJECTED, "từ chối yêu cầu"),
+        (500, WebSearchFailureReason.PROVIDER_ERROR, "gặp sự cố"),
     ],
 )
 @pytest.mark.asyncio
-async def test_transport_errors_raise(error: Exception, message: str) -> None:
+async def test_http_error_status_names_the_cause(
+    status: int, reason: WebSearchFailureReason, says: str
+) -> None:
+    transport = httpx.MockTransport(lambda _request: httpx.Response(status, json={}))
+
+    with pytest.raises(WebSearchUnavailableError) as exc_info:
+        await _client(transport).search("q", max_results=2)
+
+    assert exc_info.value.reason is reason
+    assert exc_info.value.code == f"WEB_SEARCH_{reason.value}"
+    assert f"HTTP {status}" in str(exc_info.value)
+    assert says in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_tavily_error_detail_is_appended_without_the_key() -> None:
+    body = {"detail": {"error": "This request exceeds your plan's set usage limit. tvly-secret"}}
+    transport = httpx.MockTransport(lambda _request: httpx.Response(432, json=body))
+
+    with pytest.raises(WebSearchUnavailableError) as exc_info:
+        await _client(transport).search("q", max_results=2)
+
+    message = str(exc_info.value)
+    assert "Chi tiết: This request exceeds your plan's set usage limit." in message
+    assert "tvly-secret" not in message
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (httpx.ReadTimeout("slow"), WebSearchFailureReason.TIMEOUT),
+        (httpx.ConnectError("refused"), WebSearchFailureReason.CONNECTION_ERROR),
+    ],
+)
+@pytest.mark.asyncio
+async def test_transport_errors_raise(error: Exception, reason: WebSearchFailureReason) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise error
 
-    with pytest.raises(WebSearchUnavailableError, match=message):
+    with pytest.raises(WebSearchUnavailableError) as exc_info:
         await _client(httpx.MockTransport(handler)).search("q", max_results=2)
+
+    assert exc_info.value.reason is reason
 
 
 @pytest.mark.parametrize(
@@ -106,8 +142,10 @@ async def test_transport_errors_raise(error: Exception, message: str) -> None:
 async def test_unexpected_body_raises(body: bytes) -> None:
     transport = httpx.MockTransport(lambda _request: httpx.Response(200, content=body))
 
-    with pytest.raises(WebSearchUnavailableError, match="unexpected response body"):
+    with pytest.raises(WebSearchUnavailableError) as exc_info:
         await _client(transport).search("q", max_results=2)
+
+    assert exc_info.value.reason is WebSearchFailureReason.MALFORMED_RESPONSE
 
 
 @pytest.mark.asyncio
@@ -120,8 +158,10 @@ async def test_slow_tavily_is_cut_off_at_one_overall_deadline(
         await asyncio.sleep(1)
         return httpx.Response(200, json={"results": []})
 
-    with pytest.raises(WebSearchUnavailableError, match="timed out"):
+    with pytest.raises(WebSearchUnavailableError, match=r"0\.05 giây") as exc_info:
         await _client(httpx.MockTransport(slow)).search("q", max_results=2)
+
+    assert exc_info.value.reason is WebSearchFailureReason.TIMEOUT
 
 
 @pytest.mark.asyncio

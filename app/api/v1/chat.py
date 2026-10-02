@@ -30,7 +30,7 @@ from app.database.repositories.clarification_state import ClarificationStateRepo
 from app.database.session import get_db_session
 from app.graph.nodes.greeting import is_first_turn
 from app.graph.nodes.security_context import parse_security_headers
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem, WarningItem
 from app.graph.streaming import BudgetContext
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
@@ -196,6 +196,9 @@ async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenera
         elif isinstance(item, ErrorItem):
             payload = {"code": item.code, "message": item.message, "retryable": item.retryable}
             yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        elif isinstance(item, WarningItem):
+            payload = {"code": item.code, "message": item.message}
+            yield f"event: warning\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
     yield "event: done\ndata: {}\n\n"
 
 

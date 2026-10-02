@@ -7,7 +7,7 @@ import pytest
 
 from app.core.config import settings
 from app.graph.nodes.web_search import search_web
-from app.integrations.tavily_client import WebSearchUnavailableError
+from app.integrations.tavily_client import WebSearchFailureReason, WebSearchUnavailableError
 from app.schemas.web_search import WebSearchResult
 
 
@@ -51,7 +51,7 @@ async def test_every_failed_sub_query_gets_its_best_page_before_extra_slots(
         }
     )
 
-    results = await search_web(["lich thi", "hoc bong"], client=client)
+    results = (await search_web(["lich thi", "hoc bong"], client=client)).results
 
     # hb1 makes it in despite lt2 outscoring it; the last slot goes to lt2.
     assert [r.title for r in results] == ["lt1", "lt2", "hb1"]
@@ -67,7 +67,7 @@ async def test_more_failed_sub_queries_than_slots_keeps_the_best_heads(
         {"a": [_page("a1", 0.6)], "b": [_page("b1", 0.9)], "c": [_page("c1", 0.8)]}
     )
 
-    results = await search_web(["a", "b", "c"], client=client)
+    results = (await search_web(["a", "b", "c"], client=client)).results
 
     assert [r.title for r in results] == ["b1", "c1"]
 
@@ -81,31 +81,47 @@ async def test_low_score_pages_and_duplicate_urls_are_dropped() -> None:
         }
     )
 
-    results = await search_web(["q1", "q2"], client=client)
+    results = (await search_web(["q1", "q2"], client=client)).results
 
     assert [r.title for r in results] == ["shared", "other"]
 
 
 @pytest.mark.asyncio
 async def test_one_failing_search_does_not_drop_the_others() -> None:
-    client = _FakeClient({"q1": WebSearchUnavailableError("HTTP 429"), "q2": [_page("ok", 0.8)]})
+    rate_limited = WebSearchUnavailableError(WebSearchFailureReason.RATE_LIMITED, "HTTP 429")
+    client = _FakeClient({"q1": rate_limited, "q2": [_page("ok", 0.8)]})
 
-    results = await search_web(["q1", "q2"], client=client)
+    outcome = await search_web(["q1", "q2"], client=client)
 
-    assert [r.title for r in results] == ["ok"]
+    assert [r.title for r in outcome.results] == ["ok"]
+    assert outcome.failure is rate_limited
 
 
-@pytest.mark.parametrize(
-    ("setting", "value"), [("CHAT_WEB_SEARCH_ENABLED", False), ("TAVILY_API_KEY", "")]
-)
 @pytest.mark.asyncio
-async def test_disabled_or_keyless_search_makes_no_call(
-    monkeypatch: pytest.MonkeyPatch, setting: str, value: object
+async def test_disabled_search_makes_no_call_and_reports_nothing(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, setting, value)
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", False)
     client = _FakeClient({})
 
-    assert await search_web(["q"], client=client) == []
+    outcome = await search_web(["q"], client=client)
+
+    assert (outcome.results, outcome.failure) == ([], None)
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_enabled_without_a_key_reports_it_as_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "TAVILY_API_KEY", "")
+    client = _FakeClient({})
+
+    outcome = await search_web(["q"], client=client)
+
+    assert outcome.results == []
+    assert outcome.failure is not None
+    assert outcome.failure.reason is WebSearchFailureReason.NOT_CONFIGURED
     assert client.calls == []
 
 
@@ -113,7 +129,7 @@ async def test_disabled_or_keyless_search_makes_no_call(
 async def test_no_failed_sub_query_makes_no_call() -> None:
     client = _FakeClient({})
 
-    assert await search_web([], client=client) == []
+    assert (await search_web([], client=client)).results == []
     assert client.calls == []
 
 
@@ -122,7 +138,7 @@ async def test_long_content_is_truncated(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_RESULT_MAX_CHARS", 100)
     client = _FakeClient({"q": [_page("long", 0.9, content="x" * 500)]})
 
-    (result,) = await search_web(["q"], client=client)
+    (result,) = (await search_web(["q"], client=client)).results
 
     assert result.content == "x" * 100 + "…"
 
@@ -136,7 +152,24 @@ async def test_only_the_first_max_queries_sub_queries_are_searched(
         {"a": [_page("a1", 0.6)], "b": [_page("b1", 0.9)], "c": [_page("c1", 0.8)]}
     )
 
-    results = await search_web(["a", "b", "c"], client=client)
+    results = (await search_web(["a", "b", "c"], client=client)).results
 
     assert [query for query, _ in client.calls] == ["a", "b"]
     assert [r.title for r in results] == ["b1", "a1"]
+
+
+@pytest.mark.asyncio
+async def test_page_counts_are_logged_without_debug(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "APP_DEBUG", False)
+    client = _FakeClient({"q": [_page("good", 0.8), _page("weak", 0.3, content="secret body")]})
+
+    with caplog.at_level("INFO", logger="app.graph.nodes.web_search"):
+        await search_web(["q"], client=client)
+
+    assert "query='q': 2 page(s) found, 1 with score >= 0.5" in caplog.text
+    assert "0.30 https://iuh.edu.vn/weak" in caplog.text
+    assert "1 of 1 sub-query(ies) searched, 1 page(s) kept for the prompt" in caplog.text
+    # Page bodies only with APP_DEBUG.
+    assert "secret body" not in caplog.text

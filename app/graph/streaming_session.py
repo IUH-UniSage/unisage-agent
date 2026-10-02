@@ -53,7 +53,7 @@ from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import async_session_factory
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem, WarningItem
 from app.graph.stream_error_codes import (
     LLM_STREAM_INTERRUPTED,
     MESSAGES,
@@ -62,7 +62,7 @@ from app.graph.stream_error_codes import (
 )
 from app.graph.streaming import BudgetContext
 from app.graph.streaming_graph import run_graph
-from app.graph.streaming_state import GraphInput, GraphModels
+from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,22 @@ def _error_item_for(
     if streamed_any and not (detailed and code == LLM_STREAM_INTERRUPTED):
         message = f"Câu trả lời bị gián đoạn giữa chừng. {message}"
     return ErrorItem(code=code, message=message, retryable=retryable)
+
+
+_WEB_SEARCH_WARNING_PREFIX = (
+    "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
+)
+
+
+def _web_search_warning(graph_output: GraphOutput, graph_input: GraphInput) -> WarningItem | None:
+    """`event: warning` for an AI admin when web search failed (out of Tavily
+    credits, bad key, timeout, ...) - everyone else just gets the answer the
+    turn fell back to, with no mention of web search."""
+
+    failure = graph_output.web_search_failure
+    if failure is None or not can_see_ai_details(graph_input.security.permissions):
+        return None
+    return WarningItem(code=failure.code, message=f"{_WEB_SEARCH_WARNING_PREFIX}{failure}")
 
 
 async def run_and_persist(
@@ -185,6 +201,9 @@ async def run_and_persist(
             )
             response_text = graph_output.response_text
             status = "COMPLETED"
+            warning = _web_search_warning(graph_output, graph_input)
+            if warning is not None:
+                await queue.put(warning)
         except Exception as exc:
             reference = short_reference(usage_recorder.request_id)
             logger.exception(

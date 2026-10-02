@@ -5,12 +5,19 @@ Like `slack_notifier`, this talks to a fixed, operator-configured host
 rather than going through the SSRF-guarded provider HTTP client factory.
 
 Every failure - missing key, network error, timeout, non-2xx, unparseable
-body - is raised as `WebSearchUnavailableError`. Web search is only a last
-resort before the ticket fallback, so the caller logs it and carries on
-without web results; it never reaches the user as an error.
+body - is raised as `WebSearchUnavailableError`, carrying a
+`WebSearchFailureReason` and a Vietnamese message naming the cause (with
+Tavily's own error text when it sent one). Web search is only a last resort
+before the ticket fallback, so the turn carries on without web results; the
+message only ever reaches an AI admin, as a warning next to the answer (see
+`run_and_persist`).
+
+Tavily's status codes: 401 bad key, 429 rate limit, 432 key/plan credit
+limit reached, 433 pay-as-you-go spending limit reached.
 """
 
 import asyncio
+from enum import StrEnum
 from typing import Any
 
 import httpx
@@ -25,8 +32,40 @@ from app.schemas.web_search import WebSearchResult
 _MAX_QUERY_CHARS = 400
 
 
+_MAX_DETAIL_CHARS = 300
+_CREDIT_LIMIT_STATUSES = (432, 433)
+
+
+class WebSearchFailureReason(StrEnum):
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+    AUTH_FAILED = "AUTH_FAILED"
+    CREDITS_EXHAUSTED = "CREDITS_EXHAUSTED"
+    RATE_LIMITED = "RATE_LIMITED"
+    REQUEST_REJECTED = "REQUEST_REJECTED"
+    PROVIDER_ERROR = "PROVIDER_ERROR"
+    TIMEOUT = "TIMEOUT"
+    CONNECTION_ERROR = "CONNECTION_ERROR"
+    MALFORMED_RESPONSE = "MALFORMED_RESPONSE"
+
+
 class WebSearchUnavailableError(Exception):
-    """The web search provider could not answer this query."""
+    """The web search provider could not answer this query. `str(exc)` is the
+    admin-facing Vietnamese explanation, never containing the API key."""
+
+    def __init__(self, reason: WebSearchFailureReason, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    @property
+    def code(self) -> str:
+        return f"WEB_SEARCH_{self.reason.value}"
+
+
+def not_configured_error() -> WebSearchUnavailableError:
+    return WebSearchUnavailableError(
+        WebSearchFailureReason.NOT_CONFIGURED,
+        "Tìm kiếm web đang bật (CHAT_WEB_SEARCH_ENABLED) nhưng chưa cấu hình TAVILY_API_KEY.",
+    )
 
 
 class TavilyClient:
@@ -35,7 +74,7 @@ class TavilyClient:
 
     async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
         if not settings.TAVILY_API_KEY:
-            raise WebSearchUnavailableError("TAVILY_API_KEY is not set")
+            raise not_configured_error()
 
         body: dict[str, Any] = {
             "query": query[:_MAX_QUERY_CHARS],
@@ -58,15 +97,70 @@ class TavilyClient:
                         headers={"Authorization": f"Bearer {settings.TAVILY_API_KEY}"},
                     )
         except (TimeoutError, httpx.TimeoutException) as exc:
-            raise WebSearchUnavailableError("timed out") from exc
+            raise WebSearchUnavailableError(
+                WebSearchFailureReason.TIMEOUT,
+                f"Tavily không phản hồi trong {settings.TAVILY_TIMEOUT_SECONDS:g} giây "
+                "(TAVILY_TIMEOUT_SECONDS).",
+            ) from exc
         except httpx.RequestError as exc:
-            raise WebSearchUnavailableError(f"network error: {type(exc).__name__}") from exc
+            raise WebSearchUnavailableError(
+                WebSearchFailureReason.CONNECTION_ERROR,
+                f"Không kết nối được tới Tavily ({type(exc).__name__}). "
+                "Kiểm tra mạng và TAVILY_BASE_URL.",
+            ) from exc
 
         if response.status_code >= 300:
-            raise WebSearchUnavailableError(f"HTTP {response.status_code}")
+            raise _status_error(response)
 
         try:
             raw_results = response.json()["results"]
             return [WebSearchResult.model_validate(item) for item in raw_results]
         except (ValueError, KeyError, TypeError, ValidationError) as exc:
-            raise WebSearchUnavailableError("unexpected response body") from exc
+            raise WebSearchUnavailableError(
+                WebSearchFailureReason.MALFORMED_RESPONSE,
+                "Tavily trả về dữ liệu không đọc được (sai định dạng kết quả tìm kiếm).",
+            ) from exc
+
+
+def _status_error(response: httpx.Response) -> WebSearchUnavailableError:
+    status = response.status_code
+    if status in (401, 403):
+        reason = WebSearchFailureReason.AUTH_FAILED
+        message = f"Tavily từ chối API key (HTTP {status}). Kiểm tra TAVILY_API_KEY."
+    elif status in _CREDIT_LIMIT_STATUSES:
+        reason = WebSearchFailureReason.CREDITS_EXHAUSTED
+        message = (
+            f"Tài khoản Tavily đã hết credit hoặc chạm giới hạn chi tiêu (HTTP {status}). "
+            "Nạp thêm credit hoặc nâng gói tại app.tavily.com."
+        )
+    elif status == 429:
+        reason = WebSearchFailureReason.RATE_LIMITED
+        message = "Tavily đang giới hạn tốc độ gọi (HTTP 429), thử lại sau ít phút."
+    elif status >= 500:
+        reason = WebSearchFailureReason.PROVIDER_ERROR
+        message = f"Tavily đang gặp sự cố (HTTP {status}), thử lại sau."
+    else:
+        reason = WebSearchFailureReason.REQUEST_REJECTED
+        message = f"Tavily từ chối yêu cầu tìm kiếm (HTTP {status})."
+    detail = _error_detail(response)
+    if detail:
+        message = f"{message} Chi tiết: {detail}"
+    return WebSearchUnavailableError(reason, message)
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """Tavily's own error text (`{"detail": {"error": "..."}}`), key-redacted
+    and trimmed - empty when the body says nothing usable."""
+
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        detail = detail.get("error")
+    if not isinstance(detail, str):
+        return ""
+    if settings.TAVILY_API_KEY:
+        detail = detail.replace(settings.TAVILY_API_KEY, "***")
+    return detail.strip()[:_MAX_DETAIL_CHARS]

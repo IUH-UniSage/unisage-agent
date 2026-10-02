@@ -6,6 +6,7 @@ from typing import Any
 from pydantic_ai.models import Model
 
 from app.core.registry.model_registry import CredentialConfig
+from app.integrations.tavily_client import WebSearchUnavailableError
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
@@ -47,4 +48,6 @@ class GraphOutput:
     pending_clarification: PendingClarification | None = None
     used_ticket_fallback: bool = False
     used_web_search: bool = False
+    # Why web search found nothing, when it failed - shown to AI admins only.
+    web_search_failure: WebSearchUnavailableError | None = None
     citations: list[dict[str, Any]] = field(default_factory=list)

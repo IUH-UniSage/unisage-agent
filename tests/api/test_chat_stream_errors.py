@@ -31,7 +31,7 @@ from app.core.errors.llm_failure import FailureReason
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.registry.model_router import ModelRouter
 from app.core.usage.usage_recorder import UsageRecorder
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem, WarningItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
@@ -572,3 +572,19 @@ async def test_no_response_ever_mixes_content_from_two_models(
     assert all("MODEL-D" not in token for token in tokens)
     assert patched["body"]["content"] == "MODEL-C-1"
     assert patched["body"]["status"] == "ERROR"
+
+
+@pytest.mark.asyncio
+async def test_warning_is_sent_as_its_own_sse_event_before_done() -> None:
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
+    await queue.put(TokenItem("Trả lời"))
+    await queue.put(WarningItem(code="WEB_SEARCH_TIMEOUT", message="Tavily không phản hồi"))
+    await queue.put(DoneItem())
+
+    body = "".join([chunk async for chunk in _sse_token_generator(queue)])
+
+    assert (
+        'event: warning\ndata: {"code": "WEB_SEARCH_TIMEOUT", "message": "Tavily không phản hồi"}'
+        in body
+    )
+    assert body.endswith("event: done\ndata: {}\n\n")

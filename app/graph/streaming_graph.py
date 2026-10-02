@@ -44,6 +44,7 @@ from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_tic
 from app.graph.nodes.web_search import search_web
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
+from app.integrations.tavily_client import WebSearchUnavailableError
 from app.rag.prompting.citations import build_citations
 from app.schemas.clarification import PendingClarification
 from app.schemas.intent import ClassifiedTask, RoutingMode
@@ -305,9 +306,12 @@ async def _run_advisory_flow(
         for index in rerank_result.failed_query_indexes
     ]
     web_results: list[WebSearchResult] = []
+    web_search_failure: WebSearchUnavailableError | None = None
     if failed_sub_queries and settings.CHAT_WEB_SEARCH_ENABLED:
         trace.node("09b_WebSearchNode")
-        web_results = await search_web(failed_sub_queries)
+        web_outcome = await search_web(failed_sub_queries)
+        web_results = web_outcome.results
+        web_search_failure = web_outcome.failure
         for result in web_results:
             trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
 
@@ -334,6 +338,7 @@ async def _run_advisory_flow(
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
             used_ticket_fallback=True,
+            web_search_failure=web_search_failure,
         )
 
     # GenerationSynthesisNode (streaming).
@@ -372,4 +377,5 @@ async def _run_advisory_flow(
             generation_result.response_text, rerank_result.chunks, web_results
         ),
         used_web_search=bool(web_results),
+        web_search_failure=web_search_failure,
     )
