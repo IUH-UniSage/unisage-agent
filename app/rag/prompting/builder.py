@@ -11,6 +11,7 @@ from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+from app.schemas.web_search import WebSearchResult
 
 from .loader import get_known_metadata_fields, get_templates
 
@@ -151,7 +152,9 @@ def _page_suffix(chunk: RetrievedChunk) -> str:
     return f", tr. {chunk.page_start}"
 
 
-def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
+def build_prepared_context_section(
+    chunks: Sequence[RetrievedChunk], web_results: Sequence[WebSearchResult] = ()
+) -> str:
     """Build `{prepared_context}` - the `<academic_context>` block, chunks numbered
     to match the `[1][2]` citation indices the generation prompt asks the model to use,
     plus the `<current_date>` block (today, ICT/GMT+7) so the model has a real-world
@@ -159,7 +162,12 @@ def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
     or for checking whether a document's stated effective date has passed.
 
     Each chunk's source is suffixed with its page number(s) when available
-    (`_page_suffix`); `citation_rules.yaml` tells the LLM to cite them."""
+    (`_page_suffix`); `citation_rules.yaml` tells the LLM to cite them.
+
+    `web_results` (WebSearchNode, only for sub-queries that found no chunk)
+    fill the `<websearch>` block right below, numbered on from the last chunk
+    so one `[n]` sequence covers both - `build_citations` resolves it the
+    same way."""
 
     context_chunks = (
         "\n".join(
@@ -170,8 +178,23 @@ def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
     )
     current_date = now_ict().strftime("%d/%m/%Y")
     return get_templates().prepared_context.format(
-        context_chunks=context_chunks, current_date=current_date
+        context_chunks=context_chunks,
+        web_search_context=_build_web_search_context(web_results, first_index=len(chunks) + 1),
+        current_date=current_date,
     )
+
+
+def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_index: int) -> str:
+    """The `<websearch>` block, or nothing at all - a turn without web
+    results doesn't pay for the web-source rules in its prompt."""
+
+    if not web_results:
+        return ""
+    entries = "\n".join(
+        f"  [{index}] ({result.title} — {result.url}) {result.content}"
+        for index, result in enumerate(web_results, first_index)
+    )
+    return "\n" + get_templates().web_search_context.format(web_results=entries) + "\n"
 
 
 def build_missing_metadata_block(pending: PendingClarification | None) -> str:
@@ -201,6 +224,7 @@ def build_json_repair_prompt(
     *,
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
+    web_results: Sequence[WebSearchResult] = (),
 ) -> str:
     """Build the standalone prompt for GenerationSynthesisNode's JSON-repair
     follow-up call (see `_repair_missing_ask_form` there) - no header needed,
@@ -219,7 +243,7 @@ def build_json_repair_prompt(
     templates = get_templates()
     return templates.json_repair.format(
         previous_response=previous_response,
-        academic_context=build_prepared_context_section(chunks),
+        academic_context=build_prepared_context_section(chunks, web_results),
         academic_metadata=build_metadata_section(security, confirmed_metadata),
         ask_user_form_guide=build_ask_user_form_guide(),
     )

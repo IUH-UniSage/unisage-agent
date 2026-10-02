@@ -1,7 +1,8 @@
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _DEFAULT_INTERNAL_SECRET = "unisage-internal-secret-key-2026"
 _MIN_INTERNAL_SECRET_LENGTH = 32
@@ -114,6 +115,17 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "unisage_chunks"
 
+    # --- TAVILY_: web search API used by WebSearchNode when retrieval finds nothing for a
+    # sub-query (see app/graph/nodes/web_search.py). Empty key = web search is skipped. ---
+    TAVILY_API_KEY: str = ""
+    TAVILY_BASE_URL: str = "https://api.tavily.com"
+    # Comma-separated in .env. Only these sites (and their subdomains) are searched - the
+    # answer must come from the university's own pages, never a forum or another school.
+    TAVILY_INCLUDE_DOMAINS: Annotated[list[str], NoDecode] = ["iuh.edu.vn"]
+    # `basic` costs 1 credit per search, `advanced` 2 but returns longer, more relevant snippets.
+    TAVILY_SEARCH_DEPTH: Literal["basic", "advanced"] = "basic"
+    TAVILY_TIMEOUT_SECONDS: float = 8.0
+
     # --- INGEST_: only ever read at document-ingestion time (chunking,
     # enrichment) - never during a chat turn ---
     INGEST_MULTI_REP_QUESTION_COUNT: int = 3
@@ -127,6 +139,15 @@ class Settings(BaseSettings):
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
+    # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
+    # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
+    # bound how much web text reaches the system prompt (~6000 chars at the defaults,
+    # about what CHAT_RETRIEVAL_MAX_CHUNKS chunks take).
+    CHAT_WEB_SEARCH_ENABLED: bool = False
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=2, ge=1)
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=4, ge=1)
+    CHAT_WEB_SEARCH_MIN_SCORE: float = Field(default=0.5, ge=0.0, le=1.0)
+    CHAT_WEB_SEARCH_RESULT_MAX_CHARS: int = Field(default=1500, ge=100)
 
     # GenerationSynthesisNode's JSON-repair follow-up call (see
     # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
@@ -170,6 +191,13 @@ class Settings(BaseSettings):
     # since under-reserving would let a request through that a THROTTLE/BLOCK
     # budget should have caught.
     BUDGET_ESTIMATE_MAX_OUTPUT_TOKENS: int = 2000
+
+    @field_validator("TAVILY_INCLUDE_DOMAINS", mode="before")
+    @classmethod
+    def _split_domains(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [domain.strip() for domain in value.split(",") if domain.strip()]
+        return value
 
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":

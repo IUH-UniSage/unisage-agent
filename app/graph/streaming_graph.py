@@ -18,6 +18,7 @@ from dataclasses import replace
 
 from pydantic_ai.models import Model
 
+from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.registry.model_registry import CredentialConfig
 from app.core.usage.usage_recorder import UsageRecorder
@@ -40,11 +41,13 @@ from app.graph.nodes.security_context import (
     resolve_clarification_guard,
 )
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
+from app.graph.nodes.web_search import search_web
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.rag.prompting.citations import build_citations
 from app.schemas.clarification import PendingClarification
 from app.schemas.intent import ClassifiedTask, RoutingMode
+from app.schemas.web_search import WebSearchResult
 
 _ORIGIN_NODE_QUERY_TRANSFORMATION = "QueryTransformationNode"
 
@@ -251,9 +254,10 @@ async def _run_advisory_flow(
     question: str | None = None,
     budget: BudgetContext | None = None,
 ) -> GraphOutput:
-    """Advisory branch: query transformation → retrieval → rerank → generation
-    (or ticket fallback). `question` is what gets answered; `None` means the
-    whole user message."""
+    """Advisory branch: query transformation → retrieval → rerank → web search
+    for the sub-queries rerank left empty → generation (or ticket fallback
+    when neither found anything). `question` is what gets answered; `None`
+    means the whole user message."""
 
     question = question or graph_input.user_message
 
@@ -285,17 +289,28 @@ async def _run_advisory_flow(
 
     # RetrievalFilteringNode (permission pre-filter on every query).
     trace.node("08_RetrievalFilteringNode")
-    chunks = retrieve_chunks(
+    per_query_chunks = retrieve_chunks(
         [sub_query.retrieval_text for sub_query in sub_queries],
         models.retrieval,
         graph_input.security,
     )
 
-    # PostRetrievalRerankNode.
+    # PostRetrievalRerankNode (per sub-query, then merged).
     trace.node("09_PostRetrievalRerankNode")
-    rerank_result = rerank_chunks(chunks)
+    rerank_result = rerank_chunks(per_query_chunks)
 
-    if not rerank_result.has_valid_context:
+    # WebSearchNode: only the sub-queries rerank left with no chunk.
+    failed_sub_queries = [
+        sub_queries[index].retrieval_text for index in rerank_result.failed_query_indexes
+    ]
+    web_results: list[WebSearchResult] = []
+    if failed_sub_queries and settings.CHAT_WEB_SEARCH_ENABLED:
+        trace.node("09b_WebSearchNode")
+        web_results = await search_web(failed_sub_queries)
+        for result in web_results:
+            trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}")
+
+    if not rerank_result.has_valid_context and not web_results:
         # TicketFallbackNode (streaming).
         trace.node("11_TicketFallbackNode", model=models.generation)
         fallback_agent = build_ticket_fallback_agent(models.generation)
@@ -333,6 +348,7 @@ async def _run_advisory_flow(
         security=graph_input.security,
         confirmed_metadata=confirmed_metadata,
         chunks=rerank_result.chunks,
+        web_results=web_results,
         previous_pending=pending_clarification,
         origin_node=_ORIGIN_NODE_QUERY_TRANSFORMATION,
         history=graph_input.history,
@@ -351,5 +367,8 @@ async def _run_advisory_flow(
         response_text=generation_result.response_text,
         confirmed_metadata=generation_result.confirmed_metadata,
         pending_clarification=generation_result.pending_clarification,
-        citations=build_citations(generation_result.response_text, rerank_result.chunks),
+        citations=build_citations(
+            generation_result.response_text, rerank_result.chunks, web_results
+        ),
+        used_web_search=bool(web_results),
     )

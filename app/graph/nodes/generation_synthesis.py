@@ -51,6 +51,7 @@ from app.schemas.clarification import PendingClarification
 from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+from app.schemas.web_search import WebSearchResult
 
 _JSON_BLOCK_PATTERN = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 _SUB_QUERY_ID_PATTERN = re.compile(r"SQ(\d+)")
@@ -108,6 +109,7 @@ async def _repair_missing_ask_form(
     full_text: str,
     *,
     chunks: list[RetrievedChunk],
+    web_results: Sequence[WebSearchResult] = (),
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     token_sink: TokenSink,
@@ -151,7 +153,11 @@ async def _repair_missing_ask_form(
         return full_text
 
     repair_prompt = build_json_repair_prompt(
-        full_text, chunks, security=security, confirmed_metadata=confirmed_metadata
+        full_text,
+        chunks,
+        security=security,
+        confirmed_metadata=confirmed_metadata,
+        web_results=web_results,
     )
 
     async def _capture_sink(_token: str) -> None:
@@ -184,6 +190,7 @@ async def run_generation_synthesis(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     chunks: list[RetrievedChunk],
+    web_results: Sequence[WebSearchResult] = (),
     previous_pending: PendingClarification | None,
     origin_node: str,
     token_sink: TokenSink,
@@ -208,6 +215,7 @@ async def run_generation_synthesis(
             security=security,
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
+            web_results=web_results,
             pending_clarification=previous_pending,
             history=history,
         )
@@ -218,6 +226,7 @@ async def run_generation_synthesis(
             security=security,
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
+            web_results=web_results,
             pending_clarification=previous_pending,
             history=history,
         )
@@ -226,7 +235,7 @@ async def run_generation_synthesis(
     trace.prompt(
         "10_GenerationSynthesisNode",
         f"{build_metadata_section(security, confirmed_metadata)}\n"
-        f"{build_prepared_context_section(chunks)}",
+        f"{build_prepared_context_section(chunks, web_results)}",
     )
     full_text = await stream_agent_text(
         agent,
@@ -245,6 +254,7 @@ async def run_generation_synthesis(
             agent,
             full_text,
             chunks=chunks,
+            web_results=web_results,
             security=security,
             confirmed_metadata=confirmed_metadata,
             token_sink=token_sink,

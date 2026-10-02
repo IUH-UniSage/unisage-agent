@@ -1,5 +1,6 @@
 from app.rag.prompting.citations import build_citations, cited_indexes, source_title
 from app.schemas.retrieval import RetrievedChunk
+from app.schemas.web_search import WebSearchResult
 
 _KEY = "a63a8c6f-3715-4d03-a464-13116e18bed7_Quyet dinh 1035 QD DHCN Hoc phi 2025-2026.pdf"
 
@@ -62,3 +63,41 @@ def test_build_citations_tolerates_chunk_without_document_id_or_headings() -> No
 def test_build_citations_is_empty_without_markers_or_chunks() -> None:
     assert build_citations("Không có nguồn", [_chunk("c1")]) == []
     assert build_citations("Có [1]", []) == []
+
+
+def _web(title: str) -> WebSearchResult:
+    return WebSearchResult(
+        title=title, url=f"https://pdt.iuh.edu.vn/{title}", content="...", score=0.8
+    )
+
+
+def test_markers_after_the_chunks_cite_web_pages_in_listed_order() -> None:
+    chunks = [
+        RetrievedChunk(chunk_id="c1", content="a", source="hoc-phi.pdf", score=0.9),
+        RetrievedChunk(chunk_id="c2", content="b", source="quy-che.pdf", score=0.8),
+    ]
+
+    citations = build_citations(
+        "Học phí [1]. Lịch thi [4]. Thêm [3].", chunks, [_web("thong-bao"), _web("lich-thi")]
+    )
+
+    assert [c["index"] for c in citations] == [1, 4, 3]
+    assert citations[0]["title"] == "hoc-phi"
+    assert "url" not in citations[0]
+    assert citations[1] == {
+        "index": 4,
+        "documentId": None,
+        "title": "lich-thi",
+        "section": None,
+        "pageStart": None,
+        "pageEnd": None,
+        "sourceType": "WEB",
+        "url": "https://pdt.iuh.edu.vn/lich-thi",
+    }
+    assert citations[2]["url"] == "https://pdt.iuh.edu.vn/thong-bao"
+
+
+def test_web_only_turn_numbers_pages_from_one_and_drops_out_of_range_markers() -> None:
+    citations = build_citations("Theo website [1], còn [2] không có.", [], [_web("lich-thi")])
+
+    assert [(c["index"], c["sourceType"]) for c in citations] == [(1, "WEB")]

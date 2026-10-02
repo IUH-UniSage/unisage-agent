@@ -10,14 +10,14 @@ AST-scans every `.py` file under `app/` for:
     with no `http_client=` gets the SDK's own unguarded default transport,
     which is exactly the bare-client pattern this feature bans.
   - `httpx.Client(`/`httpx.AsyncClient(` constructions outside the factory
-    module itself. `app/integrations/backend_java_client.py` and
-    `app/integrations/slack_notifier.py` are scoped exceptions: each builds a
+    module itself. `app/integrations/backend_java_client.py`,
+    `app/integrations/slack_notifier.py` and `app/integrations/tavily_client.py`
+    are scoped exceptions: each builds a
     plain `httpx.AsyncClient` to call an operator-configured external
     service, not a provider — SSRF pinning is a defense for URLs the SA
     registers as a provider endpoint (see `http_client.py`'s own module
-    docstring), and both `BACKEND_JAVA_BASE_URL`
-    and `SLACK_APIKEY_ALERT_WEBHOOK_URL` are operator-configured infra, not
-    registry data.
+    docstring), and `BACKEND_JAVA_BASE_URL`, `SLACK_APIKEY_ALERT_WEBHOOK_URL`
+    and `TAVILY_BASE_URL` are operator-configured infra, not registry data.
   - Any `import litellm` / `from litellm import ...` anywhere in `app/` — ADR
     0005 rejected LiteLLM as the provider-calling SDK (couldn't inject a
     pinned transport). Model prices come from backend-java
@@ -39,6 +39,7 @@ _FACTORY_MODULE = _APP_ROOT / "core" / "llm" / "http_client.py"
 _HTTPX_CLIENT_ALLOWED_FILES = {
     _APP_ROOT / "integrations" / "backend_java_client.py",
     _APP_ROOT / "integrations" / "slack_notifier.py",
+    _APP_ROOT / "integrations" / "tavily_client.py",
 }
 
 _SDK_CLIENT_NAMES = {"OpenAI", "AsyncOpenAI", "Anthropic"}

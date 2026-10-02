@@ -14,7 +14,7 @@ template: |
 
   ## Hướng Dẫn Tổng Hợp Đa Truy Vấn (Multi-Intent Synthesis)
   Người dùng đang đưa ra một câu hỏi phức hợp gồm nhiều ý/thực thể khác nhau.
-  Bối cảnh trong `<academic_context>` là tổng hợp kết quả truy xuất song song từ các câu hỏi con:
+  Bối cảnh trong `<academic_context>` là tổng hợp kết quả truy xuất song song từ các câu hỏi con (câu hỏi con nào không tìm được văn bản thì có thể có trang web tương ứng trong `<websearch>`):
   {sub_queries_list}
 
   Nhiệm vụ của bạn:

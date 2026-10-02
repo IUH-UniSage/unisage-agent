@@ -19,6 +19,7 @@ from app.schemas.clarification import PendingClarification
 from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+from app.schemas.web_search import WebSearchResult
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
@@ -555,3 +556,178 @@ async def test_resuming_several_origin_tasks_reruns_each_on_its_own_query(
     assert len(retrieval.queries) == len(origin_tasks)
     for query, task in zip(retrieval.queries, origin_tasks, strict=True):
         assert query.startswith(task.query)
+
+
+# ── WebSearchNode (between rerank and ticket fallback) ─────────────────────
+
+_WEB_PAGE = WebSearchResult(
+    title="Lịch thi HK1",
+    url="https://pdt.iuh.edu.vn/lich-thi",
+    content="Lịch thi học kỳ 1 bắt đầu ngày 05/01.",
+    score=0.8,
+)
+
+
+@dataclass
+class _PerQueryRetrieval:
+    results: dict[str, list[RetrievedChunk]]
+
+    def retrieve(
+        self, query: str, *, security: AcademicSecurityContext, limit: int | None = None
+    ) -> list[RetrievedChunk]:
+        del security, limit
+        return self.results[query]
+
+
+def _fake_web_search(
+    monkeypatch: pytest.MonkeyPatch, pages: list[WebSearchResult]
+) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    async def search_web(queries: Sequence[str]) -> list[WebSearchResult]:
+        calls.append(list(queries))
+        return pages
+
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", True)
+    monkeypatch.setattr("app.graph.streaming_graph.search_web", search_web)
+    return calls
+
+
+def _single_question_input() -> GraphInput:
+    return GraphInput(
+        conversation_id="c1",
+        user_message="Lịch thi học kỳ 1 khi nào?",
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_query_without_chunks_answers_from_the_web_instead_of_a_ticket(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)  # nothing can pass
+    calls = _fake_web_search(monkeypatch, [_WEB_PAGE])
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE lịch thi"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+        )
+
+    assert calls == [["HyDE lịch thi"]]
+    assert result.used_ticket_fallback is False
+    assert result.used_web_search is True
+    (prompt,) = seen_prompts
+    assert "(không có tài liệu liên quan)" in prompt
+    assert "[1] (Lịch thi HK1 — https://pdt.iuh.edu.vn/lich-thi)" in prompt
+    assert result.citations == [
+        {
+            "index": 1,
+            "documentId": None,
+            "title": "Lịch thi HK1",
+            "section": None,
+            "pageStart": None,
+            "pageEnd": None,
+            "sourceType": "WEB",
+            "url": "https://pdt.iuh.edu.vn/lich-thi",
+        }
+    ]
+    assert "09b_WebSearchNode" in _traced_nodes(caplog)
+    assert "11_TicketFallbackNode" not in _traced_nodes(caplog)
+
+
+@pytest.mark.asyncio
+async def test_only_the_sub_query_without_chunks_is_searched_and_both_blocks_reach_the_prompt(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.5)
+    calls = _fake_web_search(monkeypatch, [_WEB_PAGE])
+    message = "Học phí ngành CNTT bao nhiêu, với lại lịch thi học kỳ 1 khi nào?"
+    payload = {
+        "tasks": [{"intent": "academic_advisory", "query": message, "routing_mode": "MULTI"}],
+        "confidence": 0.9,
+    }
+    sub_queries = {"sub_queries": ["Học phí ngành CNTT?", "Lịch thi học kỳ 1?"]}
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=mock_sync_llm_model(json.dumps(payload, ensure_ascii=False)),
+        query_transformation=mock_sync_llm_model(json.dumps(sub_queries, ensure_ascii=False)),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=_PerQueryRetrieval(
+            {
+                "Học phí ngành CNTT?": [
+                    RetrievedChunk(chunk_id="hp", content="Học phí...", source="hp.pdf", score=0.9)
+                ],
+                "Lịch thi học kỳ 1?": [
+                    RetrievedChunk(chunk_id="lt", content="x", source="lt.pdf", score=0.1)
+                ],
+            }
+        ),
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message=message,
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+    )
+
+    result = await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
+
+    assert calls == [["Lịch thi học kỳ 1?"]]
+    (prompt,) = seen_prompts
+    assert "[1] (hp.pdf) Học phí..." in prompt
+    assert "[2] (Lịch thi HK1 — https://pdt.iuh.edu.vn/lich-thi)" in prompt
+    assert result.used_web_search is True
+
+
+@pytest.mark.asyncio
+async def test_no_chunk_and_no_web_page_still_falls_back_to_ticket(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    calls = _fake_web_search(monkeypatch, [])
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE lịch thi"),
+        generation=mock_streaming_llm_model(["Chưa tìm thấy quy định phù hợp."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+
+    result = await run_graph(_single_question_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert calls == [["HyDE lịch thi"]]
+    assert result.used_ticket_fallback is True
+    assert result.used_web_search is False
+
+
+@pytest.mark.asyncio
+async def test_all_sub_queries_with_chunks_never_search_the_web(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    calls = _fake_web_search(monkeypatch, [_WEB_PAGE])
+
+    result = await run_graph(
+        _single_question_input(),
+        _models(mock_sync_llm_model, mock_streaming_llm_model),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert calls == []
+    assert result.used_web_search is False

@@ -46,4 +46,5 @@ class GraphOutput:
     confirmed_metadata: dict[str, str] = field(default_factory=dict)
     pending_clarification: PendingClarification | None = None
     used_ticket_fallback: bool = False
+    used_web_search: bool = False
     citations: list[dict[str, Any]] = field(default_factory=list)
