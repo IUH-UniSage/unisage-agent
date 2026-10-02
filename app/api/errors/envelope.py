@@ -46,8 +46,11 @@ def public_chat_error(
 
     if not request.url.path.startswith(_CHAT_PATH_PREFIX):
         return None
+    # Same rule as `parse_security_headers`: no `X-User-Id` means a guest, whose other
+    # `X-User-*` headers carry no identity and are never trusted.
+    is_guest = request.headers.get("x-user-id") is None
     permissions = permissions_from_header(request.headers.get("x-user-permissions"))
-    if can_see_ai_details(permissions):
+    if not is_guest and can_see_ai_details(permissions):
         return None
     message, _retryable = public_chat_message(failure, reference=reference)
     return message, {"reference": reference}
