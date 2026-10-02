@@ -467,10 +467,35 @@ def test_chat_shows_technical_detail_to_ai_admins(client: TestClient) -> None:
     response = client.post(
         "/api/v1/chat/stream",
         json={"conversation_id": "conv-1", "message": "hi"},
-        headers={"X-User-Permissions": '["CHAT_MODEL_READ"]'},
+        headers={"X-User-Id": "admin-1", "X-User-Permissions": '["LLM_TRACE_LOG_READ"]'},
     )
 
     body = response.json()
     assert response.status_code == 503
     assert body["message"].startswith("Mô hình Chat: chưa có credential")
     assert body["errors"]["reason"] == "LLM_NOT_CONFIGURED"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        # A student whose role still carries the plain CHAT_MODEL_READ grant (pre-V30 token).
+        {"X-User-Id": "student-1", "X-User-Permissions": '["CHAT_MODEL_READ", "MESSAGE_SEND"]'},
+        # A guest: admin permissions without an `X-User-Id` identify no one.
+        {"X-User-Permissions": '["CHAT_MODEL_ALL"]'},
+    ],
+)
+def test_chat_detail_needs_an_identified_ai_admin(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    _override_java(_JavaBackend())
+    app.dependency_overrides[get_graph_models] = _models_not_configured
+
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-1", "message": "hi"},
+        headers=headers,
+    )
+
+    assert response.json()["message"].startswith("Trợ lý AI đang tạm ngưng do sự cố hệ thống.")
+    assert set(response.json()["errors"]) == {"reference"}

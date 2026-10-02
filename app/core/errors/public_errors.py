@@ -18,8 +18,11 @@ from collections.abc import Iterable
 
 from app.core.errors.llm_failure import FailureReason, LLMFailure
 
-# Anyone allowed to see the AI model configuration may see why a model call failed.
-AI_ADMIN_PERMISSIONS = frozenset({"CHAT_MODEL_ALL", "CHAT_MODEL_READ"})
+# Who may see why a model call failed: whoever manages the AI models (CHAT_MODEL_ALL) or may read
+# the LLM trace logs (LLM_TRACE_LOG_*) - i.e. SUPER_ADMIN and INGEST_ADMIN by default. Not
+# CHAT_MODEL_READ: it is a plain read grant an admin may hand to any role (the end-user USER role
+# held it until V30__revoke_user_chat_model_read), so it says nothing about being an AI admin.
+AI_ADMIN_PERMISSIONS = frozenset({"CHAT_MODEL_ALL", "LLM_TRACE_LOG_ALL", "LLM_TRACE_LOG_READ"})
 
 # Things the user can fix by changing what they ask.
 _USER_FIXABLE_MESSAGES = {

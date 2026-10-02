@@ -242,7 +242,10 @@ def test_public_chat_message_categories(reason: str, retryable: bool, expected_s
     ("header", "expected"),
     [
         ('["CHAT_MODEL_ALL"]', True),
-        ('["CHAT_MODEL_READ", "DOCUMENT_ALL"]', True),
+        ('["LLM_TRACE_LOG_READ"]', True),
+        ('["LLM_TRACE_LOG_ALL"]', True),
+        # A plain read grant - the USER role held it until V30, so it must not count.
+        ('["CHAT_MODEL_READ", "MESSAGE_SEND"]', False),
         ('["DOCUMENT_ALL"]', False),
         ("not-json", False),
         (None, False),
