@@ -9,6 +9,7 @@ bare structural stub recording `report_health()` calls, same spirit as
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx2
@@ -16,9 +17,15 @@ import openai
 import pytest
 
 import app.core.registry.model_registry as model_registry
+import app.core.registry.model_router as model_router
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.registry.model_router import ModelRouter, _state_key
+from tests.fixtures.gemini_errors import (
+    PER_DAY_QUOTA_ID,
+    PER_MINUTE_QUOTA_ID,
+    gemini_quota_http_error,
+)
 
 # ── fixtures / test doubles ─────────────────────────────────────────────────
 
@@ -562,3 +569,80 @@ async def test_unknown_reason_markers_are_ignored() -> None:
         await router.get_next_credential("CHAT")
 
     assert exc_info.value.suspension_reasons == ()
+
+
+# ── Gemini free-tier quota windows ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_gemini_per_minute_quota_cools_down_for_retry_delay_and_never_disables() -> None:
+    cred_a = _credential(id="a", priority=1)
+    cred_b = _credential(id="b", priority=2)
+    _set_snapshot(version=1, chat=(cred_a, cred_b))
+    clock = _Clock()
+    router, backend = _router(clock=clock)
+
+    await router.record_failure(
+        cred_a, gemini_quota_http_error(PER_MINUTE_QUOTA_ID, retry_delay="39s"), snapshot_version=1
+    )
+
+    assert backend.calls[0]["error_type"] == "TRANSIENT"
+    clock.advance(38.0)
+    assert (await router.get_next_credential("CHAT")).id == "b"
+    clock.advance(2.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+@pytest.mark.asyncio
+async def test_gemini_per_minute_quota_without_retry_delay_waits_a_minute() -> None:
+    cred_a = _credential(id="a", priority=1)
+    cred_b = _credential(id="b", priority=2)
+    _set_snapshot(version=1, chat=(cred_a, cred_b))
+    clock = _Clock()
+    router, _backend = _router(clock=clock)
+
+    await router.record_failure(
+        cred_a, gemini_quota_http_error(PER_MINUTE_QUOTA_ID, retry_delay=None), snapshot_version=1
+    )
+
+    clock.advance(59.0)
+    assert (await router.get_next_credential("CHAT")).id == "b"
+    clock.advance(2.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+@pytest.mark.asyncio
+async def test_gemini_per_day_quota_cools_down_until_the_daily_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(model_router, "_seconds_until_daily_quota_reset", lambda: 5000.0)
+    cred_a = _credential(id="a", priority=1)
+    cred_b = _credential(id="b", priority=2)
+    _set_snapshot(version=1, chat=(cred_a, cred_b))
+    clock = _Clock()
+    router, backend = _router(clock=clock)
+
+    await router.record_failure(
+        cred_a, gemini_quota_http_error(PER_DAY_QUOTA_ID), snapshot_version=1
+    )
+
+    assert backend.calls[0]["error_type"] == "TRANSIENT"
+    clock.advance(4999.0)
+    assert (await router.get_next_credential("CHAT")).id == "b"
+    clock.advance(2.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+@pytest.mark.parametrize(
+    ("now", "expected_hours"),
+    [
+        # 13:00 PDT -> 11h to midnight Pacific.
+        (datetime(2026, 10, 5, 20, 0, tzinfo=UTC), 11),
+        # 12:00 PST -> 12h to midnight Pacific.
+        (datetime(2026, 12, 1, 20, 0, tzinfo=UTC), 12),
+    ],
+)
+def test_daily_quota_reset_is_midnight_pacific_plus_margin(
+    now: datetime, expected_hours: int
+) -> None:
+    assert model_router._seconds_until_daily_quota_reset(now) == expected_hours * 3600 + 60

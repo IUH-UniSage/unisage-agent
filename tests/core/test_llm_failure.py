@@ -28,6 +28,11 @@ from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import ModelRegistryError
+from tests.fixtures.gemini_errors import (
+    PER_DAY_QUOTA_ID,
+    PER_MINUTE_QUOTA_ID,
+    gemini_quota_http_error,
+)
 
 _REQUEST = httpx2.Request("POST", "https://api.example.test/v1/chat/completions")
 
@@ -253,3 +258,23 @@ def test_public_chat_message_categories(reason: str, retryable: bool, expected_s
 )
 def test_ai_admin_detection(header: str | None, expected: bool) -> None:
     assert can_see_ai_details(permissions_from_header(header)) is expected
+
+
+# ── Gemini free-tier quota windows ───────────────────────────────────────
+
+
+def test_gemini_per_minute_quota_429_is_a_rate_limit_not_empty_credit() -> None:
+    failure = describe_llm_failure(gemini_quota_http_error(PER_MINUTE_QUOTA_ID), "CHAT")
+
+    assert failure.reason == FailureReason.LLM_RATE_LIMITED
+    assert failure.retryable is True
+    assert "credit" not in failure.message
+
+
+def test_gemini_per_day_quota_429_says_when_it_resets() -> None:
+    failure = describe_llm_failure(gemini_quota_http_error(PER_DAY_QUOTA_ID), "EXTRACTION")
+
+    assert failure.reason == FailureReason.LLM_RATE_LIMITED
+    assert failure.retryable is True
+    assert "trong ngày" in failure.message
+    assert "credit" not in failure.message

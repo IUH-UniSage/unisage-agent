@@ -32,6 +32,8 @@ from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.errors.error_codes import ErrorCode
 from app.core.errors.exceptions import UniSageException
 from app.core.errors.llm_error_classifier import (
+    GoogleQuotaWindow,
+    google_rate_limit,
     is_quota_exhausted,
     provider_error_details,
     provider_status_code,
@@ -266,6 +268,16 @@ def _by_status(
             purpose=purpose,
         )
     if status == 429:
+        rate_limit = google_rate_limit(*provider_error_details(root))
+        if rate_limit is not None and rate_limit.window is GoogleQuotaWindow.DAY:
+            return _failure(
+                FailureReason.LLM_RATE_LIMITED,
+                ErrorCode.LLM_RATE_LIMITED,
+                f"{who}: API key đã dùng hết lượt gọi trong ngày của model này (HTTP 429), "
+                "tự reset lúc 0h giờ Pacific (14h-15h giờ Việt Nam).",
+                retryable=True,
+                purpose=purpose,
+            )
         if is_quota_exhausted(*provider_error_details(root)):
             return _failure(
                 FailureReason.LLM_QUOTA_EXHAUSTED,

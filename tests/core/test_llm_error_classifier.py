@@ -20,9 +20,22 @@ import openai
 import pytest
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.llm_error_classifier import (
+    ErrorType,
+    GoogleQuotaWindow,
+    classify_llm_error,
+    google_rate_limit,
+    is_quota_exhausted,
+)
 from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.security.ssrf_guard import SsrfBlockedError
+from tests.fixtures.gemini_errors import (
+    PER_DAY_QUOTA_ID,
+    PER_MINUTE_QUOTA_ID,
+    gemini_quota_body,
+    gemini_quota_client_error,
+    gemini_quota_http_error,
+)
 
 
 def _openai_response(status_code: int, *, error: dict) -> httpx2.Response:
@@ -151,6 +164,53 @@ class TestGoogle:
             503, {"error": {"status": "UNAVAILABLE", "message": "model overloaded"}}
         )
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
+
+
+class TestGeminiQuotaWindows:
+    """Gemini says "You exceeded your current quota" for every free-tier limit - a per-minute
+    or per-day window that resets on its own must never read as an empty wallet."""
+
+    @pytest.mark.parametrize("quota_id", [PER_MINUTE_QUOTA_ID, PER_DAY_QUOTA_ID])
+    def test_quota_window_429_is_transient_despite_the_quota_message(self, quota_id: str) -> None:
+        assert classify_llm_error(gemini_quota_http_error(quota_id)) == ErrorType.TRANSIENT
+        assert classify_llm_error(gemini_quota_client_error(quota_id)) == ErrorType.TRANSIENT
+
+    def test_quota_window_body_is_not_quota_exhaustion(self) -> None:
+        assert not is_quota_exhausted(gemini_quota_body(PER_MINUTE_QUOTA_ID))
+
+    def test_per_minute_window_with_retry_delay(self) -> None:
+        rate_limit = google_rate_limit(gemini_quota_body(PER_MINUTE_QUOTA_ID, retry_delay="12.5s"))
+
+        assert rate_limit is not None
+        assert rate_limit.window is GoogleQuotaWindow.MINUTE
+        assert rate_limit.retry_delay_seconds == 12.5
+
+    def test_per_day_window_wins_over_per_minute(self) -> None:
+        rate_limit = google_rate_limit(gemini_quota_body(PER_MINUTE_QUOTA_ID, PER_DAY_QUOTA_ID))
+
+        assert rate_limit is not None
+        assert rate_limit.window is GoogleQuotaWindow.DAY
+
+    def test_token_per_minute_quota_counts_as_minute_window(self) -> None:
+        rate_limit = google_rate_limit(
+            gemini_quota_body("GenerateContentInputTokensPerModelPerMinute-FreeTier")
+        )
+
+        assert rate_limit is not None
+        assert rate_limit.window is GoogleQuotaWindow.MINUTE
+
+    def test_missing_retry_info_leaves_delay_unknown(self) -> None:
+        rate_limit = google_rate_limit(gemini_quota_body(PER_MINUTE_QUOTA_ID, retry_delay=None))
+
+        assert rate_limit is not None
+        assert rate_limit.retry_delay_seconds is None
+
+    @pytest.mark.parametrize(
+        "source",
+        [None, "You exceeded your current quota", {"error": {"message": "x"}}, {"error": []}],
+    )
+    def test_no_quota_failure_detail_means_no_window(self, source: object) -> None:
+        assert google_rate_limit(source) is None
 
 
 class TestModelHTTPErrorWrapping:

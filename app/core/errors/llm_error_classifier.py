@@ -21,6 +21,7 @@ understood.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -90,10 +91,89 @@ def _dict_signals_quota_exhaustion(body: dict[str, Any]) -> bool:
     )
 
 
+class GoogleQuotaWindow(StrEnum):
+    """Which rolling window a Gemini 429 says was exceeded - read from the `quotaId` of the
+    `google.rpc.QuotaFailure` detail (e.g. `GenerateRequestsPerMinutePerProjectPerModel-FreeTier`,
+    `GenerateRequestsPerDayPerProjectPerModel-FreeTier`)."""
+
+    MINUTE = "MINUTE"
+    DAY = "DAY"
+
+
+@dataclass(frozen=True)
+class GoogleRateLimit:
+    window: GoogleQuotaWindow
+    # `google.rpc.RetryInfo.retryDelay` in seconds, when Google sent one.
+    retry_delay_seconds: float | None
+
+
+_QUOTA_FAILURE_TYPE = "type.googleapis.com/google.rpc.QuotaFailure"
+_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo"
+
+
+def _google_error_details(source: object) -> list[dict[str, Any]]:
+    """The `error.details` list of a Gemini error body (`{"error": {..., "details": [...]}}`),
+    as both `google_errors.APIError.details` and PydanticAI's `ModelHTTPError.body` carry it."""
+
+    if not isinstance(source, dict):
+        return []
+    error = source.get("error", source)
+    details = error.get("details") if isinstance(error, dict) else None
+    if not isinstance(details, list):
+        return []
+    return [detail for detail in details if isinstance(detail, dict)]
+
+
+def _parse_duration_seconds(raw: object) -> float | None:
+    # protobuf Duration JSON form: "39s", "0.5s".
+    if not isinstance(raw, str) or not raw.endswith("s"):
+        return None
+    try:
+        return max(0.0, float(raw[:-1]))
+    except ValueError:
+        return None
+
+
+def google_rate_limit(*sources: object | None) -> GoogleRateLimit | None:
+    """The quota window a Gemini 429 body reports as exceeded, or `None` when no source carries a
+    `QuotaFailure` detail naming one.
+
+    Gemini answers every free-tier limit hit - per minute and per day alike - with the same
+    "You exceeded your current quota, please check your plan and billing details" message, so
+    that text says nothing about credit; only the `quotaId` tells the windows apart. A per-day
+    violation wins over a per-minute one (it is the longer wait)."""
+
+    window: GoogleQuotaWindow | None = None
+    retry_delay: float | None = None
+    for source in sources:
+        for detail in _google_error_details(source):
+            kind = detail.get("@type")
+            if kind == _RETRY_INFO_TYPE:
+                retry_delay = _parse_duration_seconds(detail.get("retryDelay"))
+            elif kind == _QUOTA_FAILURE_TYPE:
+                violations = detail.get("violations")
+                for violation in violations if isinstance(violations, list) else []:
+                    quota_id = violation.get("quotaId") if isinstance(violation, dict) else None
+                    if not isinstance(quota_id, str):
+                        continue
+                    if "PerDay" in quota_id:
+                        window = GoogleQuotaWindow.DAY
+                    elif window is None and ("PerMinute" in quota_id or "PerSecond" in quota_id):
+                        window = GoogleQuotaWindow.MINUTE
+    if window is None:
+        return None
+    return GoogleRateLimit(window=window, retry_delay_seconds=retry_delay)
+
+
 def is_quota_exhausted(*sources: object | None) -> bool:
     """True if any of `sources` (a 429 response body, a status string, a message, ...) looks
-    like a quota/credit exhaustion signal rather than a plain rate limit."""
+    like a quota/credit exhaustion signal rather than a plain rate limit.
 
+    A Gemini 429 that names a per-minute/per-day quota window is a rate limit that resets on
+    its own, whatever its message says (see `google_rate_limit`)."""
+
+    if google_rate_limit(*sources) is not None:
+        return False
     for source in sources:
         if source is None:
             continue
