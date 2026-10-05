@@ -134,6 +134,15 @@ class Settings(BaseSettings):
     INGEST_SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800
     INGEST_CHUNKING_VERSION: str = "2026-09-structural-v2"
+    # Minimum seconds between the START of two consecutive extraction calls in one embed job.
+    # Free-tier keys allow ~15 requests/minute, but a sequential job easily goes faster than
+    # that; 0 disables the pause. A call that already took longer than this adds no extra wait.
+    INGEST_EXTRACTION_MIN_INTERVAL_SECONDS: float = Field(default=0.0, ge=0)
+    # When every EXTRACTION credential is cooling down, wait this long before retrying the
+    # same chunk. A bit over the router's 30s default cooldown so the first key is usable again.
+    INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS: float = Field(default=35.0, ge=0)
+    # How many such waits one chunk gets before the embed job is failed. 0 = never wait.
+    INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS: int = Field(default=6, ge=0)
 
     # --- CHAT_: read on every chat turn ---
     CHAT_CLARIFICATION_MAX_RETRY: int = 2

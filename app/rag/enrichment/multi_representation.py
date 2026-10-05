@@ -104,9 +104,10 @@ class MultiRepresentationEnricher:
     Credential selection and failover go through `app.graph.streaming.run_agent_text_with_failover`
     - the same shared machinery `MessageClassificationNode`/`QueryTransformationNode` use - not a
     second, home-grown loop. `model_router` is still consulted directly for the initial pick
-    (`require_top_priority_credential`) and for the "malformed response from a fallback
-    credential" escalation below, exactly like CHAT's own top-priority pick in
-    `app.api.deps.get_graph_models()`.
+    (`get_next_credential`, so a credential that is cooling down or excluded is skipped; only
+    "no EXTRACTION credential configured at all" is checked via
+    `require_top_priority_credential`) and for the "malformed response from a fallback
+    credential" escalation below.
     """
 
     model: Model | str | None = None
@@ -207,9 +208,12 @@ class MultiRepresentationEnricher:
         """
 
         try:
-            credential = require_top_priority_credential("EXTRACTION")
+            require_top_priority_credential("EXTRACTION")
         except ModelRegistryError as exc:
             raise NoAvailableCredentialError("EXTRACTION") from exc
+        # Every chunk starts from the best credential that is NOT cooling down/excluded,
+        # so one that just failed is not hit again (and re-marked) by each following chunk.
+        credential = await model_router.get_next_credential("EXTRACTION")
 
         snapshot = get_current_snapshot()
         snapshot_version = snapshot.version if snapshot is not None else 0

@@ -3,6 +3,7 @@ document's approved chunks into Qdrant, publishing progress for the ingest wizar
 
 import asyncio
 import logging
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -20,12 +21,13 @@ from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.observability.alerting import alert_credential_failure
 from app.core.observability.events import publish_ingestion_event
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import get_current_snapshot
 from app.core.security.redaction import safe_error_message
 from app.core.usage.usage_recorder import UsageRecorder
 from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
-from app.rag.enrichment.multi_representation import MultiRepresentationEnricher
+from app.rag.enrichment.multi_representation import EnrichedChunk, MultiRepresentationEnricher
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
 from app.worker.celery_app import celery_app
@@ -143,6 +145,62 @@ def embed_chunks(
         return pool.submit(asyncio.run, coro).result()
 
 
+async def _pause_between_extractions(last_started: float | None) -> float:
+    """Sleep out what is left of `INGEST_EXTRACTION_MIN_INTERVAL_SECONDS`, counted from when
+    the previous extraction started (so a slow call is not paused again). Returns the start
+    time of the extraction that is about to run."""
+
+    interval = settings.INGEST_EXTRACTION_MIN_INTERVAL_SECONDS
+    if last_started is not None and interval > 0:
+        remaining = interval - (time.monotonic() - last_started)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+    return time.monotonic()
+
+
+def _is_temporary_exhaustion(exc: NoAvailableCredentialError) -> bool:
+    """True when waiting can help: the last provider failure was transient, or credentials are
+    suspended with no failure to judge by (cooldowns from an earlier chunk). A permanent
+    failure, or no credential configured at all, never recovers by waiting."""
+
+    if exc.last_error is not None:
+        return (
+            isinstance(exc.last_error, Exception)
+            and classify_llm_error(exc.last_error) is ErrorType.TRANSIENT
+        )
+    return bool(exc.suspension_reasons)
+
+
+async def _enrich_waiting_for_credentials(
+    enricher: MultiRepresentationEnricher,
+    chunk: Chunk,
+    recorder: UsageRecorder,
+    budget_tracker: BudgetTracker,
+) -> EnrichedChunk:
+    """`enrich_tracked`, but while every EXTRACTION credential is cooling down it waits
+    `INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS` and retries the same chunk, at most
+    `INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS` times before letting the error fail the job."""
+
+    waits = 0
+    while True:
+        try:
+            return await enricher.enrich_tracked(chunk, recorder, budget_tracker)
+        except NoAvailableCredentialError as exc:
+            if waits >= settings.INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS or not (
+                _is_temporary_exhaustion(exc)
+            ):
+                raise
+            waits += 1
+            logger.warning(
+                "All EXTRACTION credentials are cooling down at chunk %s - waiting %.0fs (%d/%d)",
+                chunk.chunk_index,
+                settings.INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS,
+                waits,
+                settings.INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS,
+            )
+            await asyncio.sleep(settings.INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS)
+
+
 async def _run_embed_chunks(
     *,
     embedder: EmbeddingProvider,
@@ -181,10 +239,14 @@ async def _run_embed_chunks(
         if reserve_result != "OK":
             raise RequestBudgetRejectedError("INGEST", reserve_result)
 
+        last_extraction_started: float | None = None
         for position, raw_chunk in enumerate(chunks):
             chunk = Chunk.model_validate(raw_chunk)
             try:
-                enriched = await enricher.enrich_tracked(chunk, recorder, budget_tracker)
+                last_extraction_started = await _pause_between_extractions(last_extraction_started)
+                enriched = await _enrich_waiting_for_credentials(
+                    enricher, chunk, recorder, budget_tracker
+                )
                 # Empty summary/questions (the enrichment fallback) would send an
                 # empty string to the embeddings API; fall back to the chunk's own
                 # content so every point still gets three valid vectors.

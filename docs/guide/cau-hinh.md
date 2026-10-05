@@ -148,6 +148,9 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `INGEST_MULTI_REP_QUESTION_COUNT` | `3` | Số câu hỏi mẫu sinh sẵn cho mỗi chunk, dùng làm `questions_vector` khi retrieval fan-out 3 vector |
 | `INGEST_SEMANTIC_MAX_TOKEN_FACTOR` | `1.5` | Chiến lược chunking `semantic`: trần token mềm = `target_tokens * hệ số này`, trước khi buộc cắt |
 | `INGEST_TABLE_CHUNK_MAX_TOKENS` | `800` | Trần token mặc định cho một chunk bảng, ghi đè được qua `params.table_max_tokens` của từng request chunking |
+| `INGEST_EXTRACTION_MIN_INTERVAL_SECONDS` | `0` | Khoảng tối thiểu (giây) giữa **lúc bắt đầu** hai lần gọi extraction liên tiếp trong một job embed; `0` = không giãn nhịp. Một lần gọi đã chậm hơn mức này thì không bị chờ thêm. Đặt ~5 khi chạy key free (≤ 15 request/phút) |
+| `INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS` | `35` | Khi **mọi** credential EXTRACTION đang cooldown, chờ bấy nhiêu giây rồi thử lại đúng chunk đó (hơn cooldown mặc định 30s của `ModelRouter` một chút) |
+| `INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS` | `6` | Số lần chờ tối đa cho mỗi chunk trước khi job embed bị coi là lỗi chí tử; `0` = không chờ, dừng ngay như trước. Chỉ áp cho lỗi tạm thời — key bị loại vĩnh viễn hoặc chưa cấu hình vẫn dừng ngay |
 | `INGEST_CHUNKING_VERSION` | `2026-09-structural-v2` | Dán vào mọi chunk mới ingest; `ChunkPoint.chunking_version` mặc định `"legacy"` cho chunk cũ hơn phase này. `app/api/v1/ingestion.py` so sánh giá trị này với `chunk.chunking_version` của draft để phát hiện draft chunk theo sơ đồ cũ trước khi cho embed — đổi giá trị này là đổi **cả một lứa** chunk cũ thành "cần chunk lại", nên chỉ đổi khi thật sự đổi hình dạng chunk, không đổi tuỳ hứng |
 
 **`CHAT_`**
