@@ -18,7 +18,7 @@ import pytest
 
 import app.core.registry.model_registry as model_registry
 import app.core.registry.model_router as model_router
-from app.core.registry.errors import NoAvailableCredentialError
+from app.core.registry.errors import CredentialRpmSaturatedError, NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.registry.model_router import ModelRouter, _state_key
 from tests.fixtures.gemini_errors import (
@@ -646,3 +646,36 @@ def test_daily_quota_reset_is_midnight_pacific_plus_margin(
     now: datetime, expected_hours: int
 ) -> None:
     assert model_router._seconds_until_daily_quota_reset(now) == expected_hours * 3600 + 60
+
+
+# ── local max_rpm refusal ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rpm_saturated_credential_is_skipped_silently_until_a_slot_frees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alerts: list[Any] = []
+
+    async def _spy_alert(*args: Any, **kwargs: Any) -> None:
+        alerts.append(args)
+
+    monkeypatch.setattr(model_router, "alert_credential_failure", _spy_alert)
+    cred_a = _credential(id="a", priority=1)
+    cred_b = _credential(id="b", priority=2)
+    _set_snapshot(version=1, chat=(cred_a, cred_b))
+    clock = _Clock()
+    redis_client = ValueStoringRedis(clock)
+    router, backend = _router(redis_client=redis_client)
+
+    await router.record_failure(
+        cred_a, CredentialRpmSaturatedError("a", 15, 7.0), snapshot_version=1
+    )
+
+    assert backend.calls == []
+    assert alerts == []
+    assert redis_client.values[_state_key("a", 1)] == "LLM_RATE_LIMITED"
+    clock.advance(6.0)
+    assert (await router.get_next_credential("CHAT")).id == "b"
+    clock.advance(2.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"

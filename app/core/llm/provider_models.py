@@ -18,6 +18,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client
+from app.core.llm.rate_limited_model import RateLimitedModel
 from app.core.registry.model_registry import CredentialConfig
 
 _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
@@ -96,6 +97,9 @@ def build_model(credential: CredentialConfig) -> Model:
     `credential.provider`, since a self-hosted server speaks the OpenAI wire format. Every other
     `source_type` is looked up by `credential.provider` in `_PROVIDER_MAP`; no entry there raises
     `UnsupportedProviderError` — this function never builds anything in that case.
+
+    A credential with a positive `max_rpm` comes back wrapped in `RateLimitedModel`, which
+    enforces that limit before every request (the native model is its `.wrapped`).
     """
 
     http_client = build_provider_http_client(
@@ -115,4 +119,7 @@ def build_model(credential: CredentialConfig) -> Model:
         api_key=credential.api_key,
         http_client=http_client,
     )
-    return model_cls(credential.model_name or "", provider=provider)
+    model = model_cls(credential.model_name or "", provider=provider)
+    if credential.max_rpm is not None and credential.max_rpm > 0:
+        return RateLimitedModel(model, credential)
+    return model

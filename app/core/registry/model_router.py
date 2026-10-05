@@ -61,12 +61,17 @@ from app.core.errors.llm_error_classifier import (
     provider_status_code,
 )
 from app.core.errors.llm_failure import (
+    FailureReason,
     admin_failure_message,
     describe_llm_failure,
     stamp_failed_model,
 )
 from app.core.observability.alerting import alert_credential_failure
-from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
+from app.core.registry.errors import (
+    CredentialRpmSaturatedError,
+    NoAvailableCredentialError,
+    NoBudgetAvailableError,
+)
 from app.core.registry.model_registry import CredentialConfig, active_credentials_for
 from app.integrations.backend_java_client import BackendJavaClient
 
@@ -406,8 +411,15 @@ class ModelRouter:
         transient error into one Slack message.
         """
 
-        error_type = classify_llm_error(exc)
         key = _state_key(credential.id, credential.revision)
+        if isinstance(exc, CredentialRpmSaturatedError):
+            # Refused locally by its own `max_rpm` - the provider never saw the call, so
+            # there's nothing to alert on or report as credential health. Just skip it until
+            # its window has a free slot again.
+            await self._mark(key, exc.retry_after_seconds, FailureReason.LLM_RATE_LIMITED.value)
+            return
+
+        error_type = classify_llm_error(exc)
         stamp_failed_model(exc, credential)
         message = admin_failure_message(
             exc, purpose=purpose, api_key=credential.api_key, credential=credential

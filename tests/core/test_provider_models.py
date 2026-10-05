@@ -13,6 +13,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.provider_models import UnsupportedProviderError, build_model
+from app.core.llm.rate_limited_model import RateLimitedModel
 from app.core.registry.model_registry import CredentialConfig
 from app.core.security.ssrf_guard import PinnedNetworkBackend
 
@@ -36,8 +37,24 @@ def _credential(**overrides: object) -> CredentialConfig:
 def test_openai_provider_builds_openai_chat_model() -> None:
     model = build_model(_credential())
 
-    assert isinstance(model, OpenAIChatModel)
+    assert isinstance(model, RateLimitedModel)
+    assert isinstance(model.wrapped, OpenAIChatModel)
     assert model.model_name == "gpt-4o-mini"
+
+
+def test_credential_without_max_rpm_builds_the_native_model_unwrapped() -> None:
+    model = build_model(_credential(max_rpm=None))
+
+    assert isinstance(model, OpenAIChatModel)
+
+
+def test_rate_limited_model_carries_its_credential() -> None:
+    credential = _credential()
+
+    model = build_model(credential)
+
+    assert isinstance(model, RateLimitedModel)
+    assert model.credential is credential
 
 
 def test_self_hosted_uses_openai_compatible_transport_regardless_of_provider_string() -> None:
@@ -50,7 +67,8 @@ def test_self_hosted_uses_openai_compatible_transport_regardless_of_provider_str
 
     model = build_model(credential)
 
-    assert isinstance(model, OpenAIChatModel)
+    assert isinstance(model, RateLimitedModel)
+    assert isinstance(model.wrapped, OpenAIChatModel)
     assert model.model_name == "llama-3-70b"
 
 
@@ -125,7 +143,8 @@ def test_google_provider_builds_google_model() -> None:
 
     model = build_model(credential)
 
-    assert isinstance(model, GoogleModel)
+    assert isinstance(model, RateLimitedModel)
+    assert isinstance(model.wrapped, GoogleModel)
     assert isinstance(model.provider, GoogleProvider)
     assert model.model_name == "gemini-2.0-flash"
 

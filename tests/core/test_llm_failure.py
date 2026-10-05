@@ -26,7 +26,11 @@ from app.core.errors.public_errors import (
 )
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
-from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
+from app.core.registry.errors import (
+    CredentialRpmSaturatedError,
+    NoAvailableCredentialError,
+    NoBudgetAvailableError,
+)
 from app.core.registry.model_registry import ModelRegistryError
 from tests.fixtures.gemini_errors import (
     PER_DAY_QUOTA_ID,
@@ -260,7 +264,7 @@ def test_ai_admin_detection(header: str | None, expected: bool) -> None:
     assert can_see_ai_details(permissions_from_header(header)) is expected
 
 
-# ── Gemini free-tier quota windows ───────────────────────────────────────
+# ── Gemini free-tier quota windows / local max_rpm refusal ─────────────────
 
 
 def test_gemini_per_minute_quota_429_is_a_rate_limit_not_empty_credit() -> None:
@@ -278,3 +282,19 @@ def test_gemini_per_day_quota_429_says_when_it_resets() -> None:
     assert failure.retryable is True
     assert "trong ngày" in failure.message
     assert "credit" not in failure.message
+
+
+def test_local_max_rpm_refusal_is_a_rate_limit() -> None:
+    failure = describe_llm_failure(CredentialRpmSaturatedError("cred-1", 15, 4.0), "CHAT")
+
+    assert failure.reason == FailureReason.LLM_RATE_LIMITED
+    assert failure.retryable is True
+    assert "15" in failure.message
+
+
+def test_all_credentials_rpm_saturated_reports_the_rate_limit() -> None:
+    exc = NoAvailableCredentialError(
+        "CHAT", last_error=CredentialRpmSaturatedError("cred-1", 15, 4.0)
+    )
+
+    assert describe_llm_failure(exc).reason == FailureReason.LLM_RATE_LIMITED

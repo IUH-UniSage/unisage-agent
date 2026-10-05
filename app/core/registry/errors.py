@@ -48,3 +48,20 @@ class NoBudgetAvailableError(Exception):
             f"Every credential for purpose={purpose!r} was denied by budget "
             f"enforcement (last reason: {last_deny_reason})"
         )
+
+
+class CredentialRpmSaturatedError(Exception):
+    """A credential already made its configured `max_rpm` calls within the last minute, so
+    this call was refused locally - before anything reached the provider. Raised by
+    `app.core.llm.rate_limited_model.RateLimitedModel`; the router cools the credential down
+    for `retry_after_seconds` (until the oldest call in the window ages out) and the failover
+    loops move on to the next credential."""
+
+    def __init__(self, credential_id: str, max_rpm: int, retry_after_seconds: float) -> None:
+        self.credential_id = credential_id
+        self.max_rpm = max_rpm
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(
+            f"Credential {credential_id!r} reached its max_rpm={max_rpm}; "
+            f"next slot in {retry_after_seconds:.1f}s"
+        )

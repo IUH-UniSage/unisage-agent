@@ -45,7 +45,11 @@ from app.core.errors.provider_errors import (
 )
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
-from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
+from app.core.registry.errors import (
+    CredentialRpmSaturatedError,
+    NoAvailableCredentialError,
+    NoBudgetAvailableError,
+)
 from app.core.registry.model_registry import (
     CredentialConfig,
     ModelRegistryError,
@@ -439,6 +443,15 @@ def describe_llm_failure(
             f"{who}: mọi credential đang bị tạm ngưng {detail}. "
             + ("Thử lại sau ít phút." if retryable else _CHECK_CONFIG),
             retryable=retryable,
+            purpose=purpose,
+        )
+    if isinstance(root, CredentialRpmSaturatedError):
+        return _failure(
+            FailureReason.LLM_RATE_LIMITED,
+            ErrorCode.LLM_RATE_LIMITED,
+            f"{who}: credential đã dùng hết {root.max_rpm} lượt gọi/phút đã cấu hình (maxRpm), "
+            "thử lại sau ít giây.",
+            retryable=True,
             purpose=purpose,
         )
     if isinstance(root, RequestBudgetRejectedError):
