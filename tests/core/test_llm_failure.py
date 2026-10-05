@@ -27,6 +27,7 @@ from app.core.errors.public_errors import (
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.errors import (
+    CredentialConcurrencySaturatedError,
     CredentialRpmSaturatedError,
     NoAvailableCredentialError,
     NoBudgetAvailableError,
@@ -298,3 +299,11 @@ def test_all_credentials_rpm_saturated_reports_the_rate_limit() -> None:
     )
 
     assert describe_llm_failure(exc).reason == FailureReason.LLM_RATE_LIMITED
+
+
+def test_local_max_concurrency_refusal_is_a_rate_limit() -> None:
+    failure = describe_llm_failure(CredentialConcurrencySaturatedError("cred-1", 1, 2.0), "CHAT")
+
+    assert failure.reason == FailureReason.LLM_RATE_LIMITED
+    assert failure.retryable is True
+    assert "maxConcurrency" in failure.message

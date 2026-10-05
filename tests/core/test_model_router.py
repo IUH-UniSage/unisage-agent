@@ -18,7 +18,11 @@ import pytest
 
 import app.core.registry.model_registry as model_registry
 import app.core.registry.model_router as model_router
-from app.core.registry.errors import CredentialRpmSaturatedError, NoAvailableCredentialError
+from app.core.registry.errors import (
+    CredentialConcurrencySaturatedError,
+    CredentialRpmSaturatedError,
+    NoAvailableCredentialError,
+)
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.registry.model_router import ModelRouter, _state_key
 from tests.fixtures.gemini_errors import (
@@ -678,4 +682,31 @@ async def test_rpm_saturated_credential_is_skipped_silently_until_a_slot_frees(
     clock.advance(6.0)
     assert (await router.get_next_credential("CHAT")).id == "b"
     clock.advance(2.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+@pytest.mark.asyncio
+async def test_concurrency_saturated_credential_is_skipped_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alerts: list[Any] = []
+
+    async def _spy_alert(*args: Any, **kwargs: Any) -> None:
+        alerts.append(args)
+
+    monkeypatch.setattr(model_router, "alert_credential_failure", _spy_alert)
+    cred_a = _credential(id="a", priority=1)
+    cred_b = _credential(id="b", priority=2)
+    _set_snapshot(version=1, chat=(cred_a, cred_b))
+    clock = _Clock()
+    router, backend = _router(clock=clock)
+
+    await router.record_failure(
+        cred_a, CredentialConcurrencySaturatedError("a", 1, 2.0), snapshot_version=1
+    )
+
+    assert backend.calls == []
+    assert alerts == []
+    assert (await router.get_next_credential("CHAT")).id == "b"
+    clock.advance(3.0)
     assert (await router.get_next_credential("CHAT")).id == "a"

@@ -46,6 +46,7 @@ from app.core.errors.provider_errors import (
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.errors import (
+    CredentialConcurrencySaturatedError,
     CredentialRpmSaturatedError,
     NoAvailableCredentialError,
     NoBudgetAvailableError,
@@ -451,6 +452,15 @@ def describe_llm_failure(
             ErrorCode.LLM_RATE_LIMITED,
             f"{who}: credential đã dùng hết {root.max_rpm} lượt gọi/phút đã cấu hình (maxRpm), "
             "thử lại sau ít giây.",
+            retryable=True,
+            purpose=purpose,
+        )
+    if isinstance(root, CredentialConcurrencySaturatedError):
+        return _failure(
+            FailureReason.LLM_RATE_LIMITED,
+            ErrorCode.LLM_RATE_LIMITED,
+            f"{who}: credential đang xử lý đủ {root.max_concurrency} yêu cầu đồng thời đã cấu hình "
+            "(maxConcurrency), thử lại sau ít giây.",
             retryable=True,
             purpose=purpose,
         )

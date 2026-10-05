@@ -50,18 +50,43 @@ class NoBudgetAvailableError(Exception):
         )
 
 
-class CredentialRpmSaturatedError(Exception):
-    """A credential already made its configured `max_rpm` calls within the last minute, so
-    this call was refused locally - before anything reached the provider. Raised by
-    `app.core.llm.rate_limited_model.RateLimitedModel`; the router cools the credential down
-    for `retry_after_seconds` (until the oldest call in the window ages out) and the failover
-    loops move on to the next credential."""
+class CredentialLocallyLimitedError(Exception):
+    """A call refused on this side by one of the credential's own limits (`max_rpm`,
+    `max_concurrency`) - before anything reached the provider. Raised by
+    `app.core.llm.rate_limited_model.RateLimitedModel`; the router cools the credential down for
+    `retry_after_seconds` without alerting or reporting health, and the failover loops move on
+    to the next credential."""
+
+    def __init__(self, credential_id: str, retry_after_seconds: float, message: str) -> None:
+        self.credential_id = credential_id
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message)
+
+
+class CredentialRpmSaturatedError(CredentialLocallyLimitedError):
+    """The credential already made its `max_rpm` calls within the last minute;
+    `retry_after_seconds` is when the oldest call in the window ages out."""
 
     def __init__(self, credential_id: str, max_rpm: int, retry_after_seconds: float) -> None:
-        self.credential_id = credential_id
         self.max_rpm = max_rpm
-        self.retry_after_seconds = retry_after_seconds
         super().__init__(
+            credential_id,
+            retry_after_seconds,
             f"Credential {credential_id!r} reached its max_rpm={max_rpm}; "
-            f"next slot in {retry_after_seconds:.1f}s"
+            f"next slot in {retry_after_seconds:.1f}s",
+        )
+
+
+class CredentialConcurrencySaturatedError(CredentialLocallyLimitedError):
+    """The credential already has `max_concurrency` calls in flight."""
+
+    def __init__(
+        self, credential_id: str, max_concurrency: int, retry_after_seconds: float
+    ) -> None:
+        self.max_concurrency = max_concurrency
+        super().__init__(
+            credential_id,
+            retry_after_seconds,
+            f"Credential {credential_id!r} already has {max_concurrency} call(s) in flight "
+            "(max_concurrency)",
         )

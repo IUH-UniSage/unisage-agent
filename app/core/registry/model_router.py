@@ -68,7 +68,7 @@ from app.core.errors.llm_failure import (
 )
 from app.core.observability.alerting import alert_credential_failure
 from app.core.registry.errors import (
-    CredentialRpmSaturatedError,
+    CredentialLocallyLimitedError,
     NoAvailableCredentialError,
     NoBudgetAvailableError,
 )
@@ -412,10 +412,10 @@ class ModelRouter:
         """
 
         key = _state_key(credential.id, credential.revision)
-        if isinstance(exc, CredentialRpmSaturatedError):
-            # Refused locally by its own `max_rpm` - the provider never saw the call, so
-            # there's nothing to alert on or report as credential health. Just skip it until
-            # its window has a free slot again.
+        if isinstance(exc, CredentialLocallyLimitedError):
+            # Refused locally by its own `max_rpm`/`max_concurrency` - the provider never saw
+            # the call, so there's nothing to alert on or report as credential health. Just skip
+            # it until a slot frees up again.
             await self._mark(key, exc.retry_after_seconds, FailureReason.LLM_RATE_LIMITED.value)
             return
 

@@ -32,6 +32,7 @@ _SNAPSHOT_PAYLOAD: dict[str, Any] = {
                 "apiKey": "sk-real-secret-value",
                 "priority": 1,
                 "maxRpm": 500,
+                "maxConcurrency": 2,
             }
         ],
         "EMBEDDING": [
@@ -93,6 +94,8 @@ def test_parse_snapshot_groups_credentials_by_purpose() -> None:
     assert chat[0].api_key == "sk-real-secret-value"
     assert chat[0].priority == 1
     assert chat[0].max_rpm == 500
+    assert chat[0].max_concurrency == 2
+    assert snapshot.credentials_for("EMBEDDING")[0].max_concurrency is None
     assert snapshot.credentials_for("EXTRACTION") == ()
 
 

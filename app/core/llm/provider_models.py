@@ -98,8 +98,9 @@ def build_model(credential: CredentialConfig) -> Model:
     `source_type` is looked up by `credential.provider` in `_PROVIDER_MAP`; no entry there raises
     `UnsupportedProviderError` — this function never builds anything in that case.
 
-    A credential with a positive `max_rpm` comes back wrapped in `RateLimitedModel`, which
-    enforces that limit before every request (the native model is its `.wrapped`).
+    A credential with a positive `max_rpm` or `max_concurrency` comes back wrapped in
+    `RateLimitedModel`, which enforces those limits before every request (the native model is
+    its `.wrapped`).
     """
 
     http_client = build_provider_http_client(
@@ -119,7 +120,11 @@ def build_model(credential: CredentialConfig) -> Model:
         api_key=credential.api_key,
         http_client=http_client,
     )
-    model = model_cls(credential.model_name or "", provider=provider)
-    if credential.max_rpm is not None and credential.max_rpm > 0:
+    return _with_limits(model_cls(credential.model_name or "", provider=provider), credential)
+
+
+def _with_limits(model: Model, credential: CredentialConfig) -> Model:
+    limits = (credential.max_rpm, credential.max_concurrency)
+    if any(limit is not None and limit > 0 for limit in limits):
         return RateLimitedModel(model, credential)
     return model
