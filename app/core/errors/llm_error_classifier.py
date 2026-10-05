@@ -57,6 +57,8 @@ _QUOTA_EXHAUSTION_MARKERS = (
     "exceeded_quota",
     "exceeded your current quota",
     "out of credit",
+    # Z.ai code 1113: "Insufficient balance or no resource package. Please recharge."
+    "insufficient balance",
 )
 # Deliberately NOT included: Google's "RESOURCE_EXHAUSTED" status — the Gemini API returns that
 # same status for both an actual out-of-quota 429 and a plain short-term rate limit (there's no
@@ -163,6 +165,25 @@ def google_rate_limit(*sources: object | None) -> GoogleRateLimit | None:
     if window is None:
         return None
     return GoogleRateLimit(window=window, retry_delay_seconds=retry_delay)
+
+
+# Z.ai code 1302 "Rate limit reached for requests": too many requests in flight at once for
+# the account and model - clears as soon as one of them finishes.
+ZAI_CONCURRENCY_LIMIT_CODE = "1302"
+
+
+def zai_error_code(*sources: object | None) -> str | None:
+    """Z.ai's own business error code (e.g. "1302") from an error body, which arrives either
+    unwrapped (`{"code": "1302", ...}`, the openai SDK's `body`) or as `{"error": {...}}`."""
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        error = source.get("error", source)
+        code = error.get("code") if isinstance(error, dict) else None
+        if isinstance(code, str | int) and str(code).isdigit():
+            return str(code)
+    return None
 
 
 def is_quota_exhausted(*sources: object | None) -> bool:

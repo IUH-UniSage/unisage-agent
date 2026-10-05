@@ -15,6 +15,7 @@ from typing import Any
 import httpx2
 import openai
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 
 import app.core.registry.model_registry as model_registry
 import app.core.registry.model_router as model_router
@@ -709,4 +710,26 @@ async def test_concurrency_saturated_credential_is_skipped_silently(
     assert alerts == []
     assert (await router.get_next_credential("CHAT")).id == "b"
     clock.advance(3.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+@pytest.mark.asyncio
+async def test_zai_concurrency_429_cools_down_only_a_few_seconds() -> None:
+    cred_a = _credential(id="a", priority=1)
+    cred_b = _credential(id="b", priority=2)
+    _set_snapshot(version=1, chat=(cred_a, cred_b))
+    clock = _Clock()
+    router, backend = _router(clock=clock)
+    exc = ModelHTTPError(
+        status_code=429,
+        model_name="glm-4.7-flash",
+        body={"code": "1302", "message": "Rate limit reached for requests"},
+    )
+
+    await router.record_failure(cred_a, exc, snapshot_version=1)
+
+    assert backend.calls[0]["error_type"] == "TRANSIENT"
+    clock.advance(4.0)
+    assert (await router.get_next_credential("CHAT")).id == "b"
+    clock.advance(2.0)
     assert (await router.get_next_credential("CHAT")).id == "a"

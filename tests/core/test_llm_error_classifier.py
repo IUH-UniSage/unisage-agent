@@ -26,6 +26,7 @@ from app.core.errors.llm_error_classifier import (
     classify_llm_error,
     google_rate_limit,
     is_quota_exhausted,
+    zai_error_code,
 )
 from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.security.ssrf_guard import SsrfBlockedError
@@ -309,3 +310,33 @@ def test_error_type_values_match_java_naming(error_type: ErrorType) -> None:
     a human reading a health-report payload doesn't have to learn two vocabularies."""
 
     assert error_type.value in {"TRANSIENT", "PERMANENT"}
+
+
+class TestZai:
+    """Z.ai speaks the OpenAI wire format; its business code rides in the error body."""
+
+    def test_insufficient_balance_1113_is_permanent(self) -> None:
+        body = {
+            "code": "1113",
+            "message": "Insufficient balance or no resource package. Please recharge.",
+        }
+        exc = ModelHTTPError(status_code=429, model_name="glm-4.7-flash", body=body)
+        assert classify_llm_error(exc) == ErrorType.PERMANENT
+
+    def test_concurrency_limit_1302_is_transient(self) -> None:
+        body = {"code": "1302", "message": "Rate limit reached for requests"}
+        exc = ModelHTTPError(status_code=429, model_name="glm-4.7-flash", body=body)
+        assert classify_llm_error(exc) == ErrorType.TRANSIENT
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ({"code": "1302", "message": "x"}, "1302"),
+            ({"error": {"code": "1305", "message": "x"}}, "1305"),
+            ({"code": "insufficient_quota"}, None),
+            ("1302", None),
+            (None, None),
+        ],
+    )
+    def test_zai_error_code(self, source: object, expected: str | None) -> None:
+        assert zai_error_code(source) == expected

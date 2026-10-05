@@ -7,8 +7,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from openai import AsyncOpenAI
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.zai import ZaiModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -168,3 +170,49 @@ def test_google_provider_http_client_reaches_pinned_backend(
         "GoogleProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
     )
     assert all(host == "generativelanguage.googleapis.com" for host, _ in connect_tcp_spy)
+
+
+def _zai_credential(**overrides: object) -> CredentialConfig:
+    values: dict[str, object] = {
+        "provider": "zai",
+        "model_name": "glm-4.7-flash",
+        "api_base_url": "https://api.z.ai/api/paas/v4",
+        "max_rpm": None,
+    }
+    values.update(overrides)
+    return _credential(**values)
+
+
+def test_zai_provider_builds_zai_model_on_the_credential_base_url() -> None:
+    model = build_model(_zai_credential(api_base_url="https://open.bigmodel.cn/api/paas/v4"))
+
+    assert isinstance(model, ZaiModel)
+    assert model.model_name == "glm-4.7-flash"
+    assert str(model.client.base_url) == "https://open.bigmodel.cn/api/paas/v4/"
+
+
+def test_zai_without_base_url_uses_the_default_endpoint() -> None:
+    model = build_model(_zai_credential(api_base_url=None))
+
+    assert isinstance(model, ZaiModel)
+    assert str(model.client.base_url) == "https://api.z.ai/api/paas/v4/"
+
+
+def test_max_concurrency_alone_wraps_the_model() -> None:
+    model = build_model(_zai_credential(max_concurrency=1))
+
+    assert isinstance(model, RateLimitedModel)
+    assert isinstance(model.wrapped, ZaiModel)
+
+
+def test_zai_http_client_reaches_pinned_backend(
+    connect_tcp_spy: list[tuple[str, int]],
+) -> None:
+    model = build_model(_zai_credential())
+    assert isinstance(model, ZaiModel)
+    client: AsyncOpenAI = model.client
+
+    _drive_one_request(client._client)
+
+    assert connect_tcp_spy, "ZaiProvider's http_client never reached PinnedNetworkBackend"
+    assert all(host == "api.z.ai" for host, _ in connect_tcp_spy)

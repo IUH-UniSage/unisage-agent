@@ -53,12 +53,14 @@ import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import (
+    ZAI_CONCURRENCY_LIMIT_CODE,
     ErrorType,
     GoogleQuotaWindow,
     classify_llm_error,
     google_rate_limit,
     provider_error_details,
     provider_status_code,
+    zai_error_code,
 )
 from app.core.errors.llm_failure import (
     FailureReason,
@@ -94,6 +96,8 @@ _PER_MINUTE_QUOTA_COOLDOWN_SECONDS = 60.0
 # call after the cooldown doesn't race the reset.
 _DAILY_QUOTA_RESET_ZONE = ZoneInfo("America/Los_Angeles")
 _DAILY_QUOTA_RESET_MARGIN_SECONDS = 60.0
+# Z.ai's concurrency 429 clears when an in-flight call finishes - a short pause, not 30s.
+_ZAI_CONCURRENCY_COOLDOWN_SECONDS = 5.0
 
 
 class _RedisLike(Protocol):
@@ -177,13 +181,17 @@ def _seconds_until_daily_quota_reset(now: datetime | None = None) -> float:
 
 
 def _rate_limit_cooldown_seconds(exc: Exception) -> float | None:
-    """How long a Gemini quota-window 429 says to stay off this credential - until the next
-    daily reset for a per-day quota, Google's own `retryDelay` (else a minute) for a per-minute
-    one. `None` for anything else, leaving the `Retry-After`/default cooldown in charge."""
+    """How long a provider's 429 says to stay off this credential - for a Gemini quota window,
+    until the next daily reset (per day) or Google's own `retryDelay`, else a minute (per minute);
+    a few seconds for Z.ai's concurrency limit. `None` for anything else, leaving the
+    `Retry-After`/default cooldown in charge."""
 
     if provider_status_code(exc) != 429:
         return None
-    rate_limit = google_rate_limit(*provider_error_details(exc))
+    details = provider_error_details(exc)
+    if zai_error_code(*details) == ZAI_CONCURRENCY_LIMIT_CODE:
+        return _ZAI_CONCURRENCY_COOLDOWN_SECONDS
+    rate_limit = google_rate_limit(*details)
     if rate_limit is None:
         return None
     if rate_limit.window is GoogleQuotaWindow.DAY:
