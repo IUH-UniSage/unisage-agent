@@ -99,6 +99,7 @@ def _credential_from_candidate(candidate: dict[str, Any]) -> CredentialConfig:
         priority=None,
         max_rpm=candidate.get("maxRpm"),
         api_key=candidate.get("apiKey") or "",
+        max_concurrency=candidate.get("maxConcurrency"),
     )
 
 

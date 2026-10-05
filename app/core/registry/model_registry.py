@@ -53,6 +53,9 @@ class CredentialConfig:
     # never read for routing/verification decisions. Last, with a default, so every
     # existing positional/keyword construction site (tests especially) keeps working.
     display_name: str | None = None
+    # In-flight provider calls allowed at once; None = no limit (same as max_rpm). Defaulted for
+    # the same reason as display_name.
+    max_concurrency: int | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,7 @@ def _parse_credential(raw: dict[str, Any]) -> CredentialConfig:
         max_rpm=raw.get("maxRpm"),
         api_key=raw.get("apiKey") or "",
         display_name=raw.get("displayName"),
+        max_concurrency=raw.get("maxConcurrency"),
     )
 
 

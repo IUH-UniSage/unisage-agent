@@ -44,21 +44,36 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
+from zoneinfo import ZoneInfo
 
 import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
-from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.llm_error_classifier import (
+    ZAI_CONCURRENCY_LIMIT_CODE,
+    ErrorType,
+    GoogleQuotaWindow,
+    classify_llm_error,
+    google_rate_limit,
+    provider_error_details,
+    provider_status_code,
+    zai_error_code,
+)
 from app.core.errors.llm_failure import (
+    FailureReason,
     admin_failure_message,
     describe_llm_failure,
     stamp_failed_model,
 )
 from app.core.observability.alerting import alert_credential_failure
-from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
+from app.core.registry.errors import (
+    CredentialLocallyLimitedError,
+    NoAvailableCredentialError,
+    NoBudgetAvailableError,
+)
 from app.core.registry.model_registry import CredentialConfig, active_credentials_for
 from app.integrations.backend_java_client import BackendJavaClient
 
@@ -75,6 +90,14 @@ _DEFAULT_COOLDOWN_SECONDS = 30.0
 # thing doing the real work (Java setting the row DISABLED, and the next snapshot
 # reload dropping it, is), just the immediate stop-gap until that's picked up.
 _EXCLUDED_TTL_SECONDS = 24 * 60 * 60.0
+# A Gemini per-minute 429 without a `RetryInfo.retryDelay`: the window is a rolling minute.
+_PER_MINUTE_QUOTA_COOLDOWN_SECONDS = 60.0
+# Gemini per-day quotas reset at midnight Pacific time; wait a little past it so the first
+# call after the cooldown doesn't race the reset.
+_DAILY_QUOTA_RESET_ZONE = ZoneInfo("America/Los_Angeles")
+_DAILY_QUOTA_RESET_MARGIN_SECONDS = 60.0
+# Z.ai's concurrency 429 clears when an in-flight call finishes - a short pause, not 30s.
+_ZAI_CONCURRENCY_COOLDOWN_SECONDS = 5.0
 
 
 class _RedisLike(Protocol):
@@ -147,6 +170,33 @@ def _extract_retry_after_seconds(exc: Exception) -> float | None:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _seconds_until_daily_quota_reset(now: datetime | None = None) -> float:
+    local_now = (now or datetime.now(UTC)).astimezone(_DAILY_QUOTA_RESET_ZONE)
+    next_midnight = datetime.combine(
+        local_now.date() + timedelta(days=1), datetime.min.time(), tzinfo=_DAILY_QUOTA_RESET_ZONE
+    )
+    return (next_midnight - local_now).total_seconds() + _DAILY_QUOTA_RESET_MARGIN_SECONDS
+
+
+def _rate_limit_cooldown_seconds(exc: Exception) -> float | None:
+    """How long a provider's 429 says to stay off this credential - for a Gemini quota window,
+    until the next daily reset (per day) or Google's own `retryDelay`, else a minute (per minute);
+    a few seconds for Z.ai's concurrency limit. `None` for anything else, leaving the
+    `Retry-After`/default cooldown in charge."""
+
+    if provider_status_code(exc) != 429:
+        return None
+    details = provider_error_details(exc)
+    if zai_error_code(*details) == ZAI_CONCURRENCY_LIMIT_CODE:
+        return _ZAI_CONCURRENCY_COOLDOWN_SECONDS
+    rate_limit = google_rate_limit(*details)
+    if rate_limit is None:
+        return None
+    if rate_limit.window is GoogleQuotaWindow.DAY:
+        return _seconds_until_daily_quota_reset()
+    return rate_limit.retry_delay_seconds or _PER_MINUTE_QUOTA_COOLDOWN_SECONDS
 
 
 def _error_code_for(exc: Exception) -> str:
@@ -369,8 +419,15 @@ class ModelRouter:
         transient error into one Slack message.
         """
 
-        error_type = classify_llm_error(exc)
         key = _state_key(credential.id, credential.revision)
+        if isinstance(exc, CredentialLocallyLimitedError):
+            # Refused locally by its own `max_rpm`/`max_concurrency` - the provider never saw
+            # the call, so there's nothing to alert on or report as credential health. Just skip
+            # it until a slot frees up again.
+            await self._mark(key, exc.retry_after_seconds, FailureReason.LLM_RATE_LIMITED.value)
+            return
+
+        error_type = classify_llm_error(exc)
         stamp_failed_model(exc, credential)
         message = admin_failure_message(
             exc, purpose=purpose, api_key=credential.api_key, credential=credential
@@ -382,7 +439,11 @@ class ModelRouter:
         if error_type is ErrorType.PERMANENT:
             await self._mark(key, self._excluded_ttl_seconds, reason)
         else:
-            ttl = _extract_retry_after_seconds(exc) or self._default_cooldown_seconds
+            ttl = (
+                _rate_limit_cooldown_seconds(exc)
+                or _extract_retry_after_seconds(exc)
+                or self._default_cooldown_seconds
+            )
             await self._mark(key, ttl, reason)
 
         await alert_credential_failure(credential, error_type.value, message, purpose=purpose)

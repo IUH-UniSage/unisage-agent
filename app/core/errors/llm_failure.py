@@ -32,6 +32,8 @@ from app.core.budget.tracker import RequestBudgetRejectedError
 from app.core.errors.error_codes import ErrorCode
 from app.core.errors.exceptions import UniSageException
 from app.core.errors.llm_error_classifier import (
+    GoogleQuotaWindow,
+    google_rate_limit,
     is_quota_exhausted,
     provider_error_details,
     provider_status_code,
@@ -43,7 +45,12 @@ from app.core.errors.provider_errors import (
 )
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
-from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
+from app.core.registry.errors import (
+    CredentialConcurrencySaturatedError,
+    CredentialRpmSaturatedError,
+    NoAvailableCredentialError,
+    NoBudgetAvailableError,
+)
 from app.core.registry.model_registry import (
     CredentialConfig,
     ModelRegistryError,
@@ -266,6 +273,16 @@ def _by_status(
             purpose=purpose,
         )
     if status == 429:
+        rate_limit = google_rate_limit(*provider_error_details(root))
+        if rate_limit is not None and rate_limit.window is GoogleQuotaWindow.DAY:
+            return _failure(
+                FailureReason.LLM_RATE_LIMITED,
+                ErrorCode.LLM_RATE_LIMITED,
+                f"{who}: API key đã dùng hết lượt gọi trong ngày của model này (HTTP 429), "
+                "tự reset lúc 0h giờ Pacific (14h-15h giờ Việt Nam).",
+                retryable=True,
+                purpose=purpose,
+            )
         if is_quota_exhausted(*provider_error_details(root)):
             return _failure(
                 FailureReason.LLM_QUOTA_EXHAUSTED,
@@ -427,6 +444,24 @@ def describe_llm_failure(
             f"{who}: mọi credential đang bị tạm ngưng {detail}. "
             + ("Thử lại sau ít phút." if retryable else _CHECK_CONFIG),
             retryable=retryable,
+            purpose=purpose,
+        )
+    if isinstance(root, CredentialRpmSaturatedError):
+        return _failure(
+            FailureReason.LLM_RATE_LIMITED,
+            ErrorCode.LLM_RATE_LIMITED,
+            f"{who}: credential đã dùng hết {root.max_rpm} lượt gọi/phút đã cấu hình (maxRpm), "
+            "thử lại sau ít giây.",
+            retryable=True,
+            purpose=purpose,
+        )
+    if isinstance(root, CredentialConcurrencySaturatedError):
+        return _failure(
+            FailureReason.LLM_RATE_LIMITED,
+            ErrorCode.LLM_RATE_LIMITED,
+            f"{who}: credential đang xử lý đủ {root.max_concurrency} yêu cầu đồng thời đã cấu hình "
+            "(maxConcurrency), thử lại sau ít giây.",
+            retryable=True,
             purpose=purpose,
         )
     if isinstance(root, RequestBudgetRejectedError):

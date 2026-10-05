@@ -20,9 +20,23 @@ import openai
 import pytest
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.llm_error_classifier import (
+    ErrorType,
+    GoogleQuotaWindow,
+    classify_llm_error,
+    google_rate_limit,
+    is_quota_exhausted,
+    zai_error_code,
+)
 from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.security.ssrf_guard import SsrfBlockedError
+from tests.fixtures.gemini_errors import (
+    PER_DAY_QUOTA_ID,
+    PER_MINUTE_QUOTA_ID,
+    gemini_quota_body,
+    gemini_quota_client_error,
+    gemini_quota_http_error,
+)
 
 
 def _openai_response(status_code: int, *, error: dict) -> httpx2.Response:
@@ -153,6 +167,53 @@ class TestGoogle:
         assert classify_llm_error(exc) == ErrorType.TRANSIENT
 
 
+class TestGeminiQuotaWindows:
+    """Gemini says "You exceeded your current quota" for every free-tier limit - a per-minute
+    or per-day window that resets on its own must never read as an empty wallet."""
+
+    @pytest.mark.parametrize("quota_id", [PER_MINUTE_QUOTA_ID, PER_DAY_QUOTA_ID])
+    def test_quota_window_429_is_transient_despite_the_quota_message(self, quota_id: str) -> None:
+        assert classify_llm_error(gemini_quota_http_error(quota_id)) == ErrorType.TRANSIENT
+        assert classify_llm_error(gemini_quota_client_error(quota_id)) == ErrorType.TRANSIENT
+
+    def test_quota_window_body_is_not_quota_exhaustion(self) -> None:
+        assert not is_quota_exhausted(gemini_quota_body(PER_MINUTE_QUOTA_ID))
+
+    def test_per_minute_window_with_retry_delay(self) -> None:
+        rate_limit = google_rate_limit(gemini_quota_body(PER_MINUTE_QUOTA_ID, retry_delay="12.5s"))
+
+        assert rate_limit is not None
+        assert rate_limit.window is GoogleQuotaWindow.MINUTE
+        assert rate_limit.retry_delay_seconds == 12.5
+
+    def test_per_day_window_wins_over_per_minute(self) -> None:
+        rate_limit = google_rate_limit(gemini_quota_body(PER_MINUTE_QUOTA_ID, PER_DAY_QUOTA_ID))
+
+        assert rate_limit is not None
+        assert rate_limit.window is GoogleQuotaWindow.DAY
+
+    def test_token_per_minute_quota_counts_as_minute_window(self) -> None:
+        rate_limit = google_rate_limit(
+            gemini_quota_body("GenerateContentInputTokensPerModelPerMinute-FreeTier")
+        )
+
+        assert rate_limit is not None
+        assert rate_limit.window is GoogleQuotaWindow.MINUTE
+
+    def test_missing_retry_info_leaves_delay_unknown(self) -> None:
+        rate_limit = google_rate_limit(gemini_quota_body(PER_MINUTE_QUOTA_ID, retry_delay=None))
+
+        assert rate_limit is not None
+        assert rate_limit.retry_delay_seconds is None
+
+    @pytest.mark.parametrize(
+        "source",
+        [None, "You exceeded your current quota", {"error": {"message": "x"}}, {"error": []}],
+    )
+    def test_no_quota_failure_detail_means_no_window(self, source: object) -> None:
+        assert google_rate_limit(source) is None
+
+
 class TestModelHTTPErrorWrapping:
     """`pydantic_ai.exceptions.ModelHTTPError` — the form each provider's model-native layer
     (`pydantic_ai/models/{openai,google}.py`) actually re-raises as, per ADR 0005."""
@@ -249,3 +310,33 @@ def test_error_type_values_match_java_naming(error_type: ErrorType) -> None:
     a human reading a health-report payload doesn't have to learn two vocabularies."""
 
     assert error_type.value in {"TRANSIENT", "PERMANENT"}
+
+
+class TestZai:
+    """Z.ai speaks the OpenAI wire format; its business code rides in the error body."""
+
+    def test_insufficient_balance_1113_is_permanent(self) -> None:
+        body = {
+            "code": "1113",
+            "message": "Insufficient balance or no resource package. Please recharge.",
+        }
+        exc = ModelHTTPError(status_code=429, model_name="glm-4.7-flash", body=body)
+        assert classify_llm_error(exc) == ErrorType.PERMANENT
+
+    def test_concurrency_limit_1302_is_transient(self) -> None:
+        body = {"code": "1302", "message": "Rate limit reached for requests"}
+        exc = ModelHTTPError(status_code=429, model_name="glm-4.7-flash", body=body)
+        assert classify_llm_error(exc) == ErrorType.TRANSIENT
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ({"code": "1302", "message": "x"}, "1302"),
+            ({"error": {"code": "1305", "message": "x"}}, "1305"),
+            ({"code": "insufficient_quota"}, None),
+            ("1302", None),
+            (None, None),
+        ],
+    )
+    def test_zai_error_code(self, source: object, expected: str | None) -> None:
+        assert zai_error_code(source) == expected

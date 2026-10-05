@@ -17,6 +17,7 @@ from app.api.deps import get_graph_models
 from app.core.config import settings
 from app.core.errors.error_codes import ErrorCode
 from app.core.errors.llm_failure import LLMCallException
+from app.core.llm.rate_limited_model import RateLimitedModel
 from app.core.registry.model_registry import ModelRegistryError, parse_snapshot
 from app.rag.retrieval.service import RetrievalService
 
@@ -69,7 +70,8 @@ def test_registry_enabled_builds_model_from_highest_priority_chat_credential(
 
     graph_models = get_graph_models()
 
-    assert isinstance(graph_models.classification, OpenAIChatModel)
+    assert isinstance(graph_models.classification, RateLimitedModel)
+    assert isinstance(graph_models.classification.wrapped, OpenAIChatModel)
     # priority=1 (the lower number) must win over priority=2 - no failover, just top priority.
     assert graph_models.classification.model_name == "gpt-4o-mini"
 
