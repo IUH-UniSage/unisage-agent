@@ -316,7 +316,9 @@ async def _verify_one_job(job: dict[str, Any], *, client: BackendJavaClient) -> 
     except Exception as exc:
         error_type = classify_llm_error(exc)
         result_type = "TRANSIENT" if error_type is ErrorType.TRANSIENT else "PERMANENT"
-        message = admin_failure_message(exc, purpose=purpose, api_key=credential.api_key)
+        message = admin_failure_message(
+            exc, purpose=purpose, api_key=credential.api_key, credential=credential
+        )
         logger.warning(
             "verification job %s: chat_model %s attempt %s failed (%s) - %s: %s",
             job_id,
