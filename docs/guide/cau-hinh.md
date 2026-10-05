@@ -35,6 +35,7 @@ Toàn bộ biến nằm trong một class `Settings(BaseSettings)` duy nhất �
 | `OPENAI_` | Provider LLM/embedding — dùng chung cho cả ingest lẫn chat | Cả `app/rag/` lẫn `app/graph/` |
 | `MINIO_` | Kho object cho file gốc đã ingest | `app/rag/ingestion/minio_client.py` |
 | `QDRANT_` | Vector store | `app/rag/vectorstore/` |
+| `TAVILY_` | Web search API cho WebSearchNode | `app/integrations/tavily_client.py` |
 | `REDIS_URL`, `BACKEND_JAVA_BASE_URL` | Hệ ngoài chỉ có đúng một biến — tự tên đã đủ rõ, không cần gói thành nhóm | Celery/broker; `BackendJavaClient` |
 | `INGEST_` | Chỉ đọc lúc **ingest tài liệu** (chunking, enrichment) — không bao giờ đọc trong một lượt chat | `app/rag/chunking/`, `app/rag/enrichment/` |
 | `CHAT_` | Chỉ đọc trong một **lượt chat** (các node của graph) | `app/graph/`, `app/api/v1/chat.py` |
@@ -122,6 +123,16 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 |---|---|---|
 | `QDRANT_HOST`/`QDRANT_PORT`/`QDRANT_COLLECTION` | `localhost:6333`, `unisage_chunks` | Vector DB duy nhất — không còn pgvector dù README/CONTEXT.md cũ còn nhắc (xem known-gaps) |
 
+**`TAVILY_`**
+
+| Biến | Mặc định | Dùng ở đâu / vì sao |
+|---|---|---|
+| `TAVILY_API_KEY` | rỗng | Khoá Tavily cho WebSearchNode. Rỗng thì bỏ qua web search (log warning), luồng đi thẳng tới TicketFallbackNode |
+| `TAVILY_BASE_URL` | `https://api.tavily.com` | Host cố định do người triển khai đặt — không qua SSRF guard, cùng mức tin cậy với `SLACK_APIKEY_ALERT_WEBHOOK_URL` |
+| `TAVILY_INCLUDE_DOMAINS` | `iuh.edu.vn` | Danh sách domain phân tách bằng dấu phẩy, gửi làm `include_domains` — chỉ tìm trên trang chính thức của trường (và subdomain), không bao giờ diễn đàn hay trường khác |
+| `TAVILY_SEARCH_DEPTH` | `basic` | `basic` tốn 1 credit/lần tìm, `advanced` 2 credit nhưng snippet dài và sát hơn |
+| `TAVILY_TIMEOUT_SECONDS` | `15` | Hạn chót cho **cả** lần gọi (không phải từng giai đoạn kết nối/đọc như timeout của httpx). Tavily thường trả lời trong ~3 giây nhưng có lúc vọt quá 10 giây; quá hạn thì coi như không có kết quả web, lượt chat vẫn đi tiếp tới TicketFallbackNode |
+
 **Hệ ngoài chỉ một biến**
 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
@@ -137,6 +148,9 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `INGEST_MULTI_REP_QUESTION_COUNT` | `3` | Số câu hỏi mẫu sinh sẵn cho mỗi chunk, dùng làm `questions_vector` khi retrieval fan-out 3 vector |
 | `INGEST_SEMANTIC_MAX_TOKEN_FACTOR` | `1.5` | Chiến lược chunking `semantic`: trần token mềm = `target_tokens * hệ số này`, trước khi buộc cắt |
 | `INGEST_TABLE_CHUNK_MAX_TOKENS` | `800` | Trần token mặc định cho một chunk bảng, ghi đè được qua `params.table_max_tokens` của từng request chunking |
+| `INGEST_EXTRACTION_MIN_INTERVAL_SECONDS` | `0` | Khoảng tối thiểu (giây) giữa **lúc bắt đầu** hai lần gọi extraction liên tiếp trong một job embed; `0` = không giãn nhịp. Một lần gọi đã chậm hơn mức này thì không bị chờ thêm. Đặt ~5 khi chạy key free (≤ 15 request/phút) |
+| `INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS` | `35` | Khi **mọi** credential EXTRACTION đang cooldown, chờ bấy nhiêu giây rồi thử lại đúng chunk đó (hơn cooldown mặc định 30s của `ModelRouter` một chút) |
+| `INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS` | `6` | Số lần chờ tối đa cho mỗi chunk trước khi job embed bị coi là lỗi chí tử; `0` = không chờ, dừng ngay như trước. Chỉ áp cho lỗi tạm thời — key bị loại vĩnh viễn hoặc chưa cấu hình vẫn dừng ngay |
 | `INGEST_CHUNKING_VERSION` | `2026-09-structural-v2` | Dán vào mọi chunk mới ingest; `ChunkPoint.chunking_version` mặc định `"legacy"` cho chunk cũ hơn phase này. `app/api/v1/ingestion.py` so sánh giá trị này với `chunk.chunking_version` của draft để phát hiện draft chunk theo sơ đồ cũ trước khi cho embed — đổi giá trị này là đổi **cả một lứa** chunk cũ thành "cần chunk lại", nên chỉ đổi khi thật sự đổi hình dạng chunk, không đổi tuỳ hứng |
 
 **`CHAT_`**
@@ -147,6 +161,14 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `CHAT_RETRIEVAL_MAX_CHUNKS` | `8` | Số chunk tối đa trả về sau RetrievalFilteringNode, trước khi qua ngưỡng rerank |
 | `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở PostRetrievalRerankNode. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |
 | `CHAT_MAX_SUB_QUERIES` | `3` | Số câu hỏi con tối đa khi decomposer tách một câu so sánh (task `MULTI`); tối thiểu 2. Mỗi câu hỏi con tốn thêm một lần embedding + tìm Qdrant, và chia nhỏ quota chunk của RetrievalFilteringNode |
+| `CHAT_LLM_RERANK_ENABLED` | `True` | Bật LLMRerankNode (09a): sau ngưỡng điểm, gọi **model Extraction** một lần mỗi lượt để giữ lại đúng các chunk trả lời từng câu hỏi con — ngưỡng điểm cosine để lọt chunk chỉ trùng từ khóa (VD bảng tổ hợp xét tuyển có chữ "Công nghệ thông tin" cho câu hỏi chương trình khung). Câu hỏi con không còn chunk nào → WebSearchNode. Lỗi/thiếu model Extraction → giữ kết quả theo điểm và báo AI admin |
+| `CHAT_LLM_RERANK_SNIPPET_CHARS` | `800` | Mỗi chunk đưa cho model Extraction bị cắt còn ngần này ký tự |
+| `CHAT_WEB_SEARCH_ENABLED` | `False` | Bật WebSearchNode: tìm web (Tavily) cho mỗi câu hỏi con mà rerank không còn chunk nào, trước khi rơi xuống TicketFallbackNode |
+| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB` | `5` | `max_results` gửi Tavily cho mỗi câu hỏi con trượt. Tavily tính credit theo lượt tìm, không theo số kết quả, nên lấy nhiều ứng viên không tốn thêm — trang đúng thường không nằm ở top 2 với câu hỏi tiếng Việt |
+| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN` | `2` | Tổng số trang web tối đa đưa vào `<websearch>` một lượt — chia round-robin: mỗi câu hỏi con trượt được trang tốt nhất trước, phần còn lại theo điểm. Lấy `PER_SUB` ứng viên rồi chỉ giữ ngần này trang điểm cao nhất |
+| `CHAT_WEB_SEARCH_MAX_QUERIES` | `2` | Số lần tìm Tavily tối đa một lượt. Tin nhắn nhiều task có thể có nhiều câu hỏi con trượt, nhưng chỉ `PER_TURN` trang vào prompt nên tìm thêm chỉ tốn credit. Ưu tiên câu hỏi con trượt nặng nhất (chunk tốt nhất có điểm thấp nhất) |
+| `CHAT_WEB_SEARCH_MIN_SCORE` | `0.5` | Bỏ kết quả có điểm liên quan của Tavily dưới ngưỡng này |
+| `CHAT_WEB_SEARCH_RESULT_MAX_CHARS` | `1500` | Cắt nội dung mỗi kết quả — cùng `PER_TURN` giới hạn phần web trong system prompt ở khoảng 3000 ký tự, bất kể câu hỏi dài hay tách thành bao nhiêu câu hỏi con |
 | `CHAT_ALLOW_REPAIR_JSON` | `True` | Bật/tắt lệnh gọi LLM sửa lỗi lần 2 khi câu trả lời quên khối `ask_user_form` bắt buộc (`generation_synthesis.py::_repair_missing_ask_form`). Heuristic phát hiện có lỗ hổng biết trước (câu mời đặt điều kiện ở cuối câu, kiểu "..., nếu bạn cần...", không bị nhận diện là câu không ràng buộc) khiến lần gọi sửa đôi khi bịa ra một form không ai hỏi. Tắt thì bỏ hẳn lần gọi sửa: một form thật sự bị quên sẽ không được vá, nhưng không bao giờ bịa form giả |
 
 ### Ví dụ thêm một biến mới

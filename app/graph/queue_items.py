@@ -33,9 +33,20 @@ class ErrorItem:
 
 
 @dataclass(frozen=True)
+class WarningItem:
+    """One `event: warning` - something an AI admin should fix that did not stop
+    the turn (e.g. web search failed and the answer went on without it). Only
+    ever queued for a caller `can_see_ai_details`; `message` is already the
+    redacted Vietnamese explanation."""
+
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
 class DoneItem:
     """End-of-stream sentinel - always the last item on the queue, put in
     `run_and_persist`'s outer `finally` no matter what happened before it."""
 
 
-QueueItem = TokenItem | ErrorItem | DoneItem
+QueueItem = TokenItem | ErrorItem | WarningItem | DoneItem

@@ -93,3 +93,28 @@ def test_development_env_skips_all_checks(monkeypatch: pytest.MonkeyPatch) -> No
     fresh = Settings()
 
     assert fresh.APP_ENV == "development"
+
+
+def test_web_search_defaults_are_off_and_domain_restricted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("CHAT_WEB_SEARCH_ENABLED", "TAVILY_API_KEY", "TAVILY_INCLUDE_DOMAINS"):
+        monkeypatch.delenv(name, raising=False)
+
+    fresh = Settings(_env_file=None)
+
+    assert fresh.CHAT_WEB_SEARCH_ENABLED is False
+    assert fresh.TAVILY_API_KEY == ""
+    assert fresh.TAVILY_INCLUDE_DOMAINS == ["iuh.edu.vn"]
+    assert fresh.CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN == 2
+    assert fresh.CHAT_WEB_SEARCH_MAX_QUERIES == 2
+
+
+def test_tavily_include_domains_parse_from_comma_separated_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TAVILY_INCLUDE_DOMAINS", "iuh.edu.vn, pdt.iuh.edu.vn ,")
+
+    fresh = Settings()
+
+    assert fresh.TAVILY_INCLUDE_DOMAINS == ["iuh.edu.vn", "pdt.iuh.edu.vn"]

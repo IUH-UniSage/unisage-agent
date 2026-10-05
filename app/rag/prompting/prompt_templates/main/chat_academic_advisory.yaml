@@ -14,7 +14,7 @@ template: |
   {task_2}
 
   ## Hướng Dẫn Xử Lý
-  Dựa vào bối cảnh trích xuất ở trên (`<academic_context>`), hãy trả lời trực
+  Dựa vào bối cảnh trích xuất ở trên (`<academic_context>`, và `<websearch>` nếu có), hãy trả lời trực
   diện, đầy đủ và chính xác câu hỏi của người dùng bên dưới. Áp đúng quy tắc
   định dạng theo loại câu hỏi (advisory/procedure/document/calendar) trong
   phần ACADEMIC DOMAIN RULES phía trên.

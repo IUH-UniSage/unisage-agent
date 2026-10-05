@@ -17,6 +17,7 @@ from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+from app.schemas.web_search import WebSearchResult
 
 from .builder import (
     append_recent_history,
@@ -56,6 +57,7 @@ def _base_params(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
+    web_results: Sequence[WebSearchResult],
     pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage],
 ) -> dict[str, str]:
@@ -70,7 +72,7 @@ def _base_params(
         "academic_domain_rules": templates.academic_domain_rules,
         "response_style": templates.response_style,
         "citation_rules": templates.citation_rules,
-        "prepared_context": build_prepared_context_section(chunks),
+        "prepared_context": build_prepared_context_section(chunks, web_results),
         "task_1": templates.task_1,
         "task_2": build_task_2_section(pending_clarification),
     }
@@ -85,6 +87,7 @@ def build_system_prompt(
     chunks: Sequence[RetrievedChunk],
     pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage] = (),
+    web_results: Sequence[WebSearchResult] = (),
 ) -> str:
     """Advisory frame for a single question. `resolved_query` (the standalone
     rewrite of a follow-up) is shown ahead of the raw message."""
@@ -94,6 +97,7 @@ def build_system_prompt(
             security=security,
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
+            web_results=web_results,
             pending_clarification=pending_clarification,
             history=history,
         ),
@@ -110,6 +114,7 @@ def build_multi_intent_prompt(
     chunks: Sequence[RetrievedChunk],
     pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage] = (),
+    web_results: Sequence[WebSearchResult] = (),
 ) -> str:
     """Multi-intent frame for several sub-queries, listed as `SQk. ...`."""
 
@@ -118,6 +123,7 @@ def build_multi_intent_prompt(
             security=security,
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
+            web_results=web_results,
             pending_clarification=pending_clarification,
             history=history,
         ),

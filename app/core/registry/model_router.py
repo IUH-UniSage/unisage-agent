@@ -52,7 +52,11 @@ import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
-from app.core.errors.llm_failure import admin_failure_message, describe_llm_failure
+from app.core.errors.llm_failure import (
+    admin_failure_message,
+    describe_llm_failure,
+    stamp_failed_model,
+)
 from app.core.observability.alerting import alert_credential_failure
 from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
 from app.core.registry.model_registry import CredentialConfig, active_credentials_for
@@ -367,10 +371,13 @@ class ModelRouter:
 
         error_type = classify_llm_error(exc)
         key = _state_key(credential.id, credential.revision)
-        message = admin_failure_message(exc, purpose=purpose, api_key=credential.api_key)
+        stamp_failed_model(exc, credential)
+        message = admin_failure_message(
+            exc, purpose=purpose, api_key=credential.api_key, credential=credential
+        )
         # Kept as the marker's value so a LATER request that finds this credential
         # suspended can still tell the client why (see `NoAvailableCredentialError`).
-        reason = describe_llm_failure(exc, purpose).reason.value
+        reason = describe_llm_failure(exc, purpose, credential).reason.value
 
         if error_type is ErrorType.PERMANENT:
             await self._mark(key, self._excluded_ttl_seconds, reason)

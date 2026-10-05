@@ -12,6 +12,7 @@ from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
+from app.schemas.web_search import WebSearchResult
 
 _SNAPSHOT_PATH = Path(__file__).parent.parent / "fixtures" / "advisory_prompt_snapshot.txt"
 
@@ -482,3 +483,69 @@ def test_build_multi_intent_prompt_never_shows_the_resolved_query_marker() -> No
 
     assert "Câu hỏi gốc" in prompt
     assert "Nguyên văn người dùng vừa nhắn" not in prompt
+
+
+def _web_page(title: str) -> WebSearchResult:
+    return WebSearchResult(
+        title=title, url=f"https://pdt.iuh.edu.vn/{title}", content=f"Nội dung {title}", score=0.8
+    )
+
+
+def test_websearch_block_sits_below_academic_context_numbered_after_the_chunks() -> None:
+    prompt = build_multi_intent_prompt(
+        user_query="Học phí và lịch thi?",
+        sub_queries=["Học phí?", "Lịch thi?"],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[
+            RetrievedChunk(chunk_id="c1", content="Học phí...", source="hoc-phi.pdf", score=0.9),
+            RetrievedChunk(chunk_id="c2", content="Miễn giảm...", source="mien.pdf", score=0.8),
+        ],
+        web_results=[_web_page("lich-thi")],
+        pending_clarification=None,
+    )
+
+    assert "[3] (lich-thi — https://pdt.iuh.edu.vn/lich-thi) Nội dung lich-thi" in prompt
+    # Tag names also appear inside the rules; compare the blocks' own lines.
+    assert prompt.index("\n</academic_context>") < prompt.index("\n<websearch>\n")
+    assert prompt.index("\n</websearch>") < prompt.index("\n<current_date>\n")
+    assert "luôn theo `<academic_context>`" in prompt
+
+
+def test_websearch_only_turn_has_an_empty_academic_context() -> None:
+    prompt = build_system_prompt(
+        user_query="Lịch thi học kỳ 1?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        web_results=[_web_page("lich-thi")],
+        pending_clarification=None,
+    )
+
+    assert "(không có tài liệu liên quan)" in prompt
+    assert "[1] (lich-thi — https://pdt.iuh.edu.vn/lich-thi)" in prompt
+
+
+def test_no_web_results_renders_no_websearch_block() -> None:
+    prompt = build_system_prompt(
+        user_query="Học phí?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[RetrievedChunk(chunk_id="c1", content="x", source="s", score=0.9)],
+        pending_clarification=None,
+    )
+
+    assert "<websearch>\n" not in prompt
+    assert "## Thông Tin Bổ Sung Từ Website" not in prompt
+
+
+def test_json_repair_prompt_sees_the_same_web_results() -> None:
+    prompt = build_json_repair_prompt(
+        "Bạn cho mình biết thêm hệ đào tạo nhé.",
+        [],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        web_results=[_web_page("lich-thi")],
+    )
+
+    assert "[1] (lich-thi — https://pdt.iuh.edu.vn/lich-thi)" in prompt

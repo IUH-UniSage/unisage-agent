@@ -53,7 +53,7 @@ from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import async_session_factory
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem, WarningItem
 from app.graph.stream_error_codes import (
     LLM_STREAM_INTERRUPTED,
     MESSAGES,
@@ -62,7 +62,7 @@ from app.graph.stream_error_codes import (
 )
 from app.graph.streaming import BudgetContext
 from app.graph.streaming_graph import run_graph
-from app.graph.streaming_state import GraphInput, GraphModels
+from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,19 @@ def _error_item_for(
     if streamed_any and not (detailed and code == LLM_STREAM_INTERRUPTED):
         message = f"Câu trả lời bị gián đoạn giữa chừng. {message}"
     return ErrorItem(code=code, message=message, retryable=retryable)
+
+
+def _admin_warnings(graph_output: GraphOutput, graph_input: GraphInput) -> list[WarningItem]:
+    """`event: warning`s for an AI admin (web search or the LLM rerank failed,
+    the Extraction model is missing, ...) - everyone else just gets the answer,
+    with no mention of what was skipped."""
+
+    if not can_see_ai_details(graph_input.security.permissions):
+        return []
+    return [
+        WarningItem(code=warning.code, message=warning.message)
+        for warning in graph_output.admin_warnings
+    ]
 
 
 async def run_and_persist(
@@ -185,6 +198,8 @@ async def run_and_persist(
             )
             response_text = graph_output.response_text
             status = "COMPLETED"
+            for warning in _admin_warnings(graph_output, graph_input):
+                await queue.put(warning)
         except Exception as exc:
             reference = short_reference(usage_recorder.request_id)
             logger.exception(

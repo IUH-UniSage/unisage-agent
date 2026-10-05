@@ -228,6 +228,41 @@ def test_provider_failure_falls_back_to_next_extraction_credential(
     assert backend.reports[0]["credential_id"] == "cred-primary"
 
 
+def test_next_chunk_skips_a_credential_that_is_cooling_down(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the primary fails once it is on cooldown; the following chunk must start from
+    the fallback instead of calling (and failing on) the primary again."""
+
+    _router, backend = fake_router
+    cred_primary = _credential("cred-primary", priority=1)
+    cred_fallback = _credential("cred-fallback", priority=2)
+    _set_extraction_snapshot(version=1, extraction=(cred_primary, cred_fallback))
+
+    primary_calls: list[int] = []
+
+    def primary(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        primary_calls.append(1)
+        raise RuntimeError("primary down")
+
+    _patch_build_model(
+        monkeypatch,
+        {
+            "cred-primary": FunctionModel(function=primary),
+            "cred-fallback": _function_model(_success_payload()),
+        },
+    )
+
+    enricher = MultiRepresentationEnricher(question_count=3)
+    first = enricher.enrich(_chunk())
+    second = enricher.enrich(_chunk())
+
+    assert first.summary == second.summary == "ok"
+    assert len(primary_calls) == 1
+    assert [report["credential_id"] for report in backend.reports] == ["cred-primary"]
+
+
 def test_malformed_response_on_fallback_credential_reported_permanent(
     fake_router: tuple[ModelRouter, _FakeBackendClient],
     monkeypatch: pytest.MonkeyPatch,

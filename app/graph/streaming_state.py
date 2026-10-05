@@ -26,6 +26,11 @@ class GraphModels:
     retrieval: RetrievalServiceProtocol
     generation_credential: CredentialConfig | None = None
     snapshot_version: int | None = None
+    # LLMRerankNode's model - the top-priority EXTRACTION credential, not CHAT's.
+    # None skips the node; `rerank_unavailable` then says why (for the AI-admin warning).
+    rerank: Model | str | None = None
+    rerank_credential: CredentialConfig | None = None
+    rerank_unavailable: str | None = None
 
 
 @dataclass
@@ -40,10 +45,20 @@ class GraphInput:
     history: list[HistoryMessage] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class AdminWarning:
+    code: str
+    message: str
+
+
 @dataclass
 class GraphOutput:
     response_text: str
     confirmed_metadata: dict[str, str] = field(default_factory=dict)
     pending_clarification: PendingClarification | None = None
     used_ticket_fallback: bool = False
+    used_web_search: bool = False
+    # Things an AI admin should fix that did not stop the turn (web search or the
+    # LLM rerank failing, ...) - sent to AI admins only, as `event: warning`.
+    admin_warnings: list[AdminWarning] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)

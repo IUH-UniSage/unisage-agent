@@ -1,7 +1,8 @@
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _DEFAULT_INTERNAL_SECRET = "unisage-internal-secret-key-2026"
 _MIN_INTERNAL_SECRET_LENGTH = 32
@@ -114,12 +115,34 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "unisage_chunks"
 
+    # --- TAVILY_: web search API used by WebSearchNode when retrieval finds nothing for a
+    # sub-query (see app/graph/nodes/web_search.py). Empty key = web search is skipped. ---
+    TAVILY_API_KEY: str = ""
+    TAVILY_BASE_URL: str = "https://api.tavily.com"
+    # Comma-separated in .env. Only these sites (and their subdomains) are searched - the
+    # answer must come from the university's own pages, never a forum or another school.
+    TAVILY_INCLUDE_DOMAINS: Annotated[list[str], NoDecode] = ["iuh.edu.vn"]
+    # `basic` costs 1 credit per search, `advanced` 2 but returns longer, more relevant snippets.
+    TAVILY_SEARCH_DEPTH: Literal["basic", "advanced"] = "basic"
+    # Deadline for the whole search call. Tavily usually answers in ~3s but has spikes
+    # past 10s; a timeout only drops web results, the turn still ends in the ticket fallback.
+    TAVILY_TIMEOUT_SECONDS: float = 15.0
+
     # --- INGEST_: only ever read at document-ingestion time (chunking,
     # enrichment) - never during a chat turn ---
     INGEST_MULTI_REP_QUESTION_COUNT: int = 3
     INGEST_SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800
     INGEST_CHUNKING_VERSION: str = "2026-09-structural-v2"
+    # Minimum seconds between the START of two consecutive extraction calls in one embed job.
+    # Free-tier keys allow ~15 requests/minute, but a sequential job easily goes faster than
+    # that; 0 disables the pause. A call that already took longer than this adds no extra wait.
+    INGEST_EXTRACTION_MIN_INTERVAL_SECONDS: float = Field(default=0.0, ge=0)
+    # When every EXTRACTION credential is cooling down, wait this long before retrying the
+    # same chunk. A bit over the router's 30s default cooldown so the first key is usable again.
+    INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS: float = Field(default=35.0, ge=0)
+    # How many such waits one chunk gets before the embed job is failed. 0 = never wait.
+    INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS: int = Field(default=6, ge=0)
 
     # --- CHAT_: read on every chat turn ---
     CHAT_CLARIFICATION_MAX_RETRY: int = 2
@@ -127,6 +150,27 @@ class Settings(BaseSettings):
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
+    # LLMRerankNode: one call to the EXTRACTION model per turn checks which reranked chunks
+    # actually answer which sub-query - the score threshold alone lets a chunk through on
+    # shared keywords. A sub-query left with none goes to WebSearchNode. Each chunk is shown
+    # to the model cut to SNIPPET_CHARS.
+    CHAT_LLM_RERANK_ENABLED: bool = True
+    CHAT_LLM_RERANK_SNIPPET_CHARS: int = Field(default=800, ge=100)
+    # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
+    # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
+    # bound how much web text reaches the system prompt (~3000 chars at the defaults),
+    # however long the question or however many sub-queries it split into.
+    CHAT_WEB_SEARCH_ENABLED: bool = False
+    # Tavily bills per search, not per result, so asking for more candidates is free;
+    # MIN_SCORE and PER_TURN still bound what reaches the prompt.
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=5, ge=1, le=20)
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=2, ge=1)
+    # Searches per turn: a message with several tasks can leave many sub-queries without
+    # chunks, but only PER_TURN pages reach the prompt, so the rest would be paid-for
+    # searches thrown away. The worst-missed sub-queries are searched first.
+    CHAT_WEB_SEARCH_MAX_QUERIES: int = Field(default=2, ge=1)
+    CHAT_WEB_SEARCH_MIN_SCORE: float = Field(default=0.5, ge=0.0, le=1.0)
+    CHAT_WEB_SEARCH_RESULT_MAX_CHARS: int = Field(default=1500, ge=100)
 
     # GenerationSynthesisNode's JSON-repair follow-up call (see
     # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
@@ -170,6 +214,13 @@ class Settings(BaseSettings):
     # since under-reserving would let a request through that a THROTTLE/BLOCK
     # budget should have caught.
     BUDGET_ESTIMATE_MAX_OUTPUT_TOKENS: int = 2000
+
+    @field_validator("TAVILY_INCLUDE_DOMAINS", mode="before")
+    @classmethod
+    def _split_domains(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [domain.strip() for domain in value.split(",") if domain.strip()]
+        return value
 
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":

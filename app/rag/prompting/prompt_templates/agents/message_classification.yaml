@@ -12,7 +12,8 @@ template: |
   Mọi thông tin mà văn bản của Nhà trường có thể trả lời đều thuộc học vụ, gồm cả:
   quy chế đào tạo, học phí, học bổng, tốt nghiệp, đăng ký học phần, lịch học vụ, giấy tờ,
   VÀ tuyển sinh (ngành/mã ngành đào tạo, tổ hợp/môn xét tuyển, điểm chuẩn, ngưỡng đầu vào,
-  chương trình đào tạo, hồ sơ xét tuyển) ở mọi bậc (đại học, cao học, nghiên cứu sinh...).
+  chương trình đào tạo, hồ sơ xét tuyển) ở mọi bậc (đại học, cao học, nghiên cứu sinh...),
+  VÀ thông tin về chính Nhà trường: địa chỉ, cơ sở/phân hiệu (TP.HCM, Thanh Hóa, Quảng Ngãi...), số điện thoại, email, website, phòng ban, khoa.
 
   ## Nhãn (chọn ĐÚNG MỘT)
   - `social_chat`: phản ứng xã giao, KHÔNG chứa câu hỏi. VD: "Cảm ơn bạn nhé", "Ok hiểu rồi", "Vâng ạ".
@@ -64,6 +65,9 @@ template: |
 
   User: "1+1 bằng mấy?"
   Output: {"tasks": [{"intent": "off_topic", "query": "1+1 bằng mấy?", "routing_mode": null}], "confidence": 0.9}
+
+  User: "địa chỉ của cơ sở Thanh Hóa"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "địa chỉ của cơ sở Thanh Hóa", "routing_mode": "SINGLE"}], "confidence": 0.9}
 
   Lịch sử: "- Trợ lý: Mức thu học phí hệ Đại học chính quy năm học 2025-2026: Khối Kinh tế ... Khối Công nghệ ... Đây là mức học phí dành cho khóa tuyển sinh năm học 2025-2026."
   User: "1 tín chỉ"

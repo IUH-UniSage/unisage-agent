@@ -44,7 +44,11 @@ from app.core.errors.provider_errors import (
 from app.core.llm.provider_models import UnsupportedProviderError
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.errors import NoAvailableCredentialError, NoBudgetAvailableError
-from app.core.registry.model_registry import ModelRegistryError, active_credentials_for
+from app.core.registry.model_registry import (
+    CredentialConfig,
+    ModelRegistryError,
+    active_credentials_for,
+)
 from app.core.security.redaction import safe_error_message
 from app.core.security.ssrf_guard import SsrfBlockedError
 
@@ -114,10 +118,28 @@ class LLMCallException(UniSageException):
         self.failure = failure
 
 
-def _label(purpose: str | None) -> str:
-    if purpose is None:
-        return "Mô hình AI"
-    return f"Mô hình {_PURPOSE_LABELS.get(purpose, purpose)}"
+def _label(purpose: str | None, model: str | None = None) -> str:
+    base = "Mô hình AI" if purpose is None else f"Mô hình {_PURPOSE_LABELS.get(purpose, purpose)}"
+    return f"{base} [{model}]" if model else base
+
+
+def credential_nickname(credential: CredentialConfig | None) -> str | None:
+    """The operator's nickname for the credential, else its model name - what to show
+    next to the purpose so an error says WHICH model failed."""
+
+    if credential is None:
+        return None
+    return credential.display_name or credential.model_name
+
+
+def stamp_failed_model(exc: BaseException, credential: CredentialConfig) -> None:
+    """Remembers which credential's model `exc` came from, so a later
+    `describe_llm_failure(exc)` (e.g. the SSE error) can name it."""
+
+    try:
+        exc.failed_model = credential_nickname(credential)  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - exotic exception types without __dict__
+        pass
 
 
 def _root_cause(exc: BaseException) -> BaseException:
@@ -189,8 +211,10 @@ def _input_too_large(exc: BaseException) -> bool:
     return any(marker in text for marker in _INPUT_TOO_LARGE_MARKERS)
 
 
-def _by_status(status: int, root: BaseException, purpose: str | None) -> LLMFailure:
-    who = _label(purpose)
+def _by_status(
+    status: int, root: BaseException, purpose: str | None, model: str | None
+) -> LLMFailure:
+    who = _label(purpose, model)
     if status == 401:
         return _failure(
             FailureReason.LLM_AUTH_FAILED,
@@ -312,8 +336,8 @@ def _describe_suspension_reasons(reasons: tuple[str, ...]) -> str:
     return ", ".join(phrases)
 
 
-def _budget_failure(reason: str, purpose: str | None) -> LLMFailure:
-    who = _label(purpose)
+def _budget_failure(reason: str, purpose: str | None, model: str | None) -> LLMFailure:
+    who = _label(purpose, model)
     if "THROTTLED" in reason:
         return _failure(
             FailureReason.BUDGET_THROTTLED,
@@ -332,27 +356,47 @@ def _budget_failure(reason: str, purpose: str | None) -> LLMFailure:
     )
 
 
-def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMFailure:
+def _stamped_model(exc: BaseException) -> str | None:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        model = getattr(current, "failed_model", None)
+        if model:
+            return str(model)
+        current = current.__cause__ or getattr(current, "last_error", None)
+    return None
+
+
+def describe_llm_failure(
+    exc: BaseException,
+    purpose: str | None = None,
+    credential: CredentialConfig | None = None,
+) -> LLMFailure:
     """Classifies one AI-model failure. Never raises. `purpose` is the caller's best guess
     (e.g. "CHAT" for the chat graph); an exception that knows its own purpose
-    (`NoAvailableCredentialError`, `EmbeddingProviderError`, ...) overrides it."""
+    (`NoAvailableCredentialError`, `EmbeddingProviderError`, ...) overrides it.
+    `credential` (or a model stamped on the exception chain by `stamp_failed_model`) puts
+    the model's nickname in the message."""
 
     purpose = _purpose_of(exc, purpose)
+    model = credential_nickname(credential) or _stamped_model(exc)
     if isinstance(exc, NoAvailableCredentialError) and exc.last_error is not None:
-        cause = describe_llm_failure(exc.last_error, purpose)
+        cause = describe_llm_failure(exc.last_error, purpose, credential)
         if cause.reason != FailureReason.LLM_UNKNOWN_ERROR:
             return cause
         return _failure(
             FailureReason.LLM_UNAVAILABLE,
             ErrorCode.LLM_ALL_CREDENTIALS_SUSPENDED,
-            f"{_label(purpose)}: mọi credential đều gọi thất bại (lỗi cuối: "
+            f"{_label(purpose, model)}: mọi credential đều gọi thất bại (lỗi cuối: "
             f"{type(_root_cause(exc.last_error)).__name__}). {_CHECK_CONFIG}",
             retryable=False,
             purpose=purpose,
         )
     root = _root_cause(exc)
     purpose = _purpose_of(root, purpose) if root is not exc else purpose
-    who = _label(purpose)
+    model = model or _stamped_model(root)
+    who = _label(purpose, model)
 
     if isinstance(root, ModelRegistryError) or (
         isinstance(root, NoAvailableCredentialError) and not active_credentials_for(root.purpose)
@@ -386,11 +430,11 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
             purpose=purpose,
         )
     if isinstance(root, RequestBudgetRejectedError):
-        return _budget_failure(root.reason, purpose)
+        return _budget_failure(root.reason, purpose, model)
     if isinstance(root, NoBudgetAvailableError):
-        return _budget_failure(root.last_deny_reason, purpose)
+        return _budget_failure(root.last_deny_reason, purpose, model)
     if isinstance(root, EmbeddingBudgetRejectedError):
-        return _budget_failure(root.reason, purpose)
+        return _budget_failure(root.reason, purpose, model)
     if isinstance(root, EmbeddingIdentityMismatchError):
         return _failure(
             FailureReason.EMBEDDING_IDENTITY_MISMATCH,
@@ -419,7 +463,7 @@ def describe_llm_failure(exc: BaseException, purpose: str | None = None) -> LLMF
 
     status = provider_status_code(root)
     if status is not None:
-        return _by_status(status, root, purpose)
+        return _by_status(status, root, purpose, model)
 
     if isinstance(
         root, openai.APITimeoutError | httpx.TimeoutException | asyncio.TimeoutError | TimeoutError
@@ -497,12 +541,18 @@ def is_model_failure(exc: BaseException) -> bool:
 _ADMIN_MESSAGE_MAX_LENGTH = 500
 
 
-def admin_failure_message(exc: BaseException, *, purpose: str | None, api_key: str | None) -> str:
+def admin_failure_message(
+    exc: BaseException,
+    *,
+    purpose: str | None,
+    api_key: str | None,
+    credential: CredentialConfig | None = None,
+) -> str:
     """The text stored for admins (credential health `lastErrorMessage`, verification job
     `errorMessage`): the friendly cause first, then the redacted provider detail - so the
     admin page says "API key không hợp lệ (HTTP 401)" up front instead of only a raw English
     SDK string. Capped at 500 chars (Java's `last_error_message` column)."""
 
-    friendly = describe_llm_failure(exc, purpose).message
+    friendly = describe_llm_failure(exc, purpose, credential).message
     detail = safe_error_message(exc, api_key)
     return f"{friendly} Chi tiết: {detail}"[:_ADMIN_MESSAGE_MAX_LENGTH]
