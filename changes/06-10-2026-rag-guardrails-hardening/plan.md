@@ -45,7 +45,7 @@ Chi tiết từng task ở `todo.md`.
 
 ### Phase 2: Docs
 - [x] Task 5: Sửa các tài liệu sản phẩm đang mâu thuẫn với code
-- [ ] Task 6: Viết lại README.md, CONTEXT.md, rag-pipeline.md
+- [x] Task 6: Viết lại README.md, CONTEXT.md, rag-pipeline.md
 
 ### Checkpoint 2
 - [ ] Không còn tài liệu nào nói pgvector, "provider-free fallback" hay "chưa có startup guard"

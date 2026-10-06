@@ -122,7 +122,7 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
-| `QDRANT_HOST`/`QDRANT_PORT`/`QDRANT_COLLECTION` | `localhost:6333`, `unisage_chunks` | Vector DB duy nhất — không còn pgvector dù README/CONTEXT.md cũ còn nhắc (xem known-gaps) |
+| `QDRANT_HOST`/`QDRANT_PORT`/`QDRANT_COLLECTION` | `localhost:6333`, `unisage_chunks` | Vector DB duy nhất (không dùng pgvector) |
 
 **`TAVILY_`**
 

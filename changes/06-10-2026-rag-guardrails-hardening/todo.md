@@ -200,13 +200,13 @@ Tên node (`01_…` → `11_…`) chỉ dùng cho `GraphTrace` và để đối 
 Cả 3 file trỏ sang `docs/product/PRODUCT.md` làm nguồn luật. Sau đó bỏ câu "README/CONTEXT là lịch sử" trong `PRODUCT.md`.
 
 **Acceptance criteria:**
-- [ ] Không còn nhắc pgvector, "provider-free", "deterministic fallback" như hiện trạng
-- [ ] Sơ đồ trong rag-pipeline.md khớp tên node trong `trace.node(...)` của `streaming_graph.py`, có 09a/09b là nhánh tuỳ chọn kèm điều kiện
-- [ ] Không tài liệu nào gọi orchestrator là `pydantic_graph.Graph`
-- [ ] Các lệnh quick start trong README chạy được trên Linux (`task be:dev`, `task test`)
+- [x] Không còn nhắc pgvector, "provider-free", "deterministic fallback" như hiện trạng
+- [x] Sơ đồ trong rag-pipeline.md khớp tên node trong `trace.node(...)` của `streaming_graph.py`, có 09a/09b là nhánh tuỳ chọn kèm điều kiện
+- [x] Không tài liệu nào gọi orchestrator là `pydantic_graph.Graph`
+- [x] Các lệnh quick start trong README chạy được trên Linux (`task be:dev`, `task test`)
 
 **Verification:**
-- [ ] Manual: `grep -rniE "pgvector|provider-free" README.md CONTEXT.md docs/` không còn kết quả, trừ phần lịch sử có ghi chú rõ
+- [x] Manual: `grep -rniE "pgvector|provider-free" README.md CONTEXT.md docs/` không còn kết quả, trừ phần lịch sử có ghi chú rõ
 - [ ] Manual: người dùng đọc lại sơ đồ
 
 **Dependencies:** Task 5

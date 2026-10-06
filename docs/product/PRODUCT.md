@@ -9,9 +9,9 @@ bộ đường ingest tài liệu (nộp file → xem trước → chia đoạn 
 **File này là gì:** những điều luôn đúng về sản phẩm — ai dùng nó, dữ liệu gồm những gì, cái gì quyết
 cái gì, và cái gì cố ý không làm. Cùng với `DECISIONS.md`, đây là toàn bộ tài liệu sản phẩm.
 
-**File này không phủ hết repo.** README.md, CONTEXT.md ở gốc repo đang mô tả một kiến trúc cũ
-(pgvector, "provider-free fallback") không còn đúng — coi hai file đó là lịch sử, không phải nguồn sự
-thật. Chỗ nào không ghi ở đây thì **code là nguồn sự thật**, cho tới khi có người ghi luật vào đây.
+**File này không phủ hết repo.** README.md (cách chạy), CONTEXT.md (định hướng nhanh) và
+`docs/architecture/rag-pipeline.md` (luồng chạy thật) mô tả hệ thống, nhưng luật nằm ở đây. Chỗ nào
+không ghi ở đây thì **code là nguồn sự thật**, cho tới khi có người ghi luật vào đây.
 
 **Nguồn nghiệp vụ:** thiết kế graph gốc ở `D:\KLTN\RAG_Graph\KLTN` (ảnh flow_design, `nodes/`,
 `prompt_template/`) — chuẩn cho cấu trúc luồng và cách lắp prompt, không phải chuẩn cho câu chữ prompt
