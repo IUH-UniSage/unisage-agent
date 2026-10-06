@@ -37,7 +37,7 @@ Chi tiết từng task ở `todo.md`.
 ### Phase 1: Guardrail và test (làm ngay, độc lập với nhau)
 - [x] Task 1: Test không phụ thuộc môi trường máy
 - [x] Task 2: Đánh dấu context là dữ liệu trong prompt
-- [ ] Task 3: Ghi log khi nghi prompt injection (log-only)
+- [x] Task 3: Ghi log khi nghi prompt injection (log-only)
 - [ ] Task 4: Một contract độ dài duy nhất cho câu hỏi (2000 ký tự, `4009`)
 
 ### Checkpoint 1

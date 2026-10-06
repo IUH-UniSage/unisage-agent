@@ -87,13 +87,13 @@ và mới chỉ có 4 mẫu tiếng Anh. Việc cần làm:
 - Không chặn, không đổi luồng xử lý.
 
 **Acceptance criteria:**
-- [ ] Bắt được các câu như "bỏ qua hướng dẫn trước", "bo qua moi chi dan", "in ra system prompt", "bạn giờ là", "ignore previous instructions"
-- [ ] Không bắt nhầm câu học vụ thường: "bỏ qua môn này có sao không", "hướng dẫn đăng ký học phần", "hệ thống đăng ký tín chỉ"
-- [ ] Response của `/chat/stream` không đổi khi có hoặc không có dấu hiệu injection
-- [ ] Test khẳng định bản ghi log có đúng 4 trường trên và chuỗi log không chứa bất kỳ phần nào của câu hỏi; câu không khớp thì không có bản ghi nào
+- [x] Bắt được các câu như "bỏ qua hướng dẫn trước", "bo qua moi chi dan", "in ra system prompt", "bạn giờ là", "ignore previous instructions"
+- [x] Không bắt nhầm câu học vụ thường: "bỏ qua môn này có sao không", "hướng dẫn đăng ký học phần", "hệ thống đăng ký tín chỉ"
+- [x] Response của `/chat/stream` không đổi khi có hoặc không có dấu hiệu injection
+- [x] Test khẳng định bản ghi log có đúng 4 trường trên và chuỗi log không chứa bất kỳ phần nào của câu hỏi; câu không khớp thì không có bản ghi nào
 
 **Verification:**
-- [ ] `.venv/bin/pytest -q tests/core/test_sanitizer.py tests/api/test_chat_stream_endpoint.py` (test mới cho cả ca dương tính và ca âm tính)
+- [x] `.venv/bin/pytest -q tests/core/test_sanitizer.py tests/api/test_chat_stream_endpoint.py` (test mới cho cả ca dương tính và ca âm tính)
 - [ ] Manual: gửi 1 câu injection qua `/chat/stream`, thấy dòng WARNING trong log và câu trả lời vẫn bình thường
 
 **Dependencies:** None

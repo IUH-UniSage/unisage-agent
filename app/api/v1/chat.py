@@ -22,7 +22,7 @@ from app.core.errors.exceptions import (
     InvalidQueryException,
     UsageLimitExceededException,
 )
-from app.core.security.sanitizer import sanitize_input_text
+from app.core.security.sanitizer import detect_prompt_injection, sanitize_input_text
 from app.core.security.security import verify_internal_secret
 from app.core.usage.cost_calculator import estimate as estimate_cost
 from app.core.usage.usage_recorder import UsageRecorder
@@ -202,6 +202,30 @@ async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenera
     yield "event: done\ndata: {}\n\n"
 
 
+def _log_suspected_prompt_injection(message: str, *, role: str, conversation_id: str) -> None:
+    """Log-only: a match never blocks or changes the turn. The record carries
+    the pattern name, role, conversation id and message length - never the
+    message, the matched text, or the user id - so the false-positive rate can
+    be measured before anyone decides to block."""
+
+    pattern = detect_prompt_injection(message)
+    if pattern is None:
+        return
+    logger.warning(
+        "Prompt injection suspected: pattern=%s role=%s conversation_id=%s message_length=%d",
+        pattern,
+        role,
+        conversation_id,
+        len(message),
+        extra={
+            "pattern": pattern,
+            "role": role,
+            "conversation_id": conversation_id,
+            "message_length": len(message),
+        },
+    )
+
+
 @router.post("/chat/stream")
 async def chat_stream_endpoint(
     request: ChatStreamRequest,
@@ -244,6 +268,9 @@ async def chat_stream_endpoint(
     clean_message = sanitize_input_text(request.message)
     if not clean_message:
         raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")
+    _log_suspected_prompt_injection(
+        clean_message, role=security.role, conversation_id=request.conversation_id
+    )
 
     client_ip = _resolve_client_ip(http_request, x_forwarded_for)
     guest_session_token = _resolve_guest_session_token(http_request)
