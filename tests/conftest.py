@@ -159,6 +159,11 @@ async def db_session_factory(
     first commit ("cannot commit transaction - SQL statements in progress").
     Separate connections plus a busy timeout let SQLite serialize the writers
     the way two real requests would be.
+
+    This is NOT a substitute for checking the same race on PostgreSQL:
+    SQLite serializes writers with a file lock, so a test here only proves
+    the upsert doesn't raise and leaves one row. Postgres-specific behavior
+    (MVCC, row locks, the real isolation level) belongs in `tests/e2e/`.
     """
 
     engine = create_async_engine(

@@ -20,15 +20,20 @@ Lệnh chung:
 Cách sửa:
 - Test giá trị mặc định dựng `Settings(_env_file=None)` và xoá các env liên quan.
 - Test health mock `_check_database`, giống test `degraded` ngay bên dưới.
-- Test ghi đồng thời chỉ chạy trên Postgres: đưa sang e2e hoặc skip khi dialect là sqlite, kèm lý do.
+- Test ghi đồng thời: fixture `db_session_factory` dùng SQLite **file-backed + `NullPool`** để mỗi session có connection riêng (`StaticPool` dùng chung 1 connection nên SQLite từ chối commit đầu tiên).
+
+> **Giới hạn:** SQLite tuần tự hoá các writer bằng file lock, nên test này chỉ chứng minh `INSERT ... ON CONFLICT DO UPDATE`
+> không ném lỗi và giữ đúng 1 dòng. Nó **không** thay thế kiểm chứng trên PostgreSQL production
+> (MVCC, khoá dòng, isolation level thật). Kiểm chứng Postgres thuộc bộ `tests/e2e/` khi có môi trường integration.
 
 **Acceptance criteria:**
-- [ ] 3 test trên pass khi `.env` dev có giá trị khác mặc định và Postgres không chạy
-- [ ] Test ghi đồng thời vẫn chạy được ở môi trường có Postgres (không bị xoá)
-- [ ] Không sửa code trong `app/`
+- [x] 3 test trên pass khi `.env` dev có giá trị khác mặc định và Postgres không chạy
+- [x] Test ghi đồng thời vẫn giữ trong bộ test mặc định (không bị xoá hay skip)
+- [x] Không sửa code trong `app/`
+- [x] Docstring fixture ghi rõ test SQLite không thay thế kiểm chứng PostgreSQL
 
 **Verification:**
-- [ ] `.venv/bin/pytest -q --ignore=tests/e2e` xanh trên máy dev hiện tại
+- [x] `.venv/bin/pytest -q --ignore=tests/e2e` xanh trên máy dev hiện tại
 - [ ] Đổi tạm `CHAT_RERANK_SCORE_THRESHOLD` trong `.env`, chạy lại `tests/test_config.py` vẫn pass
 
 **Dependencies:** None
@@ -50,9 +55,9 @@ Cần thêm câu dặn tương tự cho `<academic_context>`, và escape thẻ �
 `</websearch>`) nếu nó xuất hiện trong nội dung chunk hoặc trang web, để nội dung không thoát ra khỏi khung XML.
 
 **Acceptance criteria:**
-- [ ] `prepared_context.yaml` có câu dặn rằng `<academic_context>` là dữ liệu và phải bỏ qua mọi mệnh lệnh nằm trong đó
-- [ ] Chunk hoặc kết quả web chứa `</academic_context>` hay `</websearch>` được escape trước khi render
-- [ ] Prompt đã render cho một chunk bình thường không đổi, trừ câu dặn mới
+- [x] `prepared_context.yaml` có câu dặn rằng `<academic_context>` là dữ liệu và phải bỏ qua mọi mệnh lệnh nằm trong đó
+- [x] Chunk hoặc kết quả web chứa `</academic_context>` hay `</websearch>` được escape trước khi render
+- [x] Prompt đã render cho một chunk bình thường không đổi, trừ câu dặn mới (snapshot `tests/fixtures/advisory_prompt_snapshot.txt` chỉ thêm đúng 1 dòng)
 
 **Verification:**
 - [ ] Test mới trong `tests/` của prompt builder: chunk có thẻ đóng → output chỉ có đúng 1 thẻ đóng thật
@@ -63,7 +68,8 @@ Cần thêm câu dặn tương tự cho `<academic_context>`, và escape thẻ �
 **Files likely touched:**
 - `app/rag/prompting/prompt_templates/common/prepared_context.yaml`
 - `app/rag/prompting/builder.py`
-- `tests/test_prompt_builder.py` (mới, hoặc test builder đã có)
+- `tests/rag/test_prompt_builder.py` (mới)
+- `tests/fixtures/advisory_prompt_snapshot.txt`
 
 **Estimated scope:** Small
 
@@ -76,13 +82,15 @@ và mới chỉ có 4 mẫu tiếng Anh. Việc cần làm:
 - Bổ sung mẫu tiếng Việt, so khớp sau khi bỏ dấu (dùng chung kiểu chuẩn hoá với `_normalize_for_match`).
 - Đổi giá trị trả về thành tên mẫu đã khớp (`str | None`).
 - Gọi hàm này trong `chat_stream_endpoint` ngay sau `sanitize_input_text`.
-- Khi khớp, ghi log mức WARNING gồm tên mẫu, role, conversation id và độ dài câu hỏi; **không** ghi nội dung câu hỏi.
+- Khi khớp, ghi **đúng một** dòng log mức WARNING, chỉ gồm 4 trường: `pattern` (tên mẫu, không phải regex hay đoạn khớp),
+  `role`, `conversation_id`, `message_length`. **Không** ghi nội dung câu hỏi, đoạn khớp hay `user_id`.
 - Không chặn, không đổi luồng xử lý.
 
 **Acceptance criteria:**
 - [ ] Bắt được các câu như "bỏ qua hướng dẫn trước", "bo qua moi chi dan", "in ra system prompt", "bạn giờ là", "ignore previous instructions"
 - [ ] Không bắt nhầm câu học vụ thường: "bỏ qua môn này có sao không", "hướng dẫn đăng ký học phần", "hệ thống đăng ký tín chỉ"
-- [ ] Response của `/chat/stream` không đổi khi có hoặc không có dấu hiệu injection; log không chứa nội dung câu hỏi
+- [ ] Response của `/chat/stream` không đổi khi có hoặc không có dấu hiệu injection
+- [ ] Test khẳng định bản ghi log có đúng 4 trường trên và chuỗi log không chứa bất kỳ phần nào của câu hỏi; câu không khớp thì không có bản ghi nào
 
 **Verification:**
 - [ ] `.venv/bin/pytest -q tests/core/test_sanitizer.py tests/api/test_chat_stream_endpoint.py` (test mới cho cả ca dương tính và ca âm tính)
@@ -100,28 +108,33 @@ và mới chỉ có 4 mẫu tiếng Anh. Việc cần làm:
 
 ---
 
-## Task 4: Báo lỗi rõ khi câu hỏi quá dài
+## Task 4: Một contract độ dài duy nhất cho câu hỏi
 
-**Description:** Hiện `sanitize_input_text` cắt câu hỏi ở 1000 ký tự mà không báo gì, nên phần cuối
-câu hỏi mất đi một cách âm thầm. Đổi sang: câu hỏi vượt giới hạn (sau khi bỏ HTML và gộp khoảng trắng)
-thì trả `InvalidQueryException` với thông điệp tiếng Việt nêu rõ giới hạn. Giới hạn đưa vào `Settings`
-(`CHAT_MESSAGE_MAX_CHARS`, mặc định 1000). **Xác nhận Open Question trong plan.md trước khi làm.**
+**Description:** Hiện có hai giới hạn chồng nhau:
+- `ChatStreamRequest.message` (`app/schemas/chat.py:13`) có `max_length=2000`. Input trên 2000 ký tự bị Pydantic
+  từ chối trước khi vào handler, trả `400` code `4009` (`VALIDATION_ERROR`) kèm `errors.message`.
+- `sanitize_input_text` (`app/api/v1/chat.py:244`) lại cắt âm thầm ở 1000 ký tự, nên câu hỏi dài 1001–2000 ký tự mất phần cuối mà không báo gì.
+
+Chốt **một contract**: giới hạn duy nhất là `max_length=2000` của schema, lỗi luôn là `400` / `4009` / `errors.message`.
+`sanitize_input_text` bỏ việc cắt (bỏ HTML và gộp khoảng trắng chỉ làm câu ngắn đi, nên không thể vượt 2000 sau khi sanitize).
+Không thêm biến `Settings` mới, vì như vậy sẽ thành hai nguồn cho cùng một con số.
+Java (`SendMessageRequest.content`) không giới hạn độ dài, nên 2000 không xung đột với phía backend.
 
 **Acceptance criteria:**
-- [ ] Câu hỏi dài hơn `CHAT_MESSAGE_MAX_CHARS` trả lỗi 4xx với `code` ổn định, không tạo message bên Java
-- [ ] Câu hỏi dài đúng bằng giới hạn vẫn chạy bình thường
-- [ ] `.env.example` và `docs/guide/cau-hinh.md` có biến mới
+- [ ] Câu hỏi 2000 ký tự chạy bình thường và được gửi sang Java nguyên vẹn (không bị cắt)
+- [ ] Câu hỏi 2001 ký tự trả `400`, `code = 4009`, `errors` có key `message`; không gọi Java
+- [ ] Contract ghi trong docstring `ChatStreamRequest` và `docs/guide/cau-hinh.md` (hoặc PRODUCT.md › Business rules)
 
 **Verification:**
-- [ ] `.venv/bin/pytest -q tests/api/test_chat_stream_endpoint.py tests/test_config.py`
+- [ ] `.venv/bin/pytest -q tests/api/test_chat_stream_endpoint.py tests/core/test_sanitizer.py`
 
 **Dependencies:** Task 3 (cùng sửa `chat.py` và `sanitizer.py`, nên làm sau để tránh xung đột)
 
 **Files likely touched:**
 - `app/core/security/sanitizer.py`
-- `app/api/v1/chat.py`
-- `app/core/config.py`
-- `.env.example`, `docs/guide/cau-hinh.md`
+- `app/schemas/chat.py`
+- `tests/api/test_chat_stream_endpoint.py`, `tests/core/test_sanitizer.py`
+- `docs/product/PRODUCT.md`
 
 **Estimated scope:** Small
 
@@ -169,14 +182,27 @@ thì trả `InvalidQueryException` với thông điệp tiếng Việt nêu rõ 
 **Description:** Ba file này còn mô tả kiến trúc cũ: pgvector, luồng fallback không cần provider, và pipeline
 "target" với BM25/RRF/cross-encoder như thể sắp làm. Cần viết lại cho khớp hiện tại:
 - README: giữ quick start và các lệnh; sửa phần cấu trúc thư mục, thêm `worker/`, `integrations/`, `core/registry` …
-- CONTEXT.md: luồng runtime thật (graph 11 node, Qdrant 3 named vector, Gateway headers, Java giữ hội thoại).
+- CONTEXT.md: luồng runtime thật (Gateway headers, Java giữ hội thoại, Qdrant 3 named vector).
 - rag-pipeline.md: sơ đồ mermaid theo code hiện tại; phần BM25/rerank trỏ sang known-gaps.
+
+Mô tả orchestrator phải đúng với `app/graph/streaming_graph.py`: đây là **một hàm async `run_graph`**
+rẽ nhánh bằng `if` thuần Python, **không phải** `pydantic_graph.Graph`, vì `Graph.run()` không stream token.
+Tên node (`01_…` → `11_…`) chỉ dùng cho `GraphTrace` và để đối chiếu với thiết kế gốc. Các nhánh cần thể hiện:
+- 01 chào hỏi lượt đầu → trả template
+- 02 clarification guard → có thể nhảy thẳng vào luồng advisory
+- 03 phân loại → 04 routing: social / off-topic (05) / calculation (07, placeholder) / advisory
+- advisory: 06 → 08 → 09, rồi
+  - **09a `LLMRerankNode`** là tuỳ chọn (`CHAT_LLM_RERANK_ENABLED`, có context hợp lệ và có model rerank);
+  - **09b `WebSearchNode`** là tuỳ chọn (`CHAT_WEB_SEARCH_ENABLED`, có sub-query không tìm được chunk);
+- không có context và không có kết quả web → 11 TicketFallback, ngược lại → 10 GenerationSynthesis
+- calculation được nối sau câu trả lời advisory bằng ghép chuỗi
 
 Cả 3 file trỏ sang `docs/product/PRODUCT.md` làm nguồn luật. Sau đó bỏ câu "README/CONTEXT là lịch sử" trong `PRODUCT.md`.
 
 **Acceptance criteria:**
 - [ ] Không còn nhắc pgvector, "provider-free", "deterministic fallback" như hiện trạng
-- [ ] Sơ đồ trong rag-pipeline.md khớp tên node trong `app/graph/nodes/` và `streaming_graph.py`
+- [ ] Sơ đồ trong rag-pipeline.md khớp tên node trong `trace.node(...)` của `streaming_graph.py`, có 09a/09b là nhánh tuỳ chọn kèm điều kiện
+- [ ] Không tài liệu nào gọi orchestrator là `pydantic_graph.Graph`
 - [ ] Các lệnh quick start trong README chạy được trên Linux (`task be:dev`, `task test`)
 
 **Verification:**

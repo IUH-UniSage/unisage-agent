@@ -23,6 +23,10 @@ Phase 3 dùng `report.md` của UNISAGE-95 làm đầu vào.
 - **Ngưỡng rerank chỉ đổi dựa trên `report.md`.** Trước khi có số đo, chỉ sửa tài liệu cho khớp
   với code (mặc định `0.70`); `.env` của máy dev không phải nguồn sự thật.
 - **Không thêm giới hạn tần suất theo người dùng.** Usage limit hiện có đã lo phần này.
+- **Một contract độ dài câu hỏi:** `ChatStreamRequest.message max_length=2000` → `400`/`4009`. Bỏ việc
+  `sanitize_input_text` cắt âm thầm ở 1000 ký tự; không thêm biến cấu hình thứ hai cho cùng con số.
+- **Test concurrency chạy trên SQLite file-backed** chỉ chứng minh upsert không ném lỗi; không thay thế kiểm
+  chứng trên PostgreSQL production.
 - **Viết lại docs cũ, không xoá.** README giữ quick start; CONTEXT.md và rag-pipeline.md mô tả
   đúng graph 11 node + Qdrant hiện tại và trỏ sang `docs/product/PRODUCT.md`.
 
@@ -31,10 +35,10 @@ Phase 3 dùng `report.md` của UNISAGE-95 làm đầu vào.
 Chi tiết từng task ở `todo.md`.
 
 ### Phase 1: Guardrail và test (làm ngay, độc lập với nhau)
-- [ ] Task 1: Test không phụ thuộc môi trường máy
-- [ ] Task 2: Đánh dấu context là dữ liệu trong prompt
+- [x] Task 1: Test không phụ thuộc môi trường máy
+- [x] Task 2: Đánh dấu context là dữ liệu trong prompt
 - [ ] Task 3: Ghi log khi nghi prompt injection (log-only)
-- [ ] Task 4: Báo lỗi rõ khi câu hỏi quá dài thay vì cắt im lặng
+- [ ] Task 4: Một contract độ dài duy nhất cho câu hỏi (2000 ký tự, `4009`)
 
 ### Checkpoint 1
 - [ ] `pytest` (bỏ e2e) xanh trên máy có `.env` dev, ruff/mypy không vượt baseline
@@ -61,11 +65,10 @@ Chi tiết từng task ở `todo.md`.
 | Log chứa nguyên văn câu hỏi người dùng | Med | Chỉ log tên mẫu khớp, role, conversation id, độ dài; không log nội dung |
 | Văn bản quy chế chứa chuỗi `</academic_context>` làm vỡ khung XML | Low | Task 2 escape thẻ đóng trong nội dung chunk và web |
 | UNISAGE-95 chậm làm Phase 3 treo | Med | Phase 1–2 không phụ thuộc; Phase 3 tách hẳn |
-| Báo lỗi khi câu hỏi quá dài làm hỏng UX nếu web không giới hạn ô nhập | Med | Câu hỏi mở bên dưới; xác nhận giới hạn của unisage-web trước |
+| unisage-web không giới hạn ô nhập, người dùng gõ quá 2000 ký tự chỉ thấy lỗi chung `4009` | Low | Ngoài scope repo này; ghi lại để web thêm `maxLength=2000` |
 
 ## Open Questions
 
-- Giới hạn độ dài câu hỏi đúng là bao nhiêu, và unisage-web có giới hạn ô nhập chưa? Task 4 giả
-  định giữ 1000 ký tự và trả `InvalidQueryException`.
+- ~~Giới hạn độ dài câu hỏi~~ → **Đã chốt:** 2000 ký tự theo schema, lỗi `4009` (review 06-10-2026).
 - Có thêm nhóm câu hỏi `injection` vào bộ câu hỏi của UNISAGE-95 để đo Task 2 không? Nếu có, đó là
   việc của UNISAGE-95, không phải plan này.
