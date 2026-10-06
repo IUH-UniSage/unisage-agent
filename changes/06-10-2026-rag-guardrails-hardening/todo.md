@@ -159,12 +159,12 @@ Java (`SendMessageRequest.content`) không giới hạn độ dài, nên 2000 kh
 - known-gaps chưa ghi việc ghi log injection ở Task 3 và câu dặn ở Task 2.
 
 **Acceptance criteria:**
-- [ ] `DECISIONS.md` mô tả đúng hàng rào đang có: chặn những gì, và những gì chưa chặn
-- [ ] `PRODUCT.md` chỉ nêu mặc định của code (`0.70`) và trỏ tới Phase 3, không nêu giá trị `.env` máy dev
-- [ ] known-gaps có mục "Prompt injection: chỉ ghi log, chưa chặn", kèm lý do và điều kiện để xem lại
+- [x] `DECISIONS.md` mô tả đúng hàng rào đang có: chặn những gì, và những gì chưa chặn
+- [x] `PRODUCT.md` chỉ nêu mặc định của code (`0.70`) và trỏ tới Phase 3, không nêu giá trị `.env` máy dev
+- [x] known-gaps có mục "Prompt injection: chỉ ghi log, chưa chặn", kèm lý do và điều kiện để xem lại
 
 **Verification:**
-- [ ] Manual: `grep -rn "0\.4\|chưa có hàng rào" docs/` không còn kết quả sai
+- [x] Manual: `grep -rn "0\.4\|chưa có hàng rào" docs/` không còn kết quả sai
 
 **Dependencies:** Task 2, Task 3 (để mô tả đúng cái đã làm)
 

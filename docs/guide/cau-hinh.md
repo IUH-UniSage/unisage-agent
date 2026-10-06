@@ -53,8 +53,9 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 - Tên biến viết `UPPER_SNAKE_CASE`, luôn có đúng một trong các tiền tố ở trên. `model_config` đặt
   `extra="ignore"`: biến lạ trong `.env` không làm service từ chối khởi động, khác mẫu (mẫu cho
   service kia chặn khởi động khi CORS mở hoặc khoá dùng chung rỗng ở `production`) —
-  `unisage-agent` **chưa có** hàng rào tương tự cho `APP_ENV=production`; đây là khoảng trống thật,
-  không phải lựa chọn có chủ đích, xem `docs/product/DECISIONS.md`.
+  `unisage-agent` chặn khởi động ở `APP_ENV=production` khi `APP_INTERNAL_SECRET_KEY` yếu hoặc
+  `BACKEND_JAVA_BASE_URL` không an toàn (`Settings._validate_production_safety`); những gì chưa chặn
+  được liệt kê ở `docs/product/DECISIONS.md`.
 - Không phải mọi biến trong `.env`/`.env.example` đều được `Settings` đọc. `APP_HOST` và `APP_PORT`
   có mặt ở đó nhưng **không** là field của `Settings` — chúng được Taskfile đọc trực tiếp qua
   `dotenv: ['.env']` (`taskfiles/backend.yml`) để truyền vào `uvicorn --host --port`/`gunicorn -b`.
@@ -92,7 +93,7 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
 | `APP_NAME` | `UniSage AI Agent Service` | Tên hiển thị, log khởi động |
-| `APP_ENV` | `development` | Chưa gate hành vi nào theo giá trị này (xem khoảng trống ở trên) |
+| `APP_ENV` | `development` | `production` bật hàng rào chặn khởi động khi cấu hình không an toàn (xem Quy tắc chung ở trên) |
 | `APP_DEBUG` | `True` | Chỉ bật log chi tiết của **chính service này** (`app/core/graph_trace.py` dump `academic_metadata`/`prepared_context`/HyDE output) — cố tình **không** nâng root log level, để log DEBUG của httpx/OpenAI SDK/SQLAlchemy không nhấn chìm dòng log node đang chạy (xem `app/main.py`) |
 | `APP_INTERNAL_SECRET_KEY` | `unisage-internal-secret-key-2026` | Phải khớp `X-Internal-Secret` mà API Gateway gắn vào mọi request chuyển tới; `app/core/security.py::verify_internal_secret` chặn mọi request không mang đúng giá trị này ở tầng router — service chỉ vào được qua Gateway, không được gọi thẳng |
 | `APP_HOST`/`APP_PORT` | `0.0.0.0`/`8402` (`.env.example`); `127.0.0.1`/`8402` (mặc định Taskfile) | **Không** là field `Settings` — Taskfile đọc thẳng qua `dotenv`, truyền vào `uvicorn`/`gunicorn` lúc khởi chạy |

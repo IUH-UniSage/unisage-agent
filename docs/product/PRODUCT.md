@@ -193,8 +193,10 @@ tiết và các khoảng trống đã biết.
 
 ## Human decisions
 
-- Ngưỡng `CHAT_RERANK_SCORE_THRESHOLD` — chưa có số đo chính thức, hiện để tạm ở `.env` máy dev
-  (`0.4`, khác mặc định code `0.70`) — người vận hành/nghiệp vụ quyết định sau khi có bộ câu hỏi đo.
+- Ngưỡng `CHAT_RERANK_SCORE_THRESHOLD` — chưa có số đo chính thức. Nguồn duy nhất là mặc định trong
+  code (`0.70`, `app/core/config.py`); giá trị trong `.env` máy dev là tuỳ chỉnh cục bộ, không phải
+  quyết định sản phẩm. Chốt sau khi bộ eval UNISAGE-95 có số đo
+  (`changes/06-10-2026-rag-guardrails-hardening/`, Task 7).
 - Có làm hybrid search (BM25) và cross-encoder rerank thật hay không — đã cân nhắc và hoãn, xem
   `docs/specs/known-gaps.md`; mở lại khi có số đo cho thấy dense-only không đủ.
 - Cách phân biệt "công khai" cho một tài liệu (`is_public`, không phải `access_level = 0`) — do người

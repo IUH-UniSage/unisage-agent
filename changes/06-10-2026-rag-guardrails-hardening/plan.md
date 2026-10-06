@@ -44,7 +44,7 @@ Chi tiết từng task ở `todo.md`.
 - [ ] `pytest` (bỏ e2e) xanh trên máy có `.env` dev, ruff/mypy không vượt baseline
 
 ### Phase 2: Docs
-- [ ] Task 5: Sửa các tài liệu sản phẩm đang mâu thuẫn với code
+- [x] Task 5: Sửa các tài liệu sản phẩm đang mâu thuẫn với code
 - [ ] Task 6: Viết lại README.md, CONTEXT.md, rag-pipeline.md
 
 ### Checkpoint 2
