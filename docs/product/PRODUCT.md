@@ -119,6 +119,10 @@ tiết và các khoảng trống đã biết.
   không có phương án dự phòng tự động thử chiến lược khác khi một chiến lược thất bại.
 - **Draft chunk theo `chunking_version` cũ hơn hiện tại bị chặn embed**, phải chunk lại trước — tránh
   trộn hai hình dạng payload khác nhau trong cùng collection.
+- **Một câu hỏi dài tối đa 2000 ký tự, và đó là giới hạn duy nhất.** Dài hơn thì bị từ chối ngay ở
+  tầng schema (`ChatStreamRequest.message`) với `400`, `code = 4009`, `errors.message`, trước khi gọi
+  Java hay chạy graph. Không có bước nào phía sau cắt bớt câu hỏi: người dùng hoặc nhận lỗi rõ ràng,
+  hoặc câu hỏi được xử lý nguyên vẹn.
 - **`unisage-agent` không tự xác thực JWT** — tin hoàn toàn 5 header Gateway đã bơm sẵn. Một request
   không mang đúng `X-Internal-Secret` bị từ chối ở tầng router, trước khi chạm route handler nào.
 - **Mọi lỗi trả về mang một `code` ổn định**, mirror `ErrorCode.java` bên `unisage-backend` — client có
