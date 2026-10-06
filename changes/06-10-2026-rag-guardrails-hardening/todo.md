@@ -121,12 +121,12 @@ Không thêm biến `Settings` mới, vì như vậy sẽ thành hai nguồn cho
 Java (`SendMessageRequest.content`) không giới hạn độ dài, nên 2000 không xung đột với phía backend.
 
 **Acceptance criteria:**
-- [ ] Câu hỏi 2000 ký tự chạy bình thường và được gửi sang Java nguyên vẹn (không bị cắt)
-- [ ] Câu hỏi 2001 ký tự trả `400`, `code = 4009`, `errors` có key `message`; không gọi Java
-- [ ] Contract ghi trong docstring `ChatStreamRequest` và `docs/guide/cau-hinh.md` (hoặc PRODUCT.md › Business rules)
+- [x] Câu hỏi 2000 ký tự chạy bình thường và được gửi sang Java nguyên vẹn (không bị cắt)
+- [x] Câu hỏi 2001 ký tự trả `400`, `code = 4009`, `errors` có key `message`; không gọi Java
+- [x] Contract ghi trong docstring `ChatStreamRequest` và `docs/guide/cau-hinh.md` (hoặc PRODUCT.md › Business rules)
 
 **Verification:**
-- [ ] `.venv/bin/pytest -q tests/api/test_chat_stream_endpoint.py tests/core/test_sanitizer.py`
+- [x] `.venv/bin/pytest -q tests/api/test_chat_stream_endpoint.py tests/core/test_sanitizer.py`
 
 **Dependencies:** Task 3 (cùng sửa `chat.py` và `sanitizer.py`, nên làm sau để tránh xung đột)
 

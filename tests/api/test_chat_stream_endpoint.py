@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
+from app.schemas.chat import MESSAGE_MAX_CHARS
 from app.schemas.retrieval import RetrievedChunk
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
@@ -576,3 +577,40 @@ def test_ordinary_question_logs_no_injection_record(
 
     assert status == 200
     assert _injection_records(caplog) == []
+
+
+def test_message_at_the_length_limit_reaches_java_untruncated(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    java = _JavaBackend()
+    _override_java(java)
+    _override_models(mock_graph_models)
+    message = "Học phí " + "x" * (MESSAGE_MAX_CHARS - len("Học phí "))
+    assert len(message) == MESSAGE_MAX_CHARS
+
+    assert _stream_message(client, message) == 200
+
+    user_posts = [
+        c for c in java.calls if c["method"] == "POST" and c["body"].get("role") == "USER"
+    ]
+    assert user_posts[0]["body"]["content"] == message
+
+
+def test_message_over_the_length_limit_is_4009_before_any_java_call(
+    client: TestClient, mock_graph_models: GraphModels
+) -> None:
+    java = _JavaBackend()
+    _override_java(java)
+    _override_models(mock_graph_models)
+
+    response = client.post(
+        "/api/v1/chat/stream",
+        json={"conversation_id": "conv-long", "message": "x" * (MESSAGE_MAX_CHARS + 1)},
+        headers=_STUDENT_HEADERS,
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == 4009
+    assert "message" in body["errors"]
+    assert java.calls == []

@@ -52,22 +52,18 @@ def _fold(text: str) -> str:
     return " ".join(stripped.lower().split())
 
 
-def sanitize_input_text(text: str, max_length: int = 1000) -> str:
-    """Sanitize student query text from HTML tags, excessive whitespace, and injection patterns."""
+def sanitize_input_text(text: str) -> str:
+    """Strip HTML tags and collapse whitespace in a student query.
+
+    Never truncates: the only length limit is `ChatStreamRequest.message`'s
+    `max_length`, enforced before this runs (400 / code 4009). Both steps
+    here only shorten the text, so the result stays within that limit.
+    """
     if not text:
         return ""
 
-    # Strip HTML tags
     clean_text = re.sub(r"<[^>]*>", "", text)
-
-    # Normalize whitespace
-    clean_text = re.sub(r"\s+", " ", clean_text).strip()
-
-    # Truncate if exceeds max length
-    if len(clean_text) > max_length:
-        clean_text = clean_text[:max_length]
-
-    return clean_text
+    return re.sub(r"\s+", " ", clean_text).strip()
 
 
 def detect_prompt_injection(text: str) -> str | None:

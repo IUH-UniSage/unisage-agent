@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.security.sanitizer import detect_prompt_injection
+from app.core.security.sanitizer import detect_prompt_injection, sanitize_input_text
 
 
 @pytest.mark.parametrize(
@@ -45,3 +45,13 @@ def test_injection_attempts_are_detected(message: str, pattern: str) -> None:
 )
 def test_ordinary_academic_questions_are_not_flagged(message: str) -> None:
     assert detect_prompt_injection(message) is None
+
+
+def test_sanitize_never_truncates() -> None:
+    message = "Câu hỏi dài " + "a" * 1990
+
+    assert sanitize_input_text(message) == message
+
+
+def test_sanitize_strips_html_and_collapses_whitespace() -> None:
+    assert sanitize_input_text("  <b>Học   phí</b>\n\nlà bao nhiêu? ") == "Học phí là bao nhiêu?"

@@ -38,7 +38,7 @@ Chi tiết từng task ở `todo.md`.
 - [x] Task 1: Test không phụ thuộc môi trường máy
 - [x] Task 2: Đánh dấu context là dữ liệu trong prompt
 - [x] Task 3: Ghi log khi nghi prompt injection (log-only)
-- [ ] Task 4: Một contract độ dài duy nhất cho câu hỏi (2000 ký tự, `4009`)
+- [x] Task 4: Một contract độ dài duy nhất cho câu hỏi (2000 ký tự, `4009`)
 
 ### Checkpoint 1
 - [ ] `pytest` (bỏ e2e) xanh trên máy có `.env` dev, ruff/mypy không vượt baseline
