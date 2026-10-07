@@ -15,7 +15,7 @@ from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import ModelRegistryError
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
-from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
+from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
 from app.graph.streaming_session import _admin_warnings, _error_item_for, run_and_persist
@@ -87,7 +87,7 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
 
     assert patched["method"] == "PATCH"
     assert patched["body"]["status"] == "COMPLETED"
-    assert patched["body"]["content"] == OFF_TOPIC_TEMPLATE
+    assert patched["body"]["content"] in OFF_TOPIC_TEMPLATES
     assert "citations" not in patched["body"]
 
     tokens = []
@@ -97,7 +97,7 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
             break
         assert isinstance(item, TokenItem)
         tokens.append(item.text)
-    assert tokens == [OFF_TOPIC_TEMPLATE]
+    assert tokens == [patched["body"]["content"]]
 
 
 @pytest.mark.asyncio

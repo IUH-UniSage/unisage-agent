@@ -25,10 +25,10 @@ from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
-from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE, plan_route
+from app.graph.nodes.intent_routing import plan_route
 from app.graph.nodes.llm_rerank import build_llm_rerank_agent, llm_rerank
 from app.graph.nodes.message_classification import build_classification_agent, classify_intent
-from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
+from app.graph.nodes.off_topic import off_topic_reply
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.query_transformation import (
     build_decomposer_agent,
@@ -41,6 +41,7 @@ from app.graph.nodes.security_context import (
     ClarificationGuardResult,
     resolve_clarification_guard,
 )
+from app.graph.nodes.social_chat import social_chat_reply
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
 from app.graph.nodes.web_search import search_web
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
@@ -142,18 +143,20 @@ async def run_graph(
 
     if route_plan.end == "SOCIAL_CHAT":
         trace.node("04_IntentRouting_SocialChat")
-        await token_sink(SOCIAL_CHAT_TEMPLATE)
+        social_text = social_chat_reply(graph_input.user_message)
+        await token_sink(social_text)
         return GraphOutput(
-            response_text=SOCIAL_CHAT_TEMPLATE,
+            response_text=social_text,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
         )
 
     if route_plan.end == "OFF_TOPIC":
         trace.node("05_OffTopicRejectNode")
-        await token_sink(OFF_TOPIC_TEMPLATE)
+        off_topic_text = off_topic_reply()
+        await token_sink(off_topic_text)
         return GraphOutput(
-            response_text=OFF_TOPIC_TEMPLATE,
+            response_text=off_topic_text,
             confirmed_metadata=confirmed_metadata,
             pending_clarification=pending_clarification,
         )

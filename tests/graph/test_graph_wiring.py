@@ -10,8 +10,8 @@ from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.greeting import GREETING_TEMPLATE
-from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE
-from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
+from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
+from app.graph.nodes.social_chat import THANKS_TEMPLATES
 from app.graph.nodes.web_search import WebSearchOutcome
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
@@ -142,7 +142,7 @@ async def test_social_chat_routes_to_static_template(
         _usage_recorder(),
     )
 
-    assert result.response_text == SOCIAL_CHAT_TEMPLATE
+    assert result.response_text in THANKS_TEMPLATES
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_off_topic_routes_to_static_template(
         _usage_recorder(),
     )
 
-    assert result.response_text == OFF_TOPIC_TEMPLATE
+    assert result.response_text in OFF_TOPIC_TEMPLATES
 
 
 @pytest.mark.asyncio
