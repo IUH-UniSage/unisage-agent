@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, field
 
 import pytest
@@ -7,7 +8,7 @@ from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
-from tests.llm_mocks import FakeRetrievalService
+from tests.llm_mocks import FakeRetrievalService, RetrieveManyMixin
 
 
 def test_retrieve_chunks_delegates_to_the_injected_retrieval_service() -> None:
@@ -15,7 +16,9 @@ def test_retrieve_chunks_delegates_to_the_injected_retrieval_service() -> None:
         [RetrievedChunk(chunk_id="a", content="x", source="s", score=0.9)]
     )
 
-    (chunks,) = retrieve_chunks(["quy chế đào tạo"], service, AcademicSecurityContext())
+    (chunks,) = asyncio.run(
+        retrieve_chunks(["quy chế đào tạo"], service, AcademicSecurityContext())
+    )
 
     assert [c.chunk_id for c in chunks] == ["a"]
 
@@ -47,7 +50,7 @@ def test_rerank_chunks_no_valid_context_when_all_below_threshold(
 
 
 @dataclass
-class _PerQueryRetrieval:
+class _PerQueryRetrieval(RetrieveManyMixin):
     """Returns a different fixed chunk list per query, and records the order
     queries were searched in."""
 
@@ -70,7 +73,9 @@ def _chunk(chunk_id: str, score: float) -> RetrievedChunk:
 
 
 def _merged(queries: list[str], service: _PerQueryRetrieval) -> list[RetrievedChunk]:
-    return rerank_chunks(retrieve_chunks(queries, service, AcademicSecurityContext())).chunks
+    return rerank_chunks(
+        asyncio.run(retrieve_chunks(queries, service, AcademicSecurityContext()))
+    ).chunks
 
 
 @pytest.fixture
@@ -139,7 +144,7 @@ def test_retrieve_chunks_gives_each_query_an_equal_quota(monkeypatch: pytest.Mon
 def test_retrieve_chunks_single_query_keeps_the_default_limit() -> None:
     service = _PerQueryRetrieval({"q": [_chunk("a", 0.9)]})
 
-    retrieve_chunks(["q"], service, AcademicSecurityContext())
+    asyncio.run(retrieve_chunks(["q"], service, AcademicSecurityContext()))
 
     assert service.limits == [None]
 
@@ -151,7 +156,9 @@ def test_rerank_reports_which_sub_query_found_nothing(monkeypatch: pytest.Monkey
     )
 
     result = rerank_chunks(
-        retrieve_chunks(["hoc phi", "lich thi", "hoc bong"], service, AcademicSecurityContext())
+        asyncio.run(
+            retrieve_chunks(["hoc phi", "lich thi", "hoc bong"], service, AcademicSecurityContext())
+        )
     )
 
     assert result.has_valid_context is True

@@ -21,7 +21,7 @@ from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
-from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
+from tests.llm_mocks import FakeRetrievalService, RetrieveManyMixin, make_classification_llm_model
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
 
@@ -76,7 +76,7 @@ def _echo_query_transformation_model() -> FunctionModel:
 
 
 @dataclass
-class _RecordingRetrievalService:
+class _RecordingRetrievalService(RetrieveManyMixin):
     """Like `FakeRetrievalService`, but remembers every query it was asked to
     retrieve for - so a test can assert which text actually reached
     retrieval, not just what the graph returned."""
@@ -572,7 +572,7 @@ _WEB_PAGE = WebSearchResult(
 
 
 @dataclass
-class _PerQueryRetrieval:
+class _PerQueryRetrieval(RetrieveManyMixin):
     results: dict[str, list[RetrievedChunk]]
 
     def retrieve(

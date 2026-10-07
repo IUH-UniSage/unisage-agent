@@ -300,7 +300,7 @@ async def _run_advisory_flow(
 
     # RetrievalFilteringNode (permission pre-filter on every query).
     trace.node("08_RetrievalFilteringNode")
-    per_query_chunks = retrieve_chunks(
+    per_query_chunks = await retrieve_chunks(
         [sub_query.retrieval_text for sub_query in sub_queries],
         models.retrieval,
         graph_input.security,
