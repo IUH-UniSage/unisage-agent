@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "UniSage AI Agent Service"
     APP_ENV: str = "development"
     APP_DEBUG: bool = True
+    # ANSI colors on console log lines (only when the stream is a terminal).
+    LOG_COLOR: bool = True
 
     # Internal service-to-service auth: must match the shared secret the API
     # Gateway sends as `X-Internal-Secret` on every proxied request (see

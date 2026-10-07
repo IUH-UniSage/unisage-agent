@@ -33,8 +33,10 @@ every module's records eventually land) is what actually redacts everything.
 from __future__ import annotations
 
 import logging
+import re
 import traceback
 
+from app.core.config import settings
 from app.core.security.redaction import redact
 
 # Silenced because they can log request headers/bodies (may contain the
@@ -52,6 +54,19 @@ _NOISY_PROVIDER_LOGGERS = (
 # Silenced for readability only, not secrecy — kept in its own tuple so it's
 # obvious which loggers above are there *because* of the redaction rule.
 _OTHER_NOISY_LOGGERS = ("sqlalchemy.engine", "asyncio")
+
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+_RESET = "\033[0m"
+_BOLD_CYAN = "\033[1;36m"
+_GREEN = "\033[32m"
+_BOLD_RED = "\033[1;31m"
+_YELLOW = "\033[33m"
+_BOLD_MAGENTA = "\033[1;35m"
+_DIM = "\033[2m"
+_LEVEL_COLORS = {logging.WARNING: _YELLOW, logging.ERROR: _BOLD_RED, logging.CRITICAL: _BOLD_RED}
+_SLOW_NODE_MS = 2000
+_ELAPSED_PATTERN = re.compile(r"elapsed_ms=(\d+)")
 
 
 class SecretRedactionFilter(logging.Filter):
@@ -97,6 +112,42 @@ class SecretRedactionFilter(logging.Filter):
         return True
 
 
+class ColorFormatter(logging.Formatter):
+    """Highlights the graph trace (`unisage.graph`) so a turn reads at a glance:
+    node starts cyan, node timings green (red when slow), debug dumps yellow."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        line = super().format(record)
+        color = self._color_of(record)
+        if color is None:
+            return line
+        if record.name == "unisage.graph" and record.getMessage().startswith("prompt "):
+            header, _, body = line.partition("\n")
+            return f"{color}{header}{_RESET}\n{body}" if body else f"{color}{line}{_RESET}"
+        return f"{color}{line}{_RESET}"
+
+    @staticmethod
+    def _color_of(record: logging.LogRecord) -> str | None:
+        if record.levelno in _LEVEL_COLORS:
+            return _LEVEL_COLORS[record.levelno]
+        message = record.getMessage()
+        if record.name == "google_genai.models":
+            return _DIM
+        if record.name != "unisage.graph":
+            return None
+        if message.startswith("node_done="):
+            elapsed = _ELAPSED_PATTERN.search(message)
+            slow = elapsed is not None and int(elapsed.group(1)) >= _SLOW_NODE_MS
+            return _BOLD_RED if slow else _GREEN
+        if message.startswith("node="):
+            return _BOLD_CYAN
+        if message.startswith(("first_token", "graph_done")):
+            return _BOLD_MAGENTA
+        if message.startswith("prompt "):
+            return _YELLOW
+        return None
+
+
 def configure_logging() -> None:
     """Safe to call repeatedly / from multiple entrypoints (e.g. a module
     imported by both the ASGI app and a Celery task): `basicConfig()` no-ops
@@ -106,13 +157,20 @@ def configure_logging() -> None:
     root between calls (as pytest's logging plugin does) still gets covered
     on the next call, unlike a one-shot "already configured" guard would."""
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
 
     for handler in logging.getLogger().handlers:
         if not any(isinstance(existing, SecretRedactionFilter) for existing in handler.filters):
             handler.addFilter(SecretRedactionFilter())
+        if settings.LOG_COLOR and _writes_to_terminal(handler):
+            handler.setFormatter(ColorFormatter(_LOG_FORMAT))
 
     for name in (*_NOISY_PROVIDER_LOGGERS, *_OTHER_NOISY_LOGGERS):
         logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def _writes_to_terminal(handler: logging.Handler) -> bool:
+    stream = getattr(handler, "stream", None)
+    return isinstance(handler, logging.StreamHandler) and bool(
+        stream is not None and hasattr(stream, "isatty") and stream.isatty()
+    )
