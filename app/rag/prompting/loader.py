@@ -82,6 +82,9 @@ def _load_all_templates() -> PromptTemplates:
         json_repair=_load_yaml_template(main / "json_repair.yaml"),
         agent_hyde_generator=_load_yaml_template(agents / "hyde_generator.yaml"),
         agent_message_classification=_load_yaml_template(agents / "message_classification.yaml"),
+        agent_message_classification_retrieval=_load_yaml_template(
+            agents / "message_classification_retrieval.yaml"
+        ),
         agent_multi_query_decomposer=_load_yaml_template(agents / "multi_query_decomposer.yaml"),
         agent_calculation_extractor=_load_yaml_template(agents / "calculation_extractor.yaml"),
         agent_reranker_compressor=_load_yaml_template(agents / "reranker_compressor.yaml"),

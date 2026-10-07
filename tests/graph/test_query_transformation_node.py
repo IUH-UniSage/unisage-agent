@@ -301,3 +301,59 @@ async def test_sub_queries_of_several_tasks_are_flattened_in_task_order() -> Non
         "Định mức học phí ngành Công nghệ thông tin",
         "Định mức học phí ngành Kế toán",
     ]
+
+
+def _failing_model() -> FunctionModel:
+    def function(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        raise AssertionError("no LLM call expected")
+
+    return FunctionModel(function=function)
+
+
+@pytest.mark.asyncio
+async def test_retrieval_text_written_by_classification_skips_the_llm() -> None:
+    single = ClassifiedTask(
+        intent="academic_advisory",
+        query="còn khóa 2025?",
+        routing_mode="SINGLE",
+        hyde_text="Học phí khóa 2025?\n\nMức thu học phí khóa 2025...",
+    )
+    comparison = ClassifiedTask(
+        intent="academic_advisory",
+        query=_COMPARISON,
+        routing_mode="MULTI",
+        sub_queries=["Học phí ngành CNTT", "Học phí ngành Kế toán"],
+    )
+
+    sub_queries = await transform_tasks(
+        build_query_transformation_agent(_failing_model()),
+        [(single, "SINGLE"), (comparison, "MULTI")],
+        decomposer_agent=build_decomposer_agent(_failing_model()),
+    )
+
+    assert sub_queries == [
+        SubQuery(
+            question="còn khóa 2025?",
+            retrieval_text="Học phí khóa 2025?\n\nMức thu học phí khóa 2025...",
+        ),
+        SubQuery(question="Học phí ngành CNTT", retrieval_text="Học phí ngành CNTT"),
+        SubQuery(question="Học phí ngành Kế toán", retrieval_text="Học phí ngành Kế toán"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_metadata_reruns_hyde_instead_of_reusing_classification_text() -> None:
+    task = ClassifiedTask(
+        intent="academic_advisory",
+        query="Học phí?",
+        routing_mode="SINGLE",
+        hyde_text="Học phí?\n\nMức thu học phí...",
+    )
+
+    (sub_query,) = await transform_tasks(
+        build_query_transformation_agent(_fixed_model("HyDE with metadata")),
+        [(task, "SINGLE")],
+        confirmed_metadata={"training_type": "chinh_quy"},
+    )
+
+    assert sub_query.retrieval_text == "HyDE with metadata"

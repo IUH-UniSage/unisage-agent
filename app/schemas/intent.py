@@ -15,6 +15,11 @@ class ClassifiedTask(BaseModel):
     intent: str
     query: str
     routing_mode: RoutingMode | None = None
+    # Retrieval text classification wrote alongside (CHAT_CLASSIFY_WITH_RETRIEVAL), so
+    # QueryTransformationNode can skip its own LLM call. Never persisted: a resumed
+    # task re-runs on a new query.
+    hyde_text: str | None = Field(default=None, exclude=True)
+    sub_queries: list[str] | None = Field(default=None, exclude=True)
 
 
 class IntentClassification(BaseModel):

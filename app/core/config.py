@@ -149,6 +149,9 @@ class Settings(BaseSettings):
     # Thinking for the short auxiliary calls (classification, query transformation, LLM
     # rerank); generation keeps the model default. False = the model's lowest level.
     CHAT_AUX_THINKING: bool | Literal["minimal", "low", "medium", "high"] = False
+    # Classification also writes each advisory task's HyDE text / sub-queries, so
+    # QueryTransformationNode only calls its own LLM when that output is missing.
+    CHAT_CLASSIFY_WITH_RETRIEVAL: bool = True
     # Candidates fetched per turn (split across sub-queries) for rerank to judge.
     # CONTEXT_MAX_CHUNKS separately caps what reaches the generation prompt, so recall
     # can grow without bloating the prompt - also when the LLM rerank fails open.

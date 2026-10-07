@@ -181,6 +181,13 @@ async def _transform_task(
     on_attempt: AttemptRecorder | None,
     budget: BudgetContext | None,
 ) -> list[SubQuery]:
+    # Classification never saw confirmed metadata, so its text can't be reused then.
+    if not confirmed_metadata:
+        if mode == "MULTI" and task.sub_queries:
+            return [SubQuery(question=query, retrieval_text=query) for query in task.sub_queries]
+        if mode == "SINGLE" and task.hyde_text:
+            return [SubQuery(question=task.query, retrieval_text=task.hyde_text)]
+
     if mode == "MULTI" and decomposer_agent is not None:
         sub_queries = await decompose_query(
             decomposer_agent,
