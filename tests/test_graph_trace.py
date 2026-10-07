@@ -54,3 +54,22 @@ def test_prompt_logs_only_when_debug_true(
         _trace().prompt("10_GenerationSynthesisNode", "the full system prompt")
         assert "the full system prompt" in caplog.text
         assert "node=10_GenerationSynthesisNode" in caplog.text
+
+
+def test_timing_logs_node_elapsed_first_token_and_total(caplog: pytest.LogCaptureFixture) -> None:
+    trace = _trace()
+    with caplog.at_level(logging.INFO, logger="unisage.graph"):
+        trace.node("03_MessageClassificationNode")
+        trace.node("10_GenerationSynthesisNode")
+        trace.first_token()
+        trace.first_token()
+        trace.finish()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(m.startswith("node_done=03_MessageClassificationNode elapsed_ms=") for m in messages)
+    assert any(m.startswith("node_done=10_GenerationSynthesisNode elapsed_ms=") for m in messages)
+    assert (
+        sum(m.startswith("first_token node=10_GenerationSynthesisNode ttft_ms=") for m in messages)
+        == 1
+    )
+    assert messages[-1].startswith("graph_done total_ms=")
