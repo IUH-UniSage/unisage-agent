@@ -103,9 +103,9 @@ def test_color_formatter_highlights_graph_trace_lines() -> None:
     )
     assert formatter.format(_graph_record("node_done=03_X elapsed_ms=120")).startswith("\033[32m")
     assert formatter.format(_graph_record("node_done=03_X elapsed_ms=3324")).startswith(
-        "\033[1;31m"
+        "\033[1;35m"
     )
-    assert formatter.format(_graph_record("graph_done total_ms=1")).startswith("\033[1;35m")
+    assert formatter.format(_graph_record("graph_done total_ms=1")).startswith("\033[1;34m")
     assert formatter.format(_graph_record("plain", name="app.other")) == "plain"
 
 
@@ -114,4 +114,4 @@ def test_color_formatter_colors_only_the_header_of_a_prompt_dump() -> None:
 
     line = ColorFormatter("%(message)s").format(_graph_record('prompt node=03_X:\n{"tasks": []}'))
 
-    assert line == '\033[33mprompt node=03_X:\033[0m\n{"tasks": []}'
+    assert line == '\033[94mprompt node=03_X:\033[0m\n{"tasks": []}'

@@ -60,10 +60,13 @@ _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 _RESET = "\033[0m"
 _BOLD_CYAN = "\033[1;36m"
 _GREEN = "\033[32m"
-_BOLD_RED = "\033[1;31m"
-_YELLOW = "\033[33m"
 _BOLD_MAGENTA = "\033[1;35m"
+_BOLD_BLUE = "\033[1;34m"
+_BRIGHT_BLUE = "\033[94m"
 _DIM = "\033[2m"
+# Red/yellow stay reserved for real warnings and errors.
+_YELLOW = "\033[33m"
+_BOLD_RED = "\033[1;31m"
 _LEVEL_COLORS = {logging.WARNING: _YELLOW, logging.ERROR: _BOLD_RED, logging.CRITICAL: _BOLD_RED}
 _SLOW_NODE_MS = 2000
 _ELAPSED_PATTERN = re.compile(r"elapsed_ms=(\d+)")
@@ -114,7 +117,7 @@ class SecretRedactionFilter(logging.Filter):
 
 class ColorFormatter(logging.Formatter):
     """Highlights the graph trace (`unisage.graph`) so a turn reads at a glance:
-    node starts cyan, node timings green (red when slow), debug dumps yellow."""
+    node starts cyan, node timings green (magenta when slow), debug dumps blue."""
 
     def format(self, record: logging.LogRecord) -> str:
         line = super().format(record)
@@ -138,13 +141,13 @@ class ColorFormatter(logging.Formatter):
         if message.startswith("node_done="):
             elapsed = _ELAPSED_PATTERN.search(message)
             slow = elapsed is not None and int(elapsed.group(1)) >= _SLOW_NODE_MS
-            return _BOLD_RED if slow else _GREEN
+            return _BOLD_MAGENTA if slow else _GREEN
         if message.startswith("node="):
             return _BOLD_CYAN
         if message.startswith(("first_token", "graph_done")):
-            return _BOLD_MAGENTA
+            return _BOLD_BLUE
         if message.startswith("prompt "):
-            return _YELLOW
+            return _BRIGHT_BLUE
         return None
 
 
