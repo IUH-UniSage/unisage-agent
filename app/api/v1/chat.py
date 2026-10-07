@@ -1,9 +1,11 @@
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import StreamingResponse
@@ -28,7 +30,6 @@ from app.core.usage.cost_calculator import estimate as estimate_cost
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationStateRepository
 from app.database.session import get_db_session
-from app.graph.nodes.greeting import is_first_turn
 from app.graph.nodes.security_context import parse_security_headers
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem, WarningItem
 from app.graph.streaming import BudgetContext
@@ -48,24 +49,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"], dependencies=[Depends(verify_internal_secret)])
 
 
-async def _load_history(
+async def _start_turn(
     java_client: BackendJavaClient,
     *,
     conversation_id: str,
+    content: str,
     authorization: str | None,
-) -> list[HistoryMessage]:
-    """The last N messages BEFORE this turn, N being the admin setting
-    `chat.max_history_messages` that Java applies for `context=True` (called
-    prior to persisting this turn's own USER message, so the list never
-    includes it - `user_query` already carries that separately). Drops any
-    row that isn't a real, finished message (e.g. a STREAMING placeholder
-    left behind by a previous turn's error) - raw conversational context is
-    only useful if it reads as something the student or the assistant
-    actually said."""
+    guest_session_token: str | None,
+) -> dict[str, Any]:
+    try:
+        return await java_client.start_turn(
+            conversation_id=conversation_id,
+            content=content,
+            authorization=authorization,
+            guest_session_token=guest_session_token,
+        )
+    except BackendJavaHTTPError as exc:
+        if exc.status_code == 429:
+            raise UsageLimitExceededException(_usage_limit_errors(exc.body)) from exc
+        if exc.status_code in _CONVERSATION_REJECTED_STATUSES:
+            raise ConversationRejectedException(exc.status_code) from exc
+        # A Java 5xx/400 is not "this conversation isn't yours" - don't say it is.
+        raise BackendJavaUnavailableException() from exc
+    except BackendJavaError as exc:
+        raise BackendJavaUnavailableException() from exc
 
-    raw_messages = await java_client.get_conversation_messages(
-        conversation_id=conversation_id, context=True, authorization=authorization
-    )
+
+def _history_from_context(raw_messages: list[dict[str, Any]]) -> list[HistoryMessage]:
+    """Keeps only finished messages (drops e.g. a STREAMING placeholder left by a failed turn)."""
+
     return [
         HistoryMessage(role=message["role"], content=message["content"])
         for message in raw_messages
@@ -244,23 +256,12 @@ async def chat_stream_endpoint(
     ownership must be verified before any state is created, and persistence
     must survive a client disconnect):
 
-    1. Ask Java for this conversation's message count (first-turn detection)
-       and its last `chat.max_history_messages` messages (raw `<history_message>`
-       context for the prompt - see `_load_history`), both BEFORE this turn's
-       own USER message exists.
-    2. Call Java `POST /messages` (role=USER) FIRST, synchronously, still
-       inside this request/response cycle. If Java rejects it (404/403 -
-       conversation doesn't exist or belongs to someone else), this raises
-       straight back to the client as an HTTP error - no graph run, no
-       assistant placeholder, ever. Forwards the guest's `guest_session_id`
-       cookie value we read off our own inbound request
-       (`_resolve_guest_session_token`) as `X-Guest-Session-Token` alongside
-       our `X-Internal-Secret` on every `BackendJavaClient` call in this
-       request, so Java can run its guest-conversation ownership check even
-       though it's us calling, not the browser directly.
-    3. Only once that succeeds: create the ASSISTANT `STREAMING` placeholder.
-    4. Load this conversation's clarification state.
-    5. Schedule `run_and_persist` as an independent `asyncio.create_task()` -
+    1. `POST /messages/turn`: Java checks ownership, returns first-turn +
+       history, then stores the USER message and the ASSISTANT placeholder
+       in one transaction. A 404/403/429 raises straight back to the client -
+       no graph run, nothing persisted.
+    2. Concurrently, load this conversation's clarification state.
+    3. Schedule `run_and_persist` as an independent `asyncio.create_task()` -
        NOT awaited here - and return a `StreamingResponse` whose generator
        only reads the queue that task writes to.
     """
@@ -275,57 +276,28 @@ async def chat_stream_endpoint(
     client_ip = _resolve_client_ip(http_request, x_forwarded_for)
     guest_session_token = _resolve_guest_session_token(http_request)
 
+    clarification_read = asyncio.create_task(
+        ClarificationStateRepository(db_session).get_clarification(request.conversation_id)
+    )
     try:
-        first_turn = await is_first_turn(
-            java_client, conversation_id=request.conversation_id, authorization=authorization
-        )
-        # Fetched BEFORE this turn's own USER message is persisted below, so it
-        # never includes it (see `_load_history`).
-        history = await _load_history(
-            java_client, conversation_id=request.conversation_id, authorization=authorization
-        )
-    except BackendJavaHTTPError as exc:
-        # The first Java calls of the request - a conversation that doesn't exist or
-        # isn't the caller's surfaces here already, before `create_message` below.
-        if exc.status_code in _CONVERSATION_REJECTED_STATUSES:
-            raise ConversationRejectedException(exc.status_code) from exc
-        raise BackendJavaUnavailableException() from exc
-    except BackendJavaError as exc:
-        raise BackendJavaUnavailableException() from exc
-
-    try:
-        user_message = await java_client.create_message(
+        turn = await _start_turn(
+            java_client,
             conversation_id=request.conversation_id,
-            role="USER",
             content=clean_message,
-            status="COMPLETED",
             authorization=authorization,
             guest_session_token=guest_session_token,
         )
-    except BackendJavaHTTPError as exc:
-        if exc.status_code == 429:
-            raise UsageLimitExceededException(_usage_limit_errors(exc.body)) from exc
-        if exc.status_code in _CONVERSATION_REJECTED_STATUSES:
-            raise ConversationRejectedException(exc.status_code) from exc
-        # A Java 5xx/400 is not "this conversation isn't yours" - don't say it is.
-        raise BackendJavaUnavailableException() from exc
-    except BackendJavaError as exc:
-        raise BackendJavaUnavailableException() from exc
+    except BaseException:
+        # Don't close the request's DB session under an in-flight query.
+        with contextlib.suppress(Exception):
+            await clarification_read
+        raise
+    pending_clarification, confirmed_metadata = await clarification_read
 
-    try:
-        assistant_message = await java_client.create_message(
-            conversation_id=request.conversation_id,
-            role="ASSISTANT",
-            content="",
-            status="STREAMING",
-            authorization=authorization,
-            guest_session_token=guest_session_token,
-        )
-    except BackendJavaError as exc:
-        raise BackendJavaUnavailableException() from exc
-
-    assistant_message_id = str(assistant_message["id"])
-    user_message_id = str(user_message["id"])
+    first_turn = bool(turn.get("firstTurn"))
+    history = _history_from_context(turn.get("context") or [])
+    assistant_message_id = str(turn["assistantMessage"]["id"])
+    user_message_id = str(turn["userMessage"]["id"])
 
     request_id = str(uuid.uuid4())
     budget_tracker = get_default_tracker()
@@ -345,12 +317,6 @@ async def chat_stream_endpoint(
         reserve_seq=usage_recorder.reserve_budget_seq,
         per_attempt_estimate_usd=_estimate_chat_call_cost_usd(clean_message, models),
     )
-
-    clarification_repo = ClarificationStateRepository(db_session)
-    pending_clarification = await clarification_repo.get_pending_clarification(
-        request.conversation_id
-    )
-    confirmed_metadata = await clarification_repo.get_confirmed_metadata(request.conversation_id)
 
     graph_input = GraphInput(
         conversation_id=request.conversation_id,

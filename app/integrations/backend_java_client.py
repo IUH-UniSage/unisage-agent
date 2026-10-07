@@ -226,6 +226,25 @@ class BackendJavaClient:
         )
         return dict(result) if result is not None else {}
 
+    async def start_turn(
+        self,
+        *,
+        conversation_id: str,
+        content: str,
+        authorization: str | None = None,
+        guest_session_token: str | None = None,
+    ) -> dict[str, Any]:
+        """`POST /messages/turn`: history + USER message + STREAMING placeholder in one call."""
+
+        result = await self._request(
+            "POST",
+            "/messages/turn",
+            authorization=authorization,
+            json_body={"conversationId": conversation_id, "content": content},
+            guest_session_token=guest_session_token,
+        )
+        return dict(result) if result is not None else {}
+
     async def update_message(
         self,
         *,

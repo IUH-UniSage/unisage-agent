@@ -38,14 +38,11 @@ class _JavaBackend:
     def __init__(
         self,
         *,
-        reject_user_message: int | None = None,
+        reject_turn: int | None = None,
         reject_body: dict[str, Any] | None = None,
-        reject_history: int | None = None,
     ) -> None:
         self.calls: list[dict[str, Any]] = []
-        self._reject_history = reject_history
-        self._next_id = 1
-        self._reject_user_message = reject_user_message
+        self._reject_turn = reject_turn
         self._reject_body = reject_body
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -62,26 +59,19 @@ class _JavaBackend:
             }
         )
 
-        if (
-            request.method == "POST"
-            and request.url.path == "/messages"
-            and body.get("role") == "USER"
-            and self._reject_user_message is not None
-        ):
+        if request.method == "POST" and request.url.path == "/messages/turn":
+            if self._reject_turn is not None:
+                return httpx.Response(
+                    self._reject_turn, json=self._reject_body or {"message": "rejected"}
+                )
             return httpx.Response(
-                self._reject_user_message, json=self._reject_body or {"message": "rejected"}
-            )
-
-        if request.method == "GET" and request.url.path.startswith("/messages/conversation/"):
-            if self._reject_history is not None:
-                return httpx.Response(self._reject_history, json={"message": "rejected"})
-            return httpx.Response(200, json=[])
-
-        if request.method == "POST" and request.url.path == "/messages":
-            message_id = f"msg-{self._next_id}"
-            self._next_id += 1
-            return httpx.Response(
-                201, json={"id": message_id, "status": body.get("status", "COMPLETED")}
+                201,
+                json={
+                    "firstTurn": False,
+                    "context": [],
+                    "userMessage": {"id": "msg-1", "status": "COMPLETED"},
+                    "assistantMessage": {"id": "msg-2", "status": "STREAMING"},
+                },
             )
 
         if request.method == "PATCH" and request.url.path.startswith("/messages/"):
@@ -182,7 +172,7 @@ def test_malformed_trusted_header_is_400_not_401(client: TestClient) -> None:
 def test_java_rejects_user_message_returns_error_without_running_graph(
     client: TestClient, mock_graph_models: GraphModels
 ) -> None:
-    java = _JavaBackend(reject_user_message=403)
+    java = _JavaBackend(reject_turn=403)
     _override_java(java)
     _override_models(mock_graph_models)
 
@@ -192,9 +182,7 @@ def test_java_rejects_user_message_returns_error_without_running_graph(
     )
 
     assert response.status_code == 403
-    # Only the (rejected) USER-message POST happened - no placeholder created.
-    post_message_calls = [c for c in java.calls if c["path"] == "/messages"]
-    assert len(post_message_calls) == 1
+    assert [c["path"] for c in java.calls] == ["/messages/turn"]
 
 
 def test_java_usage_limit_429_keeps_code_2130_status_and_reset_time(
@@ -204,7 +192,7 @@ def test_java_usage_limit_429_keeps_code_2130_status_and_reset_time(
     HTTP 429 + code 2130 with the window and reset time intact - not as a 403 access-denied."""
 
     java = _JavaBackend(
-        reject_user_message=429,
+        reject_turn=429,
         reject_body={
             "code": 2130,
             "message": "Bạn đã dùng hết hạn mức sử dụng.",
@@ -223,15 +211,14 @@ def test_java_usage_limit_429_keeps_code_2130_status_and_reset_time(
     body = response.json()
     assert body["code"] == 2130
     assert body["errors"] == {"window": "DAILY", "resetAt": "2026-09-22T10:00+07:00"}
-    # Blocked before anything else: no assistant placeholder, no graph run.
-    post_message_calls = [c for c in java.calls if c["path"] == "/messages"]
-    assert len(post_message_calls) == 1
+    # Blocked before anything else: no graph run, nothing to PATCH.
+    assert [c["path"] for c in java.calls] == ["/messages/turn"]
 
 
 def test_java_usage_limit_429_without_detail_still_returns_429_2130(
     client: TestClient, mock_graph_models: GraphModels
 ) -> None:
-    java = _JavaBackend(reject_user_message=429)
+    java = _JavaBackend(reject_turn=429)
     _override_java(java)
     _override_models(mock_graph_models)
 
@@ -251,7 +238,7 @@ def test_java_rejections_map_to_not_found_access_denied_or_unavailable(
     say so (502 BACKEND_JAVA_UNAVAILABLE), not claim the caller lacks access."""
 
     for java_status, expected_status in ((404, 404), (403, 403), (401, 403), (500, 502)):
-        java = _JavaBackend(reject_user_message=java_status)
+        java = _JavaBackend(reject_turn=java_status)
         _override_java(java)
         _override_models(mock_graph_models)
 
@@ -263,7 +250,7 @@ def test_java_rejections_map_to_not_found_access_denied_or_unavailable(
         assert response.status_code == expected_status, java_status
 
 
-def test_successful_stream_creates_user_then_assistant_then_patches_completed(
+def test_successful_stream_starts_the_turn_then_patches_completed(
     client: TestClient, mock_graph_models: GraphModels
 ) -> None:
     java = _JavaBackend()
@@ -285,14 +272,15 @@ def test_successful_stream_creates_user_then_assistant_then_patches_completed(
         assert response.status_code == 200
         list(response.iter_text())  # drain the stream so the background task completes
 
-    message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
-    assert len(message_posts) == 2
-    assert message_posts[0]["body"]["role"] == "USER"
-    assert message_posts[1]["body"]["role"] == "ASSISTANT"
-    assert message_posts[1]["body"]["status"] == "STREAMING"
+    assert java.calls[0]["path"] == "/messages/turn"
+    assert java.calls[0]["body"] == {
+        "conversationId": "conv-1",
+        "content": "Điều kiện học bổng loại giỏi là gì?",
+    }
 
     patches = [c for c in java.calls if c["method"] == "PATCH"]
     assert len(patches) == 1
+    assert patches[0]["path"] == "/messages/msg-2"
     assert patches[0]["body"]["status"] == "COMPLETED"
 
 
@@ -315,7 +303,7 @@ def test_every_java_call_carries_x_internal_secret(
         assert response.status_code == 200
         list(response.iter_text())
 
-    assert len(java.calls) >= 3  # GET history, POST user, POST assistant, PATCH
+    assert len(java.calls) == 2  # POST turn, PATCH
     assert all(call["x_internal_secret"] == settings.APP_INTERNAL_SECRET_KEY for call in java.calls)
 
 
@@ -353,7 +341,7 @@ def test_x_forwarded_for_is_never_sent_to_java(
         assert response.status_code == 200
         list(response.iter_text())
 
-    assert len(java.calls) >= 3  # POST user, POST assistant, PATCH
+    assert len(java.calls) == 2  # POST turn, PATCH
     assert all(c["x_forwarded_for"] is None for c in java.calls)
 
 
@@ -363,8 +351,8 @@ def test_guest_session_cookie_is_forwarded_to_java_as_header(
     """The browser's `guest_session_id` httpOnly cookie reaches this service
     (same-site request via the gateway) but not backend-java (a fresh outgoing
     request, no cookie jar) - so it must be read off our own inbound request
-    and forwarded explicitly as `X-Guest-Session-Token` on every `POST
-    /messages` call, or Java's guest-conversation ownership check would 401
+    and forwarded explicitly as `X-Guest-Session-Token` on the `POST
+    /messages/turn` call, or Java's guest-conversation ownership check would 401
     every message this service persists on a guest's behalf."""
 
     java = _JavaBackend()
@@ -380,9 +368,9 @@ def test_guest_session_cookie_is_forwarded_to_java_as_header(
         assert response.status_code == 200
         list(response.iter_text())
 
-    message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
-    assert len(message_posts) == 2
-    assert all(c["x_guest_session_token"] == "raw-guest-token" for c in message_posts)
+    turn_posts = [c for c in java.calls if c["path"] == "/messages/turn"]
+    assert len(turn_posts) == 1
+    assert turn_posts[0]["x_guest_session_token"] == "raw-guest-token"
 
 
 def test_no_guest_session_cookie_omits_the_header(
@@ -404,30 +392,9 @@ def test_no_guest_session_cookie_omits_the_header(
         assert response.status_code == 200
         list(response.iter_text())
 
-    message_posts = [c for c in java.calls if c["path"] == "/messages" and c["method"] == "POST"]
-    assert len(message_posts) == 2
-    assert all(c["x_guest_session_token"] is None for c in message_posts)
-
-
-def test_history_lookup_failures_are_mapped_before_any_message_is_created(
-    client: TestClient, mock_graph_models: GraphModels
-) -> None:
-    """The history fetch is the first Java call - a foreign/missing conversation or a Java
-    outage there must be reported specifically, not as a generic 500."""
-
-    for java_status, expected_status, expected_code in ((404, 404, 4044), (500, 502, 5004)):
-        java = _JavaBackend(reject_history=java_status)
-        _override_java(java)
-        _override_models(mock_graph_models)
-
-        response = client.post(
-            "/api/v1/chat/stream",
-            json={"conversation_id": "conv-1", "message": "hi"},
-        )
-
-        assert response.status_code == expected_status, java_status
-        assert response.json()["code"] == expected_code
-        assert not [c for c in java.calls if c["method"] == "POST"]
+    turn_posts = [c for c in java.calls if c["path"] == "/messages/turn"]
+    assert len(turn_posts) == 1
+    assert turn_posts[0]["x_guest_session_token"] is None
 
 
 def _models_not_configured() -> GraphModels:
@@ -544,9 +511,7 @@ def test_suspected_injection_is_logged_with_only_pattern_role_conversation_and_l
 
     # Log-only: the turn runs exactly like any other.
     assert status == 200
-    user_posts = [
-        c for c in java.calls if c["method"] == "POST" and c["body"].get("role") == "USER"
-    ]
+    user_posts = [c for c in java.calls if c["path"] == "/messages/turn"]
     assert user_posts[0]["body"]["content"] == message
 
     records = _injection_records(caplog)
@@ -590,9 +555,7 @@ def test_message_at_the_length_limit_reaches_java_untruncated(
 
     assert _stream_message(client, message) == 200
 
-    user_posts = [
-        c for c in java.calls if c["method"] == "POST" and c["body"].get("role") == "USER"
-    ]
+    user_posts = [c for c in java.calls if c["path"] == "/messages/turn"]
     assert user_posts[0]["body"]["content"] == message
 
 

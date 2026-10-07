@@ -57,7 +57,7 @@ _TRAINING_TYPE_ASK_FORM = (
 class _JavaBackend:
     """In-memory fake of backend-java's conversation/message store, with just
     enough state (a per-conversation message list) to answer
-    `GET /messages/conversation/{id}` truthfully across turns."""
+    `POST /messages/turn`'s context truthfully across turns."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -79,17 +79,31 @@ class _JavaBackend:
             conversation_id = request.url.path.rsplit("/", 1)[-1]
             return httpx.Response(200, json=self._history.get(conversation_id, []))
 
-        if request.method == "POST" and request.url.path == "/messages":
-            message_id = f"msg-{self._next_id}"
-            self._next_id += 1
-            record = {"id": message_id, **body}
-            self._history.setdefault(body["conversationId"], []).append(record)
-            return httpx.Response(201, json=record)
+        if request.method == "POST" and request.url.path == "/messages/turn":
+            history = self._history.setdefault(body["conversationId"], [])
+            context = list(history)
+            user = self._record("USER", body["content"], "COMPLETED")
+            assistant = self._record("ASSISTANT", "", "STREAMING")
+            history.extend([user, assistant])
+            return httpx.Response(
+                201,
+                json={
+                    "firstTurn": not context,
+                    "context": context,
+                    "userMessage": user,
+                    "assistantMessage": assistant,
+                },
+            )
 
         if request.method == "PATCH" and request.url.path.startswith("/messages/"):
             return httpx.Response(200, json={"status": body.get("status")})
 
         raise AssertionError(f"unexpected call {request.method} {request.url.path}")
+
+    def _record(self, role: str, content: str, status: str) -> dict[str, Any]:
+        record = {"id": f"msg-{self._next_id}", "role": role, "content": content, "status": status}
+        self._next_id += 1
+        return record
 
 
 @pytest.fixture(autouse=True)

@@ -1,14 +1,11 @@
 """Greeting detection node - fast path for pure greetings.
 
 A first-turn pure greeting gets a static template, zero LLM tokens.
-"First turn" is answered by Java's own message history
-(`GET /messages/conversation/{id}` returning `[]`), never a Python-side
-counter — Python does not own conversation history.
+"First turn" is answered by Java (`POST /messages/turn`'s `firstTurn`),
+never a Python-side counter — Python does not own conversation history.
 """
 
 import re
-
-from app.integrations.backend_java_client import BackendJavaClient
 
 GREETING_TEMPLATE = (
     "Xin chào! Mình là Trợ Lý AI Học Vụ của trường. Mình có thể giúp bạn "
@@ -38,18 +35,6 @@ _FILLER_ONLY_PATTERN = re.compile(
 def is_pure_greeting(message: str) -> bool:
     remainder = _GREETING_TOKENS.sub("", message.strip())
     return bool(_FILLER_ONLY_PATTERN.fullmatch(remainder))
-
-
-async def is_first_turn(
-    java_client: BackendJavaClient,
-    *,
-    conversation_id: str,
-    authorization: str | None,
-) -> bool:
-    history = await java_client.get_conversation_messages(
-        conversation_id=conversation_id, limit=1, authorization=authorization
-    )
-    return len(history) == 0
 
 
 def detect_greeting(message: str, *, first_turn: bool) -> bool:

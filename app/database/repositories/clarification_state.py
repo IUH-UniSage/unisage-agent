@@ -48,17 +48,17 @@ class ClarificationStateRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_pending_clarification(self, conversation_id: str) -> PendingClarification | None:
+    async def get_clarification(
+        self, conversation_id: str
+    ) -> tuple[PendingClarification | None, dict[str, str]]:
         row = await self.get(conversation_id)
-        if row is None or row.pending_clarification is None:
-            return None
-        return PendingClarification.model_validate(row.pending_clarification)
+        return _pending_of(row), _confirmed_of(row)
+
+    async def get_pending_clarification(self, conversation_id: str) -> PendingClarification | None:
+        return _pending_of(await self.get(conversation_id))
 
     async def get_confirmed_metadata(self, conversation_id: str) -> dict[str, str]:
-        row = await self.get(conversation_id)
-        if row is None:
-            return {}
-        return dict(row.confirmed_metadata)
+        return _confirmed_of(await self.get(conversation_id))
 
     async def upsert(
         self,
@@ -114,3 +114,15 @@ class ClarificationStateRepository:
         await self._session.flush()
         row: ConversationClarificationState = result.scalar_one()
         return row
+
+
+def _pending_of(row: ConversationClarificationState | None) -> PendingClarification | None:
+    if row is None or row.pending_clarification is None:
+        return None
+    return PendingClarification.model_validate(row.pending_clarification)
+
+
+def _confirmed_of(row: ConversationClarificationState | None) -> dict[str, str]:
+    if row is None:
+        return {}
+    return dict(row.confirmed_metadata)
