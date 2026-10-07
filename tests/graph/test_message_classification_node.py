@@ -12,6 +12,7 @@ from app.graph.nodes.message_classification import (
     MAX_TASKS,
     build_classification_agent,
     classify_intent,
+    describe_classification,
     parse_classification,
 )
 from app.schemas.chat_history import HistoryMessage
@@ -365,3 +366,13 @@ def test_classification_prompt_carries_the_retrieval_section_only_when_enabled(
 
     assert "hyde_passage" in "".join(with_retrieval)
     assert "hyde_passage" not in "".join(without)
+
+
+def test_describe_classification_shows_the_retrieval_text_too() -> None:
+    task = _task("academic_advisory", "CNTT và Kế toán?", "MULTI") | {"sub_queries": ["a", "b"]}
+
+    described = json.loads(describe_classification(parse_classification(_payload(task), "x")))
+
+    assert described["tasks"][0]["sub_queries"] == ["a", "b"]
+    assert described["tasks"][0]["hyde_text"] is None
+    assert described["confidence"] == 0.9

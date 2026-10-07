@@ -139,6 +139,24 @@ def _sub_queries(raw_task: dict[str, Any]) -> list[str] | None:
     return queries[: settings.CHAT_MAX_SUB_QUERIES] if len(queries) >= 2 else None
 
 
+def describe_classification(classification: IntentClassification) -> str:
+    """JSON of what the graph acts on, including the retrieval text `model_dump` leaves out."""
+
+    tasks = [
+        {
+            "intent": task.intent,
+            "query": task.query,
+            "routing_mode": task.routing_mode,
+            "hyde_text": task.hyde_text,
+            "sub_queries": task.sub_queries,
+        }
+        for task in classification.tasks
+    ]
+    return json.dumps(
+        {"tasks": tasks, "confidence": classification.confidence}, ensure_ascii=False, indent=2
+    )
+
+
 def parse_classification(raw_output: str, message: str) -> IntentClassification:
     """Parse the model's JSON into tasks; anything unusable falls back to one
     advisory SINGLE task. Keeps at most `MAX_TASKS` tasks."""

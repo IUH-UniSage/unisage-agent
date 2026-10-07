@@ -27,7 +27,11 @@ from app.graph.nodes.generation_synthesis import build_generation_agent, run_gen
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
 from app.graph.nodes.intent_routing import plan_route
 from app.graph.nodes.llm_rerank import build_llm_rerank_agent, llm_rerank
-from app.graph.nodes.message_classification import build_classification_agent, classify_intent
+from app.graph.nodes.message_classification import (
+    build_classification_agent,
+    classify_intent,
+    describe_classification,
+)
 from app.graph.nodes.off_topic import off_topic_reply
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.query_transformation import (
@@ -136,6 +140,7 @@ async def run_graph(
         on_attempt=usage_recorder.bind("MessageClassificationNode"),
         budget=budget,
     )
+    trace.prompt("03_MessageClassificationNode", describe_classification(classification))
 
     # IntentRoutingNode (deterministic).
     trace.node("04_IntentRoutingNode")
