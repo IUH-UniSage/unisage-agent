@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio.session import AsyncSession
 from app.api.deps import get_backend_java_client, get_graph_models, get_session_factory
 from app.core.config import settings
 from app.database.repositories.clarification_state import ClarificationStateRepository
+from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
@@ -248,7 +249,6 @@ async def test_guest_without_authorization_header_completes_full_round_trip(
         assert response.status_code == 200
         body = "".join(response.iter_text())
 
-    # body is SSE `data: "<json-escaped-string>"`, so assert on a
-    # newline-free fragment rather than the raw (multi-line) template.
-    assert "chỉ có thể hỗ trợ các câu hỏi liên quan đến học vụ" in body
+    # body is SSE `data: "<json-escaped-string>"`; the template is picked at random.
+    assert any(json.dumps(template, ensure_ascii=False) in body for template in OFF_TOPIC_TEMPLATES)
     assert all(call["authorization"] is None for call in java.calls)

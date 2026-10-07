@@ -736,7 +736,7 @@ async def test_all_sub_queries_with_chunks_never_search_the_web(
     assert result.used_web_search is False
 
 
-# ── LLMRerankNode (09a, EXTRACTION model) ───────────────────────────────────
+# ── LLMRerankNode (09a, RERANK model) ──────────────────────────────────────
 
 
 @pytest.mark.asyncio

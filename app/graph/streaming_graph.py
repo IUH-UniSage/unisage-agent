@@ -314,7 +314,7 @@ async def _run_advisory_flow(
     questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]
     admin_warnings: list[AdminWarning] = []
 
-    # LLMRerankNode: keep only the chunks that answer each sub-query (EXTRACTION model).
+    # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
     if settings.CHAT_LLM_RERANK_ENABLED and rerank_result.has_valid_context:
         if models.rerank is not None:
             trace.node("09a_LLMRerankNode", model=models.rerank)
@@ -323,6 +323,7 @@ async def _run_advisory_flow(
                 questions,
                 rerank_result,
                 credential=models.rerank_credential,
+                purpose=models.rerank_purpose,
                 snapshot_version=models.snapshot_version,
                 on_attempt=usage_recorder.bind("LLMRerankNode"),
                 budget=budget,

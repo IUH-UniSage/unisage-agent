@@ -117,6 +117,22 @@ async def test_a_failing_model_keeps_the_score_ranking_and_names_the_cause() -> 
 
     assert outcome.result is before
     assert outcome.failure is not None
+    assert outcome.failure.startswith("Mô hình Rerank")
+
+
+@pytest.mark.asyncio
+async def test_the_failure_names_the_purpose_the_rerank_ran_on() -> None:
+    def broken(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(401, "gpt-x")
+
+    outcome = await llm_rerank(
+        build_llm_rerank_agent(FunctionModel(function=broken)),
+        ["a", "b"],
+        _two_sub_queries(),
+        purpose="EXTRACTION",
+    )
+
+    assert outcome.failure is not None
     assert outcome.failure.startswith("Mô hình Extraction")
 
 

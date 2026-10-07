@@ -132,3 +132,52 @@ def test_registry_flag_off_still_raises_no_legacy_fallback(monkeypatch: pytest.M
     # Surfaces to the client as a specific "CHAT model not configured" error, not a generic 500.
     assert exc_info.value.error_code is ErrorCode.LLM_NOT_CONFIGURED
     assert isinstance(exc_info.value.__cause__, ModelRegistryError)
+
+
+def _rerank_snapshot(**purposes: list[dict[str, Any]]) -> Any:
+    payload = _snapshot_payload([_chat_credential()])
+    payload["purposes"].update(purposes)
+    return parse_snapshot(payload)
+
+
+def test_rerank_uses_the_rerank_credential_when_one_is_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
+    snapshot = _rerank_snapshot(
+        RERANK=[_chat_credential(id="rerank", modelName="gpt-4.1-mini")],
+        EXTRACTION=[_chat_credential(id="extraction", modelName="gpt-4o-mini")],
+    )
+    monkeypatch.setattr(model_registry, "_current_snapshot", snapshot)
+
+    graph_models = get_graph_models()
+
+    assert graph_models.rerank_purpose == "RERANK"
+    assert graph_models.rerank_credential is not None
+    assert graph_models.rerank_credential.id == "rerank"
+
+
+def test_rerank_falls_back_to_extraction_while_no_rerank_row_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
+    snapshot = _rerank_snapshot(EXTRACTION=[_chat_credential(id="extraction")])
+    monkeypatch.setattr(model_registry, "_current_snapshot", snapshot)
+
+    graph_models = get_graph_models()
+
+    assert graph_models.rerank_purpose == "EXTRACTION"
+    assert graph_models.rerank_credential is not None
+    assert graph_models.rerank_credential.id == "extraction"
+
+
+def test_rerank_is_skipped_with_a_reason_when_neither_purpose_has_a_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
+    monkeypatch.setattr(model_registry, "_current_snapshot", _rerank_snapshot())
+
+    graph_models = get_graph_models()
+
+    assert graph_models.rerank is None
+    assert graph_models.rerank_unavailable

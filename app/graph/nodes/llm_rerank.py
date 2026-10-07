@@ -4,8 +4,8 @@ PostRetrievalRerankNode only thresholds embedding similarity, so a chunk that
 merely shares keywords passes: the admission table listing "Công nghệ thông
 tin" passed for "chương trình khung ngành CNTT", which kept web search from
 running for a sub-query no document answers and handed generation tables of
-the wrong programme level. One call to the EXTRACTION model per turn (not
-CHAT's - it is a cheap judging task) narrows each sub-query's chunks to the
+the wrong programme level. One call to the RERANK model per turn (EXTRACTION
+while none is configured; never CHAT's) narrows each sub-query's chunks to the
 ones that answer it; a sub-query left with none counts as failed and goes to
 WebSearchNode.
 
@@ -34,7 +34,7 @@ from app.schemas.retrieval import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
-PURPOSE = "EXTRACTION"
+DEFAULT_PURPOSE = "RERANK"
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _SUB_QUERY_KEY = re.compile(r"^SQ(\d+)$")
 _CHUNK_KEY = re.compile(r"^\[?C?(\d+)\]?$")
@@ -66,6 +66,7 @@ async def llm_rerank(
     rerank_result: TurnRerankResult,
     *,
     credential: CredentialConfig | None = None,
+    purpose: str = DEFAULT_PURPOSE,
     snapshot_version: int | None = None,
     on_attempt: AttemptRecorder | None = None,
     budget: BudgetContext | None = None,
@@ -81,7 +82,7 @@ async def llm_rerank(
         output = await run_agent_text_with_failover(
             agent,
             _build_prompt(questions, candidates),
-            purpose=PURPOSE,
+            purpose=purpose,
             credential=credential,
             snapshot_version=snapshot_version,
             agent_factory=build_llm_rerank_agent,
@@ -93,7 +94,7 @@ async def llm_rerank(
         )
     except Exception as exc:
         message = (
-            describe_llm_failure(exc, purpose=PURPOSE).message
+            describe_llm_failure(exc, purpose=purpose).message
             if not isinstance(exc, MalformedRerankOutputError)
             else f"Mô hình Extraction trả về kết quả lọc không đúng định dạng ({exc})."
         )

@@ -26,10 +26,12 @@ class GraphModels:
     retrieval: RetrievalServiceProtocol
     generation_credential: CredentialConfig | None = None
     snapshot_version: int | None = None
-    # LLMRerankNode's model - the top-priority EXTRACTION credential, not CHAT's.
-    # None skips the node; `rerank_unavailable` then says why (for the AI-admin warning).
+    # LLMRerankNode's model - the top-priority RERANK credential (EXTRACTION while no
+    # RERANK row exists), not CHAT's. None skips the node; `rerank_unavailable` then says
+    # why (for the AI-admin warning). `rerank_purpose` is the pool failover draws from.
     rerank: Model | str | None = None
     rerank_credential: CredentialConfig | None = None
+    rerank_purpose: str = "RERANK"
     rerank_unavailable: str | None = None
 
 

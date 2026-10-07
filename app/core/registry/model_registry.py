@@ -241,10 +241,11 @@ async def init_model_registry(
 
     _current_snapshot = snapshot
     logger.info(
-        "Loaded model registry snapshot version=%s chat=%d embedding=%d extraction=%d",
+        "Loaded model registry snapshot version=%s chat=%d embedding=%d extraction=%d rerank=%d",
         snapshot.version,
         len(snapshot.credentials_for("CHAT")),
         len(snapshot.credentials_for("EMBEDDING")),
         len(snapshot.credentials_for("EXTRACTION")),
+        len(snapshot.credentials_for("RERANK")),
     )
     return snapshot
