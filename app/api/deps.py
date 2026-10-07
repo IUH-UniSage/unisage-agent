@@ -16,6 +16,7 @@ from app.core.llm.provider_models import UnsupportedProviderError, build_model
 from app.core.registry.model_registry import (
     CredentialConfig,
     ModelRegistryError,
+    active_credentials_for,
     get_current_snapshot,
     require_top_priority_credential,
 )
@@ -72,17 +73,19 @@ def get_graph_models() -> GraphModels:
         raise LLMCallException(describe_llm_failure(exc, purpose="CHAT")) from exc
     snapshot = get_current_snapshot()
 
-    # LLMRerankNode runs on the EXTRACTION model. Missing it must not block chat: the
-    # node is skipped and AI admins are told why.
+    # LLMRerankNode runs on the RERANK model, or on EXTRACTION while no RERANK row is
+    # configured. Missing both must not block chat: the node is skipped and AI admins
+    # are told why.
+    rerank_purpose = "RERANK" if active_credentials_for("RERANK") else "EXTRACTION"
     rerank_model: Model | None = None
     rerank_credential: CredentialConfig | None = None
     rerank_unavailable: str | None = None
     try:
-        rerank_credential = require_top_priority_credential("EXTRACTION")
+        rerank_credential = require_top_priority_credential(rerank_purpose)
         rerank_model = build_model(rerank_credential)
     except (ModelRegistryError, UnsupportedProviderError) as exc:
         rerank_credential = None
-        rerank_unavailable = describe_llm_failure(exc, purpose="EXTRACTION").message
+        rerank_unavailable = describe_llm_failure(exc, purpose=rerank_purpose).message
 
     return GraphModels(
         classification=model,
@@ -93,6 +96,7 @@ def get_graph_models() -> GraphModels:
         snapshot_version=snapshot.version if snapshot is not None else None,
         rerank=rerank_model,
         rerank_credential=rerank_credential,
+        rerank_purpose=rerank_purpose,
         rerank_unavailable=rerank_unavailable,
     )
 

@@ -53,8 +53,9 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 - Tên biến viết `UPPER_SNAKE_CASE`, luôn có đúng một trong các tiền tố ở trên. `model_config` đặt
   `extra="ignore"`: biến lạ trong `.env` không làm service từ chối khởi động, khác mẫu (mẫu cho
   service kia chặn khởi động khi CORS mở hoặc khoá dùng chung rỗng ở `production`) —
-  `unisage-agent` **chưa có** hàng rào tương tự cho `APP_ENV=production`; đây là khoảng trống thật,
-  không phải lựa chọn có chủ đích, xem `docs/product/DECISIONS.md`.
+  `unisage-agent` chặn khởi động ở `APP_ENV=production` khi `APP_INTERNAL_SECRET_KEY` yếu hoặc
+  `BACKEND_JAVA_BASE_URL` không an toàn (`Settings._validate_production_safety`); những gì chưa chặn
+  được liệt kê ở `docs/product/DECISIONS.md`.
 - Không phải mọi biến trong `.env`/`.env.example` đều được `Settings` đọc. `APP_HOST` và `APP_PORT`
   có mặt ở đó nhưng **không** là field của `Settings` — chúng được Taskfile đọc trực tiếp qua
   `dotenv: ['.env']` (`taskfiles/backend.yml`) để truyền vào `uvicorn --host --port`/`gunicorn -b`.
@@ -92,7 +93,7 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
 | `APP_NAME` | `UniSage AI Agent Service` | Tên hiển thị, log khởi động |
-| `APP_ENV` | `development` | Chưa gate hành vi nào theo giá trị này (xem khoảng trống ở trên) |
+| `APP_ENV` | `development` | `production` bật hàng rào chặn khởi động khi cấu hình không an toàn (xem Quy tắc chung ở trên) |
 | `APP_DEBUG` | `True` | Chỉ bật log chi tiết của **chính service này** (`app/core/graph_trace.py` dump `academic_metadata`/`prepared_context`/HyDE output) — cố tình **không** nâng root log level, để log DEBUG của httpx/OpenAI SDK/SQLAlchemy không nhấn chìm dòng log node đang chạy (xem `app/main.py`) |
 | `APP_INTERNAL_SECRET_KEY` | `unisage-internal-secret-key-2026` | Phải khớp `X-Internal-Secret` mà API Gateway gắn vào mọi request chuyển tới; `app/core/security.py::verify_internal_secret` chặn mọi request không mang đúng giá trị này ở tầng router — service chỉ vào được qua Gateway, không được gọi thẳng |
 | `APP_HOST`/`APP_PORT` | `0.0.0.0`/`8402` (`.env.example`); `127.0.0.1`/`8402` (mặc định Taskfile) | **Không** là field `Settings` — Taskfile đọc thẳng qua `dotenv`, truyền vào `uvicorn`/`gunicorn` lúc khởi chạy |
@@ -121,7 +122,7 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
-| `QDRANT_HOST`/`QDRANT_PORT`/`QDRANT_COLLECTION` | `localhost:6333`, `unisage_chunks` | Vector DB duy nhất — không còn pgvector dù README/CONTEXT.md cũ còn nhắc (xem known-gaps) |
+| `QDRANT_HOST`/`QDRANT_PORT`/`QDRANT_COLLECTION` | `localhost:6333`, `unisage_chunks` | Vector DB duy nhất (không dùng pgvector) |
 
 **`TAVILY_`**
 
@@ -158,11 +159,14 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
 | `CHAT_CLARIFICATION_MAX_RETRY` | `2` | Clarification Guard (SecurityContextExtractionNode): số lần hỏi lại tối đa cho một field trước khi buộc trả lời an toàn theo hướng "so sánh phương án" thay vì hỏi tiếp mãi |
-| `CHAT_RETRIEVAL_MAX_CHUNKS` | `8` | Số chunk tối đa trả về sau RetrievalFilteringNode, trước khi qua ngưỡng rerank |
+| `CHAT_RETRIEVAL_MAX_CHUNKS` | `16` | Số chunk ứng viên lấy từ Qdrant mỗi lượt cho rerank chấm. Nhiều câu hỏi con thì mỗi câu được `ceil(N/số câu)` |
+| `CHAT_CONTEXT_MAX_CHUNKS` | `8` | Số chunk tối đa đưa vào prompt sinh câu trả lời, sau ngưỡng + LLM rerank (kể cả khi LLM rerank lỗi và giữ kết quả theo điểm). Tách riêng để tăng recall mà prompt không phình |
 | `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở PostRetrievalRerankNode. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |
 | `CHAT_MAX_SUB_QUERIES` | `3` | Số câu hỏi con tối đa khi decomposer tách một câu so sánh (task `MULTI`); tối thiểu 2. Mỗi câu hỏi con tốn thêm một lần embedding + tìm Qdrant, và chia nhỏ quota chunk của RetrievalFilteringNode |
-| `CHAT_LLM_RERANK_ENABLED` | `True` | Bật LLMRerankNode (09a): sau ngưỡng điểm, gọi **model Extraction** một lần mỗi lượt để giữ lại đúng các chunk trả lời từng câu hỏi con — ngưỡng điểm cosine để lọt chunk chỉ trùng từ khóa (VD bảng tổ hợp xét tuyển có chữ "Công nghệ thông tin" cho câu hỏi chương trình khung). Câu hỏi con không còn chunk nào → WebSearchNode. Lỗi/thiếu model Extraction → giữ kết quả theo điểm và báo AI admin |
+| `CHAT_LLM_RERANK_ENABLED` | `True` | Bật LLMRerankNode (09a): sau ngưỡng điểm, gọi **model Rerank** (purpose `RERANK` ở trang Cấu hình AI; chưa có thì dùng model Extraction) một lần mỗi lượt để giữ lại đúng các chunk trả lời từng câu hỏi con — ngưỡng điểm cosine để lọt chunk chỉ trùng từ khóa (VD bảng tổ hợp xét tuyển có chữ "Công nghệ thông tin" cho câu hỏi chương trình khung). Câu hỏi con không còn chunk nào → WebSearchNode. Lỗi/thiếu cả model Rerank lẫn Extraction → giữ kết quả theo điểm và báo AI admin |
 | `CHAT_LLM_RERANK_SNIPPET_CHARS` | `800` | Mỗi chunk đưa cho model Extraction bị cắt còn ngần này ký tự |
+| `CHAT_LLM_RERANK_RESCUE_MIN_SCORE` | `0.75` | Chốt an toàn: khi LLM rerank loại hết chunk ở **mọi** câu hỏi con, câu hỏi con nào có chunk tốt nhất điểm ≥ ngưỡng này được giữ lại top `RESCUE_KEEP` chunk theo điểm thay vì rơi xuống web search / TicketFallback (VD mẫu đơn nhiều dòng chấm bị model nhỏ coi là biểu mẫu trống) |
+| `CHAT_LLM_RERANK_RESCUE_KEEP` | `2` | Số chunk giữ lại khi chốt an toàn kích hoạt; `0` tắt chốt |
 | `CHAT_WEB_SEARCH_ENABLED` | `False` | Bật WebSearchNode: tìm web (Tavily) cho mỗi câu hỏi con mà rerank không còn chunk nào, trước khi rơi xuống TicketFallbackNode |
 | `CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB` | `5` | `max_results` gửi Tavily cho mỗi câu hỏi con trượt. Tavily tính credit theo lượt tìm, không theo số kết quả, nên lấy nhiều ứng viên không tốn thêm — trang đúng thường không nằm ở top 2 với câu hỏi tiếng Việt |
 | `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN` | `2` | Tổng số trang web tối đa đưa vào `<websearch>` một lượt — chia round-robin: mỗi câu hỏi con trượt được trang tốt nhất trước, phần còn lại theo điểm. Lấy `PER_SUB` ứng viên rồi chỉ giữ ngần này trang điểm cao nhất |

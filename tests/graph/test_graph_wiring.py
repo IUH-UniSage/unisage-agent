@@ -10,8 +10,8 @@ from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.greeting import GREETING_TEMPLATE
-from app.graph.nodes.intent_routing import SOCIAL_CHAT_TEMPLATE
-from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATE
+from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
+from app.graph.nodes.social_chat import THANKS_TEMPLATES
 from app.graph.nodes.web_search import WebSearchOutcome
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
@@ -21,7 +21,7 @@ from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
-from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
+from tests.llm_mocks import FakeRetrievalService, RetrieveManyMixin, make_classification_llm_model
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
 
@@ -76,7 +76,7 @@ def _echo_query_transformation_model() -> FunctionModel:
 
 
 @dataclass
-class _RecordingRetrievalService:
+class _RecordingRetrievalService(RetrieveManyMixin):
     """Like `FakeRetrievalService`, but remembers every query it was asked to
     retrieve for - so a test can assert which text actually reached
     retrieval, not just what the graph returned."""
@@ -142,7 +142,7 @@ async def test_social_chat_routes_to_static_template(
         _usage_recorder(),
     )
 
-    assert result.response_text == SOCIAL_CHAT_TEMPLATE
+    assert result.response_text in THANKS_TEMPLATES
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_off_topic_routes_to_static_template(
         _usage_recorder(),
     )
 
-    assert result.response_text == OFF_TOPIC_TEMPLATE
+    assert result.response_text in OFF_TOPIC_TEMPLATES
 
 
 @pytest.mark.asyncio
@@ -572,7 +572,7 @@ _WEB_PAGE = WebSearchResult(
 
 
 @dataclass
-class _PerQueryRetrieval:
+class _PerQueryRetrieval(RetrieveManyMixin):
     results: dict[str, list[RetrievedChunk]]
 
     def retrieve(
@@ -736,7 +736,7 @@ async def test_all_sub_queries_with_chunks_never_search_the_web(
     assert result.used_web_search is False
 
 
-# ── LLMRerankNode (09a, EXTRACTION model) ───────────────────────────────────
+# ── LLMRerankNode (09a, RERANK model) ──────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -746,6 +746,8 @@ async def test_a_keyword_only_chunk_is_judged_irrelevant_so_the_web_is_searched(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    # The dummy chunk scores 0.9, which the rescue would restore.
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_RESCUE_KEEP", 0)
     calls = _fake_web_search(monkeypatch, [_WEB_PAGE])
     seen_prompts: list[str] = []
     models = GraphModels(

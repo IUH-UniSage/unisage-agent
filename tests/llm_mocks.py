@@ -166,8 +166,22 @@ def make_classification_llm_model(*intents: str, routing_mode: str | None = None
     return FunctionModel(function=function)
 
 
+class RetrieveManyMixin:
+    """`retrieve_many` for a fake that only defines `retrieve`."""
+
+    def retrieve_many(
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[list[RetrievedChunk]]:
+        retrieve = self.retrieve  # type: ignore[attr-defined]
+        return [retrieve(query, security=security, limit=limit) for query in queries]
+
+
 @dataclass(frozen=True)
-class FakeRetrievalService:
+class FakeRetrievalService(RetrieveManyMixin):
     """`GraphModels.retrieval` test double - returns a fixed list of chunks,
     no Qdrant/OpenAI call. Satisfies `RetrievalServiceProtocol` structurally.
     Ignores `security` - tests that care about permission filtering use

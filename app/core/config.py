@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "UniSage AI Agent Service"
     APP_ENV: str = "development"
     APP_DEBUG: bool = True
+    # ANSI colors on console log lines (only when the stream is a terminal).
+    LOG_COLOR: bool = True
 
     # Internal service-to-service auth: must match the shared secret the API
     # Gateway sends as `X-Internal-Secret` on every proxied request (see
@@ -146,16 +148,32 @@ class Settings(BaseSettings):
 
     # --- CHAT_: read on every chat turn ---
     CHAT_CLARIFICATION_MAX_RETRY: int = 2
-    CHAT_RETRIEVAL_MAX_CHUNKS: int = 8
+    # Thinking for the short auxiliary calls (classification, query transformation, LLM
+    # rerank); generation keeps the model default. False = the model's lowest level.
+    CHAT_AUX_THINKING: bool | Literal["minimal", "low", "medium", "high"] = False
+    # Classification also writes each advisory task's HyDE text / sub-queries, so
+    # QueryTransformationNode only calls its own LLM when that output is missing.
+    CHAT_CLASSIFY_WITH_RETRIEVAL: bool = True
+    # Candidates fetched per turn (split across sub-queries) for rerank to judge.
+    # CONTEXT_MAX_CHUNKS separately caps what reaches the generation prompt, so recall
+    # can grow without bloating the prompt - also when the LLM rerank fails open.
+    CHAT_RETRIEVAL_MAX_CHUNKS: int = Field(default=16, ge=1)
+    CHAT_CONTEXT_MAX_CHUNKS: int = Field(default=8, ge=1)
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
-    # LLMRerankNode: one call to the EXTRACTION model per turn checks which reranked chunks
-    # actually answer which sub-query - the score threshold alone lets a chunk through on
-    # shared keywords. A sub-query left with none goes to WebSearchNode. Each chunk is shown
-    # to the model cut to SNIPPET_CHARS.
+    # LLMRerankNode: one call to the RERANK model (EXTRACTION if none) per turn checks
+    # which reranked chunks actually answer which sub-query - the score threshold alone
+    # lets a chunk through on shared keywords. A sub-query left with none goes to
+    # WebSearchNode. Each chunk is shown to the model cut to SNIPPET_CHARS.
     CHAT_LLM_RERANK_ENABLED: bool = True
     CHAT_LLM_RERANK_SNIPPET_CHARS: int = Field(default=800, ge=100)
+    # When the LLM rerank keeps nothing for any sub-query, each sub-query whose best
+    # chunk reached RESCUE_MIN_SCORE keeps its top RESCUE_KEEP by score: a small model
+    # drops e.g. a fill-in form full of dot leaders whose "Hồ sơ đính kèm" line is the
+    # answer, and the turn would end in TicketFallback with the right document retrieved.
+    CHAT_LLM_RERANK_RESCUE_MIN_SCORE: float = Field(default=0.75, ge=0, le=1)
+    CHAT_LLM_RERANK_RESCUE_KEEP: int = Field(default=2, ge=0)
     # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
     # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),

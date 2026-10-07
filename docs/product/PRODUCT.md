@@ -9,9 +9,9 @@ bộ đường ingest tài liệu (nộp file → xem trước → chia đoạn 
 **File này là gì:** những điều luôn đúng về sản phẩm — ai dùng nó, dữ liệu gồm những gì, cái gì quyết
 cái gì, và cái gì cố ý không làm. Cùng với `DECISIONS.md`, đây là toàn bộ tài liệu sản phẩm.
 
-**File này không phủ hết repo.** README.md, CONTEXT.md ở gốc repo đang mô tả một kiến trúc cũ
-(pgvector, "provider-free fallback") không còn đúng — coi hai file đó là lịch sử, không phải nguồn sự
-thật. Chỗ nào không ghi ở đây thì **code là nguồn sự thật**, cho tới khi có người ghi luật vào đây.
+**File này không phủ hết repo.** README.md (cách chạy), CONTEXT.md (định hướng nhanh) và
+`docs/architecture/rag-pipeline.md` (luồng chạy thật) mô tả hệ thống, nhưng luật nằm ở đây. Chỗ nào
+không ghi ở đây thì **code là nguồn sự thật**, cho tới khi có người ghi luật vào đây.
 
 **Nguồn nghiệp vụ:** thiết kế graph gốc ở `D:\KLTN\RAG_Graph\KLTN` (ảnh flow_design, `nodes/`,
 `prompt_template/`) — chuẩn cho cấu trúc luồng và cách lắp prompt, không phải chuẩn cho câu chữ prompt
@@ -119,6 +119,10 @@ tiết và các khoảng trống đã biết.
   không có phương án dự phòng tự động thử chiến lược khác khi một chiến lược thất bại.
 - **Draft chunk theo `chunking_version` cũ hơn hiện tại bị chặn embed**, phải chunk lại trước — tránh
   trộn hai hình dạng payload khác nhau trong cùng collection.
+- **Một câu hỏi dài tối đa 2000 ký tự, và đó là giới hạn duy nhất.** Dài hơn thì bị từ chối ngay ở
+  tầng schema (`ChatStreamRequest.message`) với `400`, `code = 4009`, `errors.message`, trước khi gọi
+  Java hay chạy graph. Không có bước nào phía sau cắt bớt câu hỏi: người dùng hoặc nhận lỗi rõ ràng,
+  hoặc câu hỏi được xử lý nguyên vẹn.
 - **`unisage-agent` không tự xác thực JWT** — tin hoàn toàn 5 header Gateway đã bơm sẵn. Một request
   không mang đúng `X-Internal-Secret` bị từ chối ở tầng router, trước khi chạm route handler nào.
 - **Mọi lỗi trả về mang một `code` ổn định**, mirror `ErrorCode.java` bên `unisage-backend` — client có
@@ -189,8 +193,10 @@ tiết và các khoảng trống đã biết.
 
 ## Human decisions
 
-- Ngưỡng `CHAT_RERANK_SCORE_THRESHOLD` — chưa có số đo chính thức, hiện để tạm ở `.env` máy dev
-  (`0.4`, khác mặc định code `0.70`) — người vận hành/nghiệp vụ quyết định sau khi có bộ câu hỏi đo.
+- Ngưỡng `CHAT_RERANK_SCORE_THRESHOLD` — chưa có số đo chính thức. Nguồn duy nhất là mặc định trong
+  code (`0.70`, `app/core/config.py`); giá trị trong `.env` máy dev là tuỳ chỉnh cục bộ, không phải
+  quyết định sản phẩm. Chốt sau khi bộ eval UNISAGE-95 có số đo
+  (`changes/06-10-2026-rag-guardrails-hardening/`, Task 7).
 - Có làm hybrid search (BM25) và cross-encoder rerank thật hay không — đã cân nhắc và hoãn, xem
   `docs/specs/known-gaps.md`; mở lại khi có số đo cho thấy dense-only không đủ.
 - Cách phân biệt "công khai" cho một tài liệu (`is_public`, không phải `access_level = 0`) — do người

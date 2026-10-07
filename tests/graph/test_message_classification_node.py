@@ -12,6 +12,7 @@ from app.graph.nodes.message_classification import (
     MAX_TASKS,
     build_classification_agent,
     classify_intent,
+    describe_classification,
     parse_classification,
 )
 from app.schemas.chat_history import HistoryMessage
@@ -305,3 +306,73 @@ async def test_classification_mock_copies_the_message_into_a_single_task(
         "Thủ tục bảo lưu thế nào?",
         "SINGLE",
     )
+
+
+def test_parse_reads_hyde_text_of_a_single_task() -> None:
+    task = _task("academic_advisory", "còn khóa 2025?", "SINGLE")
+    task |= {"standalone_question": "Học phí khóa 2025?", "hyde_passage": "Mức thu học phí..."}
+
+    (parsed,) = parse_classification(_payload(task), "còn khóa 2025?").tasks
+
+    assert parsed.hyde_text == "Học phí khóa 2025?\n\nMức thu học phí..."
+    assert parsed.sub_queries is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (["a", "b", "c", "d"], ["a", "b", "c"]),
+        (["a", "a", " "], None),
+        ("a", None),
+    ],
+)
+def test_parse_reads_and_bounds_sub_queries_of_a_multi_task(
+    raw: object, expected: list[str] | None
+) -> None:
+    task = _task("academic_advisory", "CNTT và Kế toán?", "MULTI") | {"sub_queries": raw}
+
+    (parsed,) = parse_classification(_payload(task), "CNTT và Kế toán?").tasks
+
+    assert parsed.sub_queries == expected
+    assert parsed.hyde_text is None
+
+
+def test_parse_leaves_retrieval_text_empty_when_hyde_is_incomplete() -> None:
+    task = _task("academic_advisory", _MESSAGE, "SINGLE") | {"standalone_question": _MESSAGE}
+
+    (parsed,) = parse_classification(_payload(task), _MESSAGE).tasks
+
+    assert parsed.hyde_text is None
+
+
+def test_classification_retrieval_text_is_never_persisted() -> None:
+    task = _task("academic_advisory", "CNTT và Kế toán?", "MULTI") | {"sub_queries": ["a", "b"]}
+
+    (parsed,) = parse_classification(_payload(task), "CNTT và Kế toán?").tasks
+
+    assert "sub_queries" not in parsed.model_dump()
+    assert "hyde_text" not in parsed.model_dump()
+
+
+def test_classification_prompt_carries_the_retrieval_section_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "CHAT_CLASSIFY_WITH_RETRIEVAL", True)
+    with_retrieval = build_classification_agent("test")._system_prompts
+    monkeypatch.setattr(settings, "CHAT_CLASSIFY_WITH_RETRIEVAL", False)
+    without = build_classification_agent("test")._system_prompts
+
+    assert "hyde_passage" in "".join(with_retrieval)
+    assert "hyde_passage" not in "".join(without)
+
+
+def test_describe_classification_shows_the_retrieval_text_too() -> None:
+    task = _task("academic_advisory", "CNTT và Kế toán?", "MULTI") | {"sub_queries": ["a", "b"]}
+
+    described = json.loads(describe_classification(parse_classification(_payload(task), "x")))
+
+    assert described["tasks"][0]["sub_queries"] == ["a", "b"]
+    assert described["tasks"][0]["hyde_text"] is None
+    assert described["confidence"] == 0.9

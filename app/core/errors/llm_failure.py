@@ -63,6 +63,7 @@ _PURPOSE_LABELS = {
     "CHAT": "Chat",
     "EMBEDDING": "Embedding",
     "EXTRACTION": "Extraction",
+    "RERANK": "Rerank",
 }
 
 _CHECK_CONFIG = "Kiểm tra trang Cấu hình AI."

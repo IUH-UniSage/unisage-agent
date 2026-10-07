@@ -1,6 +1,7 @@
 import asyncio
 import os
 from collections.abc import AsyncGenerator, Callable, Generator, Sequence
+from pathlib import Path
 
 # Must run before `app.core.config` is imported anywhere (including transitively, via
 # `from app.main import app` below) - the default unit-test run has no live backend-java to load
@@ -18,7 +19,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 import app.core.observability.alerting as alerting_module
 from app.api.deps import get_session_factory
@@ -141,17 +142,36 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest_asyncio.fixture
-async def db_session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
-    """A session factory bound to one fresh in-memory SQLite engine.
+async def db_session_factory(
+    tmp_path: Path,
+) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    """A session factory bound to one fresh, file-backed SQLite engine.
 
     Unlike `db_session`, this hands out the factory itself (not a single
     session) so a test can open multiple independent `AsyncSession`s against
     the same schema/data - needed to simulate two genuinely concurrent
     callers racing the same row (see the clarification-state upsert
     concurrency test).
+
+    File-backed with `NullPool` rather than in-memory with `StaticPool`: a
+    `StaticPool` hands every session the SAME connection, so two "concurrent"
+    sessions interleave statements on one connection and SQLite refuses the
+    first commit ("cannot commit transaction - SQL statements in progress").
+    Separate connections plus a busy timeout let SQLite serialize the writers
+    the way two real requests would be.
+
+    This is NOT a substitute for checking the same race on PostgreSQL:
+    SQLite serializes writers with a file lock, so a test here only proves
+    the upsert doesn't raise and leaves one row. Postgres-specific behavior
+    (MVCC, row locks, the real isolation level) belongs in `tests/e2e/`.
     """
 
-    engine, session_factory = _in_memory_sqlite_engine_and_sessions()
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
+        poolclass=NullPool,
+        connect_args={"timeout": 5},
+    )
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

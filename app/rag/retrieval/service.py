@@ -6,7 +6,11 @@ from qdrant_client.http.models import ScoredPoint
 
 from app.core.config import settings
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
-from app.rag.vectorstore.qdrant_store import build_access_filter, get_client, search_chunks
+from app.rag.vectorstore.qdrant_store import (
+    build_access_filter,
+    get_client,
+    search_chunks_batch,
+)
 from app.schemas.ingestion import SourceLocator
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
@@ -24,6 +28,14 @@ class RetrievalServiceProtocol(Protocol):
         security: AcademicSecurityContext,
         limit: int | None = None,
     ) -> list[RetrievedChunk]: ...
+
+    def retrieve_many(
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[list[RetrievedChunk]]: ...
 
 
 @dataclass(frozen=True)
@@ -48,16 +60,27 @@ class RetrievalService:
         security: AcademicSecurityContext,
         limit: int | None = None,
     ) -> list[RetrievedChunk]:
+        return self.retrieve_many([query], security=security, limit=limit)[0]
+
+    def retrieve_many(
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[list[RetrievedChunk]]:
+        """One embedding call and one Qdrant round trip for all `queries`."""
+
         effective_limit = limit if limit is not None else settings.CHAT_RETRIEVAL_MAX_CHUNKS
-        (query_vector,) = self.embedder.embed([query])
+        query_vectors = self.embedder.embed(queries)
         client = self.client or get_client()
-        points = search_chunks(
+        per_query_points = search_chunks_batch(
             client,
-            query_vector=query_vector,
-            limit=effective_limit,
+            query_vectors=query_vectors,
+            limits=[effective_limit] * len(queries),
             query_filter=build_access_filter(security),
         )
-        return [_to_retrieved_chunk(point) for point in points]
+        return [[_to_retrieved_chunk(point) for point in points] for points in per_query_points]
 
 
 def _to_retrieved_chunk(point: ScoredPoint) -> RetrievedChunk:

@@ -158,6 +158,7 @@ async def run_and_persist(
     accumulated: list[str] = []
 
     async def sink(token: str) -> None:
+        trace.first_token()
         accumulated.append(token)
         await queue.put(TokenItem(token))
 
@@ -193,9 +194,12 @@ async def run_and_persist(
                 )
                 if reserve_result != "OK":
                     raise RequestBudgetRejectedError(usage_recorder.purpose, reserve_result)
-            graph_output = await run_graph(
-                graph_input, models, sink, trace, usage_recorder, budget=budget
-            )
+            try:
+                graph_output = await run_graph(
+                    graph_input, models, sink, trace, usage_recorder, budget=budget
+                )
+            finally:
+                trace.finish()
             response_text = graph_output.response_text
             status = "COMPLETED"
             for warning in _admin_warnings(graph_output, graph_input):

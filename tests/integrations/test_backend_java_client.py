@@ -77,6 +77,51 @@ async def test_create_message_raises_http_error_with_status_on_ownership_rejecti
 
 
 @pytest.mark.asyncio
+async def test_start_turn_posts_message_and_forwards_guest_token() -> None:
+    seen: dict[str, Any] = {}
+    turn = {
+        "firstTurn": True,
+        "context": [],
+        "userMessage": {"id": "msg-1"},
+        "assistantMessage": {"id": "msg-2"},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        seen["method"] = request.method
+        seen["url_path"] = request.url.path
+        seen["parsed_body"] = _json.loads(request.read())
+        seen["guest_token"] = request.headers.get("x-guest-session-token")
+        return httpx.Response(201, json=turn)
+
+    client = _client_with(handler)
+
+    result = await client.start_turn(
+        conversation_id="conv-1", content="hello", guest_session_token="guest-abc"
+    )
+
+    assert seen["method"] == "POST"
+    assert seen["url_path"].endswith("/messages/turn")
+    assert seen["parsed_body"] == {"conversationId": "conv-1", "content": "hello"}
+    assert seen["guest_token"] == "guest-abc"
+    assert result == turn
+
+
+@pytest.mark.asyncio
+async def test_start_turn_raises_http_error_with_status_over_usage_limit() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"message": "over limit"})
+
+    client = _client_with(handler)
+
+    with pytest.raises(BackendJavaHTTPError) as exc_info:
+        await client.start_turn(conversation_id="conv-1", content="hello")
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_update_message_patches_with_expected_shape() -> None:
     seen: dict[str, Any] = {}
 

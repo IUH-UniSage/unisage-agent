@@ -10,6 +10,7 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
+from app.core.config import settings
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import ModelRouter
 from app.graph.streaming import (
@@ -17,6 +18,7 @@ from app.graph.streaming import (
     AttemptRecorder,
     BudgetContext,
     FailoverCallback,
+    auxiliary_model_settings,
     run_agent_text_with_failover,
 )
 from app.rag.prompting import append_recent_history, get_templates
@@ -47,7 +49,15 @@ _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def build_classification_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, system_prompt=get_templates().agent_message_classification)
+    templates = get_templates()
+    system_prompt = templates.agent_message_classification
+    if settings.CHAT_CLASSIFY_WITH_RETRIEVAL:
+        system_prompt = f"{system_prompt}\n\n{templates.agent_message_classification_retrieval}"
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        model_settings=auxiliary_model_settings(),
+    )
 
 
 def _fallback_classification(message: str) -> IntentClassification:
@@ -95,10 +105,55 @@ def _normalize_task(raw_task: object, message: str) -> ClassifiedTask | None:
         intent = _DEFAULT_INTENT
     raw_query = raw_task.get("query")
     query = raw_query.strip() if isinstance(raw_query, str) and raw_query.strip() else message
+    routing_mode = _normalize_routing_mode(intent, raw_task.get("routing_mode"))
     return ClassifiedTask(
         intent=intent,
         query=query,
-        routing_mode=_normalize_routing_mode(intent, raw_task.get("routing_mode")),
+        routing_mode=routing_mode,
+        hyde_text=_hyde_text(raw_task) if routing_mode == "SINGLE" else None,
+        sub_queries=_sub_queries(raw_task) if routing_mode == "MULTI" else None,
+    )
+
+
+def _hyde_text(raw_task: dict[str, Any]) -> str | None:
+    """Same shape HyDE returns: the standalone question, a blank line, the passage."""
+
+    question = raw_task.get("standalone_question")
+    passage = raw_task.get("hyde_passage")
+    if not (isinstance(question, str) and question.strip()):
+        return None
+    if not (isinstance(passage, str) and passage.strip()):
+        return None
+    return f"{question.strip()}\n\n{passage.strip()}"
+
+
+def _sub_queries(raw_task: dict[str, Any]) -> list[str] | None:
+    raw = raw_task.get("sub_queries")
+    if not isinstance(raw, list):
+        return None
+    queries: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip() and item.strip() not in queries:
+            queries.append(item.strip())
+    # Fewer than 2 is not a decomposition - QueryTransformationNode decides again.
+    return queries[: settings.CHAT_MAX_SUB_QUERIES] if len(queries) >= 2 else None
+
+
+def describe_classification(classification: IntentClassification) -> str:
+    """JSON of what the graph acts on, including the retrieval text `model_dump` leaves out."""
+
+    tasks = [
+        {
+            "intent": task.intent,
+            "query": task.query,
+            "routing_mode": task.routing_mode,
+            "hyde_text": task.hyde_text,
+            "sub_queries": task.sub_queries,
+        }
+        for task in classification.tasks
+    ]
+    return json.dumps(
+        {"tasks": tasks, "confidence": classification.confidence}, ensure_ascii=False, indent=2
     )
 
 

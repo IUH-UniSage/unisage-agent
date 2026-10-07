@@ -117,6 +117,22 @@ async def test_a_failing_model_keeps_the_score_ranking_and_names_the_cause() -> 
 
     assert outcome.result is before
     assert outcome.failure is not None
+    assert outcome.failure.startswith("Mô hình Rerank")
+
+
+@pytest.mark.asyncio
+async def test_the_failure_names_the_purpose_the_rerank_ran_on() -> None:
+    def broken(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(401, "gpt-x")
+
+    outcome = await llm_rerank(
+        build_llm_rerank_agent(FunctionModel(function=broken)),
+        ["a", "b"],
+        _two_sub_queries(),
+        purpose="EXTRACTION",
+    )
+
+    assert outcome.failure is not None
     assert outcome.failure.startswith("Mô hình Extraction")
 
 
@@ -201,3 +217,53 @@ async def test_sections_past_the_snippet_cut_are_still_listed(
         "A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.1 Khóa 2025-2026 > Khối Công nghệ"
     ) in prompt
     assert "; -" not in prompt
+
+
+_FORM = _chunk("don-chuyen-nganh", 0.78, "ĐƠN XIN CHUYỂN NGÀNH ……… Hồ sơ đính kèm gồm: ...")
+_HANDBOOK = _chunk("so-tay", 0.73, "PROCEDURE FOR CONSIDERING MAJOR TRANSFER")
+_OTHER_FORM = _chunk("don-hoc-bong", 0.65, "Hồ sơ đính kèm: giấy khai sinh")
+
+
+@pytest.mark.asyncio
+async def test_a_confident_turn_the_model_emptied_keeps_its_top_chunks() -> None:
+    agent = build_llm_rerank_agent(make_sync_llm_model('{"SQ1": {}}'))
+
+    outcome = await llm_rerank(
+        agent, ["Giấy tờ xin chuyển ngành"], rerank_chunks([[_FORM, _HANDBOOK, _OTHER_FORM]])
+    )
+
+    assert outcome.result.failed_query_indexes == []
+    assert [c.chunk_id for c in outcome.result.chunks] == ["don-chuyen-nganh", "so-tay"]
+
+
+@pytest.mark.asyncio
+async def test_rescue_needs_the_best_score_to_reach_the_minimum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_RESCUE_MIN_SCORE", 0.8)
+    agent = build_llm_rerank_agent(make_sync_llm_model('{"SQ1": {}}'))
+
+    outcome = await llm_rerank(agent, ["Giấy tờ xin chuyển ngành"], rerank_chunks([[_FORM]]))
+
+    assert outcome.result.failed_query_indexes == [0]
+    assert outcome.result.chunks == []
+
+
+@pytest.mark.asyncio
+async def test_rescue_is_off_when_keep_is_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_RESCUE_KEEP", 0)
+    agent = build_llm_rerank_agent(make_sync_llm_model('{"SQ1": {}}'))
+
+    outcome = await llm_rerank(agent, ["Giấy tờ xin chuyển ngành"], rerank_chunks([[_FORM]]))
+
+    assert outcome.result.chunks == []
+
+
+@pytest.mark.asyncio
+async def test_rescue_restores_every_confident_sub_query_when_all_were_emptied() -> None:
+    agent = build_llm_rerank_agent(make_sync_llm_model('{"SQ1": {}, "SQ2": {}}'))
+
+    outcome = await llm_rerank(agent, ["a", "b"], rerank_chunks([[_FORM], [_chunk("weak", 0.5)]]))
+
+    assert outcome.result.failed_query_indexes == [1]
+    assert [c.chunk_id for c in outcome.result.chunks] == ["don-chuyen-nganh"]

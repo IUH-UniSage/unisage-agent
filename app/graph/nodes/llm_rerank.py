@@ -4,8 +4,8 @@ PostRetrievalRerankNode only thresholds embedding similarity, so a chunk that
 merely shares keywords passes: the admission table listing "Công nghệ thông
 tin" passed for "chương trình khung ngành CNTT", which kept web search from
 running for a sub-query no document answers and handed generation tables of
-the wrong programme level. One call to the EXTRACTION model per turn (not
-CHAT's - it is a cheap judging task) narrows each sub-query's chunks to the
+the wrong programme level. One call to the RERANK model per turn (EXTRACTION
+while none is configured; never CHAT's) narrows each sub-query's chunks to the
 ones that answer it; a sub-query left with none counts as failed and goes to
 WebSearchNode.
 
@@ -27,14 +27,19 @@ from app.core.config import settings
 from app.core.errors.llm_failure import describe_llm_failure
 from app.core.registry.model_registry import CredentialConfig
 from app.graph.nodes.post_retrieval_rerank import TurnRerankResult, turn_result
-from app.graph.streaming import AttemptRecorder, BudgetContext, run_agent_text_with_failover
+from app.graph.streaming import (
+    AttemptRecorder,
+    BudgetContext,
+    auxiliary_model_settings,
+    run_agent_text_with_failover,
+)
 from app.rag.prompting import get_templates
 from app.rag.prompting.citations import source_title
 from app.schemas.retrieval import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
-PURPOSE = "EXTRACTION"
+DEFAULT_PURPOSE = "RERANK"
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _SUB_QUERY_KEY = re.compile(r"^SQ(\d+)$")
 _CHUNK_KEY = re.compile(r"^\[?C?(\d+)\]?$")
@@ -57,7 +62,11 @@ class LLMRerankOutcome:
 
 
 def build_llm_rerank_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, system_prompt=get_templates().agent_reranker_compressor)
+    return Agent(
+        model=model,
+        system_prompt=get_templates().agent_reranker_compressor,
+        model_settings=auxiliary_model_settings(),
+    )
 
 
 async def llm_rerank(
@@ -66,6 +75,7 @@ async def llm_rerank(
     rerank_result: TurnRerankResult,
     *,
     credential: CredentialConfig | None = None,
+    purpose: str = DEFAULT_PURPOSE,
     snapshot_version: int | None = None,
     on_attempt: AttemptRecorder | None = None,
     budget: BudgetContext | None = None,
@@ -81,7 +91,7 @@ async def llm_rerank(
         output = await run_agent_text_with_failover(
             agent,
             _build_prompt(questions, candidates),
-            purpose=PURPOSE,
+            purpose=purpose,
             credential=credential,
             snapshot_version=snapshot_version,
             agent_factory=build_llm_rerank_agent,
@@ -93,7 +103,7 @@ async def llm_rerank(
         )
     except Exception as exc:
         message = (
-            describe_llm_failure(exc, purpose=PURPOSE).message
+            describe_llm_failure(exc, purpose=purpose).message
             if not isinstance(exc, MalformedRerankOutputError)
             else f"Mô hình Extraction trả về kết quả lọc không đúng định dạng ({exc})."
         )
@@ -108,8 +118,9 @@ async def llm_rerank(
         )
         for query_index in range(len(questions))
     ]
-    narrowed = turn_result(per_query_kept, best_scores=rerank_result.best_scores)
     _log_decisions(questions, candidates, relevant)
+    per_query_kept = _rescue_emptied_queries(per_query_kept, rerank_result)
+    narrowed = turn_result(per_query_kept, best_scores=rerank_result.best_scores)
     logger.info(
         "LLM rerank kept %d of %d chunk(s); sub-queries without any: %s",
         len(narrowed.chunks),
@@ -148,6 +159,37 @@ def _log_decisions(
                 if index not in kept
             ),
         )
+
+
+def _rescue_emptied_queries(
+    per_query_kept: list[list[RetrievedChunk]], rerank_result: TurnRerankResult
+) -> list[list[RetrievedChunk]]:
+    """Only when the model kept nothing for ANY sub-query: each one whose best
+    chunk scored high gets its top chunks back, instead of the turn ending in
+    TicketFallback with the right document already retrieved. A sub-query left
+    empty while others kept chunks is a deliberate drop (keyword-only match)
+    and stays empty."""
+
+    keep = settings.CHAT_LLM_RERANK_RESCUE_KEEP
+    if keep == 0 or any(per_query_kept):
+        return per_query_kept
+
+    min_score = settings.CHAT_LLM_RERANK_RESCUE_MIN_SCORE
+    rescued: list[list[RetrievedChunk]] = []
+    for query_index, kept in enumerate(per_query_kept):
+        own = rerank_result.per_query[query_index].chunks
+        if not own or own[0].score < min_score:
+            rescued.append(kept)
+            continue
+        restored = own[:keep]
+        logger.info(
+            "LLM rerank rescue SQ%d: model kept nothing, restoring top %d by score [%s]",
+            query_index + 1,
+            len(restored),
+            "; ".join(f"{source_title(chunk.source)} ({chunk.score:.2f})" for chunk in restored),
+        )
+        rescued.append(restored)
+    return rescued
 
 
 def _candidate_chunks(rerank_result: TurnRerankResult) -> list[RetrievedChunk]:

@@ -29,6 +29,13 @@ _JSON_BLOCK_PATTERN = re.compile(r"```json.*?```", re.DOTALL)
 # Amounts like "60.000.000" - the previous turn's figures belong to a
 # different question, and would otherwise be copied into this turn's output.
 _AMOUNT_PATTERN = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
+# The tags that frame retrieved text in `prepared_context.yaml` /
+# `web_search_context.yaml`. Text from a document or a web page that contains
+# one of them could close the frame early and have what follows read as
+# prompt rather than data.
+_CONTEXT_FRAME_TAG_PATTERN = re.compile(
+    r"<\s*(/?)\s*(academic_context|websearch|current_date)\s*>", re.IGNORECASE
+)
 
 
 def build_metadata_section(
@@ -139,6 +146,13 @@ def append_recent_history(query: str, history: Sequence[HistoryMessage]) -> str:
     )
 
 
+def _neutralize_frame_tags(text: str) -> str:
+    """Escape any context-frame tag inside retrieved text (`<websearch>` ->
+    `&lt;websearch&gt;`) so the only real frame tags are the template's own."""
+
+    return _CONTEXT_FRAME_TAG_PATTERN.sub(r"&lt;\1\2&gt;", text)
+
+
 def _page_suffix(chunk: RetrievedChunk) -> str:
     """`", tr. X"` / `", tr. X-Y"` when the chunk carries a real page number
     (PDF only - `page_start` stays `None` for HTML/DOCX/TXT/XLSX), else `""`.
@@ -171,7 +185,8 @@ def build_prepared_context_section(
 
     context_chunks = (
         "\n".join(
-            f"  [{index}] ({chunk.source}{_page_suffix(chunk)}) {chunk.content}"
+            f"  [{index}] ({_neutralize_frame_tags(chunk.source)}{_page_suffix(chunk)}) "
+            f"{_neutralize_frame_tags(chunk.content)}"
             for index, chunk in enumerate(chunks, 1)
         )
         or _NO_RETRIEVED_CONTEXT
@@ -191,7 +206,8 @@ def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_i
     if not web_results:
         return ""
     entries = "\n".join(
-        f"  [{index}] ({result.title} — {result.url}) {result.content}"
+        f"  [{index}] ({_neutralize_frame_tags(result.title)} — "
+        f"{_neutralize_frame_tags(result.url)}) {_neutralize_frame_tags(result.content)}"
         for index, result in enumerate(web_results, first_index)
     )
     return "\n" + get_templates().web_search_context.format(web_results=entries) + "\n"

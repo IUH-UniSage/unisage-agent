@@ -17,7 +17,7 @@ from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
-from tests.llm_mocks import make_classification_llm_model
+from tests.llm_mocks import RetrieveManyMixin, make_classification_llm_model
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
 
@@ -78,7 +78,7 @@ def _echo_model() -> FunctionModel:
 
 
 @dataclass
-class _RecordingRetrieval:
+class _RecordingRetrieval(RetrieveManyMixin):
     chunks: list[RetrievedChunk] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
 

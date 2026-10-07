@@ -3,15 +3,33 @@ import pytest
 from app.core.config import Settings
 
 
-def test_new_settings_have_sane_defaults() -> None:
+def test_new_settings_have_sane_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Env-driven settings for Java integration, clarification, and
-    retrieval/rerank load with sane defaults."""
+    retrieval/rerank load with sane defaults.
 
-    fresh = Settings()
+    Reads neither `.env` nor the shell: a dev machine's `.env` routinely
+    overrides these (e.g. a lower rerank threshold), which would otherwise
+    fail this test for reasons unrelated to the code's defaults."""
+
+    for name in (
+        "BACKEND_JAVA_BASE_URL",
+        "CHAT_CLARIFICATION_MAX_RETRY",
+        "CHAT_RETRIEVAL_MAX_CHUNKS",
+        "CHAT_CONTEXT_MAX_CHUNKS",
+        "CHAT_RERANK_SCORE_THRESHOLD",
+        "CHAT_LLM_RERANK_RESCUE_MIN_SCORE",
+        "CHAT_LLM_RERANK_RESCUE_KEEP",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    fresh = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert fresh.BACKEND_JAVA_BASE_URL == "http://localhost:8401/api/v1"
     assert fresh.CHAT_CLARIFICATION_MAX_RETRY == 2
-    assert fresh.CHAT_RETRIEVAL_MAX_CHUNKS == 8
+    assert fresh.CHAT_RETRIEVAL_MAX_CHUNKS == 16
+    assert fresh.CHAT_CONTEXT_MAX_CHUNKS == 8
+    assert fresh.CHAT_LLM_RERANK_RESCUE_MIN_SCORE == 0.75
+    assert fresh.CHAT_LLM_RERANK_RESCUE_KEEP == 2
     assert fresh.CHAT_RERANK_SCORE_THRESHOLD == 0.70
 
 

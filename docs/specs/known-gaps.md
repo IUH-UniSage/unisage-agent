@@ -286,6 +286,29 @@ questions → add BM25; correct chunks are retrieved but ranked wrong, or the
 cosine threshold can't separate right from wrong → add reranking (and only
 then RRF).
 
+### Prompt injection is logged, not blocked (2026-10)
+
+Two layers exist, neither of which refuses a request:
+
+- **Prompt framing:** `<academic_context>` and `<websearch>` are declared as data, never
+  instructions, and any context-frame tag inside retrieved text is escaped
+  (`app/rag/prompting/builder.py::_neutralize_frame_tags`) so a document or web page can't close
+  its frame early.
+- **Detection:** `detect_prompt_injection` (`app/core/security/sanitizer.py`) matches a handful of
+  named Vietnamese/English patterns on diacritic-folded text. `POST /chat/stream` logs one WARNING
+  per match with only `pattern`, `role`, `conversation_id` and `message_length`; the turn runs
+  unchanged.
+
+Deliberately log-only: regex on Vietnamese is coarse, and blocking on it would refuse real questions
+("bỏ qua môn này có sao không") without any measurement of the false-positive rate. The patterns
+also only see the user's message - text inside ingested documents is protected by the framing
+alone.
+
+**When to revisit:** after 1-2 weeks of production logs, compare match counts against a sample of
+matched conversations. If matches are mostly real attacks, consider refusing with a static
+template (like OffTopic); if attacks get through without a match, consider an LLM classifier
+instead of more regex.
+
 ### `CalculationNode` is a placeholder
 
 No extractor, no Calculator Tool, no data source for scores/tuition figures.

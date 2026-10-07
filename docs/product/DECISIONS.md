@@ -151,8 +151,8 @@ là quyết định có chủ đích:
 
 Rủi ro còn lại: `CHAT_RERANK_SCORE_THRESHOLD` đang áp lên điểm cosine của `text-embedding-3-small`, trong
 khi thiết kế gốc đặt ngưỡng này cho điểm cross-encoder — hai thang điểm không tương đương. `.env` máy
-dev hiện để `0.4` (thấp hơn mặc định code `0.70`), cho thấy đã có quan sát thực tế là `0.70` quá cao
-cho cosine, nhưng chưa có số đo chính thức để chốt lại.
+dev thường đặt thấp hơn hẳn mặc định code `0.70` (từng là `0.4`, rồi `0.3`), cho thấy quan sát thực tế
+là `0.70` quá cao cho cosine, nhưng chưa có số đo chính thức để chốt lại.
 
 Đã cân và loại: bật RRF trước khi có rerank (mọi câu hỏi rơi fallback, xem trên) · tự host
 `bge-reranker-base` nguyên bản (yếu với tiếng Việt; nếu làm nên dùng `bge-reranker-v2-m3` hoặc một
@@ -448,9 +448,21 @@ biệt khỏi `Settings` (Pydantic) mà code Python đọc.
 
 Luật nằm ở: `docs/guide/cau-hinh.md` › Biến môi trường.
 
-### Vì sao chưa có hàng rào chặn khởi động khi `APP_ENV=production` mà cấu hình còn thiếu an toàn (VD `APP_INTERNAL_SECRET_KEY` vẫn để mặc định)?
+### Hàng rào chặn khởi động khi `APP_ENV=production` chặn những gì, và chưa chặn những gì?
 
-Đây là khoảng trống thật, chưa phải một quyết định có chủ đích — `Settings` hiện không đọc `APP_ENV`
-để gate bất cứ điều gì. Ghi nhận ở đây để không ai tưởng nhầm im lặng này là "đã cân nhắc rồi bỏ qua".
+`Settings._validate_production_safety` (`app/core/config.py`) chạy khi nạp cấu hình. Với
+`APP_ENV=production`, service **từ chối khởi động** khi:
+
+- `APP_INTERNAL_SECRET_KEY` rỗng, còn giá trị mặc định, hoặc ngắn hơn 32 ký tự — secret này là hàng rào
+  duy nhất giữa service và request không đi qua Gateway;
+- `BACKEND_JAVA_BASE_URL` dùng `http://` mà `INTERNAL_NETWORK_ENCRYPTED` không bật — lời gọi sang Java
+  mang `X-Internal-Secret` và header người dùng, không được đi plaintext trên mạng chưa mã hoá;
+- host của `BACKEND_JAVA_BASE_URL` là host chỉ dùng cho dev (`localhost`, `127.0.0.1`,
+  `host.docker.internal`).
+
+Chưa chặn (khoảng trống thật, không phải đã cân rồi bỏ): `APP_DEBUG` vẫn bật, `DB_URL` còn mật khẩu
+mặc định, `REDIS_URL`/Qdrant trỏ về host dev. Mở rộng khi một trong số này gây sự cố hoặc khi có
+checklist triển khai chính thức. Mỗi điều kiện mới đi kèm test trong `tests/test_config.py` như các
+điều kiện hiện có.
 
 Luật nằm ở: `docs/guide/cau-hinh.md` › Biến môi trường; `docs/specs/known-gaps.md`.
