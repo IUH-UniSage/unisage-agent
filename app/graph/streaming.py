@@ -46,8 +46,10 @@ from typing import TYPE_CHECKING
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage
 
+from app.core.config import settings
 from app.core.llm.provider_models import build_model
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig
@@ -146,6 +148,11 @@ TokenSink = Callable[[str], Awaitable[None]]
 # current call sites' `build_generation_agent`/`build_ticket_fallback_agent`
 # (both just `Agent(model=model)`, no tools/deps attached) satisfy this.
 AgentFactory = Callable[[Model | str], Agent[None, str]]
+
+
+def auxiliary_model_settings() -> ModelSettings:
+    return ModelSettings(thinking=settings.CHAT_AUX_THINKING)
+
 
 # Called once, right after a failover picks a replacement credential/model -
 # lets the caller propagate the switch to the REST of the same request (see

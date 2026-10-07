@@ -17,6 +17,7 @@ from app.graph.streaming import (
     AttemptRecorder,
     BudgetContext,
     FailoverCallback,
+    auxiliary_model_settings,
     run_agent_text_with_failover,
 )
 from app.rag.prompting import append_recent_history, get_templates
@@ -47,7 +48,11 @@ _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def build_classification_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, system_prompt=get_templates().agent_message_classification)
+    return Agent(
+        model=model,
+        system_prompt=get_templates().agent_message_classification,
+        model_settings=auxiliary_model_settings(),
+    )
 
 
 def _fallback_classification(message: str) -> IntentClassification:

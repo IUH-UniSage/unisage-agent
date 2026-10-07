@@ -146,6 +146,9 @@ class Settings(BaseSettings):
 
     # --- CHAT_: read on every chat turn ---
     CHAT_CLARIFICATION_MAX_RETRY: int = 2
+    # Thinking for the short auxiliary calls (classification, query transformation, LLM
+    # rerank); generation keeps the model default. False = the model's lowest level.
+    CHAT_AUX_THINKING: bool | Literal["minimal", "low", "medium", "high"] = False
     # Candidates fetched per turn (split across sub-queries) for rerank to judge.
     # CONTEXT_MAX_CHUNKS separately caps what reaches the generation prompt, so recall
     # can grow without bloating the prompt - also when the LLM rerank fails open.

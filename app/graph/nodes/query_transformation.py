@@ -25,6 +25,7 @@ from app.graph.streaming import (
     AttemptRecorder,
     BudgetContext,
     FailoverCallback,
+    auxiliary_model_settings,
     run_agent_text_with_failover,
 )
 from app.rag.prompting import append_recent_history, get_templates
@@ -44,11 +45,19 @@ class SubQuery:
 
 
 def build_query_transformation_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, system_prompt=get_templates().agent_hyde_generator)
+    return Agent(
+        model=model,
+        system_prompt=get_templates().agent_hyde_generator,
+        model_settings=auxiliary_model_settings(),
+    )
 
 
 def build_decomposer_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, system_prompt=get_templates().agent_multi_query_decomposer)
+    return Agent(
+        model=model,
+        system_prompt=get_templates().agent_multi_query_decomposer,
+        model_settings=auxiliary_model_settings(),
+    )
 
 
 def _fold_confirmed_metadata_into_query(user_query: str, confirmed_metadata: dict[str, str]) -> str:

@@ -27,7 +27,12 @@ from app.core.config import settings
 from app.core.errors.llm_failure import describe_llm_failure
 from app.core.registry.model_registry import CredentialConfig
 from app.graph.nodes.post_retrieval_rerank import TurnRerankResult, turn_result
-from app.graph.streaming import AttemptRecorder, BudgetContext, run_agent_text_with_failover
+from app.graph.streaming import (
+    AttemptRecorder,
+    BudgetContext,
+    auxiliary_model_settings,
+    run_agent_text_with_failover,
+)
 from app.rag.prompting import get_templates
 from app.rag.prompting.citations import source_title
 from app.schemas.retrieval import RetrievedChunk
@@ -57,7 +62,11 @@ class LLMRerankOutcome:
 
 
 def build_llm_rerank_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, system_prompt=get_templates().agent_reranker_compressor)
+    return Agent(
+        model=model,
+        system_prompt=get_templates().agent_reranker_compressor,
+        model_settings=auxiliary_model_settings(),
+    )
 
 
 async def llm_rerank(
