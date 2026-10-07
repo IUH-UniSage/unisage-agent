@@ -746,6 +746,8 @@ async def test_a_keyword_only_chunk_is_judged_irrelevant_so_the_web_is_searched(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    # The dummy chunk scores 0.9, which the rescue would restore.
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_RESCUE_KEEP", 0)
     calls = _fake_web_search(monkeypatch, [_WEB_PAGE])
     seen_prompts: list[str] = []
     models = GraphModels(

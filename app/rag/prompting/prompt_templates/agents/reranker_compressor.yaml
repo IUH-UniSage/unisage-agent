@@ -23,6 +23,7 @@ template: |
   - Học phí: mức thu theo năm học/tín chỉ, ghi chú miễn giảm áp dụng cho mức thu. KHÔNG phải: học bổng, lệ phí xét tuyển.
   - Tuyển sinh: mã ngành, tổ hợp xét tuyển, phương thức xét tuyển, chỉ tiêu, hồ sơ. KHÔNG phải: chương trình đào tạo sau khi nhập học.
   - Địa chỉ/liên hệ: địa chỉ, điện thoại, email, website của cơ sở/phòng ban.
+  - Hồ sơ/giấy tờ cần nộp cho một thủ tục: dòng "Hồ sơ đính kèm", "Hồ sơ gồm", "Kèm theo" trong MẪU ĐƠN của đúng thủ tục đó LÀ câu trả lời (VD hỏi giấy tờ xin chuyển ngành → "Đơn xin chuyển ngành" có dòng "Hồ sơ đính kèm gồm: ..."). Mẫu đơn phần lớn là dòng chấm (……) để điền tay vẫn là văn bản chính thức: KHÔNG loại chỉ vì nhiều chỗ trống. Mẫu đơn của thủ tục KHÁC (VD đơn xét học bổng khi hỏi chuyển ngành) thì không giữ.
 
   ## Output
   CHỈ trả về đúng một object JSON, không giải thích ngoài JSON, không markdown code fence. Mỗi câu hỏi con đúng một khóa `SQk`; giá trị là object `{"Cn": "lý do cụ thể"}` cho các đoạn được giữ, `{}` nếu không đoạn nào trả lời được.

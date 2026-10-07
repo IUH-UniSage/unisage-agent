@@ -108,8 +108,9 @@ async def llm_rerank(
         )
         for query_index in range(len(questions))
     ]
-    narrowed = turn_result(per_query_kept, best_scores=rerank_result.best_scores)
     _log_decisions(questions, candidates, relevant)
+    per_query_kept = _rescue_emptied_queries(per_query_kept, rerank_result)
+    narrowed = turn_result(per_query_kept, best_scores=rerank_result.best_scores)
     logger.info(
         "LLM rerank kept %d of %d chunk(s); sub-queries without any: %s",
         len(narrowed.chunks),
@@ -148,6 +149,37 @@ def _log_decisions(
                 if index not in kept
             ),
         )
+
+
+def _rescue_emptied_queries(
+    per_query_kept: list[list[RetrievedChunk]], rerank_result: TurnRerankResult
+) -> list[list[RetrievedChunk]]:
+    """Only when the model kept nothing for ANY sub-query: each one whose best
+    chunk scored high gets its top chunks back, instead of the turn ending in
+    TicketFallback with the right document already retrieved. A sub-query left
+    empty while others kept chunks is a deliberate drop (keyword-only match)
+    and stays empty."""
+
+    keep = settings.CHAT_LLM_RERANK_RESCUE_KEEP
+    if keep == 0 or any(per_query_kept):
+        return per_query_kept
+
+    min_score = settings.CHAT_LLM_RERANK_RESCUE_MIN_SCORE
+    rescued: list[list[RetrievedChunk]] = []
+    for query_index, kept in enumerate(per_query_kept):
+        own = rerank_result.per_query[query_index].chunks
+        if not own or own[0].score < min_score:
+            rescued.append(kept)
+            continue
+        restored = own[:keep]
+        logger.info(
+            "LLM rerank rescue SQ%d: model kept nothing, restoring top %d by score [%s]",
+            query_index + 1,
+            len(restored),
+            "; ".join(f"{source_title(chunk.source)} ({chunk.score:.2f})" for chunk in restored),
+        )
+        rescued.append(restored)
+    return rescued
 
 
 def _candidate_chunks(rerank_result: TurnRerankResult) -> list[RetrievedChunk]:

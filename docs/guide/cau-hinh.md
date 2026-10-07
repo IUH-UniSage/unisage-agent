@@ -159,11 +159,14 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
 | `CHAT_CLARIFICATION_MAX_RETRY` | `2` | Clarification Guard (SecurityContextExtractionNode): số lần hỏi lại tối đa cho một field trước khi buộc trả lời an toàn theo hướng "so sánh phương án" thay vì hỏi tiếp mãi |
-| `CHAT_RETRIEVAL_MAX_CHUNKS` | `8` | Số chunk tối đa trả về sau RetrievalFilteringNode, trước khi qua ngưỡng rerank |
+| `CHAT_RETRIEVAL_MAX_CHUNKS` | `16` | Số chunk ứng viên lấy từ Qdrant mỗi lượt cho rerank chấm. Nhiều câu hỏi con thì mỗi câu được `ceil(N/số câu)` |
+| `CHAT_CONTEXT_MAX_CHUNKS` | `8` | Số chunk tối đa đưa vào prompt sinh câu trả lời, sau ngưỡng + LLM rerank (kể cả khi LLM rerank lỗi và giữ kết quả theo điểm). Tách riêng để tăng recall mà prompt không phình |
 | `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở PostRetrievalRerankNode. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |
 | `CHAT_MAX_SUB_QUERIES` | `3` | Số câu hỏi con tối đa khi decomposer tách một câu so sánh (task `MULTI`); tối thiểu 2. Mỗi câu hỏi con tốn thêm một lần embedding + tìm Qdrant, và chia nhỏ quota chunk của RetrievalFilteringNode |
 | `CHAT_LLM_RERANK_ENABLED` | `True` | Bật LLMRerankNode (09a): sau ngưỡng điểm, gọi **model Extraction** một lần mỗi lượt để giữ lại đúng các chunk trả lời từng câu hỏi con — ngưỡng điểm cosine để lọt chunk chỉ trùng từ khóa (VD bảng tổ hợp xét tuyển có chữ "Công nghệ thông tin" cho câu hỏi chương trình khung). Câu hỏi con không còn chunk nào → WebSearchNode. Lỗi/thiếu model Extraction → giữ kết quả theo điểm và báo AI admin |
 | `CHAT_LLM_RERANK_SNIPPET_CHARS` | `800` | Mỗi chunk đưa cho model Extraction bị cắt còn ngần này ký tự |
+| `CHAT_LLM_RERANK_RESCUE_MIN_SCORE` | `0.75` | Chốt an toàn: khi LLM rerank loại hết chunk ở **mọi** câu hỏi con, câu hỏi con nào có chunk tốt nhất điểm ≥ ngưỡng này được giữ lại top `RESCUE_KEEP` chunk theo điểm thay vì rơi xuống web search / TicketFallback (VD mẫu đơn nhiều dòng chấm bị model nhỏ coi là biểu mẫu trống) |
+| `CHAT_LLM_RERANK_RESCUE_KEEP` | `2` | Số chunk giữ lại khi chốt an toàn kích hoạt; `0` tắt chốt |
 | `CHAT_WEB_SEARCH_ENABLED` | `False` | Bật WebSearchNode: tìm web (Tavily) cho mỗi câu hỏi con mà rerank không còn chunk nào, trước khi rơi xuống TicketFallbackNode |
 | `CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB` | `5` | `max_results` gửi Tavily cho mỗi câu hỏi con trượt. Tavily tính credit theo lượt tìm, không theo số kết quả, nên lấy nhiều ứng viên không tốn thêm — trang đúng thường không nằm ở top 2 với câu hỏi tiếng Việt |
 | `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN` | `2` | Tổng số trang web tối đa đưa vào `<websearch>` một lượt — chia round-robin: mỗi câu hỏi con trượt được trang tốt nhất trước, phần còn lại theo điểm. Lấy `PER_SUB` ứng viên rồi chỉ giữ ngần này trang điểm cao nhất |

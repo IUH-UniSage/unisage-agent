@@ -146,7 +146,11 @@ class Settings(BaseSettings):
 
     # --- CHAT_: read on every chat turn ---
     CHAT_CLARIFICATION_MAX_RETRY: int = 2
-    CHAT_RETRIEVAL_MAX_CHUNKS: int = 8
+    # Candidates fetched per turn (split across sub-queries) for rerank to judge.
+    # CONTEXT_MAX_CHUNKS separately caps what reaches the generation prompt, so recall
+    # can grow without bloating the prompt - also when the LLM rerank fails open.
+    CHAT_RETRIEVAL_MAX_CHUNKS: int = Field(default=16, ge=1)
+    CHAT_CONTEXT_MAX_CHUNKS: int = Field(default=8, ge=1)
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
@@ -156,6 +160,12 @@ class Settings(BaseSettings):
     # to the model cut to SNIPPET_CHARS.
     CHAT_LLM_RERANK_ENABLED: bool = True
     CHAT_LLM_RERANK_SNIPPET_CHARS: int = Field(default=800, ge=100)
+    # When the LLM rerank keeps nothing for any sub-query, each sub-query whose best
+    # chunk reached RESCUE_MIN_SCORE keeps its top RESCUE_KEEP by score: a small model
+    # drops e.g. a fill-in form full of dot leaders whose "Hồ sơ đính kèm" line is the
+    # answer, and the turn would end in TicketFallback with the right document retrieved.
+    CHAT_LLM_RERANK_RESCUE_MIN_SCORE: float = Field(default=0.75, ge=0, le=1)
+    CHAT_LLM_RERANK_RESCUE_KEEP: int = Field(default=2, ge=0)
     # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
     # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),

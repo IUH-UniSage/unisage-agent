@@ -62,15 +62,20 @@ def turn_result(
         for chunks in per_query_kept
     ]
     merged = per_query[0].chunks if len(per_query) == 1 else _merge_by_best_score(per_query_kept)
-    return TurnRerankResult(per_query=per_query, chunks=merged, best_scores=best_scores)
+    # `per_query` stays uncapped: it is the LLM rerank's candidate pool, which may
+    # hold more than the generation prompt does.
+    return TurnRerankResult(
+        per_query=per_query,
+        chunks=merged[: settings.CHAT_CONTEXT_MAX_CHUNKS],
+        best_scores=best_scores,
+    )
 
 
 def _merge_by_best_score(results: Sequence[list[RetrievedChunk]]) -> list[RetrievedChunk]:
-    """Keep each chunk once at its best score (earlier query wins ties),
-    ranked and capped at `CHAT_RETRIEVAL_MAX_CHUNKS`.
+    """Keep each chunk once at its best score (earlier query wins ties), ranked.
 
-    Thresholding before this cap keeps exactly what capping first then
-    thresholding did: both drop only the lowest scores."""
+    `turn_result` caps the result after thresholding, which keeps exactly what
+    capping first then thresholding would: both drop only the lowest scores."""
 
     best: dict[str, RetrievedChunk] = {}
     for chunks in results:
@@ -78,5 +83,4 @@ def _merge_by_best_score(results: Sequence[list[RetrievedChunk]]) -> list[Retrie
             existing = best.get(chunk.chunk_id)
             if existing is None or chunk.score > existing.score:
                 best[chunk.chunk_id] = chunk
-    ranked = sorted(best.values(), key=lambda chunk: chunk.score, reverse=True)
-    return ranked[: settings.CHAT_RETRIEVAL_MAX_CHUNKS]
+    return sorted(best.values(), key=lambda chunk: chunk.score, reverse=True)

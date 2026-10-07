@@ -106,8 +106,9 @@ def test_merge_keeps_the_earlier_query_copy_on_a_score_tie() -> None:
 
 @pytest.mark.usefixtures("_no_threshold")
 def test_merge_caps_the_merged_list(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 2 slots, 3 queries → quota 1 each → 3 candidates, capped to the best 2.
-    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_MAX_CHUNKS", 2)
+    # 3 candidate slots → quota 1 each; the prompt takes only the best 2.
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_MAX_CHUNKS", 3)
+    monkeypatch.setattr(settings, "CHAT_CONTEXT_MAX_CHUNKS", 2)
     service = _PerQueryRetrieval(
         {"q1": [_chunk("a", 0.9)], "q2": [_chunk("b", 0.8)], "q3": [_chunk("c", 0.7)]}
     )
@@ -165,7 +166,7 @@ def test_threshold_then_cap_equals_the_old_cap_then_threshold(
     """Old flow merged + capped every query's chunks first, then thresholded;
     per-query rerank thresholds first. Both must keep the same chunks."""
 
-    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_MAX_CHUNKS", 3)
+    monkeypatch.setattr(settings, "CHAT_CONTEXT_MAX_CHUNKS", 3)
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.6)
     service = _PerQueryRetrieval(
         {
@@ -178,3 +179,16 @@ def test_threshold_then_cap_equals_the_old_cap_then_threshold(
 
     # Old: merge+cap → a .95, c .9, b .65 → threshold .6 → same three.
     assert [c.chunk_id for c in chunks] == ["a", "c", "b"]
+
+
+@pytest.mark.usefixtures("_no_threshold")
+def test_context_cap_trims_a_single_query_but_keeps_the_rerank_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_CONTEXT_MAX_CHUNKS", 2)
+    candidates = [_chunk(f"c{i}", 0.9 - i * 0.01) for i in range(5)]
+
+    result = rerank_chunks([candidates])
+
+    assert [c.chunk_id for c in result.chunks] == ["c0", "c1"]
+    assert len(result.per_query[0].chunks) == 5
