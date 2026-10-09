@@ -38,6 +38,7 @@ Mỗi answer có `question_id` và **đúng một** field giá trị. Field nào
 | `choice` | `option_id` hoặc `other_text` (chỉ khi `allow_other`) | `{"question_id": "q1", "option_id": "k20"}` |
 | `number` | `number` | `{"question_id": "q2", "number": "6.5"}` |
 | `number_list` | `numbers` (1..`max_items`) | `{"question_id": "q3", "numbers": ["9", "8"]}` |
+| `number_or_list` | `number` (giá trị đã tổng hợp sẵn) **hoặc** `numbers` (từng cột, 1..`max_items`) | `{"question_id": "q6", "number": "7.3"}` hoặc `{"question_id": "q6", "numbers": ["8", "7", "7"]}` |
 | `text` | `text` | `{"question_id": "q4", "text": "Chất lượng cao"}` |
 | `course_table` | `rows` (1..`max_items`) | `{"question_id": "q5", "rows": [{"name": "Toán", "credits": 3, "score": "8.5"}, {"name": null, "credits": 2, "score": "B+"}]}` |
 
@@ -91,7 +92,7 @@ Response của lệnh huỷ chỉ có `clarification_closed` rồi `done`, khôn
 }
 ```
 
-- `id` có dạng `q1`..`q12`. Mỗi câu hỏi là một tab, và thứ tự trong mảng là thứ tự tab.
+- `id` có dạng `q1`..`q99`. Mỗi câu hỏi là một tab, thứ tự trong mảng là thứ tự tab. **Panel hiện đủ mọi câu hỏi của lượt** (không cắt); thanh tab phải cuộn ngang được. Server chặn ở 50 câu chỉ để từ chối payload bất thường.
 - Bất biến theo `kind`:
 
   | kind | `options` | `allow_other` | `number` | `max_items` | `max_length` |
@@ -99,9 +100,13 @@ Response của lệnh huỷ chỉ có `clarification_closed` rồi `done`, khôn
   | `choice` | 2..12 | có thể true | null | null | null |
   | `number` | [] | false | bắt buộc | null | null |
   | `number_list` | [] | false | bắt buộc (cho từng phần tử) | 1..20 | null |
+  | `number_or_list` | [] | false | bắt buộc (cho giá trị tổng hợp và từng cột) | 1..20 | null |
   | `text` | [] | false | null | null | 1..200 |
   | `course_table` | [] | false | null | 1..30 | null |
 
+- `number_or_list`: tab có công tắc 2 lựa chọn - **"Nhập sẵn"** (một ô, gửi `number`) và **"Nhập từng cột"**
+  (danh sách ô, gửi `numbers`). `prompt` mô tả cả hai, VD "Điểm thường xuyên: nhập TBtx nếu đã biết, hoặc
+  nhập từng cột TX1…TXn". Mặc định là "Nhập từng cột".
 - Cột của `course_table` cố định: `name` (string ≤ 80 hoặc null), `credits` (nguyên 1..10), `score`
   (`"0"`..`"10"` step 0.01, hoặc một trong `A+ A B+ B C+ C D+ D F`).
 - Client **không** nhận và **không** gửi `origin`, `task_id`, `field`.
@@ -164,7 +169,7 @@ của cuộc chat là ASSISTANT, `COMPLETED`, và có `clarification.status == "
     thái đã chọn. Options lấy từ `metadata.clarification.panel` của message ASSISTANT **ngay trước**
     message USER này (đối chiếu bằng `panel_id` và `question_id`). Không tìm thấy panel thì chỉ hiện
     `display`.
-  - `number` / `number_list` / `text`: hiện `display`.
+  - `number` / `number_list` / `number_or_list` / `text`: hiện `display` (với `number_or_list`, `display` đã ghi rõ cách nhập, VD `"TBtx 7.3"` hoặc `"Từng cột: 8, 7, 7"`).
   - `course_table`: bảng `rows`.
 - **Panel bị huỷ** (message ASSISTANT có `metadata.clarification.status == "cancelled"`): ngay dưới câu
   trả lời của message đó, hiện card thu gọn `Đã huỷ · N câu hỏi ⌄`. Mở ra thì thấy các câu hỏi và
