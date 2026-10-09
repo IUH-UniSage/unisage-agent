@@ -1,4 +1,5 @@
-"""Start-of-turn gate and the cancel flow for the clarification panel.
+"""Clarification panel service: the start-of-turn gate, cancel, and preparing a
+submit (validate the answers against the stored panel, then claim the round).
 
 The state of a panel lives in `conversation_clarification_states` (agent DB);
 `messages.metadata.clarification` in Java is only its projection. Every 4xx
@@ -6,24 +7,37 @@ here is raised before `start_turn`, so a refused request creates no message
 and costs no quota. Spec: docs/specs/SPEC-clarification-panel.md §2.3-§2.5.
 """
 
+import asyncio
+import contextlib
 import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors.exceptions import (
     BackendJavaUnavailableException,
+    ClarificationInvalidException,
     ClarificationPendingException,
     ClarificationProcessingException,
     ClarificationStaleException,
 )
 from app.database.repositories.clarification_state import ClarificationRoundRepository, RoundState
+from app.graph.clarification_answers import (
+    ClarificationInvalid,
+    answers_metadata,
+    answers_summary,
+    validate_answers,
+)
+from app.graph.streaming_session import ClaimContext
+from app.graph.streaming_state import ResumeInput
 from app.integrations.backend_java_client import BackendJavaClient, with_java_retries
 from app.schemas.chat import ChatStreamRequest
-from app.schemas.clarification import ClarificationCancel, PendingRound
+from app.schemas.clarification import ClarificationCancel, ClarificationSubmit, PendingRound
 
 logger = logging.getLogger(__name__)
 
@@ -94,3 +108,58 @@ async def cancel_panel(
         "clarification.cancelled conversation_id=%s panel_id=%s", conversation_id, action.panel_id
     )
     return _closed_stream(action.panel_id)
+
+
+@dataclass(frozen=True)
+class PreparedSubmit:
+    """A validated, claimed panel submit - everything the turn needs to resume it."""
+
+    claim: ClaimContext
+    resume: ResumeInput
+    summary: str  # the USER message content
+    start_turn_metadata: dict[str, Any]  # metadata.clarification_answers for that message
+
+
+async def prepare_submit(
+    *,
+    db_session: AsyncSession,
+    conversation_id: str,
+    pending: PendingRound,
+    action: ClarificationSubmit,
+) -> PreparedSubmit:
+    """Validate against the stored panel (400 if wrong, panel stays open), then claim
+    the round OPEN → PROCESSING and commit so other requests see it at once."""
+
+    try:
+        answers = validate_answers(pending.panel, action)
+    except ClarificationInvalid as exc:
+        raise ClarificationInvalidException(
+            {error.question_id: error.reason for error in exc.errors}
+        ) from exc
+    token = uuid.uuid4()
+    claimed = await ClarificationRoundRepository(db_session).claim(
+        conversation_id, action.panel_id, token, settings.CHAT_CLARIFICATION_LEASE_SECONDS
+    )
+    if claimed is None:
+        raise ClarificationStaleException()
+    await db_session.commit()
+    return PreparedSubmit(
+        claim=ClaimContext(
+            token=token,
+            deadline=asyncio.get_running_loop().time()
+            + settings.CHAT_CLAIMED_TURN_DEADLINE_SECONDS,
+        ),
+        resume=ResumeInput(pending_round=claimed, answers=answers),
+        summary=answers_summary(answers),
+        start_turn_metadata={"clarification_answers": answers_metadata(claimed.panel, answers)},
+    )
+
+
+async def release_claim(
+    db_session: AsyncSession, conversation_id: str, claim: ClaimContext
+) -> None:
+    """start_turn failed - no message, no quota yet: hand the panel back (best effort)."""
+
+    with contextlib.suppress(Exception):
+        await ClarificationRoundRepository(db_session).restore(conversation_id, claim.token)
+        await db_session.commit()

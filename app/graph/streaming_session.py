@@ -2,7 +2,8 @@
 
 `run_and_persist` MUST be scheduled with `asyncio.create_task()` by its
 caller and never awaited inline inside the SSE response cycle -
-`app/api/v1/chat.py`'s endpoint creates the task and returns a
+`ChatStreamService` (app/services/chat_stream_service.py) creates the task and the
+controller returns a
 `StreamingResponse` whose generator only reads `queue.get()`. If the client
 disconnects, Starlette cancels the SSE generator (and stops iterating the
 queue) but this task, running independently, keeps going to completion and

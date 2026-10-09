@@ -25,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.registry.model_registry as model_registry
 import app.core.registry.model_router as model_router_module
-from app.api.v1.chat import _sse_token_generator
 from app.core.config import settings
 from app.core.errors.llm_failure import FailureReason
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
@@ -38,6 +37,7 @@ from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+from app.services.chat_stream_service import _sse_token_generator
 from tests.llm_mocks import (
     FakeRetrievalService,
     make_classification_llm_model,

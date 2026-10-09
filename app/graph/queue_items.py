@@ -1,6 +1,6 @@
 """Typed items pushed onto the queue between `run_and_persist` (producer) and
 `_sse_token_generator` (consumer) - `app/graph/streaming_session.py` /
-`app/api/v1/chat.py`.
+`app/services/chat_stream_service.py`.
 
 Replaces the old `str | None` scheme (a token string, or `None` as the
 end-of-stream sentinel) with a small closed set of item types, so an error
