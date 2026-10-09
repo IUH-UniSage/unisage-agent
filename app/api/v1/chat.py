@@ -16,22 +16,37 @@ from app.api.deps import (
     get_graph_models,
     get_session_factory,
 )
+from app.api.v1.clarification_flow import cancel_panel, gate_clarification
 from app.core.budget.tracker import get_default_tracker
 from app.core.config import settings
 from app.core.errors.exceptions import (
     BackendJavaUnavailableException,
+    ClarificationInvalidException,
     ConversationRejectedException,
     InvalidQueryException,
+    RequestTooLargeException,
     UsageLimitExceededException,
 )
 from app.core.security.sanitizer import detect_prompt_injection, sanitize_input_text
 from app.core.security.security import verify_internal_secret
 from app.core.usage.cost_calculator import estimate as estimate_cost
 from app.core.usage.usage_recorder import UsageRecorder
-from app.database.repositories.clarification_state import ClarificationStateRepository
+from app.database.repositories.clarification_state import (
+    ClarificationRoundRepository,
+    ClarificationStateRepository,
+)
 from app.database.session import get_db_session
+from app.graph.clarification_answers import ClarificationInvalid, validate_answers
 from app.graph.nodes.security_context import parse_security_headers
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem, WarningItem
+from app.graph.queue_items import (
+    ClarificationClosedItem,
+    ClarificationItem,
+    DoneItem,
+    ErrorItem,
+    QueueItem,
+    TokenItem,
+    WarningItem,
+)
 from app.graph.streaming import BudgetContext
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
@@ -40,8 +55,9 @@ from app.integrations.backend_java_client import (
     BackendJavaError,
     BackendJavaHTTPError,
 )
-from app.schemas.chat import ChatStreamRequest
+from app.schemas.chat import CHAT_REQUEST_MAX_BYTES, ChatStreamRequest
 from app.schemas.chat_history import HistoryMessage
+from app.schemas.clarification import ClarificationCancel
 from app.schemas.security import AcademicSecurityContext
 
 logger = logging.getLogger(__name__)
@@ -211,6 +227,11 @@ async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenera
         elif isinstance(item, WarningItem):
             payload = {"code": item.code, "message": item.message}
             yield f"event: warning\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        elif isinstance(item, ClarificationItem):
+            yield f"event: clarification\ndata: {json.dumps(item.panel, ensure_ascii=False)}\n\n"
+        elif isinstance(item, ClarificationClosedItem):
+            payload = {"panel_id": item.panel_id, "status": item.status}
+            yield f"event: clarification_closed\ndata: {json.dumps(payload)}\n\n"
     yield "event: done\ndata: {}\n\n"
 
 
@@ -266,9 +287,36 @@ async def chat_stream_endpoint(
        only reads the queue that task writes to.
     """
 
-    if request.message is None:
-        # Panel submit/cancel is wired in a follow-up change (UNISAGE-99 T7/T10).
-        raise HTTPException(status_code=501, detail="clarification is not supported yet")
+    if len(await http_request.body()) > CHAT_REQUEST_MAX_BYTES:
+        raise RequestTooLargeException()
+
+    # The panel gate runs before start_turn: a refused request writes nothing in Java.
+    round_state = await ClarificationRoundRepository(db_session).get_round(request.conversation_id)
+    await db_session.commit()  # get_round may have consumed an expired lease
+    pending_round = gate_clarification(round_state, request)
+    if pending_round is not None:
+        action = request.clarification
+        if isinstance(action, ClarificationCancel):
+            stream = await cancel_panel(
+                db_session=db_session,
+                java_client=java_client,
+                conversation_id=request.conversation_id,
+                pending=pending_round,
+                action=action,
+                confirmed_metadata=round_state.confirmed_metadata,
+            )
+            return StreamingResponse(stream, media_type="text/event-stream")
+        assert action is not None
+        try:
+            validate_answers(pending_round.panel, action)
+        except ClarificationInvalid as exc:
+            raise ClarificationInvalidException(
+                {error.question_id: error.reason for error in exc.errors}
+            ) from exc
+        # Submitting answers is wired in a follow-up change (UNISAGE-99 T10).
+        raise HTTPException(status_code=501, detail="clarification submit is not supported yet")
+
+    assert request.message is not None
     clean_message = sanitize_input_text(request.message)
     if not clean_message:
         raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")

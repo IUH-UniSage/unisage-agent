@@ -13,7 +13,12 @@ from app.database.repositories.clarification_state import (
     ClarificationRoundRepository,
     ClarificationStateRepository,
 )
-from app.schemas.clarification import ClarificationPanel, PendingClarification, PendingRound
+from app.schemas.clarification import (
+    ClarificationPanel,
+    PendingAdvisoryTask,
+    PendingClarification,
+    PendingRound,
+)
 from app.schemas.intent import ClassifiedTask
 
 LEASE = 210.0
@@ -42,13 +47,12 @@ def _round(panel_id: uuid.UUID | None = None) -> PendingRound:
         panel=panel,
         original_query="Điều kiện tốt nghiệp?",
         tasks=[
-            {
-                "kind": "advisory",
-                "task_id": "T1",
-                "origin_task": ClassifiedTask(
+            PendingAdvisoryTask(
+                task_id="T1",
+                origin_task=ClassifiedTask(
                     intent="academic_advisory", query="Điều kiện tốt nghiệp?"
                 ),
-            }
+            )
         ],
         created_at=datetime.now(UTC),
     )

@@ -33,6 +33,8 @@ class ErrorCode(Enum):
         "Bạn không có quyền truy cập phòng ban của tài liệu này.",
     )
     VALIDATION_ERROR = (400, 4009, "Thông tin nhập chưa hợp lệ, kiểm tra lại giúp mình.")
+    # `errors` maps question_id -> reason (contracts/chat-sse.md §4).
+    CLARIFICATION_INVALID = (400, 4010, "Câu trả lời chưa hợp lệ, kiểm tra lại giúp mình.")
     EMPTY_DOCUMENT_TEXT = (
         422,
         4221,
@@ -88,6 +90,18 @@ class ErrorCode(Enum):
 
     # 403x Forbidden (chat-specific; distinct code from FORBIDDEN_DEPARTMENT_ACCESS)
     CONVERSATION_ACCESS_DENIED = (403, 4031, "Bạn không có quyền truy cập cuộc hội thoại này.")
+
+    # 409x Clarification panel state (docs/specs/SPEC-clarification-panel.md §2.3)
+    CLARIFICATION_STALE = (409, 4091, "Câu hỏi này đã được trả lời hoặc đã huỷ.")
+    CLARIFICATION_PENDING = (409, 4092, "Bạn cần trả lời hoặc huỷ câu hỏi bổ sung trước.")
+    CLARIFICATION_PROCESSING = (
+        409,
+        4093,
+        "Mình đang xử lý câu trả lời trước của bạn, chờ chút nhé.",
+    )
+
+    # 413x Payload too large
+    REQUEST_TOO_LARGE = (413, 4131, "Nội dung gửi lên quá lớn.")
 
     # 429 Usage limit. The code 2130 is backend-java's own USAGE_LIMIT_EXCEEDED, passed through
     # unchanged (this is the one 2xxx code the agent re-emits) so the web sees the same code and

@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field, model_validator
 from app.schemas.clarification import ClarificationAction
 
 MESSAGE_MAX_CHARS = 2000
+# Whole request body, panel answers included (contracts/chat-sse.md §1).
+CHAT_REQUEST_MAX_BYTES = 16 * 1024
 
 
 class ChatStreamRequest(BaseModel):

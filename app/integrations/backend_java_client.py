@@ -294,6 +294,18 @@ class BackendJavaClient:
         )
         return dict(result) if result is not None else {}
 
+    async def cancel_clarification(self, *, message_id: str, conversation_id: str) -> None:
+        """`PATCH /internal/messages/{id}/clarification` - flips the panel projection in the
+        ASSISTANT message's metadata from `open` to `cancelled`. Idempotent on Java's side;
+        retried by the caller."""
+
+        await self._request(
+            "PATCH",
+            f"/internal/messages/{message_id}/clarification",
+            authorization=None,
+            json_body={"conversationId": conversation_id, "status": "cancelled"},
+        )
+
     async def get_model_registry_version(self) -> int:
         """`GET /internal/model-registry/version`.
 

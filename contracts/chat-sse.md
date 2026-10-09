@@ -115,7 +115,7 @@ Response của lệnh huỷ chỉ có `clarification_closed` rồi `done`, khôn
 | 409 | 4092 `CLARIFICATION_PENDING` | Gửi `message` khi panel đang mở. Body **không** kèm `panel_id`: lỗi này trả về trước khi Java kiểm tra quyền sở hữu, mà `panel_id` là khoá bí mật để huỷ panel | Refetch messages, panel tự hiện lại |
 | 409 | 4093 `CLARIFICATION_PROCESSING` | Gửi `message` khi câu trả lời trước đang được xử lý | Toast "đang xử lý", giữ composer khoá |
 | 413 | 4131 `REQUEST_TOO_LARGE` | Body > 16 KB | Toast lỗi chung |
-| 503 | `BACKEND_JAVA_UNAVAILABLE` | Huỷ không ghi được trạng thái | Giữ panel, toast "thử lại" |
+| 502 | 5004 `BACKEND_JAVA_UNAVAILABLE` | Huỷ không ghi được trạng thái (mã lỗi sẵn có trong `error_codes.py`) | Giữ panel, toast "thử lại" |
 
 ## 5. `messages.metadata` (đọc qua `GET /messages/conversation/{id}` của backend)
 
