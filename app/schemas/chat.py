@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.schemas.clarification import ClarificationAction
 
 MESSAGE_MAX_CHARS = 2000
 
@@ -16,4 +18,12 @@ class ChatStreamRequest(BaseModel):
     """
 
     conversation_id: str = Field(min_length=1, max_length=100)
-    message: str = Field(min_length=1, max_length=MESSAGE_MAX_CHARS)
+    message: str | None = Field(default=None, min_length=1, max_length=MESSAGE_MAX_CHARS)
+    # Answering or cancelling an open clarification panel (contracts/chat-sse.md §1).
+    clarification: ClarificationAction | None = None
+
+    @model_validator(mode="after")
+    def _message_or_clarification(self) -> "ChatStreamRequest":
+        if (self.message is None) == (self.clarification is None):
+            raise ValueError("send exactly one of `message` or `clarification`")
+        return self

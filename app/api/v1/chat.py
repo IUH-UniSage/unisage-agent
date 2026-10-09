@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -266,6 +266,9 @@ async def chat_stream_endpoint(
        only reads the queue that task writes to.
     """
 
+    if request.message is None:
+        # Panel submit/cancel is wired in a follow-up change (UNISAGE-99 T7/T10).
+        raise HTTPException(status_code=501, detail="clarification is not supported yet")
     clean_message = sanitize_input_text(request.message)
     if not clean_message:
         raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")
