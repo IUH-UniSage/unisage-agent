@@ -228,11 +228,11 @@ khoá unique).
 |---|---|---|
 | không có | `message` | Lượt bình thường |
 | không có | `clarification` | `409 CLARIFICATION_STALE` |
-| `OPEN` | `message` | `409 CLARIFICATION_PENDING` (body có `panel_id`) |
+| `OPEN` | `message` | `409 CLARIFICATION_PENDING` (không kèm `panel_id`, vì đây là khoá bí mật để huỷ panel) |
 | `PROCESSING` | `message` | `409 CLARIFICATION_PROCESSING` |
 | `OPEN`/`PROCESSING`, `panel_id` khác | `clarification` | `409 CLARIFICATION_STALE` |
 | `PROCESSING`, `panel_id` khớp | `clarification` | `409 CLARIFICATION_STALE` (đang có request khác xử lý) |
-| `OPEN`, `panel_id` khớp | `submit` sai | `400 CLARIFICATION_INVALID` kèm `errors[]`, state không đổi |
+| `OPEN`, `panel_id` khớp | `submit` sai | `400 CLARIFICATION_INVALID`, `errors` là map `{question_id: reason}`, state không đổi |
 | `OPEN`, `panel_id` khớp | `submit` hợp lệ | Claim, rồi chạy luồng submit (2.4) |
 | `OPEN`, `panel_id` khớp | `cancel` | Claim, rồi chạy luồng huỷ (2.5) |
 

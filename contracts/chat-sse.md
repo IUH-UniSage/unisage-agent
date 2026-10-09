@@ -110,11 +110,11 @@ Response của lệnh huỷ chỉ có `clarification_closed` rồi `done`, khôn
 
 | HTTP | `code` | Khi nào | Web xử lý |
 |---|---|---|---|
-| 400 | 4010 `CLARIFICATION_INVALID` | Câu trả lời sai; body thêm `errors: [{question_id, reason}]` | Hiện lỗi dưới đúng tab, panel vẫn mở |
+| 400 | 4010 `CLARIFICATION_INVALID` | Câu trả lời sai; `errors` là map `{"q2": "lý do", ...}` theo `question_id` (cùng dạng `errors` của mọi lỗi khác) | Hiện lỗi dưới đúng tab, panel vẫn mở |
 | 409 | 4091 `CLARIFICATION_STALE` | Panel đã được trả lời hoặc huỷ, `panel_id` cũ, hoặc đang có request khác xử lý | Đóng panel, toast, refetch messages |
-| 409 | 4092 `CLARIFICATION_PENDING` | Gửi `message` khi panel đang mở; body thêm `panel_id` | Refetch messages, panel tự hiện lại |
+| 409 | 4092 `CLARIFICATION_PENDING` | Gửi `message` khi panel đang mở. Body **không** kèm `panel_id`: lỗi này trả về trước khi Java kiểm tra quyền sở hữu, mà `panel_id` là khoá bí mật để huỷ panel | Refetch messages, panel tự hiện lại |
 | 409 | 4093 `CLARIFICATION_PROCESSING` | Gửi `message` khi câu trả lời trước đang được xử lý | Toast "đang xử lý", giữ composer khoá |
-| 413 | — | Body > 16 KB | Toast lỗi chung |
+| 413 | 4131 `REQUEST_TOO_LARGE` | Body > 16 KB | Toast lỗi chung |
 | 503 | `BACKEND_JAVA_UNAVAILABLE` | Huỷ không ghi được trạng thái | Giữ panel, toast "thử lại" |
 
 ## 5. `messages.metadata` (đọc qua `GET /messages/conversation/{id}` của backend)
