@@ -230,9 +230,8 @@ def build_round(outcomes, advisory_asks, *, original_query, chain_depth, assista
 
 - Thứ tự câu hỏi: các task theo thứ tự `T1..T3`; trong mỗi task, giữ thứ tự của `missing_params` hoặc
   của `fields`.
-- Gán `id` từ `q1` trở đi, mỗi câu hỏi là một tab. Quá 12 câu hỏi (chỉ xảy ra khi 3 task đều thiếu gần
-  hết tham số) thì giữ 12 câu đầu và log `clarification.questions_truncated`; phần bị cắt được hỏi ở
-  panel kế tiếp (chain).
+- Gán `id` từ `q1` trở đi, mỗi câu hỏi là một tab. **Mọi câu hỏi đều được hỏi** trong cùng panel; chỉ
+  khi vượt 50 câu (payload bất thường) mới cắt và log `clarification.questions_truncated`.
 - Mỗi task có câu hỏi trở thành một `PendingAdvisoryTask` hoặc `PendingCalculationTask`.
   `known_params` giữ lại những gì extractor đã lấy được, để lúc resume **không gọi lại extractor**.
 
@@ -252,7 +251,7 @@ answers → nhóm theo question.task_id
 - `other_text` của câu hỏi advisory được ghi vào `confirmed_metadata` dưới dạng text tự do. Prompt
   `<student_declared_attributes>` đã coi metadata là thông tin sinh viên tự khai, không phải bộ lọc.
 - Các task calculation và advisory chạy song song như một lượt thường. Thứ tự stream giống mục 3.
-- Resume mà vẫn còn thiếu thì tạo panel mới với `chain_depth + 1` (tối đa 3, xem SPEC-clarification-panel §2.6).
+- Resume mà vẫn còn thiếu thì tạo panel mới với `chain_depth + 1` (không giới hạn, xem SPEC-clarification-panel §2.6).
 - Câu hỏi gốc của task được dùng làm câu hỏi (`original_query`), không dùng bản tóm tắt câu trả lời.
 
 ## 6. Prompts

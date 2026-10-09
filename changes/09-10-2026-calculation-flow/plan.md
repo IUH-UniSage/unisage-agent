@@ -38,7 +38,7 @@ Bản tóm tắt; lý do đầy đủ nằm trong capability map và các spec.
   thứ tự khối tính → advisory.
 - **Fail closed:** extractor lỗi thì không rơi sang Qdrant; công thức cài sẵn được định tuyến bằng luật
   trước LLM.
-- **Mỗi câu hỏi là một tab, tối đa 12 tab mỗi panel, tối đa 3 panel liên tiếp** cho cùng một câu hỏi
+- **Mỗi câu hỏi là một tab, panel hiện đủ mọi câu hỏi, không giới hạn số panel nối tiếp** (đã đổi 09-10-2026; trước đó là 12 tab / 3 panel) cho cùng một câu hỏi
   gốc.
 - **Thứ tự triển khai: backend → web → agent.** Web đọc được cả form legacy lẫn panel mới.
 
@@ -119,7 +119,7 @@ Task có rủi ro cao được đưa lên sớm:
 | Fence lọt ra stream khi bị chia chunk lạ | High | Test cắt fence ở mọi vị trí ký tự (T8) |
 | Triển khai agent trước web khiến sinh viên kẹt ở `409` | High | Thứ tự backend → web → agent ghi trong PR và `DECISIONS.md`; Checkpoint 3 kiểm tra web với agent cũ |
 | State machine claim chỉ được test trên SQLite | Med | Câu SQL giống hệt trên Postgres; chạy tay một lần trên Postgres dev ở Checkpoint 4 |
-| Panel 12 tab quá dài trên mobile | Med | Tab list cuộn ngang bên trong, `max-h-[60vh]`; screenshot 375px ở T14 |
+| Panel nhiều tab quá dài trên mobile | Med | Tab list cuộn ngang bên trong, `max-h-[60vh]`; screenshot 375px ở T14 |
 | Prompt snapshot và test cũ của Guard bị vỡ hàng loạt | Low | T10 xoá test của code bị gỡ cùng commit với code; cập nhật snapshot có chủ đích |
 | LLM nhận xét bịa số | Med | Không stream; số ngoài whitelist thì thay bằng câu cố định (T18); node 10 không nhận số |
 | Router luật bắt nhầm hoặc bỏ sót | Med | Bộ ≥ 10 câu khớp và ≥ 10 câu không khớp mỗi công thức (T16); log `router_disagreement` để tinh chỉnh |

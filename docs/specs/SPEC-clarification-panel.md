@@ -26,7 +26,8 @@ Tất cả model Pydantic trong `app/schemas/clarification.py` đều để `mod
 ### 1.1 Câu hỏi (server-side, đầy đủ)
 
 ```python
-QuestionKind = Literal["choice", "number", "number_list", "text", "course_table"]
+QuestionKind = Literal["choice", "number", "number_list", "number_or_list", "text", "course_table"]
+# number_or_list: sinh viên chọn "Nhập sẵn" (gửi `number`) hoặc "Nhập từng cột" (gửi `numbers`)
 
 class ChoiceOption(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9_-]{1,64}$")
@@ -41,7 +42,7 @@ class NumberConstraint(BaseModel):
     unit: str | None = Field(default=None, max_length=20)
 
 class Question(BaseModel):
-    id: str = Field(pattern=r"^q([1-9]|1[0-2])$")  # do graph gán: q1..q12
+    id: str = Field(pattern=r"^q[1-9][0-9]?$")  # do graph gán: q1, q2, ...
     origin: Literal["advisory", "calculation"]
     task_id: str = Field(pattern=r"^T[1-3]$")     # task của lượt gốc
     field: str = Field(max_length=64)             # tên metadata (advisory) hoặc tên param (calculation)
@@ -67,7 +68,7 @@ Cột của `course_table` cố định, không cấu hình được: `name` (te
 class ClarificationPanel(BaseModel):
     schema_version: Literal[1] = 1
     panel_id: UUID                       # uuid4, sinh lại cho mỗi panel mới
-    questions: list[Question] = Field(min_length=1, max_length=12)   # mỗi câu hỏi = 1 tab
+    questions: list[Question] = Field(min_length=1, max_length=50)   # mỗi câu hỏi = 1 tab; 50 chỉ chặn payload bất thường
 ```
 
 **Bản chiếu cho client** (`PublicClarificationPanel`) là panel bỏ đi `origin`, `task_id`, `field`. Client
@@ -95,7 +96,7 @@ class PendingRound(BaseModel):
     assistant_message_id: UUID           # message ASSISTANT đã hiện panel, dùng để PATCH metadata
     original_query: str
     tasks: list[Annotated[PendingAdvisoryTask | PendingCalculationTask, Field(discriminator="kind")]]
-    chain_depth: int = Field(default=1, ge=1, le=3)   # số panel liên tiếp của cùng một câu hỏi gốc
+    chain_depth: int = Field(default=1, ge=1)   # số panel liên tiếp của cùng một câu hỏi gốc (không giới hạn)
     created_at: datetime
 ```
 
@@ -123,7 +124,7 @@ class Answer(BaseModel):
 class ClarificationSubmit(BaseModel):
     action: Literal["submit"]
     panel_id: UUID
-    answers: list[Answer] = Field(min_length=1, max_length=12)
+    answers: list[Answer] = Field(min_length=1, max_length=50)
 
 class ClarificationCancel(BaseModel):
     action: Literal["cancel"]
@@ -310,8 +311,10 @@ Thứ tự trong `streaming_session.run_and_persist`. **Bản chiếu phải có
 Hệ quả: nếu client nhận được `event: clarification` thì reload chắc chắn thấy panel, và submit chắc chắn
 không bị `409` vì lý do lệch state.
 
-Giới hạn chuỗi panel: nếu `chain_depth` đã bằng 3 mà graph vẫn muốn hỏi thêm, graph bỏ câu hỏi đi và
-trả lời với thông tin đang có, kèm một câu nói rõ là còn thiếu những thông tin nào.
+Không có giới hạn chuỗi panel (đã chốt 09-10-2026): còn thiếu gì thì panel kế tiếp hỏi tiếp, với
+`chain_depth + 1`. Không thể hỏi vòng: thuộc tính advisory sinh viên đã trả lời (kể cả "Khác") nằm trong
+`confirmed_metadata` và không bao giờ được hỏi lại; câu hỏi tính toán do code dựng nên luôn hữu hạn.
+Mọi câu hỏi của một lượt nằm trong **một** panel (không cắt ở 12 tab nữa).
 
 ### 2.7 Sửa hai bug của luồng cũ
 
@@ -456,7 +459,7 @@ Backend: ./mvnw test -Dtest='MessageControllerTest,MessageServiceImplTest,*Clari
 - **Always:** validate theo panel đã lưu; mọi `4xx` của panel trả về trước khi gọi `start_turn`; chỉ gửi
   event `clarification` sau khi cả state lẫn bản chiếu đều đã ghi thành công; mọi chuyển trạng thái từ
   `PROCESSING` đều kèm điều kiện `claim_token`.
-- **Ask first:** thêm `kind` câu hỏi mới; nâng giới hạn 12 câu hỏi hoặc 30 dòng; đổi thứ tự triển khai.
+- **Ask first:** thêm `kind` câu hỏi mới; nâng giới hạn 50 câu hỏi hoặc 30 dòng; đổi thứ tự triển khai.
 - **Never:** dùng `NULL` để biểu thị "đang xử lý"; đọc `origin`/`kind`/`options` từ client; để fence `ask_user_form` lọt vào token hoặc
   `content`; cho lệnh huỷ đi qua `start_turn`; thêm endpoint public mới cho panel.
 
@@ -476,9 +479,9 @@ Backend: ./mvnw test -Dtest='MessageControllerTest,MessageServiceImplTest,*Clari
 
 ## Decisions (09-10-2026)
 
-- Mỗi câu hỏi là một tab; một panel chứa mọi câu hỏi của lượt đó (tối đa 12).
+- Mỗi câu hỏi là một tab; một panel chứa mọi câu hỏi của lượt đó (không cắt; 50 chỉ chặn payload bất thường).
 - Graph lỗi sau khi claim thì không khôi phục round; history đã đủ context.
-- Chuỗi panel liên tiếp cho cùng một câu hỏi gốc tối đa 3 (lưới an toàn chống vòng lặp hỏi mãi).
+- ~~Chuỗi panel tối đa 3~~ - đã bỏ ngày 09-10-2026: không giới hạn số panel nối tiếp, không cắt ở 12 tab; chống hỏi vòng nhờ `confirmed_metadata`.
 - (Review lần 2) State machine `OPEN/PROCESSING` + `claim_token` + lease thay cho việc dùng `NULL`. Bản
   chiếu không còn best-effort: dữ liệu card đi cùng `start_turn`; panel mới và lệnh huỷ đều phải PATCH
   thành công trước khi gửi event.

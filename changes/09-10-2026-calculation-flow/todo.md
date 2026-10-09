@@ -439,3 +439,13 @@ mutation qua `httpClient`, cập nhật cache của messages, trạng thái đ�
 ### Checkpoint cuối
 - [ ] Mọi acceptance criteria đã tick; 3 PR (backend, web, agent) ghi rõ thứ tự merge và triển khai
 - [ ] Người dùng review trước khi mở PR
+
+
+---
+
+## Thay đổi sau review (09-10-2026)
+
+- [x] TBtx: sinh viên chọn nhập sẵn TBtx hoặc nhập từng cột TX (trọng số như nhau); câu hỏi loại `number_or_list` (agent + contract + web)
+- [x] Làm tròn TBtx, ĐLT, ĐTH đến 0.1 trước khi bước sau dùng; ĐTKHP làm tròn 0.1 ở cuối; snapshot cập nhật
+- [x] Bỏ giới hạn 12 tab mỗi panel (chỉ chặn ở 50) và bỏ giới hạn 3 panel liên tiếp; chống hỏi vòng nhờ `confirmed_metadata`
+- [x] Chuyển kiểm tra kích thước body của endpoint phản hồi Đúng/Sai từ controller vào service (backend)

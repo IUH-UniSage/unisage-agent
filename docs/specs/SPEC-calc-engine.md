@@ -45,11 +45,11 @@ khai báo trong `formulas.py`. Các file khác import từ đó.
   để tránh sai số float. Không dùng `float` ở bất kỳ bước nào.
 - **Làm tròn:** dùng `round_half_up(x, places)` = `x.quantize(Decimal(10) ** -places, ROUND_HALF_UP)`.
   Không dùng `round()` của Python, vì nó làm tròn kiểu banker (`round(7.45, 1) == 7.4`).
-- **Thời điểm làm tròn:** chỉ làm tròn ở các bước quy chế yêu cầu: ĐTKHP làm tròn 1 chữ số, GPA làm
-  tròn 2 chữ số. Giá trị trung gian (ĐLT, ĐTH, tổng điểm chất lượng) **giữ nguyên độ chính xác** khi
-  tính. Khi hiển thị, giá trị trung gian được cắt bớt số 0 thừa; nếu dài hơn **2 chữ số thập phân** thì
-  hiện 2 chữ số (half-up) kèm dấu `≈`, ví dụ `ĐTH = 25 / 3 ≈ 8.33`. Phép tính bên dưới vẫn dùng giá trị
-  đầy đủ.
+- **Thời điểm làm tròn (đã chốt 09-10-2026):** trong `course_score`, **TBtx, ĐLT và ĐTH đều làm tròn
+  đến 0.1 trước khi bước sau dùng tới** (`COMPONENT_PLACES`), rồi ĐTKHP làm tròn 0.1 ở cuối. GPA làm
+  tròn 2 chữ số ở cuối; tổng điểm chất lượng giữ nguyên. Dòng thay số ghi rõ bước làm tròn, ví dụ
+  `ĐLT = … = 6.95 → 7.0`, `ĐTH = 25 / 3 ≈ 8.33 → 8.3` (dài hơn 2 chữ số thì hiện 2 chữ số kèm `≈`;
+  khi 2 chữ số làm người đọc hiểu sai kết quả làm tròn thì hiện 4 chữ số).
 - **Thang điểm 10:** mọi điểm thành phần nằm trong `[0, 10]`, tối đa 2 chữ số thập phân.
 - **Tín chỉ:** số nguyên. TCLT và TCTH nằm trong `[0, 10]`, tín chỉ của một môn khi tính GPA nằm trong
   `[1, 10]`.
@@ -79,11 +79,16 @@ khe hở giữa hai mức (8.95 → 9.0 → A+).
 ### `course_score(tbtx, gk, ck, th, tclt, tcth)`: ĐTKHP học phần tích hợp
 
 ```
-ĐLT   = 0.2 × TBtx + 0.3 × GK + 0.5 × CK                    (chỉ khi TCLT > 0)
-ĐTH   = (TH1 + … + THn) / n                                 (chỉ khi TCTH > 0, 1 ≤ n ≤ 20)
+TBtx  = round_half_up((TX1 + … + TXn) / n, 1)               (từng cột, trọng số như nhau, 1 ≤ n ≤ 20)
+      | round_half_up(TBtx sinh viên nhập sẵn, 1)           (sinh viên chọn 1 trong 2 cách nhập)
+ĐLT   = round_half_up(0.2 × TBtx + 0.3 × GK + 0.5 × CK, 1)  (chỉ khi TCLT > 0)
+ĐTH   = round_half_up((TH1 + … + THn) / n, 1)               (chỉ khi TCTH > 0, 1 ≤ n ≤ 20)
 ĐTKHP = round_half_up((ĐLT × TCLT + ĐTH × TCTH) / (TCLT + TCTH), 1)
 → grade_conversion(ĐTKHP)
 ```
+
+Param `tbtx` là một số (TBtx nhập sẵn) **hoặc** một mảng (các cột TX). Câu hỏi trên panel là loại
+`number_or_list` (xem SPEC-clarification-panel §1.1).
 
 Các trường hợp biên:
 

@@ -90,6 +90,19 @@ Web mới đọc được cả form legacy (read-only) lẫn panel; agent mới 
 bị kẹt. Backend phải lên trước vì agent gọi `StartTurnRequest.metadata`, `/internal/messages/{id}/
 clarification` và `/internal/calculation-traces`.
 
+### Vì sao làm tròn TBtx, ĐLT, ĐTH trước khi dùng, và TBtx có hai cách nhập?
+
+Chủ sản phẩm xác nhận (09-10-2026): các cột thường xuyên có trọng số như nhau, và mỗi điểm thành phần
+(TBtx, ĐLT, ĐTH) làm tròn đến 0.1 rồi mới nhân/cộng ở bước sau. Sinh viên thường biết từng cột chứ
+không biết TBtx, nhưng có người đã có TBtx từ cổng sinh viên - nên câu hỏi `number_or_list` cho chọn
+"Nhập sẵn" hoặc "Nhập từng cột".
+
+### Vì sao panel không giới hạn số câu hỏi hay số panel nối tiếp?
+
+Chủ sản phẩm yêu cầu cần bao nhiêu thì hỏi hết. Không thể hỏi vòng vô hạn: câu hỏi tính toán do code
+dựng (hữu hạn), thuộc tính advisory đã trả lời nằm trong `confirmed_metadata` và không bao giờ bị hỏi
+lại, và mỗi panel đều cần sinh viên tự trả lời. Server chỉ chặn ở 50 câu để từ chối payload bất thường.
+
 ### Vì sao logic `/chat/stream` nằm trong service?
 
 Controller chỉ đọc HTTP request và trả về stream của `ChatStreamService`; chặn panel, claim, gọi Java
