@@ -23,9 +23,9 @@ Lệnh chung:
 §Business contract.
 
 **Acceptance criteria:**
-- [ ] Ví dụ (TBtx 8, GK 7, CK 6.5, TH [9, 8], 2 TC LT + 1 TC TH) cho ra `7.5 / B / 3.0`, có đủ các bước ĐLT, ĐTH, ĐTKHP và quy đổi
-- [ ] Mọi biên của bảng quy đổi và các ca half-up trong spec đều pass; không có `float` nào trong module
-- [ ] Các trường hợp chỉ có LT, chỉ có TH, tổng tín chỉ bằng 0, điểm ngoài khoảng đều raise `CalculationInputError` đúng field
+- [x] Ví dụ (TBtx 8, GK 7, CK 6.5, TH [9, 8], 2 TC LT + 1 TC TH) cho ra `7.5 / B / 3.0`, có đủ các bước ĐLT, ĐTH, ĐTKHP và quy đổi
+- [x] Mọi biên của bảng quy đổi và các ca half-up trong spec đều pass; không có `float` nào trong module
+- [x] Các trường hợp chỉ có LT, chỉ có TH, tổng tín chỉ bằng 0, điểm ngoài khoảng đều raise `CalculationInputError` đúng field
 
 **Verification:** `.venv/bin/pytest -q tests/calculation/test_formulas.py` · ruff/mypy `app/calculation`
 
@@ -38,9 +38,9 @@ Lệnh chung:
 `tcth > 0`), dispatcher `calculate`, và `render.py` với `render_markdown`.
 
 **Acceptance criteria:**
-- [ ] GPA đúng với tổ hợp có môn F và có điểm chữ; 31 môn bị từ chối
-- [ ] `missing_params` trả về đúng thứ tự và đúng điều kiện
-- [ ] Có snapshot markdown cho 3 công thức; cùng input luôn ra cùng output
+- [x] GPA đúng với tổ hợp có môn F và có điểm chữ; 31 môn bị từ chối
+- [x] `missing_params` trả về đúng thứ tự và đúng điều kiện
+- [x] Có snapshot markdown cho 3 công thức; cùng input luôn ra cùng output
 
 **Verification:** `.venv/bin/pytest -q tests/calculation` · coverage `app/calculation` ≥ 95%
 
@@ -54,9 +54,9 @@ Lệnh chung:
 half-up.
 
 **Acceptance criteria:**
-- [ ] Toàn bộ danh sách chuỗi tấn công trong spec bị `validate` từ chối (không chuỗi nào được `eval`/`compile`)
-- [ ] Chia cho 0 raise lỗi với field rõ ràng; kết quả vượt `1e12` bị từ chối
-- [ ] Công thức hợp lệ (`so_tc * don_gia + phi`, có `round`/`min`/`max`) tính đúng và có các bước
+- [x] Toàn bộ danh sách chuỗi tấn công trong spec bị `validate` từ chối (không chuỗi nào được `eval`/`compile`)
+- [x] Chia cho 0 raise lỗi với field rõ ràng; kết quả vượt `1e12` bị từ chối
+- [x] Công thức hợp lệ (`so_tc * don_gia + phi`, có `round`/`min`/`max`) tính đúng và có các bước
 
 **Verification:** `.venv/bin/pytest -q tests/calculation/test_expression.py`
 
@@ -70,16 +70,16 @@ half-up.
 - §7.2: endpoint nội bộ chỉ dùng cho huỷ (`open → cancelled`).
 
 **Acceptance criteria:**
-- [ ] `start_turn` có `clarification_answers` thì message USER mang đúng metadata đó; key lạ hoặc > 32 KB trả `400`; không có metadata thì hành vi y như cũ
-- [ ] Endpoint huỷ: thiếu secret bị chặn; sai conversation, message USER hoặc không có panel đều trả `404`; `cancelled` hai lần là idempotent; chuyển trạng thái khác trả `409`; các key khác trong metadata giữ nguyên
-- [ ] Không đụng `content`/`status`/usage của message ASSISTANT
+- [x] `start_turn` có `clarification_answers` thì message USER mang đúng metadata đó; key lạ hoặc > 32 KB trả `400`; không có metadata thì hành vi y như cũ
+- [x] Endpoint huỷ: thiếu secret bị chặn; sai conversation, message USER hoặc không có panel đều trả `404`; `cancelled` hai lần là idempotent; chuyển trạng thái khác trả `409`; các key khác trong metadata giữ nguyên
+- [x] Không đụng `content`/`status`/usage của message ASSISTANT
 
 **Verification:** `./mvnw test -Dtest='*Clarification*,MessageControllerTest,MessageServiceImplTest'`
 
 **Dependencies:** Không · **Files:** `dto/request/StartTurnRequest.java`, `controller/internal/InternalMessageController.java` (hoặc controller internal sẵn có), `dto/request/internal/CancelClarificationRequest.java`, `service/conversation/MessageService{,Impl}.java`, tests · **Scope:** M
 
 ### Checkpoint 1
-- [ ] `tests/calculation` xanh, coverage ≥ 95%; `./mvnw test` xanh
+- [x] `tests/calculation` xanh, coverage ≥ 95%; `./mvnw test` xanh (trừ `ModelPricingServiceImplTest.getHistory_filtersAndPagesNewestFirst`, fail sẵn trên `main`)
 - [ ] Người dùng duyệt snapshot render của 3 công thức
 
 ---
@@ -100,9 +100,9 @@ dùng chính các ví dụ JSON trong contract làm fixture. PendingClarificatio
 v1 **chưa** xoá ở task này (để T10 xoá); đặt tên mới song song để code cũ vẫn chạy.
 
 **Acceptance criteria:**
-- [ ] Mọi model đều `extra="forbid"`; mỗi kind có ca hợp lệ và không hợp lệ; panel có 12 câu hợp lệ, 13 câu bị từ chối
-- [ ] `validate_answers` bắt được: thiếu, trùng, id lạ, sai kind, ngoài khoảng, sai step, "Khác" khi `allow_other=False`, bảng 31 dòng
-- [ ] `ChatStreamRequest` bắt buộc có đúng một trong `message` hoặc `clarification`
+- [x] Mọi model đều `extra="forbid"`; mỗi kind có ca hợp lệ và không hợp lệ; panel có 12 câu hợp lệ, 13 câu bị từ chối
+- [x] `validate_answers` bắt được: thiếu, trùng, id lạ, sai kind, ngoài khoảng, sai step, "Khác" khi `allow_other=False`, bảng 31 dòng
+- [x] `ChatStreamRequest` bắt buộc có đúng một trong `message` hoặc `clarification`
 
 **Verification:** `.venv/bin/pytest -q tests/schemas/test_clarification_schema.py tests/api/test_chat_stream_endpoint.py`
 
@@ -121,9 +121,9 @@ v1 **chưa** xoá ở task này (để T10 xoá); đặt tên mới song song đ
 - `revoke_open(panel_id)`: dùng khi PATCH finalize lỗi
 
 **Acceptance criteria:**
-- [ ] Claim `OPEN → PROCESSING`; claim sai `panel_id` hoặc đang `PROCESSING` thì trả `None`; hai claim đồng thời chỉ một thắng
-- [ ] `restore`/`complete` với token sai không ghi được gì; lease hết hạn bị dọn; `upsert_open` không ghi đè round đang có
-- [ ] `alembic upgrade head` rồi `downgrade -1` chạy sạch
+- [x] Claim `OPEN → PROCESSING`; claim sai `panel_id` hoặc đang `PROCESSING` thì trả `None`; hai claim đồng thời chỉ một thắng
+- [x] `restore`/`complete` với token sai không ghi được gì; lease hết hạn bị dọn; `upsert_open` không ghi đè round đang có
+- [x] `alembic upgrade head` rồi `downgrade -1` chạy sạch
 
 **Verification:** `.venv/bin/pytest -q tests/database/test_clarification_state_repository.py` · `.venv/bin/alembic upgrade head`
 
@@ -139,9 +139,9 @@ SPEC §2.3. Thêm 4 mã lỗi (`4010`, `4091`, `4092`, `4093`) và giới hạn 
 thì `restore` rồi trả `503`. Ở task này, submit hợp lệ tạm trả `501`; T10 sẽ thay.
 
 **Acceptance criteria:**
-- [ ] Đủ các dòng của bảng 2.3 (trừ submit hợp lệ) có test; mọi lỗi 4xx không gọi `start_turn`
-- [ ] Huỷ không gọi `start_turn`, không gọi LLM, không ghi usage; PATCH lỗi 3 lần thì trả `503` và state về `OPEN`
-- [ ] Body 17 KB nhận `413`
+- [x] Đủ các dòng của bảng 2.3 (trừ submit hợp lệ) có test; mọi lỗi 4xx không gọi `start_turn`
+- [x] Huỷ không gọi `start_turn`, không gọi LLM, không ghi usage; PATCH lỗi 3 lần thì trả `503` và state về `OPEN`
+- [x] Body 17 KB nhận `413`
 
 **Verification:** `.venv/bin/pytest -q tests/api/test_chat_stream_clarification.py tests/api/`
 
@@ -155,9 +155,9 @@ thì `restore` rồi trả `503`. Ở task này, submit hợp lệ tạm trả `
 label thật cho LLM.
 
 **Acceptance criteria:**
-- [ ] Cắt fence ở mọi vị trí ký tự (và cả từng ký tự một chunk): output hiện ra luôn giống nhau và không chứa `ask_user_form`
-- [ ] Code block thật và JSON khác được giữ nguyên; fence chưa đóng được xử lý đúng
-- [ ] `GraphOutput.response_text` và token gửi ra đều không có fence; `confirmed_metadata` vẫn được cập nhật như trước
+- [x] Cắt fence ở mọi vị trí ký tự (và cả từng ký tự một chunk): output hiện ra luôn giống nhau và không chứa `ask_user_form`
+- [x] Code block thật và JSON khác được giữ nguyên; fence chưa đóng được xử lý đúng
+- [x] `GraphOutput.response_text` và token gửi ra đều không có fence; `confirmed_metadata` vẫn được cập nhật như trước
 
 **Verification:** `.venv/bin/pytest -q tests/graph/test_fence_redactor.py tests/graph/test_generation_synthesis_node.py tests/rag`
 
@@ -172,9 +172,9 @@ kèm `metadata.clarification` (`open`, thử lại 3 lần) → `ClarificationIt
 `done`. Ghi state lỗi thì PATCH không kèm panel; PATCH lỗi thì `revoke_open` và không gửi event.
 
 **Acceptance criteria:**
-- [ ] Lượt advisory thiếu thông tin chỉ gửi một event `clarification`, và event đó đi sau cả ghi state lẫn PATCH thành công
-- [ ] PATCH finalize mang `content` đã redact và metadata `open` với đúng `panel_id` đang lưu trong state
-- [ ] PATCH lỗi thì round bị thu hồi và không có event `clarification`; ghi state lỗi thì không có metadata panel
+- [x] Lượt advisory thiếu thông tin chỉ gửi một event `clarification`, và event đó đi sau cả ghi state lẫn PATCH thành công
+- [x] PATCH finalize mang `content` đã redact và metadata `open` với đúng `panel_id` đang lưu trong state
+- [x] PATCH lỗi thì round bị thu hồi và không có event `clarification`; ghi state lỗi thì không có metadata panel
 
 **Verification:** `.venv/bin/pytest -q tests/graph/test_streaming_session.py tests/graph/test_graph_wiring.py`
 
@@ -190,10 +190,10 @@ thì không hỏi thêm. Xoá `resolve_clarification_guard`, `_match_reply`, `re
 PendingClarification v1, cùng các test của chúng.
 
 **Acceptance criteria:**
-- [ ] Submit hai lần: lần đầu chạy, lần sau `409`; chỉ có một message USER, và nó mang `clarification_answers`
-- [ ] `message` gửi trong lúc đang xử lý nhận `4093`; `start_turn` lỗi `429` thì state về `OPEN` (đúng token)
-- [ ] Phần sau claim nằm trong `asyncio.timeout(deadline)`: quá hạn thì cancel, không có PATCH và không ghi state; mất quyền sở hữu (`still_owner`) trước finalize thì bỏ PATCH
-- [ ] Không còn tham chiếu nào tới Guard/retry trong `app/`; toàn bộ test agent xanh
+- [x] Submit hai lần: lần đầu chạy, lần sau `409`; chỉ có một message USER, và nó mang `clarification_answers`
+- [x] `message` gửi trong lúc đang xử lý nhận `4093`; `start_turn` lỗi `429` thì state về `OPEN` (đúng token)
+- [x] Phần sau claim nằm trong `asyncio.timeout(deadline)`: quá hạn thì cancel, không có PATCH và không ghi state; mất quyền sở hữu (`still_owner`) trước finalize thì bỏ PATCH
+- [x] Không còn tham chiếu nào tới Guard/retry trong `app/`; toàn bộ test agent xanh
 
 **Verification:** `.venv/bin/pytest -q --ignore=tests/e2e` · `.venv/bin/pytest -q tests/e2e/test_advisory_flow_e2e.py` · ruff/mypy
 
@@ -201,7 +201,7 @@ PendingClarification v1, cùng các test của chúng.
 
 ### Checkpoint 2
 - [ ] E2E advisory: hỏi → panel → submit → trả lời; reload metadata đúng
-- [ ] Không có `ask_user_form` trong token hay `content`; toàn bộ test agent xanh; ruff/mypy không vượt baseline
+- [x] Không có `ask_user_form` trong token hay `content`; toàn bộ test agent xanh; ruff/mypy không vượt baseline
 - [ ] Review với người dùng trước khi sang Phase 4
 
 ---
@@ -215,9 +215,9 @@ PendingClarification v1, cùng các test của chúng.
 ghi `metadata.clarification` vào message đang stream khi nhận event; `utils/clarification-state.ts` (`deriveOpenPanel`, `readAnsweredCard`); đổi tên `ask-user-form.ts` thành `legacy-ask-user-form.ts` (chỉ giữ strip và parse read-only).
 
 **Acceptance criteria:**
-- [ ] `deriveOpenPanel`/`readAnsweredCard` đúng cho các trạng thái open/cancelled, message cuối là USER, message ERROR, metadata hỏng
-- [ ] Stream có event `clarification` thì message trong cache có metadata `open`; event lạ bị bỏ qua
-- [ ] Message cũ có fence: text không lộ JSON
+- [x] `deriveOpenPanel`/`readAnsweredCard` đúng cho các trạng thái open/cancelled, message cuối là USER, message ERROR, metadata hỏng
+- [x] Stream có event `clarification` thì message trong cache có metadata `open`; event lạ bị bỏ qua
+- [x] Message cũ có fence: text không lộ JSON
 
 **Verification:** `pnpm test -- src/features/chat` · `pnpm typecheck`
 
@@ -232,9 +232,9 @@ có label, mô tả, "(Đề xuất)", "Khác" kèm input), `question-text.tsx`.
 Xoá `AskUserFormCard`.
 
 **Acceptance criteria:**
-- [ ] Nút gửi chỉ bật khi đủ câu trả lời; "Khác" bắt buộc có text; dùng được hoàn toàn bằng bàn phím
-- [ ] Huỷ gửi `{action: "cancel"}`; composer mở lại ngay sau `clarification_closed`
-- [ ] Không dùng màu hex tuỳ ý; product tour anchor còn nguyên
+- [x] Nút gửi chỉ bật khi đủ câu trả lời; "Khác" bắt buộc có text; dùng được hoàn toàn bằng bàn phím
+- [x] Huỷ gửi `{action: "cancel"}`; composer mở lại ngay sau `clarification_closed`
+- [x] Không dùng màu hex tuỳ ý; product tour anchor còn nguyên
 
 **Verification:** `pnpm test -- src/features/chat/components/clarification` · `pnpm lint && pnpm typecheck`
 
@@ -247,9 +247,9 @@ thẻ trên mobile); `utils/clarification-answers.ts` (cùng quy tắc với ser
 lưu `sessionStorage` theo `panel_id`, có try/catch.
 
 **Acceptance criteria:**
-- [ ] Ngoài khoảng hoặc sai step thì báo lỗi ngay trong tab; bảng môn thêm/xoá được dòng, tối đa 30, nhận điểm chữ
-- [ ] Reload thì nháp được khôi phục; `sessionStorage` lỗi thì panel vẫn chạy
-- [ ] `Answer[]` dựng ra khớp contract (test so với fixture lấy từ `contracts/chat-sse.md`)
+- [x] Ngoài khoảng hoặc sai step thì báo lỗi ngay trong tab; bảng môn thêm/xoá được dòng, tối đa 30, nhận điểm chữ
+- [x] Reload thì nháp được khôi phục; `sessionStorage` lỗi thì panel vẫn chạy
+- [x] `Answer[]` dựng ra khớp contract (test so với fixture lấy từ `contracts/chat-sse.md`)
 
 **Verification:** `pnpm test -- src/features/chat`
 
@@ -263,9 +263,9 @@ liệu (message USER lạc quan cũng mang sẵn `clarification_answers`). Xử 
 `e2e/chat-clarification.spec.ts` (desktop + mobile), chụp screenshot ở 375 và 1280.
 
 **Acceptance criteria:**
-- [ ] Sau khi gửi, card có border hiện đúng các cặp câu hỏi → câu trả lời (bảng môn dùng `ui/table`); reload vẫn y hệt
-- [ ] Reload khi panel đang mở: panel hiện lại → Huỷ → composer mở lại
-- [ ] `pnpm lint && pnpm format:check && pnpm typecheck && pnpm build && pnpm test && pnpm test:e2e` xanh
+- [x] Sau khi gửi, card có border hiện đúng các cặp câu hỏi → câu trả lời (bảng môn dùng `ui/table`); reload vẫn y hệt
+- [x] Reload khi panel đang mở: panel hiện lại → Huỷ → composer mở lại
+- [x] `pnpm lint && pnpm format:check && pnpm typecheck && pnpm build && pnpm test && pnpm test:e2e` xanh
 
 **Verification:** như trên, kèm screenshot đính vào PR
 
@@ -288,9 +288,9 @@ liệu (message USER lạc quan cũng mang sẵn `clarification_answers`). Xử 
 Type A cũ và tham chiếu tới file không tồn tại). Cập nhật `schema.py`, `loader.py` và snapshot.
 
 **Acceptance criteria:**
-- [ ] Mọi template load được; placeholder trong template khớp với tham số `format`
-- [ ] Không còn nhắc `tuition_calculation`/`credit_check`/`chat_calculation_result.yaml`
-- [ ] Snapshot advisory được cập nhật có chủ đích (chỉ thêm khối `calculation_results`)
+- [x] Mọi template load được; placeholder trong template khớp với tham số `format`
+- [x] Không còn nhắc `tuition_calculation`/`credit_check`/`chat_calculation_result.yaml`
+- [x] Snapshot advisory được cập nhật có chủ đích (chỉ thêm khối `calculation_results`)
 
 **Verification:** `.venv/bin/pytest -q tests/rag`
 
@@ -304,10 +304,10 @@ cho 3 công thức cài sẵn. Câu hỏi được dựng từ `missing_params`;
 lý do.
 
 **Acceptance criteria:**
-- [ ] Đủ tham số thì ra `Computed` với kết quả đúng; thiếu `th` khi `tcth > 0` thì ra `NeedsInput` với đúng câu hỏi `number_list`
-- [ ] Điểm 11 thì câu hỏi có lý do; JSON hỏng, `formula_id` lạ hoặc LLM lỗi thì ra `Unresolved("extraction_failed")` (fail closed, không retrieve)
-- [ ] Router luật `BUILTIN_TRIGGERS` khoá `formula_id`: câu GPA mà LLM trả `retrieved` vẫn chạy `gpa`; có `test_builtin_triggers.py` với ≥ 10 câu khớp và ≥ 10 câu không khớp cho mỗi công thức
-- [ ] Gọi extractor qua `run_agent_text_with_failover` và `usage_recorder.bind("CalculationNode")`
+- [x] Đủ tham số thì ra `Computed` với kết quả đúng; thiếu `th` khi `tcth > 0` thì ra `NeedsInput` với đúng câu hỏi `number_list`
+- [x] Điểm 11 thì câu hỏi có lý do; JSON hỏng, `formula_id` lạ hoặc LLM lỗi thì ra `Unresolved("extraction_failed")` (fail closed, không retrieve)
+- [x] Router luật `BUILTIN_TRIGGERS` khoá `formula_id`: câu GPA mà LLM trả `retrieved` vẫn chạy `gpa`; có `test_builtin_triggers.py` với ≥ 10 câu khớp và ≥ 10 câu không khớp cho mỗi công thức
+- [x] Gọi extractor qua `run_agent_text_with_failover` và `usage_recorder.bind("CalculationNode")`
 
 **Verification:** `.venv/bin/pytest -q tests/graph/test_calculation_node.py`
 
@@ -323,10 +323,10 @@ tự: chunk id, câu trích là chuỗi con, `expression.validate`, values, neo 
 chỉ chạy kiểm tra 1–2 rồi hiện câu trích (`status = "quote_only"`).
 
 **Acceptance criteria:**
-- [ ] Mỗi kiểm tra trong 7 kiểm tra khi trượt đều ra `Unresolved("formula_invalid")` và không gọi `evaluate`; verifier lỗi hoặc timeout cũng bị coi là trượt
-- [ ] `ambiguous` trả về candidates kèm nguồn; `not_found` hoặc không có chunk thì không tính
-- [ ] Công thức hợp lệ thiếu biến thì `NeedsInput` với câu hỏi `number` theo min/max của biến
-- [ ] Công tắc tắt: chỉ hiện câu trích, không gọi `evaluate`, không có panel
+- [x] Mỗi kiểm tra trong 7 kiểm tra khi trượt đều ra `Unresolved("formula_invalid")` và không gọi `evaluate`; verifier lỗi hoặc timeout cũng bị coi là trượt
+- [x] `ambiguous` trả về candidates kèm nguồn; `not_found` hoặc không có chunk thì không tính
+- [x] Công thức hợp lệ thiếu biến thì `NeedsInput` với câu hỏi `number` theo min/max của biến
+- [x] Công tắc tắt: chỉ hiện câu trích, không gọi `evaluate`, không có panel
 
 **Verification:** `.venv/bin/pytest -q tests/graph/test_calculation_retrieved.py`
 
@@ -345,10 +345,10 @@ chỉ chạy kiểm tra 1–2 rồi hiện câu trích (`status = "quote_only"`)
 - Xoá `CALCULATION_PLACEHOLDER_TEMPLATE`.
 
 **Acceptance criteria:**
-- [ ] Lượt chỉ calculation đủ tham số: có khối tính và nhận xét, không có panel; thiếu tham số: câu dẫn và panel, không có lời gọi generation
-- [ ] Lượt lẫn mà cả hai đều thiếu: **một** panel có câu hỏi của cả hai origin; tối đa 12 câu, phần dư được log
-- [ ] `metadata.calculation` chỉ chứa các field công khai (test assert **không có** `question_raw`, `inputs`, `expression`, `source_quote`, `models`, `prompt_versions`); trace đầy đủ được push đúng 1 lần mỗi lượt, push lỗi thì lượt vẫn chạy
-- [ ] Advisory chuẩn bị xong trước vẫn không gửi token nào trước khối tính; nhận xét có số ngoài whitelist (hoặc LLM timeout) được thay bằng câu cố định, client không bao giờ thấy số lạ
+- [x] Lượt chỉ calculation đủ tham số: có khối tính và nhận xét, không có panel; thiếu tham số: câu dẫn và panel, không có lời gọi generation
+- [x] Lượt lẫn mà cả hai đều thiếu: **một** panel có câu hỏi của cả hai origin; tối đa 12 câu, phần dư được log
+- [x] `metadata.calculation` chỉ chứa các field công khai (test assert **không có** `question_raw`, `inputs`, `expression`, `source_quote`, `models`, `prompt_versions`); trace đầy đủ được push đúng 1 lần mỗi lượt, push lỗi thì lượt vẫn chạy
+- [x] Advisory chuẩn bị xong trước vẫn không gửi token nào trước khối tính; nhận xét có số ngoài whitelist (hoặc LLM timeout) được thay bằng câu cố định, client không bao giờ thấy số lạ
 
 **Verification:** `.venv/bin/pytest -q tests/graph`
 
@@ -361,9 +361,9 @@ chỉ chạy kiểm tra 1–2 rồi hiện câu trích (`status = "quote_only"`)
 Còn thiếu thì tạo panel mới với `chain_depth + 1`, tối đa 3. E2E `tests/e2e/test_calculation_flow_e2e.py`.
 
 **Acceptance criteria:**
-- [ ] Resume không gọi LLM extractor/formula (kiểm tra bằng mock: 0 lời gọi)
-- [ ] Ở `chain_depth = 3` không hỏi thêm, câu trả lời nêu rõ còn thiếu gì
-- [ ] E2E: ĐTKHP thiếu TH → `clarification` → submit → `7.5 / B / 3.0`
+- [x] Resume không gọi LLM extractor/formula (kiểm tra bằng mock: 0 lời gọi)
+- [x] Ở `chain_depth = 3` không hỏi thêm, câu trả lời nêu rõ còn thiếu gì
+- [x] E2E: ĐTKHP thiếu TH → `clarification` → submit → `7.5 / B / 3.0`
 
 **Verification:** `.venv/bin/pytest -q tests/graph tests/e2e/test_calculation_flow_e2e.py` · toàn bộ `--ignore=tests/e2e` xanh
 
@@ -392,9 +392,9 @@ Endpoint:
   dựng từ trace. Đổi sang `CORRECT` thì ticket `OPEN` chuyển sang `CLOSED`.
 
 **Acceptance criteria:**
-- [ ] T1 và T2 cùng sai thì có 2 ticket; Report thường vẫn tạo được trên cùng message; 2 Report thường trên một message vẫn bị chặn
-- [ ] Ticket chứa lý do, ghi chú và trace đọc từ `calculation_traces`; không có trace thì ghi rõ; `GET /messages/...` không bao giờ trả trace hay `note`
-- [ ] Validation: `reason` bắt buộc khi `WRONG` và phải `null` khi `CORRECT`; `OTHER` bắt buộc có note; item không phải retrieved đã tính thì `404`; ticket đã xử lý xong thì `409`; body > 2 KB thì `400`; `/internal/calculation-traces` thiếu secret bị chặn
+- [x] T1 và T2 cùng sai thì có 2 ticket; Report thường vẫn tạo được trên cùng message; 2 Report thường trên một message vẫn bị chặn
+- [x] Ticket chứa lý do, ghi chú và trace đọc từ `calculation_traces`; không có trace thì ghi rõ; `GET /messages/...` không bao giờ trả trace hay `note`
+- [x] Validation: `reason` bắt buộc khi `WRONG` và phải `null` khi `CORRECT`; `OTHER` bắt buộc có note; item không phải retrieved đã tính thì `404`; ticket đã xử lý xong thì `409`; body > 2 KB thì `400`; `/internal/calculation-traces` thiếu secret bị chặn
 
 **Verification:** `./mvnw test -Dtest='*CalculationFeedback*,TicketServiceImplTest'`
 
@@ -406,9 +406,9 @@ Endpoint:
 mutation qua `httpClient`, cập nhật cache của messages, trạng thái đọc từ `metadata.calculation_feedback`.
 
 **Acceptance criteria:**
-- [ ] Nút chỉ hiện cho phần tử `retrieved` đã tính; Sai bắt buộc chọn 1 trong 5 lý do; "Khác" bắt buộc ghi chú; có dòng thông báo dữ liệu sẽ được gửi
-- [ ] Reload vẫn giữ lựa chọn; `409` thì khoá nút
-- [ ] `pnpm test`, `lint`, `typecheck`, `build` xanh; e2e mock endpoint feedback
+- [x] Nút chỉ hiện cho phần tử `retrieved` đã tính; Sai bắt buộc chọn 1 trong 5 lý do; "Khác" bắt buộc ghi chú; có dòng thông báo dữ liệu sẽ được gửi
+- [x] Reload vẫn giữ lựa chọn; `409` thì khoá nút
+- [x] `pnpm test`, `lint`, `typecheck`, `build` xanh; e2e mock endpoint feedback
 
 **Verification:** `pnpm test -- src/features/chat` · `pnpm test:e2e -- e2e/chat-clarification.spec.ts`
 
@@ -429,8 +429,8 @@ mutation qua `httpClient`, cập nhật cache của messages, trạng thái đ�
 - `docs/architecture/rag-pipeline.md`: cập nhật sơ đồ node 07 và luồng panel.
 
 **Acceptance criteria:**
-- [ ] Không còn tài liệu nào nói CalculationNode là placeholder hoặc nói tới Clarification Guard so khớp text
-- [ ] `DECISIONS.md` ghi rõ thứ tự backend → web → agent
+- [x] Không còn tài liệu nào nói CalculationNode là placeholder hoặc nói tới Clarification Guard so khớp text
+- [x] `DECISIONS.md` ghi rõ thứ tự backend → web → agent
 
 **Verification:** `grep -rn "placeholder\|Clarification Guard" docs/` chỉ còn những chỗ có chủ đích
 

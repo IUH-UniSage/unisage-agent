@@ -60,52 +60,52 @@ Task có rủi ro cao được đưa lên sớm:
 ## Task List
 
 ### Phase 1: Nền tảng (song song)
-- [ ] T1: calc-engine: rounding, bảng quy đổi, `grade_conversion`, `course_score`
-- [ ] T2: calc-engine: `gpa`, `ParamSpec`/`missing_params`, `render_markdown`
-- [ ] T3: calc-engine: evaluator allowlist cho công thức Qdrant
-- [ ] T4: backend: `StartTurnRequest.metadata` + `PATCH /internal/messages/{id}/clarification` (huỷ)
+- [x] T1: calc-engine: rounding, bảng quy đổi, `grade_conversion`, `course_score`
+- [x] T2: calc-engine: `gpa`, `ParamSpec`/`missing_params`, `render_markdown`
+- [x] T3: calc-engine: evaluator allowlist cho công thức Qdrant
+- [x] T4: backend: `StartTurnRequest.metadata` + `PATCH /internal/messages/{id}/clarification` (huỷ)
 
 ### Checkpoint 1
 - [ ] `tests/calculation` xanh, coverage `app/calculation` ≥ 95%; test backend xanh
 - [ ] Review với người dùng: các bước hiển thị của 3 công thức (snapshot render)
 
 ### Phase 2: Contract panel (agent)
-- [ ] T5: Schema v2 + `validate_answers` + `contracts/chat-sse.md`
-- [ ] T6: Migration + state machine `OPEN/PROCESSING` (claim_token, lease)
-- [ ] T7: Định tuyến đầu lượt (bảng 2.2), mã lỗi mới, luồng huỷ
-- [ ] T8: `FenceRedactor` + nối vào generation
-- [ ] T9: Advisory sinh panel: captured asks → `PendingRound`, thứ tự upsert → event → PATCH
-- [ ] T10: Luồng submit + resume advisory; gỡ Guard/retry/carry-forward
+- [x] T5: Schema v2 + `validate_answers` + `contracts/chat-sse.md`
+- [x] T6: Migration + state machine `OPEN/PROCESSING` (claim_token, lease)
+- [x] T7: Định tuyến đầu lượt (bảng 2.2), mã lỗi mới, luồng huỷ
+- [x] T8: `FenceRedactor` + nối vào generation
+- [x] T9: Advisory sinh panel: captured asks → `PendingRound`, thứ tự upsert → event → PATCH
+- [x] T10: Luồng submit + resume advisory; gỡ Guard/retry/carry-forward
 
 ### Checkpoint 2
 - [ ] Luồng advisory hỏi lại chạy end-to-end bằng contract mới (e2e với fake LLM)
 - [ ] Không test nào thấy `ask_user_form` trong token hay `content`; toàn bộ test agent xanh
 
 ### Phase 3: Web
-- [ ] T11: Schema zod, SSE events, request variants, `deriveOpenPanel`, legacy read path
-- [ ] T12: Khung panel + câu hỏi choice/text + khoá composer + huỷ + ADR 0003
-- [ ] T13: Câu hỏi number/number_list/course_table + validate client + nháp `sessionStorage`
-- [ ] T14: Card có border + xử lý 4010/4091/4092 + e2e + screenshot
+- [x] T11: Schema zod, SSE events, request variants, `deriveOpenPanel`, legacy read path
+- [x] T12: Khung panel + câu hỏi choice/text + khoá composer + huỷ + ADR 0003
+- [x] T13: Câu hỏi number/number_list/course_table + validate client + nháp `sessionStorage`
+- [x] T14: Card có border + xử lý 4010/4091/4092 + e2e + screenshot
 
 ### Checkpoint 3
 - [ ] Web chạy với **agent cũ** không lỗi (legacy) và với agent nhánh này (panel)
 - [ ] `lint`, `format:check`, `typecheck`, `build`, `test`, `test:e2e` xanh; có screenshot 375/1280
 
 ### Phase 4: Calculation node (agent)
-- [ ] T15: Prompts: viết lại extractor, `calculation_formula`, `chat_calculation`, sửa task_2/guide
-- [ ] T16: `run_calculation_task`, nhánh công thức cài sẵn
-- [ ] T17: Nhánh Qdrant + kiểm tra provenance
-- [ ] T18: Graph wiring: thứ tự stream, gộp panel, nhận xét, `calculation_results` cho node 10
-- [ ] T19: Resume calculation + chain depth + e2e luồng tính
+- [x] T15: Prompts: viết lại extractor, `calculation_formula`, `chat_calculation`, sửa task_2/guide
+- [x] T16: `run_calculation_task`, nhánh công thức cài sẵn
+- [x] T17: Nhánh Qdrant + kiểm tra provenance
+- [x] T18: Graph wiring: thứ tự stream, gộp panel, nhận xét, `calculation_results` cho node 10
+- [x] T19: Resume calculation + chain depth + e2e luồng tính
 
 ### Checkpoint 4
 - [ ] Đủ 4 tiêu chí "Success Criteria" của SPEC-calculation-node
 - [ ] Chạy tay trên máy dev (đủ 3 repo): ĐTKHP thiếu điểm TH, GPA với bảng môn, lượt lẫn advisory + calculation, Huỷ, reload
 
 ### Phase 5: Hoàn tất
-- [ ] T21: backend: `POST /messages/{id}/calculation-feedback` + ticket type `AI_CALCULATION_WRONG`
-- [ ] T22: web: nút Đúng/Sai + popover lý do
-- [ ] T20: Docs (known-gaps, PRODUCT, DECISIONS, rag-pipeline) + ghi chú rollout
+- [x] T21: backend: `POST /messages/{id}/calculation-feedback` + ticket type `AI_CALCULATION_WRONG`
+- [x] T22: web: nút Đúng/Sai + popover lý do
+- [x] T20: Docs (known-gaps, PRODUCT, DECISIONS, rag-pipeline) + ghi chú rollout
 
 ### Checkpoint cuối
 - [ ] Mọi acceptance criteria đã tick; review với người dùng trước khi mở PR (3 PR, ghi rõ thứ tự merge)

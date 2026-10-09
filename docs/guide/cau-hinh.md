@@ -76,7 +76,7 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 > `RETRIEVAL_MAX_CHUNKS`, `RERANK_SCORE_THRESHOLD`, `HISTORY_MESSAGE_LIMIT`, `ALLOW_REPAIR_JSON`,
 > `SEMANTIC_MAX_TOKEN_FACTOR`, `TABLE_CHUNK_MAX_TOKENS`, `CHUNKING_VERSION`,
 > `MULTI_REP_LLM_MODEL`, `MULTI_REP_QUESTION_COUNT`, `HOST`, `PORT`). Đã đổi hết sang bảng tiền tố ở
-> trên (`APP_DEBUG`, `APP_INTERNAL_SECRET_KEY`, `DB_URL`, `CHAT_CLARIFICATION_MAX_RETRY`,
+> trên (`APP_DEBUG`, `APP_INTERNAL_SECRET_KEY`, `DB_URL`,
 > `CHAT_RETRIEVAL_MAX_CHUNKS`, `CHAT_RERANK_SCORE_THRESHOLD`, `CHAT_HISTORY_MESSAGE_LIMIT`,
 > `CHAT_ALLOW_REPAIR_JSON`, `INGEST_SEMANTIC_MAX_TOKEN_FACTOR`, `INGEST_TABLE_CHUNK_MAX_TOKENS`,
 > `INGEST_CHUNKING_VERSION`, `INGEST_MULTI_REP_LLM_MODEL`, `INGEST_MULTI_REP_QUESTION_COUNT`,
@@ -158,7 +158,9 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
-| `CHAT_CLARIFICATION_MAX_RETRY` | `2` | Clarification Guard (SecurityContextExtractionNode): số lần hỏi lại tối đa cho một field trước khi buộc trả lời an toàn theo hướng "so sánh phương án" thay vì hỏi tiếp mãi |
+| `CHAT_CALC_RETRIEVED_FORMULA_ENABLED` | `true` | Có tính công thức chép từ quy chế (Qdrant) hay không. `false` = chỉ trích nguyên văn công thức kèm nguồn, không tính (công tắc tắt khẩn cấp - không có eval trước phát hành). Ba công thức cài sẵn không bị ảnh hưởng |
+| `CHAT_CLAIMED_TURN_DEADLINE_SECONDS` | `150` | Hạn chót cứng cho mọi việc của một lượt gửi câu trả lời panel sau khi claim (start_turn → graph → finalize); quá hạn thì bị cancel, không ghi thêm gì |
+| `CHAT_CLARIFICATION_LEASE_SECONDS` | `210` | Thời hạn giữ panel ở trạng thái `PROCESSING`; phải ≥ deadline + 60 s, nếu không agent từ chối khởi động |
 | `CHAT_RETRIEVAL_MAX_CHUNKS` | `16` | Số chunk ứng viên lấy từ Qdrant mỗi lượt cho rerank chấm. Nhiều câu hỏi con thì mỗi câu được `ceil(N/số câu)` |
 | `CHAT_CONTEXT_MAX_CHUNKS` | `8` | Số chunk tối đa đưa vào prompt sinh câu trả lời, sau ngưỡng + LLM rerank (kể cả khi LLM rerank lỗi và giữ kết quả theo điểm). Tách riêng để tăng recall mà prompt không phình |
 | `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở PostRetrievalRerankNode. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |

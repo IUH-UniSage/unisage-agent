@@ -36,6 +36,65 @@ lý sang bên không sở hữu nó, và mỗi lần đổi hình dạng field p
 
 Luật nằm ở: `PRODUCT.md` › Objects, Source of truth.
 
+Từ UNISAGE-99, bảng này giữ `PendingRound` (panel v2) cùng state machine `OPEN/PROCESSING`;
+`messages.metadata.clarification` bên Java chỉ là **bản chiếu** để web hiển thị và dựng lại sau
+reload - agent không đọc nó để ra quyết định (xem mục UNISAGE-99 bên dưới).
+
+## UNISAGE-99 - Tính toán học vụ và panel hỏi lại
+
+Spec: `docs/specs/SPEC-calc-engine.md`, `SPEC-clarification-panel.md`, `SPEC-calculation-node.md`,
+`unisage-web/docs/specs/SPEC-clarification-panel-ui.md`; contract `contracts/chat-sse.md`.
+
+### Vì sao LLM không bao giờ tính, và node 10 không nhận con số nào?
+
+LLM tính sai các phép cộng có trọng số mà khó phát hiện. Mọi con số đến từ `app/calculation/`
+(`Decimal`, làm tròn half-up), khối các bước do Python render. LLM chỉ chọn công thức, chép số người
+dùng đã nói, chép công thức từ quy chế và viết nhận xét. Nhận xét không stream và bị thay bằng câu
+cố định nếu có số ngoài danh sách cho phép; node 10 chỉ nhận **tiêu đề** phép tính đã hiển thị.
+
+### Vì sao 3 công thức cài sẵn, còn lại lấy từ Qdrant mà không có eval trước khi phát hành?
+
+GPA, điểm tổng kết học phần (LT/TH) và quy đổi thang điểm là câu hỏi phổ biến nhất và có công thức
+ổn định - cài sẵn thì nhanh, test được, và được chọn bằng router luật trước LLM nên câu hỏi GPA không
+thể bị đưa nhầm sang Qdrant. Công thức khác chép từ quy chế phải qua 7 kiểm tra fail-closed (chunk id,
+câu trích có thật, allowlist biểu thức, khoảng giá trị, neo hằng số, neo biến, verifier LLM độc lập),
+luôn gắn nhãn "Kết quả tham khảo theo quy chế". Chủ sản phẩm chọn **không** làm eval trước phát hành;
+thay bằng công tắc `CHAT_CALC_RETRIEVED_FORMULA_ENABLED`, trace đầy đủ (bảng `calculation_traces` chỉ
+staff đọc) và nút Đúng/Sai tạo ticket `AI_CALCULATION_WRONG` riêng cho từng item.
+
+### Vì sao panel có state machine `OPEN → PROCESSING(claim_token, lease)` thay vì xoá state khi claim?
+
+Xoá state rồi mới gọi Java qua mạng tạo ra khoảng trống: một tin nhắn thường gửi song song sẽ thấy
+"không có panel" và chạy như lượt bình thường, còn khôi phục bằng `WHERE ... IS NULL` có thể ghi đè
+nhầm. Với `PROCESSING` + `claim_token`, mọi chuyển trạng thái đều có fencing; lease (210 s) luôn dài
+hơn deadline cứng của lượt đã claim (150 s) cộng 60 s biên, nên khi lease hết hạn thì request cũ chắc
+chắn đã bị cancel.
+
+### Vì sao bản chiếu metadata không best-effort, và Huỷ không tạo lượt chat?
+
+Panel chỉ được gửi (`event: clarification`) sau khi cả state lẫn PATCH metadata đều thành công - PATCH
+lỗi thì thu hồi round. Dữ liệu card có border đi cùng `start_turn` (một transaction với message USER).
+Huỷ chỉ claim rồi PATCH bản chiếu qua `/internal/**` (gateway chặn từ bên ngoài): không message, không
+quota, không LLM. Cờ "bỏ qua quota" trên `/messages/turn` bị loại vì client tự gọi được endpoint đó.
+
+### Vì sao advisory vẫn sinh `ask_user_form` trong text?
+
+LLM là bên duy nhất biết văn bản chia nhánh theo thuộc tính nào. Giữ nguyên cơ chế đó nhưng
+`FenceRedactor` lọc khối JSON ngay trong stream (kể cả khi bị chia giữa các chunk) nên nó không bao
+giờ tới client hay nằm trong `content`; khối bị bắt trở thành câu hỏi choice của panel.
+
+### Thứ tự triển khai: backend → web → agent
+
+Web mới đọc được cả form legacy (read-only) lẫn panel; agent mới chặn tin nhắn bằng `409` khi panel
+đang mở, nên **không được** triển khai agent trước web - web cũ không hiện được panel và sinh viên sẽ
+bị kẹt. Backend phải lên trước vì agent gọi `StartTurnRequest.metadata`, `/internal/messages/{id}/
+clarification` và `/internal/calculation-traces`.
+
+### Vì sao logic `/chat/stream` nằm trong service?
+
+Controller chỉ đọc HTTP request và trả về stream của `ChatStreamService`; chặn panel, claim, gọi Java
+và khởi chạy graph nằm trong `app/services/` (yêu cầu của chủ dự án: controller không chứa logic).
+
 ### Vì sao `unisage-agent` tin thẳng 5 header do Gateway bơm, không tự giải mã JWT?
 
 Giải mã và xác thực JWT là việc Gateway đã làm, dùng chung một khoá bí mật mà `unisage-agent` không

@@ -1,8 +1,7 @@
 # Spec: calc-engine (unisage-agent)
 
-> **Status: Approved, chưa implement** (UNISAGE-99, nhánh `feature/huydh-unisage-99-calculation-flow`).
-> Spec này mô tả trạng thái **đích**. `known-gaps.md` mô tả code **hiện tại** trên `main`, và chỉ được
-> sửa ở T20, khi code của UNISAGE-99 đã xong.
+> **Status: Implemented** (UNISAGE-99, nhánh `feature/huydh-unisage-99-calculation-flow`). Rủi ro còn
+> lại nằm ở `unisage-agent/docs/specs/known-gaps.md`.
 
 Module id `calc-engine` trong [capability map](../../changes/09-10-2026-calculation-flow/capability-map.md).
 Thuần Python: không gọi LLM, không I/O, không phụ thuộc graph. Graph node `calculation-node` gọi xuống.
