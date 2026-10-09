@@ -18,7 +18,7 @@ _NO_DEPARTMENT_ACCESS = "    - (không có phòng ban nào được cấp quyề
 _NO_RETRIEVED_CONTEXT = "  (không có tài liệu liên quan)"
 _NO_HISTORY = "  (đây là lượt đầu tiên, chưa có lịch sử)"
 _HISTORY_ROLE_LABELS = {"USER": "Người dùng", "ASSISTANT": "Trợ lý"}
-NO_PENDING_CLARIFICATION = "Không có"
+NOTHING = "Không có"
 
 RECENT_HISTORY_LIMIT = 4
 _RECENT_ASSISTANT_MAX_CHARS = 300
@@ -262,14 +262,17 @@ def render_resolved_user_query(user_query: str, resolved_query: str | None) -> s
 
 
 def build_task_2_section() -> str:
-    """Build `{task_2}` - nested format: `task_2.yaml` embeds the static
-    `ask_user_form_guide.yaml`/`confirmed_metadata_guide.yaml`. Answers to a
+    """Build `{task_2}` - `task_2.yaml` embeds `ask_user_form_guide.yaml`. Answers to a
     clarification panel arrive structured and are already folded into
-    `confirmed_metadata`, so there is never a pending block to show the model."""
+    `confirmed_metadata`, so the model never re-reads a pending form."""
 
-    templates = get_templates()
-    return templates.task_2.format(
-        missing_metadata_to_confirm=NO_PENDING_CLARIFICATION,
-        ask_user_form_guide=build_ask_user_form_guide(),
-        confirmed_metadata_guide=templates.confirmed_metadata_guide,
-    )
+    return get_templates().task_2.format(ask_user_form_guide=build_ask_user_form_guide())
+
+
+def build_calculation_results_section(titles: Sequence[str]) -> str:
+    """`{calculation_results}`: titles only - never a number - of the calculations
+    already shown above the advisory answer."""
+
+    if not titles:
+        return NOTHING
+    return "\n".join(f"- {title} (đã tính ở trên)" for title in titles)

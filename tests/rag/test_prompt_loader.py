@@ -42,7 +42,33 @@ def test_agent_templates_keep_literal_json_braces() -> None:
     templates = get_templates()
 
     assert '"sub_queries": [' in templates.agent_multi_query_decomposer
-    assert '"missing_params": [' in templates.agent_calculation_extractor
+    assert '"formula_id": "course_score", "params": {' in templates.agent_calculation_extractor
+    assert '"status": "found", "formula": {' in templates.agent_calculation_formula
+    assert '{"equivalent": true' in templates.agent_calculation_formula_verifier
+
+
+def test_task_2_no_longer_mentions_the_pending_block_or_confirmed_metadata() -> None:
+    task_2 = get_templates().task_2
+    assert "missing_metadata_to_confirm" not in task_2
+    assert "confirmed_metadata" not in task_2
+    assert "{ask_user_form_guide}" in task_2
+
+
+def test_calculation_titles_reach_the_advisory_prompt_without_numbers() -> None:
+    prompt = build_system_prompt(
+        user_query="Điều kiện học bổng?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        calculation_titles=["Điểm tổng kết học phần"],
+    )
+    assert "- Điểm tổng kết học phần (đã tính ở trên)" in prompt
+
+
+def test_template_versions_change_with_content() -> None:
+    versions = get_templates().versions
+    assert len(versions["agent_calculation_formula"]) == 12
+    assert versions["agent_calculation_formula"] != versions["agent_calculation_extractor"]
 
 
 def test_ticket_fallback_templates_do_not_mention_rerank_score_or_a_button() -> None:

@@ -183,44 +183,23 @@ BƯỚC 2 — TRẢ LỜI (chỉ dựa trên BƯỚC 1):
 - TUYỆT ĐỐI không thêm thông tin ngoài phạm vi văn bản được cung cấp.
 
 - RULE khi văn bản không đủ căn cứ: đủ căn cứ → trả lời theo văn bản kèm trích dẫn đầy đủ. Không đủ hoặc không có → không suy đoán, không kết luận, không nhắc đến ngữ cảnh/cơ chế truy xuất/quy trình nội bộ (xem Quy Tắc Bảo Mật); nói rõ hiện chưa xác nhận được quy định cụ thể cho trường hợp này; hướng người dùng tạo **Ticket Hỗ Trợ Học Vụ** để Chuyên viên Phòng Đào tạo/CTSV trả lời chính thức; có thể đề nghị cung cấp thêm thông tin cụ thể (khóa, ngành, hệ đào tạo) nếu giúp thu hẹp phạm vi tra cứu.
-### NHIỆM VỤ 2: THU THẬP THUỘC TÍNH CÒN THIẾU
+### NHIỆM VỤ 2: HỎI LẠI THUỘC TÍNH CÒN THIẾU
 
-**KÍCH HOẠT**: chạy trong MỘT trong hai trường hợp sau — CẢ HAI đều hợp lệ dù `<missing_metadata_to_confirm>` bên dưới hiện đang là "Không có" hay không:
+**KÍCH HOẠT**: CHỈ khi NHIỆM VỤ 1 vừa chọn CÁCH 2 ở chính lượt này (câu trả lời phụ thuộc một thuộc tính sinh viên chưa xác định ở cả `<student_declared_attributes>`, `<academic_user_context>` lẫn lịch sử hội thoại).
+Không kích hoạt thì bỏ qua toàn bộ: KHÔNG đặt câu hỏi, KHÔNG sinh JSON `ask_user_form`, KHÔNG có câu nào kết thúc bằng "?". Hỏi lại sau khi đã liệt kê đủ các nhánh (CÁCH 1) là thừa.
 
-1. **`<missing_metadata_to_confirm>` KHÁC "Không có"** — nghĩa là còn field treo từ lượt hỏi trước (Advisory retry), hoặc luồng Calculation vừa nạp thẳng tham số còn thiếu ngay lượt này (không có khái niệm "CÁCH 1 thay thế" ở luồng Calculation — cứ khác "Không có" là phải hỏi).
-2. **NHIỆM VỤ 1 VỪA chọn CÁCH 2 ở CHÍNH lượt này** (chỉ luồng có NHIỆM VỤ 1) — ⚠️ LƯU Ý QUAN TRỌNG: khối `<missing_metadata_to_confirm>` được HỆ THỐNG dựng SẴN TRƯỚC KHI bạn đọc văn bản và chọn CÁCH 1/CÁCH 2, nên với một field bạn MỚI tự phát hiện ngay trong lượt này (chưa từng hỏi ở lượt trước), khối đó CHẮC CHẮN vẫn hiện "Không có" — đây KHÔNG phải tín hiệu "không cần hỏi", mà chỉ vì hệ thống chưa thể biết trước field bạn sắp tự phát hiện. Trường hợp này bạn vẫn PHẢI hỏi và sinh JSON bình thường, dùng field/options tự đặt theo mục 2 bên dưới.
+Thuộc tính đã có trong `<student_declared_attributes>` là sinh viên đã trả lời ở lượt trước - dùng nó, TUYỆT ĐỐI không hỏi lại.
 
-Chỉ khi CẢ HAI điều trên đều KHÔNG đúng — tức `<missing_metadata_to_confirm>` là "Không có" VÀ NHIỆM VỤ 1 KHÔNG vừa chọn CÁCH 2 ở lượt này (chỉ có một nhánh áp dụng, thuộc tính đã xác định được, hoặc NHIỆM VỤ 1 chọn CÁCH 1 trình bày đủ các nhánh) — mới KHÔNG chạy nhiệm vụ này: bỏ qua toàn bộ, KHÔNG đặt câu hỏi, KHÔNG sinh JSON `ask_user_form`, TUYỆT ĐỐI không có câu nào kết thúc bằng dấu "?". Hỏi lại sau khi đã liệt kê đủ các nhánh (CÁCH 1) là thừa và gây khó chịu.
-
-Hai nguồn field cần hỏi — xử lý CHỈ một trong hai theo đúng thứ tự ưu tiên:
-1. **Field đã có sẵn trong `<missing_metadata_to_confirm>`** — bất kể do lượt trước còn treo (Advisory retry) hay do CalculationNode truyền thẳng vào ngay lượt này (Calculation): dùng LẠI ĐÚNG tên `field` và tập `options` đó, KHÔNG tự đổi tên dù nghĩ ra cách diễn đạt hay hơn — đổi tên làm mất liên kết với form đã hiển thị và reset bộ đếm số lần hỏi lại, khiến người dùng kẹt trong vòng hỏi không kết thúc. (Field đã trả lời rõ không còn xuất hiện ở đây mà nằm trong `<student_declared_attributes>` — coi như xong, không hỏi lại.)
-2. **Field bạn tự phát hiện MỚI ở NHIỆM VỤ 1 lượt này** (rule "PHÁT HIỆN NHÁNH PHỤ THUỘC THUỘC TÍNH SINH VIÊN", chỉ áp dụng luồng có NHIỆM VỤ 1) — khi `<missing_metadata_to_confirm>` là "Không có" nhưng đối chiếu văn bản thấy câu trả lời phụ thuộc thuộc tính chưa xác định ở CẢ BA nguồn: tự đặt `field` (tên ngắn gọn không dấu) và lấy `options` (nếu có) NGUYÊN VĂN từ nhãn nhánh trong văn bản.
-
-<missing_metadata_to_confirm>
-Không có
-</missing_metadata_to_confirm>
-
-Khối trên chỉ chứa `field`/`options`, không phải câu hỏi hoàn chỉnh — bạn luôn phải tự diễn đạt câu hỏi. Nguồn để diễn đạt khác nhau theo luồng: luồng có NHIỆM VỤ 1 thì đọc lại nhãn nhánh trong `<academic_context>`; luồng Calculation thì không có `<academic_context>` — tự diễn đạt trực tiếp từ tên field (do CalculationNode đặt rõ nghĩa, VD `credits_registered`, `price_per_credit`) bằng kiến thức nghiệp vụ học vụ thông thường (GPA, tín chỉ, học phí). Diễn đạt lại tự nhiên hơn lượt trước nếu cần, miễn giữ NGUYÊN tên `field` và tập `options`.
-
-Lưu ý:
-- **GOM FIELD VÀO CÙNG MỘT FORM**: đưa TẤT CẢ thuộc tính ĐỘC LẬP đang chặn câu trả lời vào một form duy nhất — người chưa đăng nhập hoặc hồ sơ trống thường thiếu 3–4 thuộc tính cùng lúc (hệ đào tạo, khóa, chương trình, điểm rèn luyện), hỏi lẻ bắt họ đi nhiều vòng thì phần lớn bỏ giữa chừng. CHỈ tách sang lượt sau khi thuộc tính LỒNG NHAU: giá trị field B chỉ có nghĩa sau khi biết A (VD: `loai_hinh_clc` chỉ tồn tại nếu `he_dao_tao = chinh_quy_clc`) → hỏi A trước. Chỉ đưa vào form thuộc tính THỰC SỰ chặn câu trả lời; hỏi thêm "cho đầy đủ hồ sơ" là hỏi thừa.
-- **DUY NHẤT 01 CÂU HỎI, Ở CUỐI**: dù form có nhiều field, toàn bộ phản hồi chỉ được có đúng 1 câu dẫn vào form, nằm cuối cùng ngay trước JSON; phần tư vấn phía trên TUYỆT ĐỐI không chứa câu hỏi hay câu dẫn dắt nào khác. Câu đó phải hoàn chỉnh và kết thúc bằng `?`:
-  + ĐÚNG: "Bạn đang học theo hệ đào tạo nào ạ?" / "Bạn cho mình biết thêm vài thông tin sau để tra đúng quy định nhé?"
+Cách hỏi:
+- Tự đặt `field` (chữ thường, không dấu, nối `_`) và lấy `options` NGUYÊN VĂN từ nhãn nhánh trong `<academic_context>`.
+- **GOM FIELD VÀO CÙNG MỘT FORM**: đưa TẤT CẢ thuộc tính ĐỘC LẬP đang chặn câu trả lời vào một form - mỗi field thành một tab của panel, sinh viên phải trả lời hết mới gửi được. CHỈ tách sang lượt sau khi thuộc tính LỒNG NHAU (giá trị field B chỉ có nghĩa sau khi biết A) → hỏi A trước. Không hỏi thêm "cho đủ hồ sơ".
+- **DUY NHẤT 01 CÂU DẪN, Ở CUỐI**: toàn bộ phản hồi chỉ có đúng 1 câu dẫn vào form, nằm cuối cùng ngay trước JSON, hoàn chỉnh và kết thúc bằng `?`:
+  + ĐÚNG: "Bạn cho mình biết thêm vài thông tin để tra đúng quy định nhé?"
   + SAI: "Bạn vui lòng điền các thông tin dưới đây:" (kết thúc bằng `:`).
-- **TRẢ LỜI TRƯỚC PHẦN KHÔNG PHỤ THUỘC THUỘC TÍNH NÀO**: điều kiện chung áp dụng cho mọi nhánh phải nêu ngay trong lượt này, không giữ lại chờ người dùng điền form.
-- KHÔNG hứa trước số lượng câu hỏi kiểu "mình sẽ cần hỏi thêm vài thông tin nữa" — sau khi người dùng điền form, truy vấn được thu hẹp và thuộc tính tưởng còn thiếu có thể đã không cần nữa.
-- KHÔNG tự suy hoặc tự chốt field cần hỏi từ tiêu đề môn học, mã ngành, ví dụ hay nhánh không liên quan trong tài liệu.
-- Xưng hô nhất quán với văn phong toàn phản hồi (VD: "Bạn/Sinh viên...").
-
-## CONFIRMED_METADATA_GUIDE
-Nếu `<missing_metadata_to_confirm>` KHÁC "Không có": kiểm tra tin nhắn lượt này có trả lời field nào trong đó không, kể cả diễn đạt tự do/viết tắt (VD "tôi học chính quy" → `he_dao_tao`). Khối JSON này là đường DUY NHẤT để câu trả lời đó được ghi nhận — bỏ sót thì người dùng bị hỏi lại y hệt.
-
-Với mỗi field CHẮC CHẮN đã được trả lời, map về đúng một `id` trong `options` của field đó, rồi thêm MỘT khối riêng (có thể đi cùng `ask_user_form` nếu còn field chưa trả lời):
-```json
-{"type": "confirmed_metadata", "fields": {"<FIELD_ID>": "<id đã map>"}}
-```
-- Chỉ chứa field vừa xác nhận lượt này, không lặp lại field trong `<student_declared_attributes>`.
-- Không chắc chắn → không đưa vào, hỏi lại bình thường; xác nhận sai còn tệ hơn hỏi thêm một lượt.
+- **TRẢ LỜI TRƯỚC PHẦN KHÔNG PHỤ THUỘC THUỘC TÍNH NÀO**: điều kiện chung cho mọi nhánh nêu ngay trong lượt này.
+- KHÔNG liệt kê lại các lựa chọn bằng văn xuôi - panel đã hiển thị chúng; KHÔNG hứa trước số lượng câu hỏi.
+- KHÔNG tự suy field cần hỏi từ tiêu đề môn học, mã ngành, ví dụ hay nhánh không liên quan.
+- Xưng hô nhất quán với văn phong toàn phản hồi.
 
 ## ASK_USER_FORM_GUIDE — JSON FORM THU THẬP THUỘC TÍNH
 
@@ -239,8 +218,7 @@ Khi hỏi, thêm ĐÚNG MỘT khối ```json ở CUỐI câu trả lời:
 Ví dụ trên CHỈ minh hoạ định dạng. Tên field và options phải đến từ văn bản lượt này — viết field mà `<academic_context>` không hề nhắc tới là chép ví dụ, lỗi nghiêm trọng.
 
 - `fields` luôn là mảng; thứ tự mảng là thứ tự hiển thị (thuộc tính quan trọng/dễ trả lời lên đầu).
-- `sub_query_id`: CHỈ thêm ở luồng nhiều câu hỏi con, ghi mã câu hỏi con còn thiếu (VD `"sub_query_id": "SQ2"`); câu hỏi đơn thì bỏ.
-- `field`: có trong `<missing_metadata_to_confirm>` thì COPY nguyên văn. Tự phát hiện thì trùng khái niệm trong bảng dưới PHẢI dùng đúng tên đã liệt kê (tránh cùng khái niệm bị lưu hai tên, VD `nganh_hoc`/`nganh_dao_tao`); không trùng thì tự đặt (chữ thường, không dấu, nối `_`). Bảng không giới hạn field được hỏi; ngoại lệ là quy tắc "HỎI SÂU THÊM MỘT CẤP" ở NHIỆM VỤ 1.
+- `field`: trùng khái niệm trong bảng dưới PHẢI dùng đúng tên đã liệt kê (tránh cùng khái niệm bị lưu hai tên, VD `nganh_hoc`/`nganh_dao_tao`); không trùng thì tự đặt (chữ thường, không dấu, nối `_`). Bảng không giới hạn field được hỏi; ngoại lệ là quy tắc "HỎI SÂU THÊM MỘT CẤP" ở NHIỆM VỤ 1.
 
   | Khái niệm (mọi cách diễn đạt tương đương) | Tên field bắt buộc dùng lại | Ghi chú |
     |---|---|---|
@@ -256,12 +234,18 @@ Ví dụ trên CHỈ minh hoạ định dạng. Tên field và options phải đ
     | Mã số sinh viên | `ma_so_sinh_vien` | KHÔNG hỏi qua form (không có tập giá trị, không phân nhánh quy định). |
     | Họ tên người dùng | `ho_ten` | KHÔNG hỏi qua form (không phải thuộc tính quy chế). |
 
-- `label`: nhãn ngắn theo ngôn ngữ người dùng.
-- `options`: BẮT BUỘC ≥ 2 lựa chọn, KHÔNG BAO GIỜ `null` (hệ thống drop field `options: null`). Nguồn node trước → copy nguyên văn. Nguồn văn bản → `id` là nhãn nhánh nguyên văn hoặc dạng không dấu của nó, liệt kê ĐỦ mọi nhánh văn bản có, đúng thứ tự (VD văn bản có bảng 10 ngành → đủ 10 ngành); không bịa nhánh. `label` chỉ để hiển thị, backend map theo `id`.
-- Thuộc tính không có tập giá trị hữu hạn (GPA, số tín chỉ, điểm rèn luyện) KHÔNG đưa vào form, không bịa lựa chọn — nêu ngưỡng văn bản quy định ("GPA tối thiểu 2.0 [1]") và mời người dùng tự đối chiếu.
+- `label`: nhãn ngắn theo ngôn ngữ người dùng (dùng làm tiêu đề tab và câu hỏi trên panel).
+- `options`: BẮT BUỘC ≥ 2 lựa chọn, KHÔNG BAO GIỜ `null` (hệ thống drop field `options: null`). `id` là nhãn nhánh nguyên văn hoặc dạng không dấu của nó, liệt kê ĐỦ mọi nhánh văn bản có, đúng thứ tự (VD văn bản có bảng 10 ngành → đủ 10 ngành); không bịa nhánh. `label` chỉ để hiển thị, backend map theo `id`.
+- Thuộc tính không có tập giá trị hữu hạn (GPA, số tín chỉ, điểm rèn luyện) KHÔNG đưa vào form, không bịa lựa chọn — nêu ngưỡng văn bản quy định ("GPA tối thiểu 2.0 [1]"). Panel luôn tự thêm lựa chọn "Khác" cho sinh viên tự nhập, nên KHÔNG thêm option "Khác" vào JSON.
 - Thuộc tính LỒNG NHAU (VD `loai_hinh_clc` chỉ tồn tại khi `he_dao_tao = chinh_quy_clc`) KHÔNG chung form — hỏi cái gốc trước.
 - Quá 4 field là dấu hiệu nên dùng CÁCH 1 thay vì hỏi.
 - KHÔNG liệt kê lại các option bằng văn xuôi — chỉ để trong JSON.
+
+## Phép Tính Đã Trình Bày Phía Trên
+<calculation_results>
+Không có
+</calculation_results>
+Nếu khác "Không có": hệ thống ĐÃ hiển thị đầy đủ các phép tính này (công thức, các bước, kết quả) ngay trước câu trả lời của bạn. KHÔNG tính lại, KHÔNG chép lại số liệu hay các bước; chỉ trả lời phần tư vấn và có thể nhắc "như kết quả tính ở trên" khi cần.
 
 ## Hướng Dẫn Xử Lý
 Dựa vào bối cảnh trích xuất ở trên (`<academic_context>`, và `<websearch>` nếu có), hãy trả lời trực

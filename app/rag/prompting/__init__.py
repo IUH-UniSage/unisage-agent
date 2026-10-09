@@ -21,6 +21,7 @@ from app.schemas.web_search import WebSearchResult
 from .builder import (
     append_recent_history,
     build_ask_user_form_guide,
+    build_calculation_results_section,
     build_history_section,
     build_json_repair_prompt,
     build_known_metadata_fields_section,
@@ -36,6 +37,7 @@ __all__ = [
     "PromptTemplates",
     "append_recent_history",
     "build_ask_user_form_guide",
+    "build_calculation_commentary_prompt",
     "build_history_section",
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
@@ -83,6 +85,7 @@ def build_system_prompt(
     chunks: Sequence[RetrievedChunk],
     history: Sequence[HistoryMessage] = (),
     web_results: Sequence[WebSearchResult] = (),
+    calculation_titles: Sequence[str] = (),
 ) -> str:
     """Advisory frame for a single question. `resolved_query` (the standalone
     rewrite of a follow-up) is shown ahead of the raw message."""
@@ -96,6 +99,7 @@ def build_system_prompt(
             history=history,
         ),
         user_query=render_resolved_user_query(user_query, resolved_query),
+        calculation_results=build_calculation_results_section(calculation_titles),
     )
 
 
@@ -108,6 +112,7 @@ def build_multi_intent_prompt(
     chunks: Sequence[RetrievedChunk],
     history: Sequence[HistoryMessage] = (),
     web_results: Sequence[WebSearchResult] = (),
+    calculation_titles: Sequence[str] = (),
 ) -> str:
     """Multi-intent frame for several sub-queries, listed as `SQk. ...`."""
 
@@ -121,6 +126,7 @@ def build_multi_intent_prompt(
         ),
         sub_queries_list=render_sub_queries_list(sub_queries),
         user_query=user_query,
+        calculation_results=build_calculation_results_section(calculation_titles),
     )
 
 
@@ -149,3 +155,15 @@ def build_ticket_fallback_prompt(
 
 def render_sub_queries_list(sub_queries: Sequence[str]) -> str:
     return "\n".join(f"SQ{index}. {query}" for index, query in enumerate(sub_queries, 1))
+
+
+def build_calculation_commentary_prompt(*, user_query: str, calculation_payload: str) -> str:
+    """`main/chat_calculation.yaml`: the short note after a calculation-only turn."""
+
+    templates = get_templates()
+    return templates.chat_calculation.format(
+        header=templates.header,
+        response_style=templates.response_style,
+        calculation_payload=calculation_payload,
+        user_query=user_query,
+    )
