@@ -123,7 +123,9 @@ def test_missing_practice_scores_then_answer_computes_the_course_score(
         },
     )
     text = "".join(json.loads(data) for name, data in second if name == "token")
-    assert "Kết quả: ĐTKHP **7.5** · Điểm chữ **B** · Thang 4 **3.0**" in text
+    assert (
+        "Kết quả: ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**" in text
+    )
     assert "Điểm chữ B nghĩa là bạn đã qua học phần." in text
     assert llm.calls == 3  # only the note - no second classification or extraction
     assert not any(name == "clarification" for name, _ in second)

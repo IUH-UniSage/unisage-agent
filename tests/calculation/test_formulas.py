@@ -111,8 +111,11 @@ def test_course_score_spec_example() -> None:
         "Điểm lý thuyết",
         "Điểm thực hành",
         "Điểm tổng kết học phần",
-        "Quy đổi",
     ]
+    # The band lookup is the result line, not a repeated step.
+    assert result.summary == (
+        "ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**"
+    )
     assert result.steps[0].substituted == "TBtx = 8"
     # Each component is rounded to 0.1 before the next step uses it.
     assert result.steps[1].substituted == (
@@ -171,7 +174,7 @@ def test_before_rounding_falls_back_to_four_decimals() -> None:
 def test_theory_only_course_skips_practice() -> None:
     result = course_score({"tbtx": 8, "gk": 8, "ck": 8, "tclt": 3, "tcth": 0})
     assert dict(result.outputs)["ĐTKHP"] == "8.0"
-    assert "chỉ có lý thuyết" in result.steps[-2].substituted
+    assert "chỉ có lý thuyết" in result.steps[-1].substituted
     assert all(step.label != "Điểm thực hành" for step in result.steps)
 
 

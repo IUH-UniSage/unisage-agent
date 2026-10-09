@@ -161,15 +161,21 @@ def _as_number(text: str) -> Decimal | None:
 
 
 def allowed_numbers(results: Sequence[CalculationResult]) -> set[Decimal]:
+    """Numbers the note may mention: the student's own inputs and the scale names.
+    Never a result - it is already shown right above, so repeating it is noise."""
+
     allowed = set(_ALWAYS_ALLOWED)
     for result in results:
-        texts = [value for _, value in result.inputs] + [value for _, value in result.outputs]
-        texts += [step.display for step in result.steps]
-        for text in texts:
-            for match in _NUMBER.finditer(text):
+        for _, value in result.inputs:
+            for match in _NUMBER.finditer(value):
                 number = _as_number(match.group(0))
                 if number is not None:
                     allowed.add(number)
+        for _, value in result.outputs:
+            for match in _NUMBER.finditer(value):
+                number = _as_number(match.group(0))
+                if number is not None:
+                    allowed.discard(number)
     return allowed
 
 
@@ -181,17 +187,12 @@ def unknown_numbers(text: str, allowed: set[Decimal]) -> list[str]:
     ]
 
 
-def fixed_note(results: Sequence[CalculationResult]) -> str:
-    """Used when the LLM note fails the check (or the call fails): built from outputs only."""
-
-    parts = [", ".join(f"{label} {value}" for label, value in result.outputs) for result in results]
-    return "Kết quả: " + "; ".join(parts) + "."
-
-
 async def commentary(
     results: Sequence[CalculationResult], user_query: str, deps: CalculationDeps
 ) -> str:
-    """Not streamed: the whole note is checked before anything is sent."""
+    """Not streamed: the whole note is checked before anything is sent. A note that
+    fails the check (or a failed call) is simply left out - the result line above
+    already says everything; a fallback sentence would only repeat it."""
 
     if not results:
         return ""
@@ -213,12 +214,13 @@ async def commentary(
         )
     except Exception:
         logger.warning("calculation.commentary_failed", exc_info=True)
-        return fixed_note(results)
+        return ""
     text = text.strip()
     unknown = unknown_numbers(text, allowed_numbers(results))
-    if not text or unknown:
-        logger.warning("calculation.commentary_rejected unknown_numbers=%s", unknown)
-        return fixed_note(results)
+    if unknown:
+        # A number that is not an input - an invented one, or the result repeated.
+        logger.warning("calculation.commentary_rejected numbers=%s", unknown)
+        return ""
     return text
 
 

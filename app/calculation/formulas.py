@@ -115,7 +115,8 @@ def before_rounding(raw: Decimal, rounded: Decimal, places: int) -> str:
     to 7.4 - so fall back to 4 decimals whenever the short form would mislead.
     """
 
-    for digits in (DISPLAY_PLACES, 4):
+    # Always at least one digit more than the result, or "≈ 2.04 → 2.04" says nothing.
+    for digits in (max(DISPLAY_PLACES, places + 1), 4):
         shown = round_half_up(raw, digits)
         if round_half_up(shown, places) == rounded:
             prefix = "" if shown == raw else "≈ "
@@ -203,16 +204,12 @@ def _band_range(band: GradeBand) -> str:
     return f"[{lower}; {upper})"
 
 
-def _conversion_step(rounded: Decimal, band: GradeBand) -> Step:
-    return Step(
-        label="Quy đổi",
-        symbolic="Điểm thang 10 → điểm chữ → thang 4",
-        substituted=(
-            f"{fixed(rounded, 1)} thuộc khoảng {_band_range(band)} → {band.letter} → "
-            f"{fixed(band.gp4, 1)}"
-        ),
-        value=band.gp4,
-        display=fixed(band.gp4, 1),
+def _conversion_summary(label: str, rounded: Decimal, band: GradeBand) -> str:
+    """The single result line of a grade conversion - shown once, never as a step too."""
+
+    return (
+        f"{label} **{fixed(rounded, 1)}** thuộc khoảng {_band_range(band)} → "
+        f"điểm chữ **{band.letter}** → thang 4 **{fixed(band.gp4, 1)}**"
     )
 
 
@@ -227,17 +224,18 @@ def grade_conversion(params: Mapping[str, object]) -> CalculationResult:
 
     rounded = round_half_up(score, COURSE_SCORE_PLACES)
     band = grade_band(rounded)
-    steps = (
-        Step(
-            label="Làm tròn",
-            symbolic="Làm tròn điểm thang 10 đến 0.1",
-            substituted=f"{plain(score)} → {fixed(rounded, 1)}",
-            value=rounded,
-            display=fixed(rounded, 1),
-            note="làm tròn đến 0.1",
-        ),
-        _conversion_step(rounded, band),
-    )
+    steps: tuple[Step, ...] = ()
+    if rounded != score:
+        steps = (
+            Step(
+                label="Làm tròn",
+                symbolic="Làm tròn điểm thang 10 đến 0.1",
+                substituted=f"{plain(score)} → {fixed(rounded, 1)}",
+                value=rounded,
+                display=fixed(rounded, 1),
+                note="làm tròn đến 0.1",
+            ),
+        )
     return CalculationResult(
         formula_id="grade_conversion",
         title="Quy đổi điểm thang 10 sang điểm chữ và thang 4",
@@ -249,6 +247,7 @@ def grade_conversion(params: Mapping[str, object]) -> CalculationResult:
             ("Điểm chữ", band.letter),
             ("Thang 4", fixed(band.gp4, 1)),
         ),
+        summary=_conversion_summary("Điểm", rounded, band),
     )
 
 
@@ -438,7 +437,6 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
         )
     )
     band = grade_band(final)
-    steps.append(_conversion_step(final, band))
 
     return CalculationResult(
         formula_id="course_score",
@@ -451,6 +449,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
             ("Điểm chữ", band.letter),
             ("Thang 4", fixed(band.gp4, 1)),
         ),
+        summary=_conversion_summary("ĐTKHP", final, band),
     )
 
 
@@ -545,25 +544,22 @@ def gpa(params: Mapping[str, object]) -> CalculationResult:
     final = round_half_up(raw_gpa, GPA_PLACES)
     qualities = " + ".join(step.display for step in steps)
     credit_sum = " + ".join(str(credits) for _, credits, _, _ in rows)
+    if final == raw_gpa:
+        tail = f"= {fixed(final, GPA_PLACES)}"
+    else:
+        shown = before_rounding(raw_gpa, final, GPA_PLACES)
+        lead = shown if shown.startswith("≈") else f"= {shown}"
+        tail = f"{lead} → {fixed(final, GPA_PLACES)}"
     steps.append(
         Step(
-            label="GPA",
-            symbolic=GPA_FORMULA_TEXT[1].removesuffix(", làm tròn đến 0.01"),
+            label="Điểm trung bình",
+            symbolic=GPA_FORMULA_TEXT[1],
             substituted=(
                 f"GPA = ({qualities}) / ({credit_sum}) = {plain(total_quality)} / {total_credits}"
-                f" {equals(raw_gpa)}"
+                f" {tail}"
             ),
-            value=raw_gpa,
-            display=fmt(raw_gpa),
-        )
-    )
-    steps.append(
-        Step(
-            label="Làm tròn",
-            symbolic="Làm tròn GPA đến 0.01",
-            substituted=f"{before_rounding(raw_gpa, final, GPA_PLACES)} → {fixed(final, 2)}",
             value=final,
-            display=fixed(final, 2),
+            display=fixed(final, GPA_PLACES),
             note="làm tròn đến 0.01",
         )
     )

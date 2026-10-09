@@ -28,6 +28,9 @@ class CalculationResult:
     steps: tuple[Step, ...]
     outputs: tuple[tuple[str, str], ...]
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    # The one result line shown to the student (markdown); None = built from `outputs`.
+    # Grade conversions fold the band lookup in here instead of repeating it as a step.
+    summary: str | None = None
 
 
 @dataclass(frozen=True)

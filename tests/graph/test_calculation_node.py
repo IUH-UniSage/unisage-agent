@@ -249,6 +249,11 @@ async def test_single_advisory_question_still_passes_its_resolved_query(
     assert _RESOLVED_MARKER in prompt
 
 
+NEW_RESULT_LINE = (
+    "Kết quả: ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**"
+)
+
+
 def _scripted(*outputs: object) -> FunctionModel:
     """Non-streamed calls answered in order (classification, extractor, ...)."""
 
@@ -299,7 +304,10 @@ async def test_calculation_only_turn_with_every_number_shows_steps_and_a_checked
         )
 
     assert "".join(tokens) == result.response_text
-    assert "Kết quả: ĐTKHP **7.5** · Điểm chữ **B** · Thang 4 **3.0**" in result.response_text
+    assert (
+        "Kết quả: ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**"
+        in result.response_text
+    )
     assert result.response_text.endswith("Điểm chữ B nghĩa là bạn đã qua học phần.")
     assert result.pending_round is None
     assert retrieval.queries == []
@@ -320,7 +328,21 @@ async def test_note_with_an_invented_number_is_replaced() -> None:
     )
     result = await run_graph(_input(_COURSE_QUERY), models, _sink([]), _TRACE, _usage_recorder())
     assert "0.8" not in result.response_text
-    assert result.response_text.endswith("Kết quả: ĐTKHP 7.5, Điểm chữ B, Thang 4 3.0.")
+    # A rejected note is simply left out - no fallback sentence repeating the result.
+    assert result.response_text.endswith(NEW_RESULT_LINE)
+
+
+@pytest.mark.asyncio
+async def test_note_repeating_the_result_is_left_out() -> None:
+    models = GraphModels(
+        classification=_scripted(_COURSE_TASK, _COURSE_PARAMS),
+        query_transformation=_echo_model(),
+        generation=_note_model("Điểm tổng kết của bạn là 7.5, tương đương 3.0 trên thang 4."),
+        retrieval=_RecordingRetrieval([]),
+    )
+    result = await run_graph(_input(_COURSE_QUERY), models, _sink([]), _TRACE, _usage_recorder())
+    assert result.response_text.endswith(NEW_RESULT_LINE)
+    assert "Điểm tổng kết của bạn" not in result.response_text
 
 
 @pytest.mark.asyncio
