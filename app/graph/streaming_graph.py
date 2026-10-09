@@ -19,7 +19,7 @@ from dataclasses import replace
 from pydantic_ai.models import Model
 
 from app.core.config import settings
-from app.core.observability.graph_trace import GraphTrace
+from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
@@ -92,6 +92,25 @@ async def run_graph(
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None = None,
 ) -> GraphOutput:
+    # Bound for the whole run so a failover deep inside an LLM helper can log which
+    # model/credential the node moved to (see `GraphTrace.model_switch`).
+    token = bind_trace(trace)
+    try:
+        return await _run_graph(
+            graph_input, models, token_sink, trace, usage_recorder, budget=budget
+        )
+    finally:
+        unbind_trace(token)
+
+
+async def _run_graph(
+    graph_input: GraphInput,
+    models: GraphModels,
+    token_sink: TokenSink,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    budget: BudgetContext | None = None,
+) -> GraphOutput:
     # GreetingDetectionNode: fast path, no LLM.
     trace.node("01_GreetingDetectionNode")
     if detect_greeting(graph_input.user_message, first_turn=graph_input.is_first_turn):
@@ -126,8 +145,12 @@ async def run_graph(
         )
 
     # MessageClassificationNode.
-    trace.node("03_MessageClassificationNode", model=models.classification)
     classification_agent = build_classification_agent(models.classification)
+    trace.node(
+        "03_MessageClassificationNode",
+        agent=classification_agent,
+        credential=models.generation_credential,
+    )
     classification = await classify_intent(
         classification_agent,
         graph_input.user_message,
@@ -278,9 +301,14 @@ async def _run_advisory_flow(
     question = question or graph_input.user_message
 
     # QueryTransformationNode: HyDE per SINGLE task, decomposer per MULTI task.
-    trace.node("06_QueryTransformationNode", model=models.query_transformation)
+    query_transformation_agent = build_query_transformation_agent(models.query_transformation)
+    trace.node(
+        "06_QueryTransformationNode",
+        agent=query_transformation_agent,
+        credential=models.generation_credential,
+    )
     sub_queries = await transform_tasks(
-        build_query_transformation_agent(models.query_transformation),
+        query_transformation_agent,
         advisory_tasks,
         decomposer_agent=build_decomposer_agent(models.query_transformation),
         confirmed_metadata=confirmed_metadata,
@@ -322,9 +350,10 @@ async def _run_advisory_flow(
     # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
     if settings.CHAT_LLM_RERANK_ENABLED and rerank_result.has_valid_context:
         if models.rerank is not None:
-            trace.node("09a_LLMRerankNode", model=models.rerank)
+            rerank_agent = build_llm_rerank_agent(models.rerank)
+            trace.node("09a_LLMRerankNode", agent=rerank_agent, credential=models.rerank_credential)
             llm_rerank_outcome = await llm_rerank(
-                build_llm_rerank_agent(models.rerank),
+                rerank_agent,
                 questions,
                 rerank_result,
                 credential=models.rerank_credential,
@@ -368,8 +397,10 @@ async def _run_advisory_flow(
 
     if not rerank_result.has_valid_context and not web_results:
         # TicketFallbackNode (streaming).
-        trace.node("11_TicketFallbackNode", model=models.generation)
         fallback_agent = build_ticket_fallback_agent(models.generation)
+        trace.node(
+            "11_TicketFallbackNode", agent=fallback_agent, credential=models.generation_credential
+        )
         fallback_text = await run_ticket_fallback(
             fallback_agent,
             question,
@@ -393,8 +424,12 @@ async def _run_advisory_flow(
         )
 
     # GenerationSynthesisNode (streaming).
-    trace.node("10_GenerationSynthesisNode", model=models.generation)
     generation_agent = build_generation_agent(models.generation)
+    trace.node(
+        "10_GenerationSynthesisNode",
+        agent=generation_agent,
+        credential=models.generation_credential,
+    )
     sub_query_questions = (
         [sub_query.question for sub_query in sub_queries] if len(sub_queries) > 1 else None
     )

@@ -607,3 +607,21 @@ async def test_run_generation_synthesis_merges_confirmed_metadata_fallback(
 
     assert result.confirmed_metadata == {"existing": "value", "he_dao_tao": "chinh_quy"}
     assert result.pending_clarification is None
+
+
+def test_generation_agent_asks_for_the_configured_thinking(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_GENERATION_THINKING", "low")
+    agent = build_generation_agent(mock_streaming_llm_model(["x"]))
+    assert agent.model_settings == {"thinking": "low"}
+
+
+def test_generation_agent_keeps_the_model_default_when_thinking_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_GENERATION_THINKING", None)
+    agent = build_generation_agent(mock_streaming_llm_model(["x"]))
+    assert agent.model_settings == {}

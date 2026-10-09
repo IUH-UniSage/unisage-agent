@@ -3,6 +3,7 @@
 credential like any other provider failure, and a stream that has started is never cut."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -13,6 +14,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 import app.core.registry.model_router as model_router_module
 from app.core.config import settings
+from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import ModelRouter
 from app.graph.streaming import run_agent_text_with_failover, stream_agent_text
@@ -185,3 +187,35 @@ async def test_aux_call_over_its_time_limit_fails_over(
 
     assert output == "ok"
     assert [report["credential_id"] for report in backend.reports] == ["primary"]
+
+
+@pytest.mark.asyncio
+async def test_failover_logs_a_node_line_with_the_replacement_model(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: _FakeBackendClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        "app.graph.streaming.build_model", lambda credential: FunctionModel(_ok_run)
+    )
+    trace = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
+    token = bind_trace(trace)
+    try:
+        with caplog.at_level(logging.INFO, logger="unisage.graph"):
+            trace.node("03_MessageClassificationNode")
+            await run_agent_text_with_failover(
+                _agent_factory(FunctionModel(_hanging_run)),
+                "hello",
+                purpose="CHAT",
+                credential=PRIMARY,
+                snapshot_version=1,
+                agent_factory=_agent_factory,
+                router=_router(backend),
+                timeout_seconds=0.05,
+            )
+    finally:
+        unbind_trace(token)
+
+    switch = [r for r in caplog.records if r.name == "unisage.graph"][-1].getMessage()
+    assert switch.startswith("node=03_MessageClassificationNode model=function:_ok_run:")
+    assert "credential=fallback failover_from=primary reason=TimeoutError " in switch

@@ -51,8 +51,10 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage
 
 from app.core.config import settings
+from app.core.errors.llm_error_classifier import provider_status_code
 from app.core.llm.provider_models import build_model
 from app.core.llm.thinking import resolve_thinking
+from app.core.observability.graph_trace import active_trace
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import (
@@ -144,6 +146,26 @@ async def _next_credential_or_raise(
         ) from failure
 
 
+def _failure_label(exc: Exception) -> str:
+    """Short reason for a failover log line - the HTTP status when there is one."""
+
+    status = provider_status_code(exc)
+    return f"{type(exc).__name__}:{status}" if status is not None else type(exc).__name__
+
+
+def _trace_model_switch(
+    agent: Agent[None, str],
+    credential: CredentialConfig,
+    failed_credential: CredentialConfig | None,
+    reason: str,
+) -> None:
+    """Logs the node's new model/credential when this runs inside a traced graph request."""
+
+    trace = active_trace()
+    if trace is not None:
+        trace.model_switch(agent, credential, failed_credential=failed_credential, reason=reason)
+
+
 TokenSink = Callable[[str], Awaitable[None]]
 
 # Rebuilds an `Agent` around a freshly-built fallback `Model` - the two
@@ -154,6 +176,12 @@ AgentFactory = Callable[[Model | str], Agent[None, str]]
 
 def auxiliary_model_settings(model: Model | str) -> ModelSettings:
     return ModelSettings(thinking=resolve_thinking(model, settings.CHAT_AUX_THINKING))
+
+
+def generation_model_settings(model: Model | str) -> ModelSettings:
+    if settings.CHAT_GENERATION_THINKING is None:
+        return ModelSettings()
+    return ModelSettings(thinking=resolve_thinking(model, settings.CHAT_GENERATION_THINKING))
 
 
 def _timeout_or_none(seconds: float) -> float | None:
@@ -245,9 +273,13 @@ async def stream_agent_text(
                 router=failover_router,
             )
             if selected is not active_credential:
+                denied_credential = active_credential
                 active_credential = selected
                 active_model = build_model(active_credential)
                 active_agent = agent_factory(active_model) if agent_factory else active_agent
+                _trace_model_switch(
+                    active_agent, active_credential, denied_credential, "PROVIDER_BUDGET_DENIED"
+                )
                 if on_failover is not None:
                     on_failover(active_credential, active_model)
         else:
@@ -347,6 +379,9 @@ async def stream_agent_text(
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
             attempt_index += 1
+            _trace_model_switch(
+                active_agent, active_credential, failed_credential, _failure_label(exc)
+            )
             logger.warning(
                 "stream_agent_text: credential %s failed (%s) before any output was "
                 "streamed - failing over to credential %s",
@@ -409,9 +444,13 @@ async def run_agent_text_with_failover(
                 router=failover_router,
             )
             if selected is not active_credential:
+                denied_credential = active_credential
                 active_credential = selected
                 active_model = build_model(active_credential)
                 active_agent = agent_factory(active_model) if agent_factory else active_agent
+                _trace_model_switch(
+                    active_agent, active_credential, denied_credential, "PROVIDER_BUDGET_DENIED"
+                )
                 if on_failover is not None:
                     on_failover(active_credential, active_model)
         else:
@@ -467,6 +506,9 @@ async def run_agent_text_with_failover(
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
             attempt_index += 1
+            _trace_model_switch(
+                active_agent, active_credential, failed_credential, _failure_label(exc)
+            )
             logger.warning(
                 "run_agent_text_with_failover: credential %s failed (%s) - failing over "
                 "to credential %s",

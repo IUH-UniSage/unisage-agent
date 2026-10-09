@@ -17,6 +17,7 @@ from app.graph.streaming import (
     BudgetContext,
     FailoverCallback,
     TokenSink,
+    generation_model_settings,
     stream_agent_text,
 )
 from app.rag.prompting import build_ticket_fallback_prompt
@@ -25,7 +26,7 @@ from app.schemas.security import AcademicSecurityContext
 
 
 def build_ticket_fallback_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model)
+    return Agent(model=model, model_settings=generation_model_settings(model))
 
 
 async def run_ticket_fallback(
