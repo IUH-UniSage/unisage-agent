@@ -14,7 +14,7 @@ from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import ModelRegistryError
 from app.core.usage.usage_recorder import UsageRecorder
-from app.database.repositories.clarification_state import ClarificationStateRepository
+from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
@@ -187,10 +187,10 @@ async def test_run_and_persist_persists_clarification_state_on_success(
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )
 
-    repo = ClarificationStateRepository(db_session)
     # off_topic never touches confirmed_metadata, but a row should still
     # exist (upserted with the empty defaults).
-    assert await repo.get_confirmed_metadata("conv-42") == {}
+    state = await ClarificationRoundRepository(db_session).get_round("conv-42")
+    assert state.status is None and state.confirmed_metadata == {}
 
 
 @pytest.mark.asyncio
@@ -249,11 +249,10 @@ async def test_queue_sentinel_still_arrives_when_java_patch_raises_unexpected_er
 
     await asyncio.wait_for(_drain_to_sentinel(), timeout=2.0)
 
-    # The clarification-state write (which runs AFTER the Java PATCH in the
-    # function body) must still have happened too - the PATCH failure must
-    # not short-circuit it.
-    repo = ClarificationStateRepository(db_session)
-    assert await repo.get_confirmed_metadata("conv-1") == {}
+    # The clarification-state write (which runs BEFORE the Java PATCH since
+    # UNISAGE-99: state first, projection second) still happened.
+    state = await ClarificationRoundRepository(db_session).get_round("conv-1")
+    assert state.confirmed_metadata == {}
 
 
 @pytest.mark.asyncio

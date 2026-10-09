@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Sequence
 
 from app.core.timezone import now_ict
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
@@ -213,27 +211,6 @@ def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_i
     return "\n" + get_templates().web_search_context.format(web_results=entries) + "\n"
 
 
-def build_missing_metadata_block(pending: PendingClarification | None) -> str:
-    """`<missing_metadata_to_confirm>` content - JSON `ask_user_form` shape sourced
-    from `pending_clarification`, or the `"Không có"` sentinel that keeps
-    `{task_2}` silent for this turn."""
-
-    if pending is None:
-        return NO_PENDING_CLARIFICATION
-    fields = [
-        {
-            "field": field,
-            "options": (
-                [{"id": option_id, "label": option_id} for option_id in options]
-                if options is not None
-                else None
-            ),
-        }
-        for field, options in zip(pending.missing_fields, pending.options, strict=True)
-    ]
-    return json.dumps({"type": "ask_user_form", "fields": fields}, ensure_ascii=False)
-
-
 def build_json_repair_prompt(
     previous_response: str,
     chunks: Sequence[RetrievedChunk],
@@ -284,14 +261,15 @@ def render_resolved_user_query(user_query: str, resolved_query: str | None) -> s
     return f'{resolved}\n\n(Nguyên văn người dùng vừa nhắn ở lượt này: "{user_query}")'
 
 
-def build_task_2_section(pending: PendingClarification | None) -> str:
+def build_task_2_section() -> str:
     """Build `{task_2}` - nested format: `task_2.yaml` embeds the static
-    `ask_user_form_guide.yaml`/`confirmed_metadata_guide.yaml` plus the
-    dynamic missing-metadata block."""
+    `ask_user_form_guide.yaml`/`confirmed_metadata_guide.yaml`. Answers to a
+    clarification panel arrive structured and are already folded into
+    `confirmed_metadata`, so there is never a pending block to show the model."""
 
     templates = get_templates()
     return templates.task_2.format(
-        missing_metadata_to_confirm=build_missing_metadata_block(pending),
+        missing_metadata_to_confirm=NO_PENDING_CLARIFICATION,
         ask_user_form_guide=build_ask_user_form_guide(),
         confirmed_metadata_guide=templates.confirmed_metadata_guide,
     )

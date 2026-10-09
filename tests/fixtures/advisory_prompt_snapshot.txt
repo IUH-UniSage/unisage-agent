@@ -197,7 +197,7 @@ Hai nguồn field cần hỏi — xử lý CHỈ một trong hai theo đúng th�
 2. **Field bạn tự phát hiện MỚI ở NHIỆM VỤ 1 lượt này** (rule "PHÁT HIỆN NHÁNH PHỤ THUỘC THUỘC TÍNH SINH VIÊN", chỉ áp dụng luồng có NHIỆM VỤ 1) — khi `<missing_metadata_to_confirm>` là "Không có" nhưng đối chiếu văn bản thấy câu trả lời phụ thuộc thuộc tính chưa xác định ở CẢ BA nguồn: tự đặt `field` (tên ngắn gọn không dấu) và lấy `options` (nếu có) NGUYÊN VĂN từ nhãn nhánh trong văn bản.
 
 <missing_metadata_to_confirm>
-{"type": "ask_user_form", "fields": [{"field": "nganh_hoc", "options": [{"id": "cntt", "label": "cntt"}, {"id": "ke_toan", "label": "ke_toan"}]}]}
+Không có
 </missing_metadata_to_confirm>
 
 Khối trên chỉ chứa `field`/`options`, không phải câu hỏi hoàn chỉnh — bạn luôn phải tự diễn đạt câu hỏi. Nguồn để diễn đạt khác nhau theo luồng: luồng có NHIỆM VỤ 1 thì đọc lại nhãn nhánh trong `<academic_context>`; luồng Calculation thì không có `<academic_context>` — tự diễn đạt trực tiếp từ tên field (do CalculationNode đặt rõ nghĩa, VD `credits_registered`, `price_per_credit`) bằng kiến thức nghiệp vụ học vụ thông thường (GPA, tín chỉ, học phí). Diễn đạt lại tự nhiên hơn lượt trước nếu cần, miễn giữ NGUYÊN tên `field` và tập `options`.

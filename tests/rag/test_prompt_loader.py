@@ -9,7 +9,6 @@ from app.rag.prompting import (
     get_templates,
 )
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
 from app.schemas.web_search import WebSearchResult
@@ -68,7 +67,6 @@ def test_advisory_prompt_includes_the_security_access_control_block() -> None:
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "Quy Tắc Bảo Mật & Phân Quyền Thông Tin" in prompt
@@ -87,7 +85,6 @@ def test_prompt_renders_two_separate_tags_never_merged() -> None:
         security=security,
         confirmed_metadata=confirmed_metadata,
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "<academic_user_context>" in prompt
@@ -119,7 +116,6 @@ def test_prompt_never_puts_confirmed_metadata_in_qdrant_filter_shape() -> None:
         security=AcademicSecurityContext(),
         confirmed_metadata={"training_type": "chinh_quy"},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert '"training_type"' not in prompt  # never JSON-shaped, only prose
@@ -135,7 +131,6 @@ def test_prepared_context_renders_chunks_with_citation_index() -> None:
                 chunk_id="c1", content="Nội dung 1", source="Quy chế A", faculty="GLOBAL", score=1.0
             )
         ],
-        pending_clarification=None,
     )
 
     assert "[1] (Quy chế A) Nội dung 1" in prompt
@@ -155,7 +150,6 @@ def test_prepared_context_shows_page_suffix_for_pdf_chunks_with_a_single_page() 
                 page_start=5,
             )
         ],
-        pending_clarification=None,
     )
 
     assert "[1] (Quy chế A, tr. 5) Nội dung 1" in prompt
@@ -176,7 +170,6 @@ def test_prepared_context_shows_page_range_suffix_when_start_and_end_differ() ->
                 page_end=6,
             )
         ],
-        pending_clarification=None,
     )
 
     assert "[1] (Quy chế A, tr. 5-6) Nội dung 1" in prompt
@@ -195,7 +188,6 @@ def test_prepared_context_has_no_page_suffix_for_non_pdf_chunks() -> None:
                 score=1.0,
             )
         ],
-        pending_clarification=None,
     )
 
     assert "[1] (Quy chế A) Nội dung 1" in prompt
@@ -231,33 +223,12 @@ def test_json_repair_prompt_includes_academic_context_for_verbatim_options() -> 
     assert "ASK_USER_FORM_GUIDE" in prompt
 
 
-def test_pending_clarification_renders_as_ask_user_form_json() -> None:
-    pending = PendingClarification(
-        origin_node="QueryTransformationNode",
-        missing_fields=["training_type"],
-        options=[["chinh_quy", "lien_thong"]],
-        retry_count=0,
-    )
-
-    prompt = build_system_prompt(
-        user_query="Điều kiện học bổng là gì?",
-        security=AcademicSecurityContext(),
-        confirmed_metadata={},
-        chunks=[],
-        pending_clarification=pending,
-    )
-
-    assert '"type": "ask_user_form"' in prompt
-    assert '"field": "training_type"' in prompt
-
-
 def test_no_pending_clarification_renders_khong_co() -> None:
     prompt = build_system_prompt(
         user_query="Điều kiện học bổng là gì?",
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "Không có" in prompt
@@ -269,7 +240,6 @@ def test_prompt_embeds_the_user_query() -> None:
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "Điều kiện học bổng loại giỏi là gì?" in prompt
@@ -281,7 +251,6 @@ def test_guest_security_context_renders_khach_role_and_no_department_access() ->
         security=AcademicSecurityContext(),  # default: role=KHACH, no department_access
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "Vai trò (Role): KHACH" in prompt
@@ -299,7 +268,6 @@ def test_known_metadata_fields_vocabulary_is_embedded() -> None:
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "he_dao_tao" in prompt
@@ -312,7 +280,6 @@ def test_history_message_renders_prior_turns_with_role_labels() -> None:
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
         history=[
             HistoryMessage(role="USER", content="Tôi học ngành CNTT"),
             HistoryMessage(role="ASSISTANT", content="Ngành CNTT có mã 7480201."),
@@ -330,7 +297,6 @@ def test_history_message_empty_renders_sentinel_not_a_crash() -> None:
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "<history_message>" in prompt
@@ -358,7 +324,6 @@ def test_citation_rules_ask_for_inline_markers_without_trailing_source_block() -
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[RetrievedChunk(chunk_id="c1", content="Nội dung 1", source="Quy chế A", score=1.0)],
-        pending_clarification=None,
     )
 
     assert "SAU câu hoặc đoạn dùng nguồn" in prompt
@@ -378,7 +343,6 @@ def test_resolved_query_prepended_when_it_differs_from_raw_user_query() -> None:
         security=security,
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "Học phí đại học chính quy khóa tuyển sinh năm học 2023-2024" in prompt
@@ -395,14 +359,12 @@ def test_resolved_query_omitted_when_same_as_raw_user_query() -> None:
         security=security,
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
     without_resolved = build_system_prompt(
         user_query=raw_query,
         security=security,
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert with_resolved == without_resolved
@@ -437,12 +399,6 @@ def test_build_system_prompt_unchanged_by_the_multi_intent_frame_refactor() -> N
                     chunk_id="c2", content="Điều 5...", source="quy-che.docx", score=0.8
                 ),
             ],
-            pending_clarification=PendingClarification(
-                origin_node="QueryTransformationNode",
-                missing_fields=["nganh_hoc"],
-                options=[["cntt", "ke_toan"]],
-                original_query="Học phí khóa 2023?",
-            ),
             history=[
                 HistoryMessage(role="USER", content="Học phí khóa 2023?"),
                 HistoryMessage(role="ASSISTANT", content="Học phí khóa 2023 là ... [1]."),
@@ -459,7 +415,6 @@ def test_build_multi_intent_prompt_renders_sub_queries_and_shares_base_params() 
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[RetrievedChunk(chunk_id="c1", content="Nội dung", source="s", score=0.9)],
-        pending_clarification=None,
     )
 
     assert "SQ1. Học phí ngành CNTT bao nhiêu?" in prompt
@@ -478,7 +433,6 @@ def test_build_multi_intent_prompt_never_shows_the_resolved_query_marker() -> No
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[],
-        pending_clarification=None,
     )
 
     assert "Câu hỏi gốc" in prompt
@@ -502,7 +456,6 @@ def test_websearch_block_sits_below_academic_context_numbered_after_the_chunks()
             RetrievedChunk(chunk_id="c2", content="Miễn giảm...", source="mien.pdf", score=0.8),
         ],
         web_results=[_web_page("lich-thi")],
-        pending_clarification=None,
     )
 
     assert "[3] (lich-thi — https://pdt.iuh.edu.vn/lich-thi) Nội dung lich-thi" in prompt
@@ -519,7 +472,6 @@ def test_websearch_only_turn_has_an_empty_academic_context() -> None:
         confirmed_metadata={},
         chunks=[],
         web_results=[_web_page("lich-thi")],
-        pending_clarification=None,
     )
 
     assert "(không có tài liệu liên quan)" in prompt
@@ -532,7 +484,6 @@ def test_no_web_results_renders_no_websearch_block() -> None:
         security=AcademicSecurityContext(),
         confirmed_metadata={},
         chunks=[RetrievedChunk(chunk_id="c1", content="x", source="s", score=0.9)],
-        pending_clarification=None,
     )
 
     assert "<websearch>\n" not in prompt

@@ -9,14 +9,10 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database.models import ConversationClarificationState
-from app.database.repositories.clarification_state import (
-    ClarificationRoundRepository,
-    ClarificationStateRepository,
-)
+from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.schemas.clarification import (
     ClarificationPanel,
     PendingAdvisoryTask,
-    PendingClarification,
     PendingRound,
 )
 from app.schemas.intent import ClassifiedTask
@@ -174,25 +170,23 @@ async def test_revoke_open_only_matches_its_panel(db_session: AsyncSession) -> N
 
 @pytest.mark.asyncio
 async def test_legacy_v1_row_reads_as_no_round(db_session: AsyncSession) -> None:
-    legacy = ClarificationStateRepository(db_session)
-    await legacy.upsert(
-        "c1",
-        pending_clarification=PendingClarification(
-            origin_node="QueryTransformationNode", missing_fields=["x"], options=[["a", "b"]]
-        ),
-        confirmed_metadata={"program": "CNTT"},
+    # A pre-UNISAGE-99 row: v1 JSON in pending_clarification, no pending_status.
+    db_session.add(
+        ConversationClarificationState(
+            conversation_id="c1",
+            pending_clarification={
+                "origin_node": "QueryTransformationNode",
+                "missing_fields": ["x"],
+            },
+            confirmed_metadata={"program": "CNTT"},
+        )
     )
     await db_session.commit()
-    state = await ClarificationRoundRepository(db_session).get_round("c1")
+    repo = ClarificationRoundRepository(db_session)
+    state = await repo.get_round("c1")
     assert state.status is None and state.confirmed_metadata == {"program": "CNTT"}
-    # ...and a v1 reader never sees a v2 round.
-    await ClarificationRoundRepository(db_session).revoke_open("c1", uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_v1_reader_ignores_v2_rounds(db_session: AsyncSession) -> None:
-    await _open(db_session)
-    assert await ClarificationStateRepository(db_session).get_pending_clarification("c1") is None
+    # ...and a new round may be opened over it.
+    assert await repo.upsert_open("c1", _round(), {})
 
 
 @pytest.mark.asyncio

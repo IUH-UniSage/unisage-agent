@@ -34,6 +34,7 @@ still before the unconditional `finally` puts `DoneItem` - `event: error`
 never has a chance to arrive after `event: done`.
 """
 
+import asyncio
 import logging
 import uuid
 from asyncio import Queue
@@ -157,6 +158,8 @@ class ClaimContext:
     """A submit turn holds the conversation's panel claim (PROCESSING) until it ends."""
 
     token: uuid.UUID
+    # `loop.time()` deadline for everything after the claim (CHAT_CLAIMED_TURN_DEADLINE_SECONDS).
+    deadline: float | None = None
 
 
 async def _store_round_state(
@@ -264,106 +267,123 @@ async def run_and_persist(
     graph_output = None
     error_item: ErrorItem | None = None
     try:
-        try:
-            if budget is not None:
-                # Request-level SYSTEM/PURPOSE reservation covers every attempt across
-                # every node in this request - multiplied up from one call's estimate to
-                # account for the 2-3 secondary LLM calls (classification, query
-                # transformation) beyond the primary generation call.
-                request_estimate_usd = budget.per_attempt_estimate_usd * Decimal(
-                    str(settings.BUDGET_RESERVATION_MULTIPLIER_CHAT)
-                )
-                reserve_result = await budget.tracker.reserve_request(
-                    request_id=budget.request_id,
-                    purpose=usage_recorder.purpose,
-                    estimate_usd=request_estimate_usd,
-                )
-                if reserve_result != "OK":
-                    raise RequestBudgetRejectedError(usage_recorder.purpose, reserve_result)
+        # A submit turn holds the panel claim: past its deadline it is cancelled
+        # before any further Java or state write (the lease outlives the deadline).
+        async with asyncio.timeout_at(claim.deadline if claim is not None else None):
             try:
-                graph_output = await run_graph(
-                    graph_input, models, sink, trace, usage_recorder, budget=budget
+                if budget is not None:
+                    # Request-level SYSTEM/PURPOSE reservation covers every attempt across
+                    # every node in this request - multiplied up from one call's estimate to
+                    # account for the 2-3 secondary LLM calls (classification, query
+                    # transformation) beyond the primary generation call.
+                    request_estimate_usd = budget.per_attempt_estimate_usd * Decimal(
+                        str(settings.BUDGET_RESERVATION_MULTIPLIER_CHAT)
+                    )
+                    reserve_result = await budget.tracker.reserve_request(
+                        request_id=budget.request_id,
+                        purpose=usage_recorder.purpose,
+                        estimate_usd=request_estimate_usd,
+                    )
+                    if reserve_result != "OK":
+                        raise RequestBudgetRejectedError(usage_recorder.purpose, reserve_result)
+                try:
+                    graph_output = await run_graph(
+                        graph_input, models, sink, trace, usage_recorder, budget=budget
+                    )
+                finally:
+                    trace.finish()
+                response_text = graph_output.response_text
+                status = "COMPLETED"
+                for warning in _admin_warnings(graph_output, graph_input):
+                    await queue.put(warning)
+            except Exception as exc:
+                reference = short_reference(usage_recorder.request_id)
+                logger.exception(
+                    "graph execution failed for conversation_id=%s, message_id=%s, ref=%s",
+                    conversation_id,
+                    assistant_message_id,
+                    reference,
                 )
-            finally:
-                trace.finish()
-            response_text = graph_output.response_text
-            status = "COMPLETED"
-            for warning in _admin_warnings(graph_output, graph_input):
-                await queue.put(warning)
-        except Exception as exc:
-            reference = short_reference(usage_recorder.request_id)
-            logger.exception(
-                "graph execution failed for conversation_id=%s, message_id=%s, ref=%s",
-                conversation_id,
-                assistant_message_id,
-                reference,
-            )
-            response_text = "".join(accumulated)
-            status = "ERROR"
-            error_item = _error_item_for(
-                exc,
-                streamed_any=bool(accumulated),
-                detailed=can_see_ai_details(graph_input.security.permissions),
-                reference=reference,
-            )
+                response_text = "".join(accumulated)
+                status = "ERROR"
+                error_item = _error_item_for(
+                    exc,
+                    streamed_any=bool(accumulated),
+                    detailed=can_see_ai_details(graph_input.security.permissions),
+                    reference=reference,
+                )
 
-        pending_round: PendingRound | None = None
-        if status == "COMPLETED" and graph_output is not None and graph_output.pending_round:
-            pending_round = graph_output.pending_round.model_copy(
-                update={"assistant_message_id": uuid.UUID(assistant_message_id)}
+            pending_round: PendingRound | None = None
+            if status == "COMPLETED" and graph_output is not None and graph_output.pending_round:
+                pending_round = graph_output.pending_round.model_copy(
+                    update={"assistant_message_id": uuid.UUID(assistant_message_id)}
+                )
+            confirmed = (
+                graph_output.confirmed_metadata
+                if graph_output is not None
+                else graph_input.confirmed_metadata
             )
-        confirmed = (
-            graph_output.confirmed_metadata
-            if graph_output is not None
-            else graph_input.confirmed_metadata
-        )
-        # State first, projection second, event last: a client that receives
-        # `event: clarification` can always reload and submit that panel.
-        persisted = await _store_round_state(
-            session_factory, conversation_id, claim, pending_round, confirmed
-        )
-        if persisted is _LOST_CLAIM:
-            # Our claim was taken over (lease expired): another request owns the
-            # conversation now - write nothing more to Java.
-            return
-        round_stored = persisted is True and pending_round is not None
+            # State first, projection second, event last: a client that receives
+            # `event: clarification` can always reload and submit that panel.
+            persisted = await _store_round_state(
+                session_factory, conversation_id, claim, pending_round, confirmed
+            )
+            if persisted is _LOST_CLAIM:
+                # Our claim was taken over (lease expired): another request owns the
+                # conversation now - write nothing more to Java.
+                return
+            round_stored = persisted is True and pending_round is not None
 
-        metadata: dict[str, Any] | None = None
-        if round_stored and pending_round is not None:
-            metadata = {
-                "clarification": {
-                    "schema_version": 1,
-                    "status": "open",
-                    "panel": pending_round.panel.public().model_dump(mode="json"),
+            metadata: dict[str, Any] | None = None
+            if round_stored and pending_round is not None:
+                metadata = {
+                    "clarification": {
+                        "schema_version": 1,
+                        "status": "open",
+                        "panel": pending_round.panel.public().model_dump(mode="json"),
+                    }
                 }
-            }
-        finalized = await _finalize_safely(
-            lambda: java_client.update_message(
-                message_id=assistant_message_id,
-                conversation_id=conversation_id,
-                content=response_text,
-                status=status,
-                citations=(graph_output.citations or None) if graph_output is not None else None,
-                metadata=metadata,
-                authorization=authorization,
-            ),
-            what=f"finalize message {assistant_message_id}",
-        )
-        if not finalized:
-            logger.error(
-                "failed to PATCH backend-java final message state for conversation_id=%s, "
-                "message_id=%s (status=%s) - message stays STREAMING in Java's DB",
-                conversation_id,
-                assistant_message_id,
-                status,
+            finalized = await _finalize_safely(
+                lambda: java_client.update_message(
+                    message_id=assistant_message_id,
+                    conversation_id=conversation_id,
+                    content=response_text,
+                    status=status,
+                    citations=(graph_output.citations or None)
+                    if graph_output is not None
+                    else None,
+                    metadata=metadata,
+                    authorization=authorization,
+                ),
+                what=f"finalize message {assistant_message_id}",
             )
-        if round_stored and pending_round is not None:
-            if finalized:
-                await queue.put(
-                    ClarificationItem(pending_round.panel.public().model_dump(mode="json"))
+            if not finalized:
+                logger.error(
+                    "failed to PATCH backend-java final message state for conversation_id=%s, "
+                    "message_id=%s (status=%s) - message stays STREAMING in Java's DB",
+                    conversation_id,
+                    assistant_message_id,
+                    status,
                 )
-            else:
-                await _revoke_round(session_factory, conversation_id, pending_round)
+            if round_stored and pending_round is not None:
+                if finalized:
+                    await queue.put(
+                        ClarificationItem(pending_round.panel.public().model_dump(mode="json"))
+                    )
+                else:
+                    await _revoke_round(session_factory, conversation_id, pending_round)
+    except TimeoutError:
+        logger.error(
+            "claimed turn passed its deadline for conversation_id=%s, message_id=%s",
+            conversation_id,
+            assistant_message_id,
+        )
+        error_item = _error_item_for(
+            TimeoutError("claimed turn deadline"),
+            streamed_any=bool(accumulated),
+            detailed=can_see_ai_details(graph_input.security.permissions),
+            reference=short_reference(usage_recorder.request_id),
+        )
     finally:
         # Closes exactly once here regardless of which path above ran - success,
         # graph exception, or (since this whole function keeps running independently

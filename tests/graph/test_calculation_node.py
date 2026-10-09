@@ -220,10 +220,12 @@ async def test_mixed_turn_keeps_the_clarification_raised_by_the_advisory_part(
 
     result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE, _usage_recorder())
 
-    assert result.pending_clarification is not None
-    assert result.pending_clarification.missing_fields == ["training_type"]
+    assert result.pending_round is not None
+    assert [q.field for q in result.pending_round.panel.questions] == ["training_type"]
+    # The calculation task is T1, so the advisory part is T2.
+    assert result.pending_round.panel.questions[0].task_id == "T2"
     # Resume must retrieve on the advisory question, not the GPA part.
-    assert result.pending_clarification.original_query == _ADVISORY_QUERY
+    assert result.pending_round.original_query == _ADVISORY_QUERY
     assert result.response_text.endswith(CALCULATION_PLACEHOLDER_TEMPLATE)
 
 

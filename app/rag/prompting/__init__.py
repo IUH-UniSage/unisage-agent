@@ -14,7 +14,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
@@ -26,7 +25,6 @@ from .builder import (
     build_json_repair_prompt,
     build_known_metadata_fields_section,
     build_metadata_section,
-    build_missing_metadata_block,
     build_prepared_context_section,
     build_task_2_section,
     render_resolved_user_query,
@@ -41,7 +39,6 @@ __all__ = [
     "build_history_section",
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
-    "build_missing_metadata_block",
     "build_multi_intent_prompt",
     "build_system_prompt",
     "build_ticket_fallback_prompt",
@@ -58,7 +55,6 @@ def _base_params(
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
     web_results: Sequence[WebSearchResult],
-    pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage],
 ) -> dict[str, str]:
     """Blocks shared by every GenerationSynthesisNode frame."""
@@ -74,7 +70,7 @@ def _base_params(
         "citation_rules": templates.citation_rules,
         "prepared_context": build_prepared_context_section(chunks, web_results),
         "task_1": templates.task_1,
-        "task_2": build_task_2_section(pending_clarification),
+        "task_2": build_task_2_section(),
     }
 
 
@@ -85,7 +81,6 @@ def build_system_prompt(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
-    pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage] = (),
     web_results: Sequence[WebSearchResult] = (),
 ) -> str:
@@ -98,7 +93,6 @@ def build_system_prompt(
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
             web_results=web_results,
-            pending_clarification=pending_clarification,
             history=history,
         ),
         user_query=render_resolved_user_query(user_query, resolved_query),
@@ -112,7 +106,6 @@ def build_multi_intent_prompt(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
-    pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage] = (),
     web_results: Sequence[WebSearchResult] = (),
 ) -> str:
@@ -124,7 +117,6 @@ def build_multi_intent_prompt(
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
             web_results=web_results,
-            pending_clarification=pending_clarification,
             history=history,
         ),
         sub_queries_list=render_sub_queries_list(sub_queries),

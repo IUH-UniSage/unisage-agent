@@ -1,7 +1,7 @@
 """`HistoryMessage` - lives here (not in `app.graph.streaming_state`) so both
 the graph layer and `app.rag.prompting` can depend on it without inverting
 this project's stated dependency direction (API -> Graph -> RAG services ->
-repositories, see AGENTS.md) - the same reason `PendingClarification`/
+repositories, see AGENTS.md) - the same reason `PendingRound`/
 `AcademicSecurityContext` live under `app.schemas` rather than in the graph
 package.
 """

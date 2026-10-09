@@ -149,7 +149,6 @@ class Settings(BaseSettings):
     INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS: int = Field(default=6, ge=0)
 
     # --- CHAT_: read on every chat turn ---
-    CHAT_CLARIFICATION_MAX_RETRY: int = 2
     # Hard deadline for everything a turn does after claiming a clarification panel
     # (start_turn → graph → finalize). Past it the task is cancelled before any more writes.
     CHAT_CLAIMED_TURN_DEADLINE_SECONDS: float = Field(default=150.0, gt=0)

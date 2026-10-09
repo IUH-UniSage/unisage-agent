@@ -12,32 +12,64 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.models.function import FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import get_backend_java_client, get_graph_models, get_session_factory
+from app.core.config import settings
 from app.database.models import Base
 from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.graph.streaming_state import GraphModels
 from app.integrations import backend_java_client
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
 from app.schemas.clarification import ClarificationPanel, PendingAdvisoryTask, PendingRound
 from app.schemas.intent import ClassifiedTask
+from app.schemas.retrieval import RetrievedChunk
+from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 CONVERSATION = "conv-1"
 ASSISTANT_MESSAGE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 
 
 class _Java:
-    def __init__(self, *, cancel_status: int = 200) -> None:
+    def __init__(self, *, cancel_status: int = 200, turn_status: int = 201) -> None:
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
         self.cancel_status = cancel_status
+        self.turn_status = turn_status
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read()) if request.content else {}
         self.calls.append((request.method, request.url.path, body))
         if request.url.path.endswith("/clarification"):
             return httpx.Response(self.cancel_status, json={})
+        if request.url.path == "/messages/turn":
+            if self.turn_status != 201:
+                return httpx.Response(self.turn_status, json={"code": 2130, "message": "quota"})
+            return httpx.Response(
+                201,
+                json={
+                    "firstTurn": False,
+                    "context": [],
+                    "userMessage": {"id": "u-1", "status": "COMPLETED"},
+                    "assistantMessage": {"id": str(ASSISTANT_MESSAGE_ID), "status": "STREAMING"},
+                },
+            )
+        if request.method == "PATCH" and request.url.path.startswith("/messages/"):
+            return httpx.Response(200, json={"status": body.get("status")})
         raise AssertionError(f"unexpected Java call {request.method} {request.url.path}")
+
+    def paths(self) -> list[str]:
+        return [path for _method, path, _body in self.calls]
+
+
+def _streaming_model(chunks: list[str]) -> FunctionModel:
+    async def stream(_messages: object, _info: object) -> Any:
+        for chunk in chunks:
+            yield chunk
+
+    return FunctionModel(stream_function=stream)
 
 
 @pytest.fixture
@@ -46,8 +78,16 @@ def java(client: TestClient) -> Iterator[_Java]:
     app.dependency_overrides[get_backend_java_client] = lambda: BackendJavaClient(
         base_url="http://java.test", transport=httpx.MockTransport(fake.handler)
     )
-    # Never reached by these tests (the gate answers first), but FastAPI resolves it.
-    app.dependency_overrides[get_graph_models] = lambda: None
+    app.dependency_overrides[get_graph_models] = lambda: GraphModels(
+        classification=make_classification_llm_model("off_topic"),  # a resume never classifies
+        query_transformation=FunctionModel(
+            function=lambda _m, _i: ModelResponse(parts=[TextPart(content="hyde")])
+        ),
+        generation=_streaming_model(["Học phí hệ chính quy là ... [1]."]),
+        retrieval=FakeRetrievalService(
+            [RetrievedChunk(chunk_id="c1", content="học phí", source="s", score=0.9)]
+        ),
+    )
     yield fake
 
 
@@ -239,3 +279,70 @@ def test_second_cancel_is_stale(client: TestClient, java: _Java) -> None:
     assert _post(client, _cancel(pending.panel.panel_id)).status_code == 200
     response = _post(client, _cancel(pending.panel.panel_id))
     assert response.status_code == 409 and response.json()["code"] == 4091
+
+
+# --- §2.4 submit ------------------------------------------------------------------
+
+
+def _stream(client: TestClient, body: dict[str, Any]) -> tuple[int, str]:
+    with client.stream(
+        "POST", "/api/v1/chat/stream", json={"conversation_id": CONVERSATION, **body}
+    ) as response:
+        return response.status_code, "".join(response.iter_text())
+
+
+def test_submit_answers_and_resumes_the_original_question(
+    client: TestClient, java: _Java, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    pending = _seed(client)
+    status, body = _stream(
+        client, _submit(pending.panel.panel_id, [{"question_id": "q1", "number": "6.5"}])
+    )
+
+    assert status == 200
+    assert "Học phí hệ chính quy" in body and "event: done" in body
+    turn = next(b for m, p, b in java.calls if p == "/messages/turn")
+    assert turn["content"] == "Điểm CK: 6.5"
+    answers = turn["metadata"]["clarification_answers"]
+    assert answers["panel_id"] == str(pending.panel.panel_id)
+    assert answers["items"][0]["display"] == "6.5"
+    assert java.paths().count("/messages/turn") == 1
+    assert _status(client) is None  # round consumed
+
+
+def test_second_submit_of_the_same_panel_is_stale(
+    client: TestClient, java: _Java, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    pending = _seed(client)
+    body = _submit(pending.panel.panel_id, [{"question_id": "q1", "number": "6.5"}])
+    assert _stream(client, body)[0] == 200
+    response = _post(client, body)
+    assert response.status_code == 409 and response.json()["code"] == 4091
+    assert java.paths().count("/messages/turn") == 1
+
+
+def test_start_turn_failure_hands_the_panel_back(client: TestClient, java: _Java) -> None:
+    java.turn_status = 429
+    pending = _seed(client)
+    response = _post(
+        client, _submit(pending.panel.panel_id, [{"question_id": "q1", "number": "6.5"}])
+    )
+    assert response.status_code == 429
+    assert _status(client) == "OPEN"
+
+
+def test_claimed_turn_past_its_deadline_writes_nothing(
+    client: TestClient, java: _Java, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_CLAIMED_TURN_DEADLINE_SECONDS", 0.001)
+    pending = _seed(client)
+    status, body = _stream(
+        client, _submit(pending.panel.panel_id, [{"question_id": "q1", "number": "6.5"}])
+    )
+    assert status == 200
+    assert "event: error" in body
+    # start_turn happened before the claim's deadline started mattering; nothing after it.
+    assert not any(p.startswith("/messages/") and m == "PATCH" for m, p, _b in java.calls)
+    assert _status(client) == "PROCESSING"  # left for the lease to expire

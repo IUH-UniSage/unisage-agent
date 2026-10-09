@@ -239,14 +239,21 @@ class BackendJavaClient:
         content: str,
         authorization: str | None = None,
         guest_session_token: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """`POST /messages/turn`: history + USER message + STREAMING placeholder in one call."""
+        """`POST /messages/turn`: history + USER message + STREAMING placeholder in one call.
 
+        `metadata` (only `clarification_answers`) is stored on the USER message in the
+        same transaction - the answered-panel card's data."""
+
+        body: dict[str, Any] = {"conversationId": conversation_id, "content": content}
+        if metadata is not None:
+            body["metadata"] = metadata
         result = await self._request(
             "POST",
             "/messages/turn",
             authorization=authorization,
-            json_body={"conversationId": conversation_id, "content": content},
+            json_body=body,
             guest_session_token=guest_session_token,
         )
         return dict(result) if result is not None else {}

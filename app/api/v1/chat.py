@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
@@ -6,7 +7,7 @@ from collections.abc import AsyncGenerator
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -21,6 +22,7 @@ from app.core.config import settings
 from app.core.errors.exceptions import (
     BackendJavaUnavailableException,
     ClarificationInvalidException,
+    ClarificationStaleException,
     ConversationRejectedException,
     InvalidQueryException,
     RequestTooLargeException,
@@ -34,7 +36,12 @@ from app.database.repositories.clarification_state import (
     ClarificationRoundRepository,
 )
 from app.database.session import get_db_session
-from app.graph.clarification_answers import ClarificationInvalid, validate_answers
+from app.graph.clarification_answers import (
+    ClarificationInvalid,
+    answers_metadata,
+    answers_summary,
+    validate_answers,
+)
 from app.graph.nodes.security_context import parse_security_headers
 from app.graph.queue_items import (
     ClarificationClosedItem,
@@ -46,8 +53,8 @@ from app.graph.queue_items import (
     WarningItem,
 )
 from app.graph.streaming import BudgetContext
-from app.graph.streaming_session import run_and_persist
-from app.graph.streaming_state import GraphInput, GraphModels
+from app.graph.streaming_session import ClaimContext, run_and_persist
+from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
 from app.integrations.backend_java_client import (
     BackendJavaClient,
     BackendJavaError,
@@ -55,7 +62,7 @@ from app.integrations.backend_java_client import (
 )
 from app.schemas.chat import CHAT_REQUEST_MAX_BYTES, ChatStreamRequest
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import ClarificationCancel
+from app.schemas.clarification import ClarificationCancel, ClarificationSubmit
 from app.schemas.security import AcademicSecurityContext
 
 logger = logging.getLogger(__name__)
@@ -70,6 +77,7 @@ async def _start_turn(
     content: str,
     authorization: str | None,
     guest_session_token: str | None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         return await java_client.start_turn(
@@ -77,6 +85,7 @@ async def _start_turn(
             content=content,
             authorization=authorization,
             guest_session_token=guest_session_token,
+            metadata=metadata,
         )
     except BackendJavaHTTPError as exc:
         if exc.status_code == 429:
@@ -292,6 +301,9 @@ async def chat_stream_endpoint(
     round_state = await ClarificationRoundRepository(db_session).get_round(request.conversation_id)
     await db_session.commit()  # get_round may have consumed an expired lease
     pending_round = gate_clarification(round_state, request)
+    resume: ResumeInput | None = None
+    claim: ClaimContext | None = None
+    start_turn_metadata: dict[str, Any] | None = None
     if pending_round is not None:
         action = request.clarification
         if isinstance(action, ClarificationCancel):
@@ -304,34 +316,61 @@ async def chat_stream_endpoint(
                 confirmed_metadata=round_state.confirmed_metadata,
             )
             return StreamingResponse(stream, media_type="text/event-stream")
-        assert action is not None
+        assert isinstance(action, ClarificationSubmit)
         try:
-            validate_answers(pending_round.panel, action)
+            answers = validate_answers(pending_round.panel, action)
         except ClarificationInvalid as exc:
             raise ClarificationInvalidException(
                 {error.question_id: error.reason for error in exc.errors}
             ) from exc
-        # Submitting answers is wired in a follow-up change (UNISAGE-99 T10).
-        raise HTTPException(status_code=501, detail="clarification submit is not supported yet")
-
-    assert request.message is not None
-    clean_message = sanitize_input_text(request.message)
-    if not clean_message:
-        raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")
-    _log_suspected_prompt_injection(
-        clean_message, role=security.role, conversation_id=request.conversation_id
-    )
+        token = uuid.uuid4()
+        claimed = await ClarificationRoundRepository(db_session).claim(
+            request.conversation_id,
+            action.panel_id,
+            token,
+            settings.CHAT_CLARIFICATION_LEASE_SECONDS,
+        )
+        if claimed is None:
+            raise ClarificationStaleException()
+        await db_session.commit()  # other requests must see PROCESSING right away
+        claim = ClaimContext(
+            token=token,
+            deadline=asyncio.get_running_loop().time()
+            + settings.CHAT_CLAIMED_TURN_DEADLINE_SECONDS,
+        )
+        resume = ResumeInput(pending_round=claimed, answers=answers)
+        clean_message = answers_summary(answers)
+        start_turn_metadata = {"clarification_answers": answers_metadata(claimed.panel, answers)}
+    else:
+        assert request.message is not None
+        clean_message = sanitize_input_text(request.message)
+        if not clean_message:
+            raise InvalidQueryException("Câu hỏi không được để trống hoặc không hợp lệ.")
+        _log_suspected_prompt_injection(
+            clean_message, role=security.role, conversation_id=request.conversation_id
+        )
 
     client_ip = _resolve_client_ip(http_request, x_forwarded_for)
     guest_session_token = _resolve_guest_session_token(http_request)
 
-    turn = await _start_turn(
-        java_client,
-        conversation_id=request.conversation_id,
-        content=clean_message,
-        authorization=authorization,
-        guest_session_token=guest_session_token,
-    )
+    try:
+        turn = await _start_turn(
+            java_client,
+            conversation_id=request.conversation_id,
+            content=clean_message,
+            authorization=authorization,
+            guest_session_token=guest_session_token,
+            metadata=start_turn_metadata,
+        )
+    except BaseException:
+        if claim is not None:
+            # Nothing happened yet (no message, no quota): hand the panel back.
+            with contextlib.suppress(Exception):
+                await ClarificationRoundRepository(db_session).restore(
+                    request.conversation_id, claim.token
+                )
+                await db_session.commit()
+        raise
     confirmed_metadata = round_state.confirmed_metadata
 
     first_turn = bool(turn.get("firstTurn"))
@@ -365,6 +404,7 @@ async def chat_stream_endpoint(
         security=security,
         confirmed_metadata=confirmed_metadata,
         history=history,
+        resume=resume,
     )
 
     queue: asyncio.Queue[QueueItem] = asyncio.Queue()
@@ -381,6 +421,7 @@ async def chat_stream_endpoint(
             queue=queue,
             session_factory=session_factory,
             budget=budget,
+            claim=claim,
         )
     )
     _background_tasks.add(task)

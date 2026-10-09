@@ -13,7 +13,6 @@ def test_new_settings_have_sane_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
 
     for name in (
         "BACKEND_JAVA_BASE_URL",
-        "CHAT_CLARIFICATION_MAX_RETRY",
         "CHAT_RETRIEVAL_MAX_CHUNKS",
         "CHAT_CONTEXT_MAX_CHUNKS",
         "CHAT_RERANK_SCORE_THRESHOLD",
@@ -25,7 +24,6 @@ def test_new_settings_have_sane_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     fresh = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert fresh.BACKEND_JAVA_BASE_URL == "http://localhost:8401/api/v1"
-    assert fresh.CHAT_CLARIFICATION_MAX_RETRY == 2
     assert fresh.CHAT_RETRIEVAL_MAX_CHUNKS == 16
     assert fresh.CHAT_CONTEXT_MAX_CHUNKS == 8
     assert fresh.CHAT_LLM_RERANK_RESCUE_MIN_SCORE == 0.75
@@ -34,12 +32,10 @@ def test_new_settings_have_sane_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_settings_load_overrides_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CHAT_CLARIFICATION_MAX_RETRY", "5")
     monkeypatch.setenv("CHAT_RERANK_SCORE_THRESHOLD", "0.5")
 
     fresh = Settings()
 
-    assert fresh.CHAT_CLARIFICATION_MAX_RETRY == 5
     assert fresh.CHAT_RERANK_SCORE_THRESHOLD == 0.5
 
 

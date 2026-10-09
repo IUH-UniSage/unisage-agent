@@ -6,9 +6,10 @@ from typing import Any
 from pydantic_ai.models import Model
 
 from app.core.registry.model_registry import CredentialConfig
+from app.graph.clarification_answers import NormalizedAnswer
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification, PendingRound
+from app.schemas.clarification import PendingRound
 from app.schemas.security import AcademicSecurityContext
 
 
@@ -35,6 +36,12 @@ class GraphModels:
     rerank_unavailable: str | None = None
 
 
+@dataclass(frozen=True)
+class ResumeInput:
+    pending_round: PendingRound
+    answers: dict[str, NormalizedAnswer]
+
+
 @dataclass
 class GraphInput:
     conversation_id: str
@@ -42,9 +49,9 @@ class GraphInput:
     is_first_turn: bool
     security: AcademicSecurityContext
     confirmed_metadata: dict[str, str] = field(default_factory=dict)
-    pending_clarification: PendingClarification | None = None
-    clarification_max_retry: int = 2
     history: list[HistoryMessage] = field(default_factory=list)
+    # Set on a panel-submit turn: the claimed round and its validated answers.
+    resume: ResumeInput | None = None
 
 
 @dataclass(frozen=True)
@@ -57,7 +64,6 @@ class AdminWarning:
 class GraphOutput:
     response_text: str
     confirmed_metadata: dict[str, str] = field(default_factory=dict)
-    pending_clarification: PendingClarification | None = None
     used_ticket_fallback: bool = False
     used_web_search: bool = False
     # Things an AI admin should fix that did not stop the turn (web search or the

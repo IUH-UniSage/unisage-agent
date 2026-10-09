@@ -119,7 +119,7 @@ class ConversationClarificationState(Base):
     is Python's own internal processing state, not chat history, and lives
     in Python's own schema/database by design (see tasks/plan.md).
 
-    `pending_clarification` holds a `PendingClarification`-shaped JSON object
+    `pending_clarification` holds a `PendingRound`-shaped JSON object
     (see `app/schemas/clarification.py`) or `None` when nothing is pending.
     `confirmed_metadata` accumulates self-declared student attributes across
     the whole conversation and never expires on its own - it is only ever
