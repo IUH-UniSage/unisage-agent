@@ -376,3 +376,13 @@ on genuinely independent (non-comparison) questions - if this turns out to
 be common, the HyDE fallback would need its own multi-question handling
 instead of treating the merged text as one question.
 
+
+### Target solver assumes a monotonic regulation formula on large domains
+
+`solver.py` tries every value of a score/credit unknown (≤ 2000 points), which
+is exact. A regulation variable with a wide range (money) is bisected instead,
+which assumes the result moves one way with the unknown; both ends are checked
+first, but a formula with `min(...)`/`max(...)` that is flat or turns inside the
+range could return a non-minimal value. Not seen in current regulation formulas.
+GPA cannot be solved yet (its input is a course table, not a scalar) - such a
+question gets the fixed `target_unsupported` sentence.

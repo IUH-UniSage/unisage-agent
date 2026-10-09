@@ -384,6 +384,23 @@ user hoặc guest giống `startTurn`)
 Admin điều tra trong màn `support-tickets` hiện có, lọc theo type `AI_CALCULATION_WRONG`. Trace đầy đủ nằm
 trong `description`, nên không cần màn hình mới, và staff chỉ thấy trace qua quyền xem ticket sẵn có.
 
+## 8. Câu hỏi ngược và phép tính trước
+
+- Extractor trả thêm `solve: {unknowns, goal: {grade} | {comparator, value}, want}`; `unknowns` không
+  bao giờ nằm trong `params` và không bao giờ bị hỏi trên panel. `CalculationPlan.solve` được lưu trong
+  round nên lượt submit giải tiếp mà không gọi LLM.
+- Công thức cài sẵn: ẩn phải có `solve_step`, sai → `Unresolved("target_unsupported")` (câu cố định).
+  Công thức Qdrant: formula agent ghi `unknowns` (tên biến đã khai báo), extractor không biết tên biến
+  thì để `[]`; ẩn không khai báo hoặc mục tiêu điểm chữ → `target_unsupported`.
+- `last_calculation` (cột JSON trên `conversation_clarification_states`, migration `a4b5c6d7e8f9`): phép
+  tính `Computed` cuối cùng của lượt (bỏ `solve`), ghi cùng lúc với `confirmed_metadata`; lượt không có
+  phép tính thì giữ nguyên. Lượt sau đưa nó vào prompt extractor (`<previous_calculation>`) và thêm
+  `previous` vào `<allowed_formula_ids>` (router không được ép công thức khác). `formula_id="previous"`
+  → gộp `params` cũ với số mới; công thức Qdrant dùng lại plan đã kiểm tra, **không** retrieve lại.
+- Router: thêm trigger `(cuối|giữa) kỳ ... bao nhiêu điểm/thì/để`, `cần/phải thi/đạt bao nhiêu điểm`,
+  `qua môn` cho `course_score`; classifier coi câu hỏi ngược là `academic_calculation`.
+- Trace staff có thêm `solve`.
+
 ## Commands
 
 ```

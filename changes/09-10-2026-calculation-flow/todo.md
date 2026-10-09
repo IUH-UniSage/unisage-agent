@@ -449,3 +449,6 @@ mutation qua `httpClient`, cập nhật cache của messages, trạng thái đ�
 - [x] Làm tròn TBtx, ĐLT, ĐTH đến 0.1 trước khi bước sau dùng; ĐTKHP làm tròn 0.1 ở cuối; snapshot cập nhật
 - [x] Bỏ giới hạn 12 tab mỗi panel (chỉ chặn ở 50) và bỏ giới hạn 3 panel liên tiếp; chống hỏi vòng nhờ `confirmed_metadata`
 - [x] Chuyển kiểm tra kích thước body của endpoint phản hồi Đúng/Sai từ controller vào service (backend)
+- [x] Câu hỏi ngược "cần bao nhiêu điểm để được A+": `solver.py` (chạy lại công thức xuôi) + `target.py`, dùng chung cho công thức cài sẵn và Qdrant; hai ẩn → mức bằng nhau + bảng đánh đổi
+- [x] Lưu `last_calculation` (migration `a4b5c6d7e8f9`) để câu nối tiếp dùng lại số đã nhập (`formula_id = "previous"`)
+- [x] Router + classifier nhận câu hỏi ngược là `academic_calculation` / `course_score`

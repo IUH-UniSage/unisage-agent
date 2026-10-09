@@ -109,6 +109,25 @@ Chủ sản phẩm yêu cầu cần bao nhiêu thì hỏi hết. Không thể h�
 dựng (hữu hạn), thuộc tính advisory đã trả lời nằm trong `confirmed_metadata` và không bao giờ bị hỏi
 lại, và mỗi panel đều cần sinh viên tự trả lời. Server chỉ chặn ở 50 câu để từ chối payload bất thường.
 
+### Vì sao câu hỏi "cần bao nhiêu điểm để được A+" do Python giải, và công thức vẫn hardcode?
+
+LLM không đảo ngược được công thức có nhiều bước làm tròn: với TX 9·8·7, GK 9, TH 6·9·9 (3+1 TC),
+LLM tính ra "CK 9.4" nhưng thực tế CK 9.5 chỉ cho ĐTKHP 8.8, phải thi từ 9.75 (làm tròn thành 10) mới
+được 9.0. `app/calculation/solver.py` không biết công thức nào: nó chạy lại **công thức xuôi** cho từng
+giá trị của biến cần tìm (bước 0.5 cho điểm thành phần, 1 cho tín chỉ, chia đôi cho số tiền), nên đúng
+với mọi quy tắc làm tròn, và dùng chung cho công thức cài sẵn lẫn công thức Qdrant đã qua 7 kiểm tra.
+LLM chỉ chỉ ra biến cần tìm và mục tiêu. Hai ẩn (GK và CK) → mức khi hai cột bằng nhau + bảng đánh đổi
+ngắn.
+
+Công thức xuôi vẫn hardcode trong `formulas.py`: không có văn bản quy chế chứa công thức ngược (và hiện
+chưa có văn bản gốc của 3 công thức), nên tự soạn tài liệu để ingest chỉ là hardcode ở chỗ khó kiểm
+soát hơn và còn có thể trượt 7 kiểm tra. Khi có văn bản quy chế chính thức thì ingest để trích dẫn và
+đối chiếu hệ số, nhưng 3 công thức vẫn ở trong code.
+
+Phép tính gần nhất của hội thoại được lưu (`last_calculation`) để câu nối tiếp như "thế cuối kỳ cần
+bao nhiêu để được A+" dùng lại số đã nhập - chỉ khi extractor chọn rõ `formula_id = "previous"`, để
+một phép tính mới cùng công thức không âm thầm thừa hưởng số cũ.
+
 ### Vì sao logic `/chat/stream` nằm trong service?
 
 Controller chỉ đọc HTTP request và trả về stream của `ChatStreamService`; chặn panel, claim, gọi Java

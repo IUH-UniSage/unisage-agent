@@ -230,6 +230,24 @@ dạng ký hiệu, biểu thức đã thế số, rồi kết quả. Với phép
 bước mẫu số. `validate(formula)` được tách riêng để `calculation-node` gọi trước khi hỏi người dùng
 bất cứ điều gì.
 
+## `solver.py` + `target.py`: câu hỏi ngược ("cần bao nhiêu để ...") {#solver}
+
+- `solve(forward, Domain(min, max, step), Goal(">=" | "<=", value), want="min" | "max")`: thử lần lượt
+  mọi giá trị của biến (≤ 2000 điểm), miền lớn hơn (tiền) thì chia đôi giả định đơn điệu (kiểm tra hai
+  đầu trước). Trả giá trị tốt nhất, giá trị liền kề **không** đạt (để chứng minh đó là mức tối thiểu),
+  hoặc đầu miền tốt nhất khi không đạt được. `forward` trả `None` = giá trị đó không tính được.
+- `forward` luôn là công thức xuôi (`compute(params).primary_value`), nên mọi bước làm tròn được giữ.
+- Miền: `ParamSpec.solve_step` (GK/CK bước 0.5, `half_point=True`; TBtx bước 0.1; tín chỉ bước 1);
+  biến Qdrant: `min/max` đã khai báo (thiếu `max` → 10^9), bước 1 nếu đơn vị là TC/tín/môn, còn lại 0.01.
+- Mục tiêu điểm chữ chỉ nhận cho công thức có `target_is_score10` (ĐTKHP): A+ → `ĐTKHP ≥ 9.0`.
+- Một ẩn: bước thay số đầy đủ với giá trị tìm được + dòng "Mức liền kề" + một dòng kết quả, VD
+  `Cần CK tối thiểu **10.0** (điểm từ 9.75 trở lên được làm tròn thành 10.0) để ĐTKHP ≥ 9.0 (A+).`
+  Không đạt được → nêu kết quả tốt nhất; đã đạt với 0 → "bạn đã chắc chắn đạt".
+- Hai ẩn: mức khi hai ẩn bằng nhau + bảng đánh đổi ≤ 5 dòng (chỉ trong khoảng còn đạt được), render
+  thành bảng markdown (`CalculationResult.table`).
+- `CalculationResult.primary_value`: con số chính (ĐTKHP, GPA, kết quả công thức quy chế) ở độ chính
+  xác đầy đủ - thứ solver so với mục tiêu.
+
 ## Code Style
 
 Theo `AGENTS.md`: Python 3.12, type hint đầy đủ, dataclass frozen, không thêm abstraction (không
