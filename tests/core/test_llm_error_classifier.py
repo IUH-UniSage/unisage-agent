@@ -25,6 +25,7 @@ from app.core.errors.llm_error_classifier import (
     GoogleQuotaWindow,
     classify_llm_error,
     google_rate_limit,
+    is_model_wide_failure,
     is_quota_exhausted,
     zai_error_code,
 )
@@ -340,3 +341,35 @@ class TestZai:
     )
     def test_zai_error_code(self, source: object, expected: str | None) -> None:
         assert zai_error_code(source) == expected
+
+
+# ── is_model_wide_failure ───────────────────────────────────────────────────
+
+
+def _status_error(status: int) -> ModelHTTPError:
+    return ModelHTTPError(status_code=status, model_name="gemini-3.1-flash-lite-preview", body={})
+
+
+@pytest.mark.parametrize("status", [500, 503, 504])
+def test_server_errors_are_model_wide(status: int) -> None:
+    assert is_model_wide_failure(_status_error(status))
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 429])
+def test_client_errors_are_not_model_wide(status: int) -> None:
+    assert not is_model_wide_failure(_status_error(status))
+
+
+def test_timeouts_and_connection_errors_are_model_wide() -> None:
+    assert is_model_wide_failure(TimeoutError())
+    assert is_model_wide_failure(ModelAPIError(model_name="m", message="ReadTimeout"))
+
+
+def test_a_wrapped_timeout_is_model_wide() -> None:
+    wrapper = RuntimeError("wrapped")
+    wrapper.__cause__ = TimeoutError()
+    assert is_model_wide_failure(wrapper)
+
+
+def test_an_unrelated_error_is_not_model_wide() -> None:
+    assert not is_model_wide_failure(ValueError("bug"))

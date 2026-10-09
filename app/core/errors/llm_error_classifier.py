@@ -28,7 +28,7 @@ from typing import Any
 import google.genai.errors as google_errors
 import httpx
 import openai
-from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.security.ssrf_guard import SsrfBlockedError
@@ -277,3 +277,29 @@ def classify_llm_error(exc: Exception) -> ErrorType:
     # No HTTP status: a connection error/timeout (openai `APIConnectionError`, PydanticAI
     # `ModelAPIError`, ...) or something unrecognized - both fail open toward retrying.
     return ErrorType.TRANSIENT
+
+
+def is_model_wide_failure(exc: BaseException) -> bool:
+    """`True` for a failure that says the provider's MODEL is struggling (5xx, timeout,
+    connection error) rather than one credential (429, 401, ...) - every other key on the
+    same model would most likely fail the same way, so trying them one by one only adds
+    latency. Follows `__cause__` so a wrapped timeout still counts."""
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status_code = provider_status_code(current)
+        if status_code is not None:
+            return status_code >= 500
+        if isinstance(
+            current,
+            TimeoutError
+            | httpx.TimeoutException
+            | httpx.TransportError
+            | openai.APIConnectionError
+            | ModelAPIError,
+        ):
+            return True
+        current = current.__cause__
+    return False

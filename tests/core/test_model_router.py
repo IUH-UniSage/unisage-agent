@@ -43,14 +43,19 @@ def _reset_cached_snapshot() -> Any:
 
 
 def _credential(
-    *, id: str, revision: int = 1, priority: int | None = 1, api_key: str = "sk-secret"
+    *,
+    id: str,
+    revision: int = 1,
+    priority: int | None = 1,
+    api_key: str = "sk-secret",
+    model_name: str = "gpt-4o-mini",
 ) -> CredentialConfig:
     return CredentialConfig(
         id=id,
         revision=revision,
         source_type="CLOUD_API",
         provider="openai",
-        model_name="gpt-4o-mini",
+        model_name=model_name,
         api_base_url="https://api.openai.com/v1",
         priority=priority,
         max_rpm=None,
@@ -86,17 +91,22 @@ class _Clock:
 
 
 class FakeAsyncRedis:
-    """Minimal stand-in for `redis.asyncio.Redis` — only `set`/`exists`/`aclose`, the
-    three methods `ModelRouter` calls. TTL is evaluated against an injected `_Clock`
-    instead of wall-clock time."""
+    """Minimal stand-in for `redis.asyncio.Redis` — only `set`/`exists`/`get`/`aclose`, the
+    methods `ModelRouter` calls. TTL is evaluated against an injected `_Clock` instead of
+    wall-clock time."""
 
     def __init__(self, clock: _Clock) -> None:
         self._clock = clock
         self._expiry: dict[str, float] = {}
+        self._values: dict[str, Any] = {}
 
     async def set(self, name: str, value: Any, *, ex: int | None = None) -> Any:
         self._expiry[name] = self._clock.now + float(ex) if ex is not None else float("inf")
+        self._values[name] = value
         return True
+
+    async def get(self, name: str) -> Any:
+        return self._values.get(name) if await self.exists(name) else None
 
     async def exists(self, name: str) -> int:
         expiry = self._expiry.get(name)
@@ -161,6 +171,15 @@ def _rate_limit_error_with_retry_after(seconds: str) -> openai.RateLimitError:
         429, request=request, json={"error": body}, headers={"Retry-After": seconds}
     )
     return openai.RateLimitError("rate limited", response=response, body=body)
+
+
+def _server_overloaded_error() -> openai.InternalServerError:
+    """A 503 - the model itself is struggling, not one key."""
+
+    request = httpx2.Request("POST", "https://api.openai.com/v1/chat/completions")
+    body = {"message": "high demand", "type": "server_error", "code": None}
+    response = httpx2.Response(503, request=request, json={"error": body})
+    return openai.InternalServerError("high demand", response=response, body=body)
 
 
 def _permanent_error() -> openai.AuthenticationError:
@@ -564,9 +583,13 @@ async def test_suspension_reasons_survive_redis_outage_via_in_memory_state() -> 
 async def test_unknown_reason_markers_are_ignored() -> None:
     """A fake without `get` (or a pre-existing "1" marker) just means "reason unknown"."""
 
+    class _NoGetRedis(FakeAsyncRedis):
+        async def get(self, name: str) -> Any:
+            raise AttributeError("get")
+
     cred_a = _credential(id="a")
     _set_snapshot(version=1, chat=(cred_a,))
-    router, _ = _router(clock=_Clock())
+    router, _ = _router(redis_client=_NoGetRedis(_Clock()))
 
     await router.record_failure(cred_a, _permanent_error(), snapshot_version=1)
 
@@ -732,4 +755,116 @@ async def test_zai_concurrency_429_cools_down_only_a_few_seconds() -> None:
     clock.advance(4.0)
     assert (await router.get_next_credential("CHAT")).id == "b"
     clock.advance(2.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+# ── model-level circuit: 5xx/timeouts across credentials skip the whole model ──
+
+
+async def _fail(router: ModelRouter, credential: CredentialConfig, exc: Exception) -> None:
+    await router.record_failure(credential, exc, snapshot_version=1, purpose="CHAT")
+
+
+@pytest.mark.asyncio
+async def test_two_credentials_of_one_model_failing_skips_the_model() -> None:
+    cred_a = _credential(id="a", priority=1, model_name="flash-preview")
+    cred_b = _credential(id="b", priority=2, model_name="flash-preview")
+    cred_c = _credential(id="c", priority=3, model_name="flash-stable")
+    _set_snapshot(version=1, chat=(cred_a, cred_b, cred_c))
+    clock = _Clock()
+    router, _backend = _router(clock=clock)
+
+    await _fail(router, cred_a, _server_overloaded_error())
+    assert (await router.get_next_credential("CHAT")).id == "b"
+    await _fail(router, cred_b, _server_overloaded_error())
+    assert (await router.get_next_credential("CHAT")).id == "c"
+
+
+@pytest.mark.asyncio
+async def test_one_credential_failing_does_not_skip_its_model() -> None:
+    cred_a = _credential(id="a", priority=1, model_name="flash-preview")
+    cred_b = _credential(id="b", priority=2, model_name="flash-preview")
+    cred_c = _credential(id="c", priority=3, model_name="flash-stable")
+    _set_snapshot(version=1, chat=(cred_a, cred_b, cred_c))
+    router, _backend = _router(clock=_Clock())
+
+    await _fail(router, cred_a, _server_overloaded_error())
+
+    assert (await router.get_next_credential("CHAT")).id == "b"
+
+
+@pytest.mark.asyncio
+async def test_rate_limits_never_skip_the_model() -> None:
+    cred_a = _credential(id="a", priority=1, model_name="flash-preview")
+    cred_b = _credential(id="b", priority=2, model_name="flash-preview")
+    cred_c = _credential(id="c", priority=3, model_name="flash-stable")
+    _set_snapshot(version=1, chat=(cred_a, cred_b, cred_c))
+    clock = _Clock()
+    router, _backend = _router(clock=clock)
+
+    await _fail(router, cred_a, _rate_limit_error_with_retry_after("5"))
+    await _fail(router, cred_b, _rate_limit_error_with_retry_after("5"))
+    clock.advance(6.0)
+
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+@pytest.mark.asyncio
+async def test_model_skip_doubles_when_the_first_call_after_it_fails_again() -> None:
+    cred_a = _credential(id="a", priority=1, model_name="flash-preview")
+    cred_b = _credential(id="b", priority=2, model_name="flash-preview")
+    cred_c = _credential(id="c", priority=3, model_name="flash-stable")
+    _set_snapshot(version=1, chat=(cred_a, cred_b, cred_c))
+    clock = _Clock()
+    router, _backend = _router(clock=clock)
+    await _fail(router, cred_a, _server_overloaded_error())
+    await _fail(router, cred_b, _server_overloaded_error())
+
+    # Past both the 30s credential cooldown and the 30s model skip: the model gets a try.
+    clock.advance(31.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+    await _fail(router, cred_a, _server_overloaded_error())
+
+    # That one failure re-opens it, now for 60s.
+    clock.advance(31.0)
+    assert (await router.get_next_credential("CHAT")).id == "c"
+    clock.advance(30.0)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+@pytest.mark.asyncio
+async def test_model_skip_is_capped() -> None:
+    cred_a = _credential(id="a", priority=1, model_name="flash-preview")
+    cred_b = _credential(id="b", priority=2, model_name="flash-preview")
+    cred_c = _credential(id="c", priority=3, model_name="flash-stable")
+    _set_snapshot(version=1, chat=(cred_a, cred_b, cred_c))
+    clock = _Clock()
+    router, _backend = _router(clock=clock)
+    await _fail(router, cred_a, _server_overloaded_error())
+    await _fail(router, cred_b, _server_overloaded_error())
+
+    for _ in range(6):
+        clock.advance(model_router._MODEL_COOLDOWN_MAX_SECONDS + 1)
+        assert (await router.get_next_credential("CHAT")).id == "a"
+        await _fail(router, cred_a, _server_overloaded_error())
+
+    clock.advance(model_router._MODEL_COOLDOWN_MAX_SECONDS + 1)
+    assert (await router.get_next_credential("CHAT")).id == "a"
+
+
+@pytest.mark.asyncio
+async def test_skipped_model_is_still_used_when_no_other_model_is_left() -> None:
+    cred_a = _credential(id="a", priority=1, model_name="flash-preview")
+    cred_b = _credential(id="b", priority=2, model_name="flash-preview")
+    _set_snapshot(version=1, chat=(cred_a, cred_b))
+    clock = _Clock()
+    backend = FakeBackendClient()
+    router = ModelRouter(
+        redis_client=FakeAsyncRedis(clock), backend_client=backend, default_cooldown_seconds=5
+    )
+    await _fail(router, cred_a, _server_overloaded_error())
+    await _fail(router, cred_b, _server_overloaded_error())
+
+    clock.advance(6.0)  # credentials usable again, model still skipped
+
     assert (await router.get_next_credential("CHAT")).id == "a"

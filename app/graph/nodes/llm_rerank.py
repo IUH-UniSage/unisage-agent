@@ -65,7 +65,7 @@ def build_llm_rerank_agent(model: Model | str) -> Agent[None, str]:
     return Agent(
         model=model,
         system_prompt=get_templates().agent_reranker_compressor,
-        model_settings=auxiliary_model_settings(),
+        model_settings=auxiliary_model_settings(model),
     )
 
 
@@ -97,6 +97,7 @@ async def llm_rerank(
             agent_factory=build_llm_rerank_agent,
             on_attempt=on_attempt,
             budget=budget,
+            timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
         )
         relevant = _parse_relevance(
             output, sub_query_count=len(questions), chunk_count=len(candidates)
