@@ -3,18 +3,35 @@
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from app.calculation.formulas import param_spec
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.calculation_turn import NEEDS_INPUT_LEAD
+from app.graph.clarification_answers import validate_answers
+from app.graph.clarification_round import (
+    TaskQuestions,
+    advisory_questions,
+    advisory_task,
+    build_round,
+)
+from app.graph.nodes.calculation import question_for
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
-from app.graph.streaming_state import GraphInput, GraphModels
+from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
+from app.schemas.clarification import (
+    Answer,
+    CalculationPlan,
+    ClarificationSubmit,
+    PendingCalculationTask,
+)
+from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from tests.llm_mocks import RetrieveManyMixin, make_classification_llm_model
@@ -407,3 +424,109 @@ async def test_mixed_turn_without_context_still_shows_the_calculation_first(
     assert result.used_ticket_fallback is True
     assert result.response_text.startswith(NEEDS_INPUT_LEAD)
     assert "chưa tìm thấy" in result.response_text.lower()
+
+
+def _resume_round(*, chain_depth: int = 1, with_advisory: bool = False) -> ResumeInput:
+    calc_task = PendingCalculationTask(
+        task_id="T1",
+        query=_COURSE_QUERY,
+        plan=CalculationPlan(formula_id="course_score"),
+        known_params={"tclt": 2, "tcth": 1, "tbtx": 8, "gk": 7, "ck": 6.5},
+    )
+    parts = [
+        TaskQuestions(
+            task=calc_task,
+            questions=[question_for(param_spec("course_score", "th"))],  # type: ignore[arg-type]
+        )
+    ]
+    if with_advisory:
+        parts.append(
+            TaskQuestions(
+                task=advisory_task(
+                    "T2",
+                    [
+                        ClassifiedTask(
+                            intent="academic_advisory", query=_ADVISORY_QUERY, routing_mode="SINGLE"
+                        )
+                    ],
+                ),
+                questions=advisory_questions(
+                    [json.loads(_ASK_FORM_ANSWER.split("```json\n")[1].split("\n```")[0])],
+                    confirmed_metadata={},
+                ),
+            )
+        )
+    pending = build_round(parts, original_query=_ADVISORY_QUERY, chain_depth=chain_depth)
+    assert pending is not None
+    answers = [Answer(question_id="q1", numbers=[Decimal("9"), Decimal("8")])]
+    if with_advisory:
+        answers.append(Answer(question_id="q2", option_id="chinh_quy"))
+    submit = ClarificationSubmit(action="submit", panel_id=pending.panel.panel_id, answers=answers)
+    return ResumeInput(pending_round=pending, answers=validate_answers(pending.panel, submit))
+
+
+@pytest.mark.asyncio
+async def test_resume_mixed_round_computes_then_answers_the_advisory_question(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    retrieval = _RecordingRetrieval([_CHUNK])
+    models = GraphModels(
+        classification=_scripted(),  # any classification/extractor call would fail
+        query_transformation=_echo_model(),
+        generation=mock_streaming_llm_model(["Thủ tục hệ chính quy gồm 3 bước [1]."]),
+        retrieval=retrieval,
+    )
+    tokens: list[str] = []
+    result = await run_graph(
+        _input("x", resume=_resume_round(with_advisory=True)),
+        models,
+        _sink(tokens),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert "ĐTKHP **7.5**" in tokens[0]  # calculation block first
+    assert result.response_text.endswith("Thủ tục hệ chính quy gồm 3 bước [1].")
+    assert result.confirmed_metadata == {"training_type": "chinh_quy"}
+    (query,) = retrieval.queries
+    assert query.startswith(_ADVISORY_QUERY)
+    assert result.pending_round is None
+
+
+@pytest.mark.asyncio
+async def test_resume_with_a_still_invalid_answer_chains_until_the_limit() -> None:
+    models = GraphModels(
+        classification=_scripted(),
+        query_transformation=_echo_model(),
+        generation=_note_model("unused"),
+        retrieval=_RecordingRetrieval([]),
+    )
+    # TCLT + TCTH = 0 is only caught when computing: ask again (depth 2)...
+    resume = _resume_round()
+    task = resume.pending_round.tasks[0]
+    assert isinstance(task, PendingCalculationTask)
+    broken = task.model_copy(update={"known_params": {**task.known_params, "tclt": 0, "tcth": 0}})
+    pending = resume.pending_round.model_copy(update={"tasks": [broken]})
+    result = await run_graph(
+        _input("x", resume=ResumeInput(pending_round=pending, answers=resume.answers)),
+        models,
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert result.pending_round is not None and result.pending_round.chain_depth == 2
+    assert result.pending_round.panel.questions[0].field == "tclt"
+
+    # ...but never a fourth panel in a row.
+    last = pending.model_copy(update={"chain_depth": 3})
+    tokens: list[str] = []
+    final = await run_graph(
+        _input("x", resume=ResumeInput(pending_round=last, answers=resume.answers)),
+        models,
+        _sink(tokens),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert final.pending_round is None
+    assert "Mình vẫn chưa có đủ thông tin về" in final.response_text
