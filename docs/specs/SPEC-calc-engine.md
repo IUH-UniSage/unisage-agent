@@ -45,6 +45,10 @@ khai báo trong `formulas.py`. Các file khác import từ đó.
   để tránh sai số float. Không dùng `float` ở bất kỳ bước nào.
 - **Làm tròn:** dùng `round_half_up(x, places)` = `x.quantize(Decimal(10) ** -places, ROUND_HALF_UP)`.
   Không dùng `round()` của Python, vì nó làm tròn kiểu banker (`round(7.45, 1) == 7.4`).
+- **Làm tròn điểm thành phần (quy chế, đã chốt 09-10-2026):** mỗi điểm sinh viên nhập cho từng cột TX,
+  GK, CK, từng cột TH được làm tròn đến 0.5 trước tiên (`round_to_half_point`); dòng "Làm tròn điểm
+  thành phần" chỉ hiện khi có điểm bị đổi. TBtx sinh viên nhập sẵn là giá trị trung bình, không làm tròn
+  0.5.
 - **Thời điểm làm tròn (đã chốt 09-10-2026):** trong `course_score`, **TBtx, ĐLT và ĐTH đều làm tròn
   đến 0.1 trước khi bước sau dùng tới** (`COMPONENT_PLACES`), rồi ĐTKHP làm tròn 0.1 ở cuối. GPA làm
   tròn 2 chữ số ở cuối; tổng điểm chất lượng giữ nguyên. Dòng thay số ghi rõ bước làm tròn, ví dụ
@@ -79,6 +83,7 @@ khe hở giữa hai mức (8.95 → 9.0 → A+).
 ### `course_score(tbtx, gk, ck, th, tclt, tcth)`: ĐTKHP học phần tích hợp
 
 ```
+TXi, GK, CK, THi = round_to_half_point(điểm sinh viên nhập)   (lẻ < 0.25 → .0; 0.25..< 0.75 → .5; ≥ 0.75 → 1)
 TBtx  = round_half_up((TX1 + … + TXn) / n, 1)               (từng cột, trọng số như nhau, 1 ≤ n ≤ 20)
       | round_half_up(TBtx sinh viên nhập sẵn, 1)           (sinh viên chọn 1 trong 2 cách nhập)
 ĐLT   = round_half_up(0.2 × TBtx + 0.3 × GK + 0.5 × CK, 1)  (chỉ khi TCLT > 0)

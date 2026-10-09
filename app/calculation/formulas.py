@@ -26,6 +26,10 @@ PRACTICE_SCORES_MAX = 20
 COURSE_SCORE_PLACES = 1
 # TBtx, ĐLT and ĐTH are rounded to this before the next step uses them.
 COMPONENT_PLACES = 1
+# Recorded component scores (each TX/TH column, GK, CK) are rounded to the half
+# point first (quy chế): fraction < 0.25 -> .0, 0.25..< 0.75 -> .5, >= 0.75 -> 1.
+HALF_POINT_LOW = Decimal("0.25")
+HALF_POINT_HIGH = Decimal("0.75")
 GPA_PLACES = 2
 DISPLAY_PLACES = 2
 
@@ -66,6 +70,16 @@ GRADE_SCALE: tuple[GradeBand, ...] = (
 # ---------------------------------------------------------------------------
 # Numbers and display
 # ---------------------------------------------------------------------------
+
+
+def round_to_half_point(value: Decimal) -> Decimal:
+    whole = value.to_integral_value(rounding="ROUND_FLOOR")
+    fraction = value - whole
+    if fraction < HALF_POINT_LOW:
+        return whole
+    if fraction < HALF_POINT_HIGH:
+        return whole + Decimal("0.5")
+    return whole + 1
 
 
 def round_half_up(value: Decimal, places: int) -> Decimal:
@@ -256,6 +270,8 @@ def grade_conversion(params: Mapping[str, object]) -> CalculationResult:
 # ---------------------------------------------------------------------------
 
 COURSE_SCORE_FORMULA_TEXT = (
+    "Điểm từng cột TX, GK, CK, TH làm tròn đến 0.5 (lẻ dưới 0.25 → 0; từ 0.25 đến dưới 0.75 → 0.5;"
+    " từ 0.75 → 1)",
     "TBtx = (TX1 + TX2 + … + TXn) / n, làm tròn đến 0.1 (hoặc TBtx bạn nhập sẵn)",
     f"ĐLT = 20% {TIMES} TBtx + 30% {TIMES} GK + 50% {TIMES} CK, làm tròn đến 0.1",
     "ĐTH = (TH1 + TH2 + … + THn) / n, làm tròn đến 0.1",
@@ -298,8 +314,9 @@ def _mean_line(symbol: str, scores: list[Decimal]) -> tuple[Decimal, str]:
 
 
 def course_score(params: Mapping[str, object]) -> CalculationResult:
-    """ĐTKHP of a theory + practice course. TBtx, ĐLT and ĐTH are each rounded to 0.1
-    before the next step uses them; ĐTKHP is rounded to 0.1 at the end. `tbtx` is
+    """ĐTKHP of a theory + practice course. Each recorded component score (TX/TH
+    column, GK, CK) is first rounded to the half point; TBtx, ĐLT and ĐTH are each
+    rounded to 0.1 before the next step uses them; ĐTKHP is rounded to 0.1 at the end. `tbtx` is
     either the student's own average or the list of TX columns (equal weights)."""
 
     errors: list[FieldError] = []
@@ -356,6 +373,32 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
         ("Tín chỉ thực hành", str(tcth)),
     ]
 
+    # Half-point rounding of the recorded component scores, shown only if it changes one.
+    changes: list[str] = []
+
+    def half(label: str, value: Decimal) -> Decimal:
+        rounded = round_to_half_point(value)
+        if rounded != value:
+            changes.append(f"{label} {plain(value)} → {fixed(rounded, 1)}")
+        return rounded
+
+    if tx_columns is not None:
+        tx_columns = [half(f"TX{i}", v) for i, v in enumerate(tx_columns, start=1)]
+    theory = {field: half(field.upper(), value) for field, value in theory.items()}
+    if practice is not None:
+        practice = [half(f"TH{i}", v) for i, v in enumerate(practice, start=1)]
+    if changes:
+        steps.append(
+            Step(
+                label="Làm tròn điểm thành phần",
+                symbolic=COURSE_SCORE_FORMULA_TEXT[0],
+                substituted="; ".join(changes),
+                value=Decimal(0),
+                display="",
+                note="làm tròn đến 0.5",
+            )
+        )
+
     dlt = Decimal(0)
     if tclt:
         if tx_columns is not None:
@@ -371,7 +414,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
         steps.append(
             Step(
                 label="Điểm thường xuyên",
-                symbolic=COURSE_SCORE_FORMULA_TEXT[0],
+                symbolic=COURSE_SCORE_FORMULA_TEXT[1],
                 substituted=line,
                 value=tbtx,
                 display=fixed(tbtx, 1),
@@ -385,7 +428,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
         steps.append(
             Step(
                 label="Điểm lý thuyết",
-                symbolic=COURSE_SCORE_FORMULA_TEXT[1],
+                symbolic=COURSE_SCORE_FORMULA_TEXT[2],
                 substituted=(
                     f"ĐLT = {plain(weights.tx)} {TIMES} {fixed(tbtx, 1)}"
                     f" + {plain(weights.gk)} {TIMES} {plain(gk)}"
@@ -406,7 +449,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
         steps.append(
             Step(
                 label="Điểm thực hành",
-                symbolic=COURSE_SCORE_FORMULA_TEXT[2],
+                symbolic=COURSE_SCORE_FORMULA_TEXT[3],
                 substituted=line,
                 value=dth,
                 display=fixed(dth, 1),
@@ -429,7 +472,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
     steps.append(
         Step(
             label="Điểm tổng kết học phần",
-            symbolic=COURSE_SCORE_FORMULA_TEXT[3],
+            symbolic=COURSE_SCORE_FORMULA_TEXT[4],
             substituted=substituted,
             value=final,
             display=fixed(final, 1),

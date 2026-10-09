@@ -97,6 +97,12 @@ Chủ sản phẩm xác nhận (09-10-2026): các cột thường xuyên có tr�
 không biết TBtx, nhưng có người đã có TBtx từ cổng sinh viên - nên câu hỏi `number_or_list` cho chọn
 "Nhập sẵn" hoặc "Nhập từng cột".
 
+### Vì sao điểm thành phần làm tròn 0.5 trước khi tính?
+
+Quy chế ghi điểm quá trình và điểm thi được làm tròn theo nửa điểm (lẻ dưới 0.25 → 0, từ 0.25 đến dưới
+0.75 → 0.5, từ 0.75 → 1). Chủ sản phẩm xác nhận áp dụng (09-10-2026) cho từng điểm sinh viên nhập (cột
+TX, GK, CK, cột TH); các giá trị trung bình (TBtx, ĐLT, ĐTH, ĐTKHP) vẫn làm tròn 0.1.
+
 ### Vì sao panel không giới hạn số câu hỏi hay số panel nối tiếp?
 
 Chủ sản phẩm yêu cầu cần bao nhiêu thì hỏi hết. Không thể hỏi vòng vô hạn: câu hỏi tính toán do code

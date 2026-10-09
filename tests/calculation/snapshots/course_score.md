@@ -1,6 +1,7 @@
 **Điểm tổng kết học phần (lý thuyết + thực hành)**
 
 Công thức:
+- Điểm từng cột TX, GK, CK, TH làm tròn đến 0.5 (lẻ dưới 0.25 → 0; từ 0.25 đến dưới 0.75 → 0.5; từ 0.75 → 1)
 - TBtx = (TX1 + TX2 + … + TXn) / n, làm tròn đến 0.1 (hoặc TBtx bạn nhập sẵn)
 - ĐLT = 20% × TBtx + 30% × GK + 50% × CK, làm tròn đến 0.1
 - ĐTH = (TH1 + TH2 + … + THn) / n, làm tròn đến 0.1

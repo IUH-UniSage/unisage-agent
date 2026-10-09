@@ -37,9 +37,9 @@ def test_round_half_up_is_not_bankers_rounding(value: str, places: int, expected
 
 
 def test_decimal_inputs_avoid_float_drift() -> None:
-    result = course_score({"tbtx": 0.1, "gk": 0.2, "ck": 0.3, "tclt": 1, "tcth": 0})
-    # 0.2*0.1 + 0.3*0.2 + 0.5*0.3 = 0.23 exactly (float math would give 0.22999...) -> 0.2
-    assert result.steps[1].substituted.endswith("= 0.02 + 0.06 + 0.15 = 0.23 → 0.2")
+    result = course_score({"tbtx": 0.1, "gk": 0.5, "ck": 1.5, "tclt": 1, "tcth": 0})
+    # 0.2*0.1 + 0.3*0.5 + 0.5*1.5 = 0.92 exactly (float math drifts) -> 0.9
+    assert result.steps[1].substituted.endswith("= 0.02 + 0.15 + 0.75 = 0.92 → 0.9")
 
 
 @pytest.mark.parametrize(
@@ -154,14 +154,34 @@ def test_bad_tx_columns_are_reported() -> None:
         course_score({"tbtx": [8] * 21, "gk": 7, "ck": 7, "tclt": 1, "tcth": 0})
 
 
-def test_rounding_step_never_looks_wrong() -> None:
-    # Mean 22.34 / 3 = 7.44667: shown as 7.45 it would visibly "round" to 7.5,
-    # but the real value rounds to 7.4 - so the step shows 4 decimals instead.
-    result = course_score({"th": ["7.44", "7.45", "7.45"], "tclt": 0, "tcth": 1})
-    assert dict(result.outputs)["ĐTKHP"] == "7.4"
-    assert (
-        result.steps[0].substituted == "ĐTH = (7.44 + 7.45 + 7.45) / 3 = 22.34 / 3 ≈ 7.4467 → 7.4"
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [("7.24", "7"), ("7.25", "7.5"), ("7.74", "7.5"), ("7.75", "8"), ("9.9", "10"), ("0.1", "0")],
+)
+def test_component_scores_round_to_the_half_point(score: str, expected: str) -> None:
+    assert formulas.round_to_half_point(Decimal(score)) == Decimal(expected)
+
+
+def test_component_rounding_is_shown_and_used() -> None:
+    result = course_score(
+        {"tbtx": [9, 8.3, 7], "gk": 6.3, "ck": 7.8, "th": [6, 9.2, 8.8], "tclt": 3, "tcth": 1}
     )
+    assert result.steps[0].label == "Làm tròn điểm thành phần"
+    assert result.steps[0].substituted == (
+        "TX2 8.3 → 8.5; GK 6.3 → 6.5; CK 7.8 → 8.0; TH2 9.2 → 9.0; TH3 8.8 → 9.0"
+    )
+    assert result.steps[1].substituted == "TBtx = (9 + 8.5 + 7) / 3 = 24.5 / 3 ≈ 8.17 → 8.2"
+    assert dict(result.outputs)["ĐTKHP"] == "7.7"
+
+
+def test_no_rounding_step_when_scores_are_already_half_points() -> None:
+    result = course_score({"tbtx": [8, 7.5], "gk": 7, "ck": 6.5, "tclt": 1, "tcth": 0})
+    assert result.steps[0].label == "Điểm thường xuyên"
+
+
+def test_a_given_tbtx_is_an_average_not_a_component() -> None:
+    result = course_score({"tbtx": "7.35", "gk": 7, "ck": 7, "tclt": 1, "tcth": 0})
+    assert all(step.label != "Làm tròn điểm thành phần" for step in result.steps)
 
 
 def test_before_rounding_falls_back_to_four_decimals() -> None:
