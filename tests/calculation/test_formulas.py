@@ -38,8 +38,8 @@ def test_round_half_up_is_not_bankers_rounding(value: str, places: int, expected
 
 def test_decimal_inputs_avoid_float_drift() -> None:
     result = course_score({"tbtx": 0.1, "gk": 0.2, "ck": 0.3, "tclt": 1, "tcth": 0})
-    # 0.2*0.1 + 0.3*0.2 + 0.5*0.3 = 0.23 exactly - float math would give 0.22999...
-    assert result.steps[0].value == Decimal("0.23")
+    # 0.2*0.1 + 0.3*0.2 + 0.5*0.3 = 0.23 exactly (float math would give 0.22999...) -> 0.2
+    assert result.steps[1].substituted.endswith("= 0.02 + 0.06 + 0.15 = 0.23 → 0.2")
 
 
 @pytest.mark.parametrize(
@@ -107,20 +107,48 @@ def test_course_score_spec_example() -> None:
     assert dict(result.outputs) == {"ĐTKHP": "7.5", "Điểm chữ": "B", "Thang 4": "3.0"}
     labels = [step.label for step in result.steps]
     assert labels == [
+        "Điểm thường xuyên",
         "Điểm lý thuyết",
         "Điểm thực hành",
         "Điểm tổng kết học phần",
-        "Làm tròn",
         "Quy đổi",
     ]
-    assert result.steps[0].substituted == (
-        f"ĐLT = 0.2 {X} 8 + 0.3 {X} 7 + 0.5 {X} 6.5 = 1.6 + 2.1 + 3.25 = 6.95"
+    assert result.steps[0].substituted == "TBtx = 8"
+    # Each component is rounded to 0.1 before the next step uses it.
+    assert result.steps[1].substituted == (
+        f"ĐLT = 0.2 {X} 8.0 + 0.3 {X} 7 + 0.5 {X} 6.5 = 1.6 + 2.1 + 3.25 = 6.95 → 7.0"
     )
-    assert result.steps[1].substituted == "ĐTH = (9 + 8) / 2 = 17 / 2 = 8.5"
-    assert result.steps[2].substituted == (
-        f"ĐTKHP = (6.95 {X} 2 + 8.5 {X} 1) / (2 + 1) = 22.4 / 3 ≈ 7.47"
+    assert result.steps[2].substituted == "ĐTH = (9 + 8) / 2 = 17 / 2 = 8.5"
+    assert result.steps[3].substituted == (
+        f"ĐTKHP = (7.0 {X} 2 + 8.5 {X} 1) / (2 + 1) = 22.5 / 3 = 7.5"
     )
-    assert result.steps[3].substituted == "≈ 7.47 → 7.5"
+
+
+def test_tx_columns_are_averaged_and_every_component_rounded() -> None:
+    result = course_score(
+        {"tbtx": [8, 7, 7], "gk": 7, "ck": 6.5, "th": [9, 8, 8], "tclt": 2, "tcth": 1}
+    )
+    steps = [step.substituted for step in result.steps]
+    assert steps[0] == "TBtx = (8 + 7 + 7) / 3 = 22 / 3 ≈ 7.33 → 7.3"
+    assert steps[1] == (
+        f"ĐLT = 0.2 {X} 7.3 + 0.3 {X} 7 + 0.5 {X} 6.5 = 1.46 + 2.1 + 3.25 = 6.81 → 6.8"
+    )
+    assert steps[2] == "ĐTH = (9 + 8 + 8) / 3 = 25 / 3 ≈ 8.33 → 8.3"
+    assert steps[3] == f"ĐTKHP = (6.8 {X} 2 + 8.3 {X} 1) / (2 + 1) = 21.9 / 3 = 7.3"
+    assert dict(result.outputs) == {"ĐTKHP": "7.3", "Điểm chữ": "B", "Thang 4": "3.0"}
+
+
+def test_a_given_tbtx_is_rounded_too() -> None:
+    result = course_score({"tbtx": "7.35", "gk": 7, "ck": 7, "tclt": 1, "tcth": 0})
+    assert result.steps[0].substituted == "TBtx = 7.35 → 7.4"
+
+
+def test_bad_tx_columns_are_reported() -> None:
+    with pytest.raises(CalculationInputError) as error:
+        course_score({"tbtx": [8, 12], "gk": 7, "ck": 7, "tclt": 1, "tcth": 0})
+    assert _fields(error.value) == {"tbtx"}
+    with pytest.raises(CalculationInputError):
+        course_score({"tbtx": [8] * 21, "gk": 7, "ck": 7, "tclt": 1, "tcth": 0})
 
 
 def test_rounding_step_never_looks_wrong() -> None:
@@ -128,7 +156,9 @@ def test_rounding_step_never_looks_wrong() -> None:
     # but the real value rounds to 7.4 - so the step shows 4 decimals instead.
     result = course_score({"th": ["7.44", "7.45", "7.45"], "tclt": 0, "tcth": 1})
     assert dict(result.outputs)["ĐTKHP"] == "7.4"
-    assert result.steps[-2].substituted == "≈ 7.4467 → 7.4"
+    assert (
+        result.steps[0].substituted == "ĐTH = (7.44 + 7.45 + 7.45) / 3 = 22.34 / 3 ≈ 7.4467 → 7.4"
+    )
 
 
 def test_before_rounding_falls_back_to_four_decimals() -> None:
@@ -141,7 +171,7 @@ def test_before_rounding_falls_back_to_four_decimals() -> None:
 def test_theory_only_course_skips_practice() -> None:
     result = course_score({"tbtx": 8, "gk": 8, "ck": 8, "tclt": 3, "tcth": 0})
     assert dict(result.outputs)["ĐTKHP"] == "8.0"
-    assert "chỉ có lý thuyết" in result.steps[-3].substituted
+    assert "chỉ có lý thuyết" in result.steps[-2].substituted
     assert all(step.label != "Điểm thực hành" for step in result.steps)
 
 
@@ -186,7 +216,8 @@ def test_practice_score_count_is_capped() -> None:
 
 def test_comma_decimal_input_is_accepted() -> None:
     result = course_score({"tbtx": "8,5", "gk": "7", "ck": "6,5", "tclt": 1, "tcth": 0})
-    assert result.steps[0].value == Decimal("7.05")
+    assert result.steps[0].value == Decimal("8.5")
+    assert result.steps[1].substituted.endswith("= 7.05 → 7.1")
 
 
 # --- GPA --------------------------------------------------------------------

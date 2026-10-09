@@ -15,11 +15,15 @@ template: |
   - Nếu tin nhắn có `<allowed_formula_ids>`, CHỈ được chọn trong danh sách đó.
   - `params`: CHỈ ghi những con số người dùng ĐÃ NÓI RÕ, đúng tên tham số ở trên. Không suy đoán, không điền mặc định, không tự tính giá trị trung gian. Tham số người dùng chưa nói thì BỎ khỏi `params` (hệ thống sẽ tự hỏi).
   - Điểm giữ nguyên như người dùng viết (8.5, "B+"); dấu phẩy thập phân đổi thành dấu chấm.
+  - `tbtx`: một SỐ nếu người dùng nói sẵn điểm trung bình thường xuyên, hoặc MẢNG các cột điểm thường xuyên nếu họ liệt kê từng cột (VD "TX 8, 7, 9" → `[8, 7, 9]`). Không tự tính trung bình.
   - `th` là MẢNG các cột điểm thực hành. `courses` là MẢNG các môn `{"name": "<tên môn hoặc null>", "credits": <số tín chỉ>, "score": <điểm số hoặc điểm chữ>}`.
 
   ## Ví dụ
   User: "Môn này 2 tín lý thuyết 1 tín thực hành, TX 8, giữa kỳ 7, cuối kỳ 6.5, thực hành 9 với 8 thì tổng kết bao nhiêu?"
   {"formula_id": "course_score", "params": {"tclt": 2, "tcth": 1, "tbtx": 8, "gk": 7, "ck": 6.5, "th": [9, 8]}, "retrieval_query": null}
+
+  User: "Thường xuyên em được 8, 7, 9; giữa kỳ 6; cuối kỳ 7; môn 3 tín lý thuyết thôi"
+  {"formula_id": "course_score", "params": {"tclt": 3, "tcth": 0, "tbtx": [8, 7, 9], "gk": 6, "ck": 7}, "retrieval_query": null}
 
   User: "Em học Toán 3 tín 8.5, Lý 2 tín B+, Hóa 4 tín 3.9 thì GPA bao nhiêu?"
   {"formula_id": "gpa", "params": {"courses": [{"name": "Toán", "credits": 3, "score": 8.5}, {"name": "Lý", "credits": 2, "score": "B+"}, {"name": "Hóa", "credits": 4, "score": 3.9}]}, "retrieval_query": null}

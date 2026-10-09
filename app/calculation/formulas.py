@@ -24,6 +24,8 @@ COMPONENT_CREDIT_MAX = 10
 PRACTICE_SCORES_MAX = 20
 
 COURSE_SCORE_PLACES = 1
+# TBtx, ĐLT and ĐTH are rounded to this before the next step uses them.
+COMPONENT_PLACES = 1
 GPA_PLACES = 2
 DISPLAY_PLACES = 2
 
@@ -255,13 +257,52 @@ def grade_conversion(params: Mapping[str, object]) -> CalculationResult:
 # ---------------------------------------------------------------------------
 
 COURSE_SCORE_FORMULA_TEXT = (
-    f"ĐLT = 20% {TIMES} TBtx + 30% {TIMES} GK + 50% {TIMES} CK",
-    "ĐTH = (TH1 + TH2 + … + THn) / n",
+    "TBtx = (TX1 + TX2 + … + TXn) / n, làm tròn đến 0.1 (hoặc TBtx bạn nhập sẵn)",
+    f"ĐLT = 20% {TIMES} TBtx + 30% {TIMES} GK + 50% {TIMES} CK, làm tròn đến 0.1",
+    "ĐTH = (TH1 + TH2 + … + THn) / n, làm tròn đến 0.1",
     f"ĐTKHP = (ĐLT {TIMES} TCLT + ĐTH {TIMES} TCTH) / (TCLT + TCTH), làm tròn đến 0.1",
 )
 
 
+def _rounded(raw: Decimal) -> tuple[Decimal, str]:
+    """A component rounded to 0.1 before the next step uses it, and the tail of its
+    substituted line: "= 8.5", or "= 6.95 → 7.0", or "≈ 7.47 → 7.5"."""
+
+    final = round_half_up(raw, COMPONENT_PLACES)
+    if raw == final:
+        return final, f"= {fixed(final, 1)}"
+    shown = before_rounding(raw, final, COMPONENT_PLACES)
+    lead = shown if shown.startswith("≈") else f"= {shown}"
+    return final, f"{lead} → {fixed(final, 1)}"
+
+
+def _scores(
+    value: object, field: str, label: str, errors: list[FieldError]
+) -> list[Decimal] | None:
+    """A non-empty list of 0..10 scores (≤ 20), or None after recording the error."""
+
+    if not isinstance(value, list | tuple) or not value:
+        errors.append(FieldError(field, f"cần ít nhất một cột {label}"))
+        return None
+    if len(value) > PRACTICE_SCORES_MAX:
+        errors.append(FieldError(field, f"tối đa {PRACTICE_SCORES_MAX} cột {label}"))
+        return None
+    scores = [parse_score(item, field, errors) for item in value]
+    return None if any(score is None for score in scores) else [s for s in scores if s is not None]
+
+
+def _mean_line(symbol: str, scores: list[Decimal]) -> tuple[Decimal, str]:
+    total = sum(scores, Decimal(0))
+    final, tail = _rounded(total / len(scores))
+    terms = " + ".join(plain(score) for score in scores)
+    return final, f"{symbol} = ({terms}) / {len(scores)} = {plain(total)} / {len(scores)} {tail}"
+
+
 def course_score(params: Mapping[str, object]) -> CalculationResult:
+    """ĐTKHP of a theory + practice course. TBtx, ĐLT and ĐTH are each rounded to 0.1
+    before the next step uses them; ĐTKHP is rounded to 0.1 at the end. `tbtx` is
+    either the student's own average or the list of TX columns (equal weights)."""
+
     errors: list[FieldError] = []
 
     def credits_of(field: str) -> int | None:
@@ -277,9 +318,19 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
 
     # An invalid credit count (None here) leaves it open whether the part is
     # needed: still validate what was given, but don't report the rest missing.
+    tx_columns: list[Decimal] | None = None
+    tbtx_given: Decimal | None = None
     theory: dict[str, Decimal] = {}
     if tclt is None or tclt > 0:
-        for field in ("tbtx", "gk", "ck"):
+        raw_tbtx = params.get("tbtx")
+        if raw_tbtx is None:
+            if tclt:
+                _missing("tbtx", errors)
+        elif isinstance(raw_tbtx, list | tuple):
+            tx_columns = _scores(raw_tbtx, "tbtx", "điểm thường xuyên", errors)
+        else:
+            tbtx_given = parse_score(raw_tbtx, "tbtx", errors)
+        for field in ("gk", "ck"):
             if params.get(field) is None:
                 if tclt:
                     _missing(field, errors)
@@ -288,21 +339,14 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
             if score is not None:
                 theory[field] = score
 
-    practice: list[Decimal] = []
+    practice: list[Decimal] | None = None
     if tcth is None or tcth > 0:
         raw_practice = params.get("th")
         if raw_practice is None:
             if tcth:
                 _missing("th", errors)
-        elif not isinstance(raw_practice, list | tuple) or not raw_practice:
-            errors.append(FieldError("th", "cần ít nhất một cột điểm thực hành"))
-        elif len(raw_practice) > PRACTICE_SCORES_MAX:
-            errors.append(FieldError("th", f"tối đa {PRACTICE_SCORES_MAX} cột điểm thực hành"))
         else:
-            for item in raw_practice:
-                score = parse_score(item, "th", errors)
-                if score is not None:
-                    practice.append(score)
+            practice = _scores(raw_practice, "th", "điểm thực hành", errors)
 
     if errors or tclt is None or tcth is None:
         raise CalculationInputError(errors)
@@ -315,79 +359,79 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
 
     dlt = Decimal(0)
     if tclt:
+        if tx_columns is not None:
+            tbtx, line = _mean_line("TBtx", tx_columns)
+            inputs.append(("Các cột thường xuyên", ", ".join(plain(s) for s in tx_columns)))
+        else:
+            assert tbtx_given is not None
+            tbtx, _ = _rounded(tbtx_given)
+            line = f"TBtx = {plain(tbtx_given)}" + (
+                f" → {fixed(tbtx, 1)}" if tbtx != tbtx_given else ""
+            )
+            inputs.append(("Điểm thường xuyên (TBtx)", plain(tbtx_given)))
+        steps.append(
+            Step(
+                label="Điểm thường xuyên",
+                symbolic=COURSE_SCORE_FORMULA_TEXT[0],
+                substituted=line,
+                value=tbtx,
+                display=fixed(tbtx, 1),
+            )
+        )
         weights = THEORY_WEIGHTS
-        tbtx, gk, ck = theory["tbtx"], theory["gk"], theory["ck"]
+        gk, ck = theory["gk"], theory["ck"]
         parts = (weights.tx * tbtx, weights.gk * gk, weights.ck * ck)
-        dlt = sum(parts, Decimal(0))
-        inputs += [
-            ("Điểm thường xuyên", plain(tbtx)),
-            ("Điểm giữa kỳ", plain(gk)),
-            ("Điểm cuối kỳ", plain(ck)),
-        ]
+        dlt, tail = _rounded(sum(parts, Decimal(0)))
+        inputs += [("Điểm giữa kỳ", plain(gk)), ("Điểm cuối kỳ", plain(ck))]
         steps.append(
             Step(
                 label="Điểm lý thuyết",
-                symbolic=COURSE_SCORE_FORMULA_TEXT[0],
+                symbolic=COURSE_SCORE_FORMULA_TEXT[1],
                 substituted=(
-                    f"ĐLT = {plain(weights.tx)} {TIMES} {plain(tbtx)}"
+                    f"ĐLT = {plain(weights.tx)} {TIMES} {fixed(tbtx, 1)}"
                     f" + {plain(weights.gk)} {TIMES} {plain(gk)}"
                     f" + {plain(weights.ck)} {TIMES} {plain(ck)} = "
                     + " + ".join(plain(part) for part in parts)
-                    + f" {equals(dlt)}"
+                    + f" {tail}"
                 ),
                 value=dlt,
-                display=fmt(dlt),
+                display=fixed(dlt, 1),
             )
         )
 
     dth = Decimal(0)
     if tcth:
-        total = sum(practice, Decimal(0))
-        dth = total / len(practice)
+        assert practice is not None
+        dth, line = _mean_line("ĐTH", practice)
         inputs.append(("Điểm thực hành", ", ".join(plain(score) for score in practice)))
         steps.append(
             Step(
                 label="Điểm thực hành",
-                symbolic=COURSE_SCORE_FORMULA_TEXT[1],
-                substituted=(
-                    f"ĐTH = ({' + '.join(plain(score) for score in practice)}) / {len(practice)}"
-                    f" = {plain(total)} / {len(practice)} {equals(dth)}"
-                ),
+                symbolic=COURSE_SCORE_FORMULA_TEXT[2],
+                substituted=line,
                 value=dth,
-                display=fmt(dth),
+                display=fixed(dth, 1),
             )
         )
 
     if tclt and tcth:
         numerator = dlt * tclt + dth * tcth
-        raw = numerator / (tclt + tcth)
+        final, tail = _rounded(numerator / (tclt + tcth))
         substituted = (
-            f"ĐTKHP = ({short(dlt)} {TIMES} {tclt} + {short(dth)} {TIMES} {tcth})"
-            f" / ({tclt} + {tcth})"
-            f" = {short(numerator)} / {tclt + tcth} {equals(raw)}"
+            f"ĐTKHP = ({fixed(dlt, 1)} {TIMES} {tclt} + {fixed(dth, 1)} {TIMES} {tcth})"
+            f" / ({tclt} + {tcth}) = {plain(numerator)} / {tclt + tcth} {tail}"
         )
     elif tclt:
-        raw = dlt
-        substituted = f"ĐTKHP = ĐLT = {short(dlt)} (học phần chỉ có lý thuyết)"
+        final = dlt
+        substituted = f"ĐTKHP = ĐLT = {fixed(dlt, 1)} (học phần chỉ có lý thuyết)"
     else:
-        raw = dth
-        substituted = f"ĐTKHP = ĐTH = {short(dth)} (học phần chỉ có thực hành)"
+        final = dth
+        substituted = f"ĐTKHP = ĐTH = {fixed(dth, 1)} (học phần chỉ có thực hành)"
     steps.append(
         Step(
             label="Điểm tổng kết học phần",
-            symbolic=COURSE_SCORE_FORMULA_TEXT[2].removesuffix(", làm tròn đến 0.1"),
+            symbolic=COURSE_SCORE_FORMULA_TEXT[3],
             substituted=substituted,
-            value=raw,
-            display=fmt(raw),
-        )
-    )
-
-    final = round_half_up(raw, COURSE_SCORE_PLACES)
-    steps.append(
-        Step(
-            label="Làm tròn",
-            symbolic="Làm tròn ĐTKHP đến 0.1",
-            substituted=f"{before_rounding(raw, final, COURSE_SCORE_PLACES)} → {fixed(final, 1)}",
             value=final,
             display=fixed(final, 1),
             note="làm tròn đến 0.1",
@@ -540,7 +584,7 @@ def gpa(params: Mapping[str, object]) -> CalculationResult:
 # Parameters per formula, and dispatch
 # ---------------------------------------------------------------------------
 
-ParamKind = Literal["number", "number_list", "course_table"]
+ParamKind = Literal["number", "number_list", "number_or_list", "course_table"]
 FormulaId = Literal["gpa", "course_score", "grade_conversion"]
 
 
@@ -616,7 +660,17 @@ FORMULAS: dict[FormulaId, Formula] = {
         params=(
             _credit_spec("tclt", "Số tín chỉ lý thuyết của học phần", "TC lý thuyết"),
             _credit_spec("tcth", "Số tín chỉ thực hành của học phần", "TC thực hành"),
-            _score_spec("tbtx", "Điểm thường xuyên (TBtx), thang 10", "Điểm TX", "tclt"),
+            ParamSpec(
+                name="tbtx",
+                label="Điểm thường xuyên: nhập TBtx nếu đã biết, hoặc nhập từng cột TX1…TXn",
+                tab_label="Điểm TX",
+                kind="number_or_list",
+                required=_unless_zero("tclt"),
+                min=SCORE_MIN,
+                max=SCORE_MAX,
+                step=Decimal("0.01"),
+                max_items=PRACTICE_SCORES_MAX,
+            ),
             _score_spec("gk", "Điểm giữa kỳ, thang 10", "Điểm GK", "tclt"),
             _score_spec("ck", "Điểm cuối kỳ, thang 10", "Điểm CK", "tclt"),
             ParamSpec(
