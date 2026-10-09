@@ -159,6 +159,11 @@ Hai hàm public của `formulas.py`:
 - `calculate(formula_id, params) -> CalculationResult`: raise `CalculationInputError` khi input sai.
 
 `render.py`: `render_markdown(result) -> str`. Output cố định cho cùng một input, có snapshot test.
+**Mỗi giá trị chỉ xuất hiện một lần** (đã chốt 09-10-2026 sau phản hồi về thông tin bị lặp): không có
+mục "Số liệu" (số đã có ở card câu trả lời và trong các dòng thay số; `inputs` chỉ còn dùng cho trace và
+nhận xét), bước làm tròn gộp vào dòng tính (`… ≈ 2.044 → 2.04`), và quy đổi điểm chữ nằm trong **một**
+dòng kết quả (`CalculationResult.summary`), ví dụ
+`Kết quả: ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**`.
 
 ## `expression.py`: evaluator cho công thức lấy từ Qdrant
 

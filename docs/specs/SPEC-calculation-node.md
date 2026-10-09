@@ -212,14 +212,15 @@ plan_route
 
 Chỉ dùng cho lượt **chỉ có** calculation và có ít nhất một `Computed`.
 
-1. Gọi LLM **không stream** (`run_agent_text_with_failover`). Nhận xét ngắn (1–3 câu, `max_tokens` thấp),
+1. Gọi LLM **không stream** (`run_agent_text_with_failover`). Nhận xét ngắn (tối đa 2 câu, `max_tokens` thấp),
    nên chờ trọn vẹn rồi mới gửi không ảnh hưởng trải nghiệm.
 2. Trích mọi số trong text bằng regex `\d+(?:[.,]\d+)?`, chuẩn hoá `,` thành `.`, bỏ số 0 thừa.
-3. Whitelist gồm: mọi giá trị trong `inputs`, `outputs`, `step.display` (bỏ dấu `≈`), cùng các hằng
-   `{0, 4, 10}` (tên thang điểm).
-4. Có số **ngoài whitelist** → bỏ nhận xét của LLM, thay bằng câu cố định do Python dựng theo
-   `formula_id` (ví dụ "Học phần đạt điểm chữ B, tương đương 3.0 trên thang 4."), và ghi log
-   `calculation.commentary_rejected`. LLM lỗi hoặc timeout cũng dùng câu cố định này.
+3. Whitelist gồm: các số sinh viên đã nhập (`inputs`) cùng các hằng `{0, 4, 10}` (tên thang điểm).
+   **Số của kết quả (`outputs`) bị loại khỏi whitelist** - kết quả đã nằm ở dòng "Kết quả" ngay phía
+   trên, nhận xét chỉ nói ý nghĩa của nó (đã chốt 09-10-2026, sau phản hồi về thông tin bị lặp).
+4. Có số **ngoài whitelist** (số bịa hoặc nhắc lại kết quả) → **bỏ hẳn nhận xét**, không có câu thay thế
+   (câu thay thế cũng chỉ lặp lại kết quả), ghi log `calculation.commentary_rejected`. LLM lỗi hoặc
+   timeout cũng bỏ nhận xét.
 5. Text gửi ra luôn là text đã qua bước 4. **Không có số nào chưa qua kiểm tra tới được client.**
 
 ## 4. Gộp câu hỏi thành một panel
@@ -406,7 +407,7 @@ trong `description`, nên không cần màn hình mới, và staff chỉ thấy 
   tham số (câu dẫn cố định + panel, không gọi LLM generation); có cả hai loại đều thiếu (**một** panel
   có câu hỏi của cả hai origin); có cả hai loại, calculation đủ còn advisory thiếu; resume chỉ chạy các
   task còn pending, không gọi lại extractor; chain 3 panel thì dừng.
-- **Kiểm tra số trong nhận xét:** số lạ, số viết kiểu `7,5`, số có `≈`, LLM timeout → đều ra câu cố định; nhận xét hợp lệ được giữ nguyên.
+- **Kiểm tra số trong nhận xét:** số lạ, nhắc lại số của kết quả, LLM timeout → nhận xét bị bỏ hẳn; nhận xét hợp lệ được giữ nguyên.
 - **Barrier:** advisory chuẩn bị xong trước calculation vẫn không gửi token nào trước khi khối tính được gửi (mô phỏng bằng calc chậm).
 - **Fail closed + router luật:** extractor trả JSON hỏng thì ra `extraction_failed`, không retrieve; câu GPA khớp luật mà LLM trả `retrieved` thì vẫn chạy `gpa`.
 - **Trace và công tắc:** `metadata.calculation` **không** chứa `question_raw`/`inputs`/`expression`/`source_quote`/`models` (test kiểm tra từng key); trace đầy đủ được push sang `/internal/calculation-traces` trước finalize; push lỗi thì lượt vẫn chạy và có log; `prompt_versions` đổi khi file YAML đổi; `models` phản ánh credential sau failover. Công tắc tắt: chỉ hiện câu trích, không gọi `evaluate`, không có panel.
@@ -441,8 +442,8 @@ trong `description`, nên không cần màn hình mới, và staff chỉ thấy 
 
 - Giữ bước nhận xét LLM (`chat_calculation.yaml`) cho lượt chỉ có calculation.
 - `ambiguous` trả lời bằng text; đưa vào panel là ticket khác.
-- (Review lần 2) Barrier trước node 10 thay cho buffer token; nhận xét không stream và bị thay bằng câu
-  cố định nếu có số ngoài whitelist; node 10 chỉ nhận tiêu đề phép tính; extractor fail closed; công
+- (Review lần 2) Barrier trước node 10 thay cho buffer token; nhận xét không stream, không nhắc lại kết quả
+  và bị bỏ hẳn nếu có số ngoài whitelist; node 10 chỉ nhận tiêu đề phép tính; extractor fail closed; công
   thức cài sẵn được định tuyến bằng luật trước LLM.
 - Công thức Qdrant vẫn được tính, nhưng phải qua 7 kiểm tra (neo hằng số, neo biến, verifier LLM độc lập),
   luôn gắn nhãn "Kết quả tham khảo theo quy chế", không hỏi sinh viên xác nhận.

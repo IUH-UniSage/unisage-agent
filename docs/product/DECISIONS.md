@@ -49,8 +49,8 @@ Spec: `docs/specs/SPEC-calc-engine.md`, `SPEC-clarification-panel.md`, `SPEC-cal
 
 LLM tính sai các phép cộng có trọng số mà khó phát hiện. Mọi con số đến từ `app/calculation/`
 (`Decimal`, làm tròn half-up), khối các bước do Python render. LLM chỉ chọn công thức, chép số người
-dùng đã nói, chép công thức từ quy chế và viết nhận xét. Nhận xét không stream và bị thay bằng câu
-cố định nếu có số ngoài danh sách cho phép; node 10 chỉ nhận **tiêu đề** phép tính đã hiển thị.
+dùng đã nói, chép công thức từ quy chế và viết nhận xét. Nhận xét không stream, không được nhắc lại
+kết quả, và bị bỏ hẳn nếu có số ngoài các số sinh viên đã nhập; node 10 chỉ nhận **tiêu đề** phép tính đã hiển thị.
 
 ### Vì sao 3 công thức cài sẵn, còn lại lấy từ Qdrant mà không có eval trước khi phát hành?
 
