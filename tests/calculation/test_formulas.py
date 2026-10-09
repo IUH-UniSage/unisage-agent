@@ -187,3 +187,90 @@ def test_practice_score_count_is_capped() -> None:
 def test_comma_decimal_input_is_accepted() -> None:
     result = course_score({"tbtx": "8,5", "gk": "7", "ck": "6,5", "tclt": 1, "tcth": 0})
     assert result.steps[0].value == Decimal("7.05")
+
+
+# --- GPA --------------------------------------------------------------------
+
+
+def test_gpa_counts_failed_courses_and_letter_grades() -> None:
+    result = formulas.calculate(
+        "gpa",
+        {
+            "courses": [
+                {"name": "Toán", "credits": 3, "score": 8.5},
+                {"name": "Lý", "credits": 2, "score": "b+"},
+                {"credits": 4, "score": "3.9"},
+            ]
+        },
+    )
+    # (3.8*3 + 3.5*2 + 0*4) / 9 = 18.4 / 9 = 2.0444...
+    assert dict(result.outputs) == {"GPA": "2.04", "Tổng tín chỉ": "9"}
+    assert result.steps[0].substituted == f"8.5 → A → 3.8; 3.8 {X} 3 = 11.4"
+    assert result.steps[2].label == "Môn 3"
+    assert result.steps[2].substituted.startswith("3.9 → F → 0.0")
+
+
+def test_gpa_rounds_course_score_before_lookup() -> None:
+    result = formulas.calculate("gpa", {"courses": [{"credits": 2, "score": "8.45"}]})
+    assert result.steps[0].substituted.startswith("8.45 → 8.5 → A → 3.8")
+    assert dict(result.outputs)["GPA"] == "3.80"
+
+
+def test_gpa_rounds_half_up_to_two_places() -> None:
+    # (4.0*1 + 3.5*1 + 3.0*2) / 4 = 13.5 / 4 = 3.375 -> 3.38 (banker's would give 3.38 too;
+    # 2.345-style ties are covered by test_round_half_up_is_not_bankers_rounding).
+    result = formulas.calculate(
+        "gpa",
+        {
+            "courses": [
+                {"credits": 1, "score": "A+"},
+                {"credits": 1, "score": "B+"},
+                {"credits": 2, "score": "B"},
+            ]
+        },
+    )
+    assert dict(result.outputs)["GPA"] == "3.38"
+
+
+@pytest.mark.parametrize(
+    ("courses", "fragment"),
+    [
+        (None, "còn thiếu"),
+        ([], "ít nhất một môn"),
+        ([{"credits": 3, "score": 8}] * 31, "tối đa 30"),
+        ([{"credits": 0, "score": 8}], "dòng 1"),
+        ([{"credits": 3, "score": "G"}], "dòng 1"),
+        ([{"credits": 3, "score": 8}, {"credits": 2.5, "score": 8}], "dòng 2"),
+    ],
+)
+def test_gpa_rejects_bad_tables(courses: object, fragment: str) -> None:
+    with pytest.raises(CalculationInputError) as error:
+        formulas.calculate("gpa", {"courses": courses} if courses is not None else {})
+    assert any(fragment in item.reason for item in error.value.errors)
+
+
+# --- params -----------------------------------------------------------------
+
+
+def test_missing_params_follow_display_order() -> None:
+    names = [spec.name for spec in formulas.missing_params("course_score", {})]
+    assert names == ["tclt", "tcth", "tbtx", "gk", "ck", "th"]
+
+
+def test_practice_scores_not_asked_when_no_practice_credits() -> None:
+    names = [spec.name for spec in formulas.missing_params("course_score", {"tclt": 2, "tcth": 0})]
+    assert names == ["tbtx", "gk", "ck"]
+
+
+def test_theory_scores_not_asked_when_no_theory_credits() -> None:
+    params = {"tclt": 0, "tcth": 1, "th": [8]}
+    assert formulas.missing_params("course_score", params) == []
+
+
+def test_every_formula_param_spec_is_well_formed() -> None:
+    for formula in formulas.FORMULAS.values():
+        for spec in formula.params:
+            assert len(spec.tab_label) <= 24
+            assert formulas.param_spec(formula.formula_id, spec.name) is spec
+            if spec.kind in {"number", "number_list"}:
+                assert spec.min is not None and spec.max is not None and spec.step is not None

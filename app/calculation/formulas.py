@@ -8,9 +8,10 @@ half-up via `round_half_up` - never Python's banker's `round()`.
 Spec: docs/specs/SPEC-calc-engine.md.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from typing import Literal
 
 from app.calculation.result import CalculationInputError, CalculationResult, FieldError, Step
 
@@ -405,3 +406,281 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
             ("Thang 4", fixed(band.gp4, 1)),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# GPA (thang 4)
+# ---------------------------------------------------------------------------
+
+GPA_COURSES_MAX = 30
+COURSE_CREDIT_MIN = 1
+COURSE_CREDIT_MAX = 10
+GPA_FORMULA_TEXT = (
+    f"Điểm chất lượng của môn = điểm hệ 4 {TIMES} số tín chỉ",
+    f"GPA = Σ (điểm hệ 4 {TIMES} số tín chỉ) / Σ số tín chỉ, làm tròn đến 0.01",
+)
+
+
+def _letter_band(value: object) -> GradeBand | None:
+    if not isinstance(value, str):
+        return None
+    letter = value.strip().upper()
+    return next((band for band in GRADE_SCALE if band.letter == letter), None)
+
+
+def gpa(params: Mapping[str, object]) -> CalculationResult:
+    errors: list[FieldError] = []
+    raw_courses = params.get("courses")
+    if raw_courses is None:
+        _missing("courses", errors)
+        raise CalculationInputError(errors)
+    if not isinstance(raw_courses, list | tuple) or not raw_courses:
+        raise CalculationInputError([FieldError("courses", "cần ít nhất một môn")])
+    if len(raw_courses) > GPA_COURSES_MAX:
+        raise CalculationInputError(
+            [FieldError("courses", f"tối đa {GPA_COURSES_MAX} môn mỗi lần tính")]
+        )
+
+    rows: list[tuple[str, int, str, GradeBand]] = []
+    for index, raw in enumerate(raw_courses, start=1):
+        if not isinstance(raw, Mapping):
+            errors.append(FieldError("courses", f"dòng {index} không hợp lệ"))
+            continue
+        name = str(raw.get("name") or f"Môn {index}").strip()[:80]
+        row_errors: list[FieldError] = []
+        credits = parse_credits(
+            raw.get("credits"),
+            "courses",
+            row_errors,
+            minimum=COURSE_CREDIT_MIN,
+            maximum=COURSE_CREDIT_MAX,
+        )
+        score_raw = raw.get("score")
+        band = _letter_band(score_raw)
+        score_text = band.letter if band else ""
+        if band is None:
+            score = parse_score(score_raw, "courses", row_errors)
+            if score is not None:
+                rounded = round_half_up(score, COURSE_SCORE_PLACES)
+                band = grade_band(rounded)
+                rounding = "" if rounded == score else f" → {fixed(rounded, 1)}"
+                score_text = f"{plain(score)}{rounding} → {band.letter}"
+        if row_errors or credits is None or band is None:
+            errors += [
+                FieldError("courses", f"dòng {index} ({name}): {error.reason}")
+                for error in row_errors
+            ]
+            continue
+        rows.append((name, credits, score_text, band))
+    if errors:
+        raise CalculationInputError(errors)
+
+    steps: list[Step] = []
+    total_quality = Decimal(0)
+    total_credits = 0
+    for name, credits, score_text, band in rows:
+        quality = band.gp4 * credits
+        total_quality += quality
+        total_credits += credits
+        steps.append(
+            Step(
+                label=name,
+                symbolic=GPA_FORMULA_TEXT[0],
+                substituted=(
+                    f"{score_text} → {fixed(band.gp4, 1)}; "
+                    f"{fixed(band.gp4, 1)} {TIMES} {credits} = {plain(quality)}"
+                ),
+                value=quality,
+                display=plain(quality),
+            )
+        )
+
+    raw_gpa = total_quality / total_credits
+    final = round_half_up(raw_gpa, GPA_PLACES)
+    qualities = " + ".join(step.display for step in steps)
+    credit_sum = " + ".join(str(credits) for _, credits, _, _ in rows)
+    steps.append(
+        Step(
+            label="GPA",
+            symbolic=GPA_FORMULA_TEXT[1].removesuffix(", làm tròn đến 0.01"),
+            substituted=(
+                f"GPA = ({qualities}) / ({credit_sum}) = {plain(total_quality)} / {total_credits}"
+                f" {equals(raw_gpa)}"
+            ),
+            value=raw_gpa,
+            display=fmt(raw_gpa),
+        )
+    )
+    steps.append(
+        Step(
+            label="Làm tròn",
+            symbolic="Làm tròn GPA đến 0.01",
+            substituted=f"{before_rounding(raw_gpa, final, GPA_PLACES)} → {fixed(final, 2)}",
+            value=final,
+            display=fixed(final, 2),
+            note="làm tròn đến 0.01",
+        )
+    )
+    return CalculationResult(
+        formula_id="gpa",
+        title="Điểm trung bình (GPA) thang 4",
+        formula_text=GPA_FORMULA_TEXT,
+        inputs=tuple(
+            (name, f"{credits} TC, điểm {score_text.split(' → ')[0]}")
+            for name, credits, score_text, _ in rows
+        ),
+        steps=tuple(steps),
+        outputs=(("GPA", fixed(final, 2)), ("Tổng tín chỉ", str(total_credits))),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Parameters per formula, and dispatch
+# ---------------------------------------------------------------------------
+
+ParamKind = Literal["number", "number_list", "course_table"]
+FormulaId = Literal["gpa", "course_score", "grade_conversion"]
+
+
+def _always(_: Mapping[str, object]) -> bool:
+    return True
+
+
+def _unless_zero(credit_field: str) -> Callable[[Mapping[str, object]], bool]:
+    """Needed unless that credit count is known to be 0 - an unknown count asks
+    for the scores in the same round rather than costing a second one."""
+
+    def required(params: Mapping[str, object]) -> bool:
+        credits = to_decimal(params.get(credit_field))
+        return credits is None or credits != 0
+
+    return required
+
+
+@dataclass(frozen=True)
+class ParamSpec:
+    name: str
+    label: str
+    tab_label: str
+    kind: ParamKind
+    required: Callable[[Mapping[str, object]], bool] = _always
+    min: Decimal | None = None
+    max: Decimal | None = None
+    step: Decimal | None = None
+    unit: str | None = None
+    max_items: int | None = None
+
+
+def _score_spec(name: str, label: str, tab_label: str, credit_field: str) -> ParamSpec:
+    return ParamSpec(
+        name=name,
+        label=label,
+        tab_label=tab_label,
+        kind="number",
+        required=_unless_zero(credit_field),
+        min=SCORE_MIN,
+        max=SCORE_MAX,
+        step=Decimal("0.01"),
+    )
+
+
+def _credit_spec(name: str, label: str, tab_label: str) -> ParamSpec:
+    return ParamSpec(
+        name=name,
+        label=label,
+        tab_label=tab_label,
+        kind="number",
+        min=Decimal(0),
+        max=Decimal(COMPONENT_CREDIT_MAX),
+        step=Decimal(1),
+        unit="TC",
+    )
+
+
+@dataclass(frozen=True)
+class Formula:
+    formula_id: FormulaId
+    title: str
+    description: str
+    params: tuple[ParamSpec, ...]
+    compute: Callable[[Mapping[str, object]], CalculationResult]
+
+
+FORMULAS: dict[FormulaId, Formula] = {
+    "course_score": Formula(
+        formula_id="course_score",
+        title="Điểm tổng kết học phần (lý thuyết + thực hành)",
+        description="Điểm tổng kết một học phần từ điểm TX/GK/CK và các cột thực hành",
+        params=(
+            _credit_spec("tclt", "Số tín chỉ lý thuyết của học phần", "TC lý thuyết"),
+            _credit_spec("tcth", "Số tín chỉ thực hành của học phần", "TC thực hành"),
+            _score_spec("tbtx", "Điểm thường xuyên (TBtx), thang 10", "Điểm TX", "tclt"),
+            _score_spec("gk", "Điểm giữa kỳ, thang 10", "Điểm GK", "tclt"),
+            _score_spec("ck", "Điểm cuối kỳ, thang 10", "Điểm CK", "tclt"),
+            ParamSpec(
+                name="th",
+                label="Các cột điểm thực hành, thang 10",
+                tab_label="Điểm TH",
+                kind="number_list",
+                required=_unless_zero("tcth"),
+                min=SCORE_MIN,
+                max=SCORE_MAX,
+                step=Decimal("0.01"),
+                max_items=PRACTICE_SCORES_MAX,
+            ),
+        ),
+        compute=course_score,
+    ),
+    "gpa": Formula(
+        formula_id="gpa",
+        title="Điểm trung bình (GPA) thang 4",
+        description="GPA học kỳ hoặc tích lũy từ danh sách môn, số tín chỉ và điểm",
+        params=(
+            ParamSpec(
+                name="courses",
+                label="Các môn: số tín chỉ và điểm (thang 10 hoặc điểm chữ)",
+                tab_label="Các môn",
+                kind="course_table",
+                max_items=GPA_COURSES_MAX,
+            ),
+        ),
+        compute=gpa,
+    ),
+    "grade_conversion": Formula(
+        formula_id="grade_conversion",
+        title="Quy đổi điểm thang 10 sang điểm chữ và thang 4",
+        description="Quy đổi một điểm thang 10 sang điểm chữ và điểm thang 4",
+        params=(
+            ParamSpec(
+                name="score10",
+                label="Điểm thang 10 cần quy đổi",
+                tab_label="Điểm",
+                kind="number",
+                min=SCORE_MIN,
+                max=SCORE_MAX,
+                step=Decimal("0.01"),
+            ),
+        ),
+        compute=grade_conversion,
+    ),
+}
+
+
+def param_spec(formula_id: FormulaId, name: str) -> ParamSpec | None:
+    return next((spec for spec in FORMULAS[formula_id].params if spec.name == name), None)
+
+
+def missing_params(formula_id: FormulaId, params: Mapping[str, object]) -> list[ParamSpec]:
+    """Required params not given yet, in display order."""
+
+    return [
+        spec
+        for spec in FORMULAS[formula_id].params
+        if params.get(spec.name) is None and spec.required(params)
+    ]
+
+
+def calculate(formula_id: FormulaId, params: Mapping[str, object]) -> CalculationResult:
+    """Raises `CalculationInputError` (every bad or missing field at once)."""
+
+    return FORMULAS[formula_id].compute(params)
