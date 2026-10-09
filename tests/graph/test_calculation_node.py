@@ -590,3 +590,67 @@ async def test_follow_up_target_question_reuses_the_stored_calculation() -> None
     assert "CK = 9.0 → ĐTKHP 8.3 (chưa đạt)" in second.response_text
     # The stored calculation stays the forward one (no target question attached).
     assert second.last_calculation is not None and second.last_calculation.plan.solve is None
+
+
+@pytest.mark.asyncio
+async def test_several_formulas_are_a_panel_choice_and_the_answer_skips_the_classifier() -> None:
+    """The screenshot bug: "tính điểm xét tuyển" matched several formulas and asked in
+    free text, so "đại học chính quy á" was re-classified as advisory. Now the case is
+    a panel choice and its answer resumes the calculation without any classification."""
+
+    from tests.graph.test_calculation_retrieved import (
+        AMBIGUOUS,
+        CHUNK,
+        EXTRACTION,
+        VERIFIED,
+        _found,
+    )
+    from tests.llm_mocks import FakeRetrievalService
+
+    query = "tính học phí giúp tôi"
+    first = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                EXTRACTION,
+                AMBIGUOUS,
+            ),
+            query_transformation=_echo_model(),
+            generation=_note_model("unused"),
+            retrieval=FakeRetrievalService([CHUNK]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert "chọn trường hợp của mình" in first.response_text
+    assert first.pending_round is not None
+    [question] = first.pending_round.panel.questions
+    assert (question.kind, question.field) == ("choice", "formula_case")
+
+    submit = ClarificationSubmit(
+        action="submit",
+        panel_id=first.pending_round.panel.panel_id,
+        answers=[Answer(question_id=question.id, option_id="c1")],
+    )
+    resume = ResumeInput(
+        pending_round=first.pending_round,
+        answers=validate_answers(first.pending_round.panel, submit),
+    )
+    second = await run_graph(
+        _input("Trường hợp: Khoá 2023", resume=resume),
+        GraphModels(
+            # Formula + verifier only: a classifier call would consume these and fail.
+            classification=_scripted(_found(), VERIFIED),
+            query_transformation=_echo_model(),
+            generation=_note_model("Bạn nhớ đóng đúng hạn nhé."),
+            retrieval=FakeRetrievalService([CHUNK]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert "Kết quả tham khảo theo quy chế" in second.response_text
+    assert "8400000" in second.response_text
+    assert second.pending_round is None

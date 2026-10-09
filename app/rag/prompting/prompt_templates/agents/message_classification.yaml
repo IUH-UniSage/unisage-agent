@@ -25,6 +25,7 @@ template: |
   ## Decision Rules
   1. CÂU NỐI TIẾP: nếu tin nhắn là câu hỏi ngắn/nối tiếp (VD: "sao không có ngành X?", "còn khóa 2024 thì sao?", "vậy ngành Y thì sao?") và lịch sử hội thoại đang nói về một chủ đề học vụ, thì phân loại theo chủ đề đó - TUYỆT ĐỐI không coi là `off_topic` chỉ vì tin nhắn đứng riêng thiếu ngữ cảnh.
   1b. CÂU LÀM RÕ: tin nhắn bắt đầu bằng cụm làm rõ ý ("ý tôi là...", "ý em là...", "tôi muốn hỏi...", "ý mình là...") LUÔN kế thừa nhãn của câu hỏi/chủ đề ngay trước đó trong lịch sử (trừ khi câu trả lời trước đó chính là lời từ chối off_topic) - KHÔNG BAO GIỜ tự nó là `off_topic`, vì bản chất nó chỉ đang làm rõ lại một câu hỏi đã hỏi trước đó, không phải một chủ đề mới.
+  1c. NỐI TIẾP PHÉP TÍNH: nhãn của câu nối tiếp lấy theo VIỆC người dùng đang làm, không theo chữ trong tin nhắn đứng riêng. Nếu lượt trước người dùng nhờ TÍNH (lịch sử có yêu cầu tính, hoặc có `<previous_calculation_turn>`) và tin nhắn này chỉ bổ sung dữ kiện/trường hợp ("đại học chính quy á", "khóa 2024", "3 tín", "TX 8 9"), đổi một con số ("nếu giữa kỳ 8 thì sao?") hoặc hỏi ngược về chính phép tính đó ("thế cuối kỳ cần bao nhiêu để được A+?") → `academic_calculation`, và `query` viết lại thành câu đầy đủ gộp yêu cầu tính ban đầu với dữ kiện mới (VD "Tính điểm xét tuyển đại học chính quy giúp tôi"). Chỉ chuyển sang `academic_advisory` khi tin nhắn hỏi rõ một quy định/thông tin mới (VD "điều kiện tốt nghiệp là gì?"), dù có `<previous_calculation_turn>`.
   2. Ưu tiên `academic_*` nếu tin nhắn có BẤT KỲ liên quan nào tới học vụ, tuyển sinh, ngành học, môn học của Nhà trường.
   3. Chỉ trả `off_topic` khi CHẮC CHẮN nội dung không liên quan gì đến Nhà trường, kể cả khi xét cùng lịch sử hội thoại - dù đó là câu hỏi kiến thức phổ thông (VD: "Python là gì?") hay một chủ đề bất kỳ khác.
   4. Tin nhắn ngắn, mơ hồ nhưng thiên về học vụ → `academic_advisory`.
@@ -39,7 +40,7 @@ template: |
   Khi nào tách thành nhiều task:
   - Tách task CHỈ khi các câu hỏi có NHÃN KHÁC NHAU (VD vừa nhờ tính GPA (`academic_calculation`) vừa hỏi thủ tục tốt nghiệp (`academic_advisory`)) - vì mỗi nhãn đi tới một luồng xử lý khác nhau. Mỗi nhãn khác nhau một task, `query` viết lại thành câu đứng riêng được, giữ nguyên từ ngữ người dùng. Tối đa 3 task.
   - Tin nhắn có 2+ câu hỏi CÙNG nhãn `academic_advisory`, dù là câu SO SÁNH nhiều thực thể (VD "Ngành CNTT và Kế toán học phí chênh bao nhiêu?") hay 2 câu hỏi độc lập không liên quan (VD "Học phí ngành CNTT bao nhiêu, với lại điều kiện học bổng là gì?") → LUÔN gộp thành 1 task `academic_advisory` duy nhất, `routing_mode = "MULTI"`, `query` giữ nguyên văn toàn bộ phần học vụ của tin nhắn. KHÔNG tự bẻ nhỏ thành từng câu hỏi con ở đây - việc đó là của Sub-Query Decomposer ở bước sau.
-  - Tin nhắn chỉ có MỘT câu hỏi → đúng 1 task, `query` chép NGUYÊN VĂN tin nhắn ở lượt này (không viết lại, không thêm ngữ cảnh từ lịch sử).
+  - Tin nhắn chỉ có MỘT câu hỏi → đúng 1 task, `query` chép NGUYÊN VĂN tin nhắn ở lượt này (không viết lại, không thêm ngữ cảnh từ lịch sử). NGOẠI LỆ: câu nối tiếp phép tính (quy tắc 1c) thì `query` viết lại thành câu đầy đủ, vì bước tính toán chỉ đọc `query`, không đọc lịch sử.
   - Câu chào/cảm ơn đi kèm một câu hỏi học vụ → chỉ cần task cho câu hỏi học vụ.
 
   Các field:
@@ -80,3 +81,20 @@ template: |
   User: "ý tôi là chi phí 1 tín chỉ"
   Output: {"tasks": [{"intent": "academic_advisory", "query": "Chi phí 1 tín chỉ là bao nhiêu?", "routing_mode": "SINGLE"}], "confidence": 0.85}
   (Câu làm rõ "ý tôi là..." kế thừa đúng chủ đề học phí đang hỏi - luôn academic_advisory, tuyệt đối không off_topic dù câu trả lời liền trước có vẻ như bị từ chối.)
+
+  Lịch sử:
+  "- Người dùng: tính điểm xét tuyển thpt giúp tôi
+  - Trợ lý: Bạn xét tuyển theo trường hợp nào?"
+  User: "đại học chính quy á"
+  Output: {"tasks": [{"intent": "academic_calculation", "query": "Tính điểm xét tuyển đại học chính quy giúp tôi", "routing_mode": null}], "confidence": 0.85}
+  (Người dùng đang nhờ TÍNH và chỉ bổ sung trường hợp - giữ academic_calculation, không chuyển sang tra cứu công thức.)
+
+  Lịch sử: "- Trợ lý: ... Kết quả: ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**"
+  <previous_calculation_turn>Điểm tổng kết học phần (lý thuyết + thực hành)</previous_calculation_turn>
+  User: "thế cuối kỳ cần bao nhiêu để được A+"
+  Output: {"tasks": [{"intent": "academic_calculation", "query": "Điểm cuối kỳ cần bao nhiêu để điểm tổng kết học phần được A+?", "routing_mode": null}], "confidence": 0.9}
+
+  <previous_calculation_turn>Điểm tổng kết học phần (lý thuyết + thực hành)</previous_calculation_turn>
+  User: "điều kiện tốt nghiệp là gì?"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "điều kiện tốt nghiệp là gì?", "routing_mode": "SINGLE"}], "confidence": 0.95}
+  (Câu hỏi quy định mới - không phải nối tiếp phép tính.)

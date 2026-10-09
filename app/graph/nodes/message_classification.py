@@ -198,8 +198,12 @@ async def classify_intent(
     on_failover: FailoverCallback | None = None,
     on_attempt: AttemptRecorder | None = None,
     budget: BudgetContext | None = None,
+    previous_calculation: str | None = None,
 ) -> IntentClassification:
-    """`history` lets a short follow-up be classified in context.
+    """`history` lets a short follow-up be classified in context. `previous_calculation`
+    names the conversation's latest computed calculation, so a free-typed follow-up on
+    it ("thế cuối kỳ cần bao nhiêu") stays a calculation instead of being guessed from
+    the chat text alone.
 
     `purpose`/`credential`/`snapshot_version`/`agent_factory`/`router`/
     `on_failover`/`on_attempt`/`budget` are the same opt-in failover/usage/budget
@@ -207,9 +211,14 @@ async def classify_intent(
     failure propagates immediately, same as before.
     """
 
+    prompt = append_recent_history(message, history)
+    if previous_calculation:
+        prompt += (
+            f"\n\n<previous_calculation_turn>{previous_calculation}</previous_calculation_turn>"
+        )
     output = await run_agent_text_with_failover(
         agent,
-        append_recent_history(message, history),
+        prompt,
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,

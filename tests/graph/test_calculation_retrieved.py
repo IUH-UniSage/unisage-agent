@@ -15,6 +15,7 @@ from app.graph.nodes.calculation import (
     QuoteOnly,
     Unresolved,
     resume_calculation,
+    resume_calculation_task,
     run_calculation_task,
 )
 from app.graph.streaming_state import GraphModels
@@ -148,22 +149,72 @@ async def test_out_of_range_value_is_asked_again() -> None:
     assert "bạn nhập 99000000" in outcome.questions[0]["prompt"]
 
 
+AMBIGUOUS = {
+    "status": "ambiguous",
+    "formula": None,
+    "candidates": [
+        {"summary": "Khoá 2023: theo tín chỉ", "source_chunk_id": "c_8"},
+        {"summary": "Khoá 2024: trọn gói theo năm", "source_chunk_id": "c_8"},
+        {"summary": "bịa", "source_chunk_id": "c_404"},
+    ],
+}
+
+
 @pytest.mark.asyncio
-async def test_ambiguous_lists_candidates_without_computing() -> None:
-    ambiguous = {
-        "status": "ambiguous",
-        "formula": None,
-        "candidates": [
-            {"summary": "Khoá 2023: theo tín chỉ", "source_chunk_id": "c_8"},
-            {"summary": "bịa", "source_chunk_id": "c_404"},
-        ],
-    }
-    model, _ = _scripted(EXTRACTION, ambiguous)
+async def test_ambiguous_asks_the_case_on_the_panel_without_computing() -> None:
+    model, _ = _scripted(EXTRACTION, AMBIGUOUS)
     outcome = await run_calculation_task("T1", "học phí?", _deps(model))
-    assert outcome == Unresolved(
-        "T1",
-        "formula_ambiguous",
-        [{"summary": "Khoá 2023: theo tín chỉ", "source": "QD-hoc-phi.pdf"}],
+    assert isinstance(outcome, NeedsInput)
+    assert outcome.lead is not None and "chọn trường hợp" in outcome.lead
+    [question] = outcome.questions
+    assert (question["kind"], question["field"], question["allow_other"]) == (
+        "choice",
+        "formula_case",
+        False,
+    )
+    assert [(o["id"], o["label"]) for o in question["options"]] == [
+        ("c1", "Khoá 2023: theo tín chỉ"),
+        ("c2", "Khoá 2024: trọn gói theo năm"),
+    ]
+    assert (
+        outcome.plan.retrieved is None and outcome.plan.retrieval_query == "công thức tính học phí"
+    )
+    assert outcome.known_params == {"so_tc": 20}
+
+
+@pytest.mark.asyncio
+async def test_chosen_case_reads_only_that_formula_then_computes() -> None:
+    model, _ = _scripted(EXTRACTION, AMBIGUOUS)
+    asked = await run_calculation_task("T1", "học phí?", _deps(model))
+    assert isinstance(asked, NeedsInput)
+
+    model, prompts = _scripted(_found(), VERIFIED)
+    outcome = await resume_calculation_task(
+        "T1", "học phí?", asked.plan, asked.known_params, {"formula_case": "c1"}, _deps(model)
+    )
+    assert isinstance(outcome, Computed)
+    assert dict(outcome.result.outputs) == {"Học phí học kỳ": "8400000"}
+    assert "<chosen_case>Khoá 2023: theo tín chỉ</chosen_case>" in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_still_ambiguous_after_choosing_is_never_asked_again() -> None:
+    model, _ = _scripted(EXTRACTION, AMBIGUOUS)
+    asked = await run_calculation_task("T1", "học phí?", _deps(model))
+    assert isinstance(asked, NeedsInput)
+    model, _ = _scripted(AMBIGUOUS)
+    outcome = await resume_calculation_task(
+        "T1", "học phí?", asked.plan, asked.known_params, {"formula_case": "c2"}, _deps(model)
+    )
+    assert outcome == Unresolved("T1", "formula_invalid")
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_with_one_usable_candidate_fails_closed() -> None:
+    one = {**AMBIGUOUS, "candidates": AMBIGUOUS["candidates"][:1]}
+    model, _ = _scripted(EXTRACTION, one)
+    assert await run_calculation_task("T1", "học phí?", _deps(model)) == Unresolved(
+        "T1", "formula_invalid"
     )
 
 

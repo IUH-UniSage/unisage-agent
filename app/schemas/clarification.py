@@ -162,9 +162,11 @@ class SolveGoal(_Strict):
 
 class SolveSpec(_Strict):
     """A target question ("cuối kỳ cần bao nhiêu để được A+"): which parameter(s)
-    the solver finds instead of asking, and the goal on the formula's result."""
+    the solver finds instead of asking, and the goal on the formula's result.
+    `unknowns` is empty only while a regulation formula is still to be read (the
+    formula agent names its variables then)."""
 
-    unknowns: list[str] = Field(min_length=1, max_length=2)
+    unknowns: list[str] = Field(default_factory=list, max_length=2)
     goal: SolveGoal
     want: Literal["min", "max"] = "min"
 
@@ -175,15 +177,31 @@ class SolveSpec(_Strict):
         return self
 
 
+class FormulaCandidate(_Strict):
+    """One of several regulation formulas that could apply, offered as a choice."""
+
+    option_id: str = Field(pattern=r"^c[1-9]$")
+    summary: str = Field(min_length=1, max_length=300)
+    chunk_id: str
+    source: str
+
+
 class CalculationPlan(_Strict):
     formula_id: Literal["gpa", "course_score", "grade_conversion", "retrieved"]
     retrieved: RetrievedFormulaPlan | None = None
     solve: SolveSpec | None = None
+    # Several regulation formulas matched: the student picks one on the panel, then
+    # only that formula is read (from the same retrieval query).
+    candidates: list[FormulaCandidate] = Field(default_factory=list, max_length=9)
+    retrieval_query: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def _retrieved_iff_needed(self) -> "CalculationPlan":
-        if (self.formula_id == "retrieved") != (self.retrieved is not None):
-            raise ValueError("retrieved plan is required exactly for formula_id 'retrieved'")
+        is_retrieved = self.formula_id == "retrieved"
+        if is_retrieved and (self.retrieved is None) == (not self.candidates):
+            raise ValueError("a regulation plan has either a verified formula or candidates")
+        if not is_retrieved and (self.retrieved is not None or self.candidates):
+            raise ValueError("a built-in plan has no regulation formula or candidates")
         return self
 
 

@@ -20,6 +20,7 @@ from dataclasses import dataclass, replace
 from pydantic import JsonValue
 from pydantic_ai.models import Model
 
+from app.calculation.formulas import FORMULAS
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
@@ -42,7 +43,7 @@ from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
     TaskOutcome,
-    resume_calculation,
+    resume_calculation_task,
     run_calculation_task,
 )
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
@@ -167,6 +168,7 @@ async def _run_graph(
         on_failover=_make_failover_applier(models),
         on_attempt=usage_recorder.bind("MessageClassificationNode"),
         budget=budget,
+        previous_calculation=calculation_title(graph_input.last_calculation),
     )
     trace.prompt("03_MessageClassificationNode", describe_classification(classification))
 
@@ -255,15 +257,18 @@ async def _run_resume(
     outcomes: list[TaskOutcome] = []
     queries: dict[str, str] = {}
     advisory: AdvisoryPart | None = None
+    deps = _calculation_deps(graph_input, models, usage_recorder, budget)
     for task in pending.tasks:
         if isinstance(task, PendingCalculationTask):
             queries[task.task_id] = task.query
             outcomes.append(
-                resume_calculation(
+                await resume_calculation_task(
                     task.task_id,
+                    task.query,
                     task.plan,
                     task.known_params,
                     answers_by_task.get(task.task_id, {}),
+                    deps,
                 )
             )
         else:
@@ -273,7 +278,6 @@ async def _run_resume(
                 question=pending.original_query,
             )
 
-    deps = _calculation_deps(graph_input, models, usage_recorder, budget)
     return await _turn_with_calculations(
         graph_input,
         models,
@@ -312,6 +316,16 @@ def _calculation_deps(
         budget=budget,
         previous=graph_input.last_calculation,
     )
+
+
+def calculation_title(last: LastCalculation | None) -> str | None:
+    """What the classifier is told about the latest calculation: its name only."""
+
+    if last is None:
+        return None
+    if last.plan.formula_id != "retrieved":
+        return FORMULAS[last.plan.formula_id].title
+    return last.plan.retrieved.result_label if last.plan.retrieved is not None else None
 
 
 def _last_calculation(outcomes: Sequence[TaskOutcome]) -> LastCalculation | None:

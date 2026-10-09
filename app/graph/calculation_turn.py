@@ -68,7 +68,8 @@ def _source_lines(source: FormulaSource) -> list[str]:
 
 
 def render_outcome(outcome: TaskOutcome) -> str:
-    """Markdown for one task, or "" for a task that only needs input (asked on the panel)."""
+    """Markdown for one task; a task that needs input is asked on the panel (only its
+    own lead, if any, is shown here)."""
 
     if isinstance(outcome, Computed):
         if outcome.source is None:
@@ -87,16 +88,9 @@ def render_outcome(outcome: TaskOutcome) -> str:
             ]
         )
     if isinstance(outcome, Unresolved):
-        message = UNRESOLVED_MESSAGES[outcome.reason]
-        if outcome.reason == "formula_ambiguous" and outcome.candidates:
-            lines = [
-                f"- {item['summary']} (nguồn: {item['source']})" for item in outcome.candidates
-            ]
-            return "\n".join(
-                [message, *lines, "", "Bạn cho mình biết bạn thuộc trường hợp nào nhé?"]
-            )
-        return message
-    return ""
+        return UNRESOLVED_MESSAGES[outcome.reason]
+    # NeedsInput: the questions are on the panel; only a specific lead is shown here.
+    return outcome.lead or ""
 
 
 def render_outcomes(outcomes: Sequence[TaskOutcome]) -> str:

@@ -55,6 +55,7 @@ from app.rag.prompting import get_templates
 from app.schemas.clarification import (
     LETTER_GRADES,
     CalculationPlan,
+    FormulaCandidate,
     FormulaSource,
     FormulaVariableSpec,
     LastCalculation,
@@ -71,7 +72,6 @@ BUILTIN_IDS: frozenset[str] = frozenset(FORMULAS)
 UnresolvedReason = Literal[
     "extraction_failed",
     "formula_not_found",
-    "formula_ambiguous",
     "formula_invalid",
     "target_unsupported",
 ]
@@ -94,13 +94,14 @@ class NeedsInput:
     plan: CalculationPlan
     known_params: dict[str, JsonValue]
     questions: list[dict[str, Any]]
+    # Shown above the panel instead of the generic lead (e.g. "several formulas").
+    lead: str | None = None
 
 
 @dataclass(frozen=True)
 class Unresolved:
     task_id: str
     reason: UnresolvedReason
-    candidates: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -534,17 +535,23 @@ def _chunk_hash(content: str) -> str:
 
 
 def _formula_prompt(
-    query: str, chunks: list[RetrievedChunk], known: Mapping[str, JsonValue]
+    query: str,
+    chunks: list[RetrievedChunk],
+    known: Mapping[str, JsonValue],
+    chosen_case: str | None = None,
 ) -> str:
     blocks = "\n\n".join(
         f'<chunk id="{chunk.chunk_id}" source="{chunk.source}">\n{chunk.content}\n</chunk>'
         for chunk in chunks
     )
-    return (
+    prompt = (
         f"<regulation_chunks>\n{blocks}\n</regulation_chunks>\n\n"
         f"<question>{query}</question>\n"
         f"<known_values>{json.dumps(dict(known), ensure_ascii=False)}</known_values>"
     )
+    if chosen_case is not None:
+        prompt += f"\n<chosen_case>{chosen_case}</chosen_case>"
+    return prompt
 
 
 def _rejected(task_id: str, check: int, detail: str = "") -> Unresolved:
@@ -652,31 +659,165 @@ def retrieved_values_outcome(
     return Computed(task_id, result, plan, known, source=retrieved.source)
 
 
+CASE_FIELD = "formula_case"
+AMBIGUOUS_LEAD = (
+    "Quy chế có nhiều công thức khác nhau cho trường hợp này. Bạn chọn trường hợp của mình ở "
+    "khung bên dưới nhé."
+)
+
+
+async def _formula_chunks(retrieval_query: str, deps: CalculationDeps) -> list[RetrievedChunk]:
+    per_query = await retrieve_chunks([retrieval_query], deps.models.retrieval, deps.security)
+    return (per_query[0] if per_query else [])[:RETRIEVED_CHUNKS_LIMIT]
+
+
+def _case_question(candidates: list[FormulaCandidate]) -> dict[str, Any]:
+    return {
+        "tab_label": "Trường hợp",
+        "prompt": "Bạn thuộc trường hợp nào?",
+        "kind": "choice",
+        "options": [
+            {
+                "id": candidate.option_id,
+                "label": (
+                    candidate.summary
+                    if len(candidate.summary) <= 120
+                    else candidate.summary[:119] + "\u2026"
+                ),
+                "description": f"Nguồn: {candidate.source}"[:200],
+            }
+            for candidate in candidates
+        ],
+        "allow_other": False,
+        "origin": "calculation",
+        "field": CASE_FIELD,
+    }
+
+
+def _ambiguous_outcome(
+    task_id: str,
+    data: Mapping[str, Any],
+    by_id: Mapping[str, RetrievedChunk],
+    known: Mapping[str, JsonValue],
+    solve_request: SolveRequest | None,
+    retrieval_query: str,
+) -> NeedsInput | Unresolved:
+    """Several formulas apply: ask which case on the panel (never as free text, so the
+    answer resumes this calculation instead of being classified as a new question)."""
+
+    candidates: list[FormulaCandidate] = []
+    for item in data.get("candidates") or []:
+        if not isinstance(item, dict) or item.get("source_chunk_id") not in by_id:
+            continue
+        summary = str(item.get("summary") or "").strip()[:300]
+        if not summary or len(candidates) >= 9:
+            continue
+        chunk = by_id[item["source_chunk_id"]]
+        candidates.append(
+            FormulaCandidate(
+                option_id=f"c{len(candidates) + 1}",
+                summary=summary,
+                chunk_id=chunk.chunk_id,
+                source=chunk.source,
+            )
+        )
+    if len(candidates) < 2:
+        return _rejected(task_id, 0, "ambiguous with fewer than 2 usable candidates")
+    solve = (
+        SolveSpec(unknowns=solve_request.unknowns, goal=solve_request.goal, want=solve_request.want)
+        if solve_request is not None
+        else None
+    )
+    plan = CalculationPlan(
+        formula_id="retrieved",
+        candidates=candidates,
+        retrieval_query=retrieval_query[:500],
+        solve=solve,
+    )
+    return NeedsInput(task_id, plan, dict(known), [_case_question(candidates)], AMBIGUOUS_LEAD)
+
+
 async def retrieved_outcome(
     task_id: str, query: str, extraction: Extraction, deps: CalculationDeps
 ) -> TaskOutcome:
     retrieval_query = extraction.retrieval_query or query
-    per_query = await retrieve_chunks([retrieval_query], deps.models.retrieval, deps.security)
-    chunks = (per_query[0] if per_query else [])[:RETRIEVED_CHUNKS_LIMIT]
+    chunks = await _formula_chunks(retrieval_query, deps)
     if not chunks:
         return Unresolved(task_id, "formula_not_found")
+    return await _read_formula(
+        task_id,
+        query,
+        chunks,
+        extraction.params,
+        extraction.solve,
+        deps,
+        retrieval_query=retrieval_query,
+    )
 
-    raw = await _ask(build_formula_agent, _formula_prompt(query, chunks, extraction.params), deps)
+
+async def resume_formula_case(
+    task_id: str,
+    query: str,
+    plan: CalculationPlan,
+    known_params: Mapping[str, JsonValue],
+    answers: Mapping[str, JsonValue],
+    deps: CalculationDeps,
+) -> TaskOutcome:
+    """The student picked a case: read only that formula (same retrieval query, only the
+    chosen chunk), then the usual 7 checks - and ask again for any missing values."""
+
+    choice = answers.get(CASE_FIELD)
+    candidate = next((c for c in plan.candidates if c.option_id == choice), None)
+    if candidate is None or plan.retrieval_query is None:
+        return Unresolved(task_id, "extraction_failed")
+    chunks = [
+        chunk
+        for chunk in await _formula_chunks(plan.retrieval_query, deps)
+        if chunk.chunk_id == candidate.chunk_id
+    ]
+    if not chunks:
+        return Unresolved(task_id, "formula_not_found")
+    solve_request = (
+        SolveRequest(plan.solve.unknowns, plan.solve.goal, plan.solve.want)
+        if plan.solve is not None
+        else None
+    )
+    known = {key: value for key, value in {**known_params, **answers}.items() if key != CASE_FIELD}
+    return await _read_formula(
+        task_id,
+        query,
+        chunks,
+        known,
+        solve_request,
+        deps,
+        retrieval_query=plan.retrieval_query,
+        chosen=candidate,
+    )
+
+
+async def _read_formula(
+    task_id: str,
+    query: str,
+    chunks: list[RetrievedChunk],
+    known: Mapping[str, JsonValue],
+    solve_request: SolveRequest | None,
+    deps: CalculationDeps,
+    *,
+    retrieval_query: str,
+    chosen: FormulaCandidate | None = None,
+) -> TaskOutcome:
+    prompt = _formula_prompt(query, chunks, known, chosen.summary if chosen is not None else None)
+    raw = await _ask(build_formula_agent, prompt, deps)
     data = _load_json_object(raw) if raw is not None else None
     if data is None:
         return _rejected(task_id, 0, "formula output unreadable")
     by_id = {chunk.chunk_id: chunk for chunk in chunks}
     status = data.get("status")
     if status == "ambiguous":
-        candidates = [
-            {
-                "summary": str(item.get("summary", ""))[:300],
-                "source": by_id[item["source_chunk_id"]].source,
-            }
-            for item in data.get("candidates") or []
-            if isinstance(item, dict) and item.get("source_chunk_id") in by_id
-        ]
-        return Unresolved(task_id, "formula_ambiguous", candidates)
+        if chosen is not None:
+            # Still ambiguous after the student chose: never ask the same thing again.
+            return _rejected(task_id, 0, "ambiguous after a case was chosen")
+        return _ambiguous_outcome(task_id, data, by_id, known, solve_request, retrieval_query)
     if status != "found" or not isinstance(data.get("formula"), dict):
         return Unresolved(task_id, "formula_not_found")
     found: dict[str, Any] = data["formula"]
@@ -726,19 +867,19 @@ async def retrieved_outcome(
         return _rejected(task_id, 7, "verifier disagreed")
 
     solve: SolveSpec | None = None
-    if extraction.solve is not None:
+    if solve_request is not None:
         raw_unknowns = found.get("unknowns")
         unknowns = (
             [str(name) for name in raw_unknowns] if isinstance(raw_unknowns, list) else []
-        ) or extraction.solve.unknowns
-        solve = retrieved_solve_spec(retrieved, extraction.solve, unknowns)
+        ) or solve_request.unknowns
+        solve = retrieved_solve_spec(retrieved, solve_request, unknowns)
         if solve is None:
             return Unresolved(task_id, "target_unsupported")
     plan = CalculationPlan(formula_id="retrieved", retrieved=retrieved, solve=solve)
     raw_values = found.get("values")
     values: dict[str, JsonValue] = dict(raw_values) if isinstance(raw_values, dict) else {}
     # 4. values are declared variables within their ranges (enforced while computing)
-    return retrieved_values_outcome(task_id, plan, {**extraction.params, **values})
+    return retrieved_values_outcome(task_id, plan, {**known, **values})
 
 
 async def _verified(plan: RetrievedFormulaPlan, deps: CalculationDeps) -> bool:
@@ -778,6 +919,22 @@ def resume_calculation(
     return resume_builtin(task_id, plan, known_params, answers)
 
 
+async def resume_calculation_task(
+    task_id: str,
+    query: str,
+    plan: CalculationPlan,
+    known_params: Mapping[str, JsonValue],
+    answers: Mapping[str, JsonValue],
+    deps: CalculationDeps,
+) -> TaskOutcome:
+    """A panel answer for one calculation task. Only a formula-case choice reads the
+    regulations again (the chosen formula); everything else just computes."""
+
+    if plan.candidates:
+        return await resume_formula_case(task_id, query, plan, known_params, answers, deps)
+    return resume_calculation(task_id, plan, known_params, answers)
+
+
 # Fixed sentences for a task that cannot be calculated (rendered by Python, no LLM).
 UNRESOLVED_MESSAGES: dict[UnresolvedReason, str] = {
     "extraction_failed": (
@@ -787,10 +944,6 @@ UNRESOLVED_MESSAGES: dict[UnresolvedReason, str] = {
     "formula_not_found": (
         "Mình chưa tìm thấy công thức tính này trong quy chế hiện có nên chưa tính giúp bạn "
         "được. Bạn có thể liên hệ Phòng Đào tạo để được hướng dẫn nhé."
-    ),
-    "formula_ambiguous": (
-        "Quy chế có nhiều công thức khác nhau cho trường hợp này, mình chưa biết bạn thuộc "
-        "trường hợp nào:"
     ),
     "formula_invalid": (
         "Mình tìm thấy nội dung liên quan trong quy chế nhưng không chắc đã đọc đúng công "

@@ -376,3 +376,40 @@ def test_describe_classification_shows_the_retrieval_text_too() -> None:
     assert described["tasks"][0]["sub_queries"] == ["a", "b"]
     assert described["tasks"][0]["hyde_text"] is None
     assert described["confidence"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_classifier_is_told_the_previous_calculation() -> None:
+    prompts: list[str] = []
+
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        prompts.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        return ModelResponse(
+            parts=[TextPart(content=_payload(_task("academic_calculation", "q", None)))]
+        )
+
+    agent = build_classification_agent(FunctionModel(function=respond))
+    await classify_intent(
+        agent,
+        "thế cuối kỳ cần bao nhiêu để được A+",
+        previous_calculation="Điểm tổng kết học phần (lý thuyết + thực hành)",
+    )
+    await classify_intent(agent, "điều kiện tốt nghiệp là gì?")
+
+    assert prompts[0].endswith(
+        "<previous_calculation_turn>Điểm tổng kết học phần (lý thuyết + thực hành)"
+        "</previous_calculation_turn>"
+    )
+    assert "<previous_calculation_turn>" not in prompts[1]
+
+
+def test_classifier_prompt_keeps_calculation_follow_ups_as_calculations() -> None:
+    """The multi-turn rule and its examples must stay in the prompt (regression for a
+    case answer like "đại học chính quy á" being re-classified as advisory)."""
+
+    from app.rag.prompting import get_templates
+
+    prompt = get_templates().agent_message_classification
+    assert "NỐI TIẾP PHÉP TÍNH" in prompt
+    assert '"đại học chính quy á"' in prompt
+    assert "<previous_calculation_turn>" in prompt

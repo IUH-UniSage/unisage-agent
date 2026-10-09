@@ -10,7 +10,8 @@ template: |
   ## Quy tắc
   - `status`:
     + `found`: đúng MỘT công thức áp dụng được, có đủ mọi hệ số trong văn bản.
-    + `ambiguous`: có từ 2 công thức mâu thuẫn nhau (khác khoá, khác hệ, khác năm...) mà câu hỏi không cho biết trường hợp nào. Khi đó `formula` = null và `candidates` = [{"summary": "<mô tả ngắn từng công thức và trường hợp áp dụng>", "source_chunk_id": "..."}].
+    + `ambiguous`: có từ 2 công thức khác nhau (khác phương thức, khoá, hệ, năm...) mà câu hỏi không cho biết trường hợp nào. Khi đó `formula` = null và `candidates` = [{"summary": "<tên trường hợp ngắn gọn, ≤ 100 ký tự, VD 'Xét tuyển bằng kết quả thi tốt nghiệp THPT (XT2)'>", "source_chunk_id": "..."}] - MỖI trường hợp một mục, kể cả khi nhiều trường hợp nằm chung một đoạn. Hệ thống sẽ hỏi người dùng chọn.
+    + Nếu có `<chosen_case>`: người dùng đã chọn trường hợp đó - CHỈ chép công thức của đúng trường hợp này, KHÔNG trả `ambiguous`.
     + `not_found`: văn bản không có công thức, hoặc công thức thiếu hệ số/không rõ ràng. `formula` = null.
   - TUYỆT ĐỐI không tự bổ sung hệ số, đơn giá hay bước tính mà văn bản không ghi. Thiếu thì trả `not_found`.
   - `expression`: chỉ dùng tên biến, số, `+ - * / ( )` và `round(x, n)`, `min(...)`, `max(...)`. Không dùng `**`, `%`, so sánh, chuỗi. Phần trăm viết thành số thập phân (20% → 0.2).
