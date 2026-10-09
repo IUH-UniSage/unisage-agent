@@ -156,10 +156,17 @@ kiểm tra bị trượt.
 
 ### Khi có nhiều công thức hoặc không có công thức nào
 
-- `status = "ambiguous"`: các chunk có **từ 2 công thức trở lên mâu thuẫn nhau** (khác khoá, khác hệ,
-  khác năm). Trả về `candidates: [{summary, source_chunk_id}]`, không tính. Câu trả lời liệt kê các
-  công thức kèm nguồn và hỏi sinh viên thuộc trường hợp nào (dạng text thường, không phải panel, vì
-  không có cách nào chắc chắn để biến đây thành câu hỏi có options).
+- `status = "ambiguous"`: các chunk có **từ 2 công thức trở lên** (khác phương thức, khoá, hệ, năm),
+  mỗi trường hợp một mục `candidates: [{summary, source_chunk_id}]`, kể cả khi nằm chung một đoạn.
+  Không tính. Trường hợp được hỏi trên **panel**: câu hỏi `choice` field `formula_case`, option
+  `c1..c9` (nhãn = tên trường hợp, mô tả = nguồn), không có "Khác", kèm lead "Quy chế có nhiều công
+  thức…". `CalculationPlan` lưu `candidates` + `retrieval_query` (+ `solve` nếu là câu hỏi ngược).
+  Ít hơn 2 ứng viên hợp lệ (chunk id không thuộc kết quả tìm kiếm) → `formula_invalid`.
+- Khi sinh viên chọn (`resume_formula_case`): tìm lại bằng `retrieval_query`, chỉ giữ chunk của trường
+  hợp đã chọn (không còn → `formula_not_found`), gọi formula agent với `<chosen_case>` rồi qua đủ 7
+  kiểm tra; thiếu số thì panel tiếp theo hỏi số. Vẫn `ambiguous` sau khi đã chọn → `formula_invalid`
+  (không hỏi lại cùng một câu). Trước đây câu hỏi trường hợp là text thường, nên câu trả lời
+  ("đại học chính quy á") bị classifier coi là câu hỏi mới và đi nhầm sang advisory.
 - `status = "not_found"`, hoặc không có chunk nào: trả lời cố định "Mình chưa tìm thấy công thức này
   trong quy chế hiện có…" và gợi ý liên hệ Phòng Đào tạo. **Không tính, không đoán công thức.**
 - Prompt nói rõ: công thức mơ hồ hoặc thiếu hệ số thì trả `not_found` hoặc `ambiguous`, không tự bổ
@@ -400,6 +407,18 @@ trong `description`, nên không cần màn hình mới, và staff chỉ thấy 
 - Router: thêm trigger `(cuối|giữa) kỳ ... bao nhiêu điểm/thì/để`, `cần/phải thi/đạt bao nhiêu điểm`,
   `qua môn` cho `course_score`; classifier coi câu hỏi ngược là `academic_calculation`.
 - Trace staff có thêm `solve`.
+
+## 9. Classifier qua nhiều lượt
+
+Nguyên tắc: **câu trả lời cho câu hỏi của bot không bao giờ được phân loại lại.**
+
+1. Mọi câu hỏi lại (thiếu số, nhiều công thức, thuộc tính advisory) đi qua panel; lượt submit vào
+   thẳng `_run_resume`, không gọi classifier. Panel đang mở thì tin nhắn thường bị chặn (`409`).
+2. Câu gõ tự do sau một phép tính: classifier nhận `<previous_calculation_turn>` (tên phép tính trong
+   `last_calculation`) - tín hiệu có cấu trúc thay vì đoán từ lịch sử chat.
+3. Quy tắc 1c trong `message_classification.yaml`: câu bổ sung dữ kiện/đổi số/hỏi ngược về phép tính
+   trước giữ `academic_calculation`, `query` viết lại thành câu đầy đủ (bước tính chỉ đọc `query`);
+   câu hỏi quy định mới vẫn là advisory. Test giữ quy tắc và ví dụ trong prompt.
 
 ## Commands
 

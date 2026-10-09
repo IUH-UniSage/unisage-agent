@@ -128,6 +128,14 @@ Phép tính gần nhất của hội thoại được lưu (`last_calculation`) 
 bao nhiêu để được A+" dùng lại số đã nhập - chỉ khi extractor chọn rõ `formula_id = "previous"`, để
 một phép tính mới cùng công thức không âm thầm thừa hưởng số cũ.
 
+### Vì sao "nhiều công thức" được hỏi trên panel, và classifier không phân loại lại câu trả lời?
+
+Một câu hỏi lại bằng text thường không để lại trạng thái: câu trả lời ("đại học chính quy á") đi
+qua classifier như một câu hỏi mới và bị xếp nhầm sang advisory (lỗi thật 09-10-2026 với điểm xét
+tuyển). Nguyên tắc: câu trả lời cho câu hỏi của bot không bao giờ được phân loại lại - mọi câu hỏi
+lại đều là panel (lượt submit đi thẳng vào resume), còn câu gõ tự do sau một phép tính được
+classifier nhận kèm tên phép tính trước (`<previous_calculation_turn>`) và quy tắc nối tiếp riêng.
+
 ### Vì sao logic `/chat/stream` nằm trong service?
 
 Controller chỉ đọc HTTP request và trả về stream của `ChatStreamService`; chặn panel, claim, gọi Java

@@ -452,3 +452,5 @@ mutation qua `httpClient`, cập nhật cache của messages, trạng thái đ�
 - [x] Câu hỏi ngược "cần bao nhiêu điểm để được A+": `solver.py` (chạy lại công thức xuôi) + `target.py`, dùng chung cho công thức cài sẵn và Qdrant; hai ẩn → mức bằng nhau + bảng đánh đổi
 - [x] Lưu `last_calculation` (migration `a4b5c6d7e8f9`) để câu nối tiếp dùng lại số đã nhập (`formula_id = "previous"`)
 - [x] Router + classifier nhận câu hỏi ngược là `academic_calculation` / `course_score`
+- [x] "Nhiều công thức" hỏi trên panel (`formula_case`), chọn xong chỉ đọc công thức đó; câu trả lời không qua classifier
+- [x] Classifier nhận `<previous_calculation_turn>` + quy tắc 1c nối tiếp phép tính; phép nhân trong câu trả lời viết `×`
