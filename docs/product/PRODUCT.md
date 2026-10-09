@@ -171,9 +171,10 @@ tiết và các khoảng trống đã biết.
   từ hai nguồn trong cùng lượt: tham số tính toán còn thiếu (dựng từ `ParamSpec`) và khối
   ```json ask_user_form``` mà GenerationSynthesisNode sinh ra (bị lọc khỏi câu trả lời). State nằm ở
   `conversation_clarification_states` (`none → OPEN → PROCESSING → none | OPEN`).
-- **công thức cài sẵn / công thức theo quy chế** — GPA, điểm tổng kết học phần, quy đổi điểm nằm sẵn
-  trong `app/calculation/formulas.py`; công thức khác LLM chép từ Qdrant, phải qua 7 kiểm tra và luôn
-  gắn nhãn "Kết quả tham khảo theo quy chế". Con số luôn do Python tính.
+- **công thức cài sẵn / AI tự tính** — GPA, điểm tổng kết học phần, quy đổi điểm nằm sẵn trong
+  `app/calculation/formulas.py` và do Python tính xuôi. Mọi phép tính khác (hỏi ngược "cần bao nhiêu để
+  được A+", công thức trong tài liệu) do LLM tự tính, luôn gắn nhãn "Kết quả do AI tự tính, có thể sai"
+  và có nút Đúng/Sai.
 - **rerank** — bước chấm lại điểm liên quan giữa câu hỏi và từng chunk sau khi retrieval trả về. Hiện
   chỉ lọc ngưỡng trên điểm cosine có sẵn, chưa có cross-encoder thật (xem `known-gaps.md`).
 - **`is_public`** — cờ trên một chunk (kế thừa từ `Document.isPublic` bên `unisage-backend`): `true`
@@ -235,6 +236,6 @@ nhiều, hoặc chunk đúng lấy được nhưng xếp sai thứ hạng), ph�
 
 - `OPEN — chủ sản phẩm`: ngưỡng rerank đúng nên là bao nhiêu, sau khi có bộ câu hỏi đo thật? — hiện
   chưa có default: chờ số đo.
-- `OPEN — chủ sản phẩm`: tỉ lệ đúng của công thức lấy từ quy chế — chưa có eval trước phát hành (đã
+- `OPEN — chủ sản phẩm`: tỉ lệ đúng của phép tính do AI tự tính — chưa có eval trước phát hành (đã
   chốt bỏ); theo dõi qua phản hồi Đúng/Sai và ticket `AI_CALCULATION_WRONG`, tắt bằng
-  `CHAT_CALC_RETRIEVED_FORMULA_ENABLED` nếu cần.
+  `CHAT_CALC_LLM_ENABLED` nếu cần.

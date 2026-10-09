@@ -317,18 +317,21 @@ the original question, even if only one actually needed the answer. Splitting a 
 across advisory tasks precisely is future work. (Calculation tasks resume one by one - they keep
 their own parameters.)
 
-### A regulation formula can be copied with the wrong meaning
+### LLM-computed calculations can be wrong
 
-The 7 checks (`docs/specs/SPEC-calculation-node.md` §2) prove the quote is real and that every
-coefficient and variable comes from it, and an independent LLM compares expression and quote -
-but none of this proves the formula is semantically right. There is no pre-release eval
-(product decision, UNISAGE-99). Mitigations: the result is always labelled "Kết quả tham khảo
-theo quy chế" with the quote and source, the kill switch `CHAT_CALC_RETRIEVED_FORMULA_ENABLED`
-turns computing off (quote only), and Đúng/Sai feedback files an `AI_CALCULATION_WRONG` ticket
-with the staff-only trace.
+Only the forward calculation of the 3 built-in formulas is done by Python. Target questions
+("cuối kỳ cần bao nhiêu để được A+"), formulas found in documents and follow-ups are computed
+by the LLM (`main/chat_calculation_llm.yaml`), which can misapply a rounding step, pick the
+wrong case of a formula, or take a number from the wrong earlier calculation in the chat.
+There is no pre-release eval (product decision, UNISAGE-99). Mitigations: the built-in rules
+are given verbatim (`describe_builtin_rules()`), the answer must check its result by
+substituting it back, every such answer is labelled "Kết quả do AI tự tính, có thể sai" with
+its sources, the kill switch `CHAT_CALC_LLM_ENABLED` turns it off, and Đúng/Sai feedback files
+an `AI_CALCULATION_WRONG` ticket with the staff-only trace (question, known values, full answer,
+cited chunks).
 
-**When to revisit:** once tickets show a pattern, or before turning the formula path on for a
-new document set.
+**When to revisit:** once tickets show a pattern - e.g. move a frequent target question back to
+deterministic code.
 
 ### A guest's "Sai" vote creates no ticket
 
@@ -375,14 +378,3 @@ retrieval. No evaluation data yet on how often the decomposer actually fails
 on genuinely independent (non-comparison) questions - if this turns out to
 be common, the HyDE fallback would need its own multi-question handling
 instead of treating the merged text as one question.
-
-
-### Target solver assumes a monotonic regulation formula on large domains
-
-`solver.py` tries every value of a score/credit unknown (≤ 2000 points), which
-is exact. A regulation variable with a wide range (money) is bisected instead,
-which assumes the result moves one way with the unknown; both ends are checked
-first, but a formula with `min(...)`/`max(...)` that is flat or turns inside the
-range could return a non-minimal value. Not seen in current regulation formulas.
-GPA cannot be solved yet (its input is a course table, not a scalar) - such a
-question gets the fixed `target_unsupported` sentence.

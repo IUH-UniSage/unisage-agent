@@ -8,16 +8,13 @@ Thuần Python: không gọi LLM, không I/O, không phụ thuộc graph. Graph 
 
 ## Objective
 
-Tính đúng và **giải thích được** các phép tính học vụ. Mỗi kết quả kèm theo công thức và từng bước đã
-thế số, để sinh viên tự đối chiếu. LLM không làm bất kỳ phép tính nào; module này là nơi duy nhất
-sinh ra con số.
+Tính đúng và **giải thích được** phép tính XUÔI của 3 công thức cài sẵn (`formulas.py`):
+`course_score`, `grade_conversion`, `gpa`. Mỗi kết quả kèm công thức và từng bước đã thế số, để sinh
+viên tự đối chiếu; không trích nguồn.
 
-Có hai nguồn công thức:
-
-1. **Cài sẵn** (`formulas.py`): `course_score`, `grade_conversion`, `gpa`. Không trích nguồn, chỉ hiện
-   công thức.
-2. **Lấy từ quy chế** (`expression.py`): một biểu thức do LLM chép từ chunk Qdrant, đã qua kiểm tra
-   provenance ở `calculation-node`. Module này chỉ chịu trách nhiệm parse an toàn và tính.
+Mọi phép tính khác (câu hỏi ngược, công thức trong tài liệu Qdrant) do LLM tự tính ở `calculation-node`
+(chốt 09-10-2026). Module này chỉ cung cấp cho LLM bản mô tả đầy đủ các quy tắc
+(`describe_builtin_rules()`: trọng số, mọi bước làm tròn, bảng quy đổi) để nó tính ngược đúng quy tắc.
 
 ## Project Structure
 
@@ -25,12 +22,10 @@ Có hai nguồn công thức:
 app/calculation/
 ├── __init__.py
 ├── formulas.py     # TOÀN BỘ business rule: bảng quy đổi, làm tròn, 3 công thức, ParamSpec, BUILTIN_TRIGGERS (router luật)
-├── expression.py   # parser/evaluator allowlist cho công thức lấy từ Qdrant
 ├── result.py       # CalculationResult, Step, CalculationInputError (dataclass, frozen)
 └── render.py       # CalculationResult -> markdown (deterministic, không LLM)
 tests/calculation/
 ├── test_formulas.py
-├── test_expression.py
 └── test_render.py
 ```
 
@@ -144,7 +139,7 @@ class Step:
 
 @dataclass(frozen=True)
 class CalculationResult:
-    formula_id: str                    # "course_score" | "gpa" | "grade_conversion" | "retrieved"
+    formula_id: str                    # "course_score" | "gpa" | "grade_conversion"
     title: str
     formula_text: list[str]            # các dòng công thức hiện cho người dùng
     inputs: list[tuple[str, str]]      # (label, giá trị đã nhập) theo thứ tự hiển thị
@@ -169,84 +164,6 @@ mục "Số liệu" (số đã có ở card câu trả lời và trong các dòn
 nhận xét), bước làm tròn gộp vào dòng tính (`… ≈ 2.044 → 2.04`), và quy đổi điểm chữ nằm trong **một**
 dòng kết quả (`CalculationResult.summary`), ví dụ
 `Kết quả: ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**`.
-
-## `expression.py`: evaluator cho công thức lấy từ Qdrant
-
-### Input
-
-```python
-@dataclass(frozen=True)
-class FormulaVariable:
-    name: str            # ^[a-z][a-z0-9_]{0,31}$
-    label: str           # ≤ 80 ký tự
-    unit: str | None
-    min: Decimal | None
-    max: Decimal | None
-
-@dataclass(frozen=True)
-class RetrievedFormula:
-    expression: str      # ≤ 200 ký tự, VD "so_tc * don_gia + phi_khac"
-    variables: list[FormulaVariable]   # 1..10
-    result_label: str
-```
-
-### Grammar allowlist
-
-Parse bằng `ast.parse(expression, mode="eval")`, sau đó duyệt toàn bộ cây. **Gặp bất kỳ node nào
-ngoài danh sách dưới đây thì từ chối cả biểu thức.**
-
-| Được phép | Ràng buộc |
-|---|---|
-| `Expression` | gốc |
-| `BinOp` với `Add`, `Sub`, `Mult`, `Div` | không có `Pow`, `Mod`, `FloorDiv`, toán tử bit |
-| `UnaryOp` với `USub`, `UAdd` | |
-| `Constant` | chỉ `int` hoặc `float`, **không phải `bool`**, `abs ≤ 1e9`, tối đa 6 chữ số thập phân |
-| `Name` (ctx `Load`) | phải có trong `variables` |
-| `Call` | `func` là `Name` thuộc `{round, min, max}`, không keyword, không starred. `round(x, n)` thì `n` là hằng nguyên trong `0..4`. `min`/`max` có 2..10 đối số |
-
-Bị từ chối ngay cả khi cú pháp hợp lệ: `Attribute`, `Subscript`, `Compare`, `BoolOp`, `IfExp`,
-`Lambda`, comprehension, `JoinedStr`, `Starred`, `Pow`, chuỗi.
-
-### Giới hạn chống DoS
-
-- Độ dài biểu thức ≤ 200 ký tự, kiểm tra **trước khi** gọi `ast.parse`.
-- Số node ≤ 50, độ sâu ≤ 10.
-- Không có `Pow`, nên không thể tạo số khổng lồ bằng lũy thừa.
-- Tính trong `decimal.localcontext(prec=28, Emax=24, Emin=-24, traps=[Overflow, InvalidOperation, DivisionByZero])`.
-  Nếu kết quả trung gian có `abs > 1e12` thì báo lỗi.
-- Chia cho 0: `CalculationInputError(field=<biến ở mẫu số nếu xác định được, không thì "expression">, reason="Mẫu số bằng 0")`.
-- `round` trong biểu thức dùng `round_half_up`.
-
-### Kiểm tra tính nhất quán
-
-- Mọi `Name` trong biểu thức phải được khai báo trong `variables`, và mọi biến khai báo phải xuất hiện
-  trong biểu thức. Biến khai báo mà không dùng nghĩa là LLM chép sai, nên từ chối.
-- Giá trị của từng biến được kiểm tra theo `min`/`max` của chính biến đó.
-
-### Output
-
-`evaluate(formula, values) -> CalculationResult` với `formula_id="retrieved"`. Các bước gồm biểu thức
-dạng ký hiệu, biểu thức đã thế số, rồi kết quả. Với phép chia ở gốc cây thì thêm một bước tử số và một
-bước mẫu số. `validate(formula)` được tách riêng để `calculation-node` gọi trước khi hỏi người dùng
-bất cứ điều gì.
-
-## `solver.py` + `target.py`: câu hỏi ngược ("cần bao nhiêu để ...") {#solver}
-
-- `solve(forward, Domain(min, max, step), Goal(">=" | "<=", value), want="min" | "max")`: thử lần lượt
-  mọi giá trị của biến (≤ 2000 điểm), miền lớn hơn (tiền) thì chia đôi giả định đơn điệu (kiểm tra hai
-  đầu trước). Trả giá trị tốt nhất, giá trị liền kề **không** đạt (để chứng minh đó là mức tối thiểu),
-  hoặc đầu miền tốt nhất khi không đạt được. `forward` trả `None` = giá trị đó không tính được.
-- `forward` luôn là công thức xuôi (`compute(params).primary_value`), nên mọi bước làm tròn được giữ.
-- Miền: `ParamSpec.solve_step` (GK/CK bước 0.5, `half_point=True`; TBtx bước 0.1; tín chỉ bước 1);
-  biến Qdrant: `min/max` đã khai báo (thiếu `max` → 10^9), bước 1 nếu đơn vị là TC/tín/môn, còn lại 0.01.
-- Mục tiêu điểm chữ chỉ nhận cho công thức có `target_is_score10` (ĐTKHP): A+ → `ĐTKHP ≥ 9.0`.
-- Một ẩn: bước thay số đầy đủ với giá trị tìm được + dòng "Mức liền kề" + một dòng kết quả, VD
-  `Cần CK tối thiểu **10.0** (điểm từ 9.75 trở lên được làm tròn thành 10.0) để ĐTKHP ≥ 9.0 (A+).`
-  Không đạt được → nêu kết quả tốt nhất; đã đạt với 0 → "bạn đã chắc chắn đạt".
-- Hai ẩn: mức khi hai ẩn bằng nhau + bảng đánh đổi ≤ 5 dòng (chỉ trong khoảng còn đạt được), render
-  thành bảng markdown (`CalculationResult.table`).
-- `CalculationResult.primary_value`: con số chính (ĐTKHP, GPA, kết quả công thức quy chế) ở độ chính
-  xác đầy đủ - thứ solver so với mục tiêu.
 
 ## Code Style
 
@@ -275,11 +192,7 @@ Dùng pytest, đặt trong `tests/calculation/`, không mock gì vì module là 
   chỉ lý thuyết, chỉ thực hành, tổng tín chỉ bằng 0, điểm 10.01, tín chỉ 1.5.
 - **GPA:** có môn F, nhập điểm chữ lẫn điểm số, 1 môn, 30 môn, 31 môn bị từ chối.
 - **`missing_params`:** đúng thứ tự, `th` chỉ bắt buộc khi `tcth > 0`.
-- **Evaluator:** các ví dụ tấn công đều bị từ chối, gồm `__import__('os')`, `().__class__`, `a**b`,
-  `9**9**9`, `[1][0]`, `a if b else c`, `"x"`, `True + 1`, `1e400`, biểu thức 201 ký tự, lồng
-  ngoặc 11 tầng, `min()` với 11 đối số, biến khai báo mà không dùng, biến dùng mà không khai báo.
-  Ngoài ra test chia cho 0 và test các công thức hợp lệ cho kết quả đúng.
-- **Render:** snapshot markdown của 3 công thức cài sẵn và 1 công thức retrieved.
+- **Render:** snapshot markdown của 3 công thức cài sẵn.
 
 ## Boundaries
 
@@ -287,17 +200,18 @@ Dùng pytest, đặt trong `tests/calculation/`, không mock gì vì module là 
   business rule ở trên phải có ít nhất một test.
 - **Ask first:** đổi bảng quy đổi, đổi trọng số 20/30/50, đổi số chữ số làm tròn (đây là thay đổi
   nghiệp vụ, không phải refactor).
-- **Never:** dùng `eval`/`exec`/`compile` lên chuỗi từ LLM; dùng `float` trong phép tính; để LLM làm
-  tròn hoặc tính.
+- **Never:** dùng `eval`/`exec`/`compile` lên chuỗi từ LLM; dùng `float` trong phép tính; để LLM tính
+  thay Python phép tính xuôi của 3 công thức cài sẵn.
 
 ## Success Criteria
 
 - [ ] Mọi test trong `tests/calculation/` pass, coverage của `app/calculation/` ≥ 95%.
 - [ ] Ví dụ ĐTKHP ở trên ra đúng `7.5 / B / 3.0`, và các bước hiển thị khớp snapshot.
-- [ ] Mọi chuỗi tấn công trong danh sách đều bị `validate` từ chối mà không chạy bất kỳ code nào.
 - [ ] `ruff`, `mypy` sạch cho `app/calculation/`.
 
 ## Decisions (09-10-2026)
 
 - Giá trị trung gian hiển thị tối đa 2 chữ số thập phân kèm `≈`; tính bằng giá trị đầy đủ.
 - GPA không tự loại môn nào (GDTC, GDQP...); sinh viên tự chọn môn đưa vào bảng.
+- Bỏ `expression.py` (evaluator công thức Qdrant) và bộ giải ngược `solver.py`/`target.py`: phần đó giao
+  cho LLM tự tính (nhãn "AI tự tính, có thể sai" + nút Đúng/Sai), xem SPEC-calculation-node.

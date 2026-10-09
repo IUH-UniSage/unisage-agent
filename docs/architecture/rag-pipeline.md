@@ -92,11 +92,12 @@ Notes:
   none | OPEN` in `conversation_clarification_states`, fenced by `claim_token`, bounded by a
   lease that outlives the claimed turn's hard deadline. Java's `messages.metadata` is only a
   projection; the event is sent after both are written.
-- **Calculation** (`docs/specs/SPEC-calculation-node.md`, `app/calculation/`): the LLM never
-  computes. Built-in formulas (GPA, course score, grade conversion) live in `formulas.py`;
-  regulation formulas pass 7 fail-closed checks and are labelled "Kết quả tham khảo theo quy
-  chế" (kill switch `CHAT_CALC_RETRIEVED_FORMULA_ENABLED`). Node 10 only gets the titles of
-  what was computed, never a number.
+- **Calculation** (`docs/specs/SPEC-calculation-node.md`, `app/calculation/`): Python computes
+  the forward calculation of the built-in formulas (GPA, course score, grade conversion) in
+  `formulas.py`. Everything else (target questions, formulas from documents, follow-ups) is
+  computed by the LLM (`main/chat_calculation_llm.yaml`), labelled "Kết quả do AI tự tính, có thể
+  sai" with Đúng/Sai feedback (kill switch `CHAT_CALC_LLM_ENABLED`). Node 10 only gets the titles
+  of what was computed, never a number.
 
 ## Ingestion Flow
 

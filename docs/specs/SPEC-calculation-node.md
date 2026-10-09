@@ -1,6 +1,6 @@
 # Spec: calculation-node (unisage-agent)
 
-> **Status: Implemented** (UNISAGE-99, nhánh `feature/huydh-unisage-99-calculation-flow`). Rủi ro còn
+> **Status: Implemented** (thiết kế chốt lại 09-10-2026: Python tính xuôi 3 công thức, LLM tính phần còn lại) (UNISAGE-99, nhánh `feature/huydh-unisage-99-calculation-flow`). Rủi ro còn
 > lại nằm ở `unisage-agent/docs/specs/known-gaps.md`.
 
 Module id `calculation-node` trong [capability map](../../changes/09-10-2026-calculation-flow/capability-map.md).
@@ -8,183 +8,88 @@ Phụ thuộc: [SPEC-calc-engine](SPEC-calc-engine.md) và [SPEC-clarification-p
 
 ## Objective
 
-Thay placeholder `CalculationNode` bằng luồng thật cho các task `academic_calculation`:
+Thay placeholder `CalculationNode` bằng luồng thật cho các task `academic_calculation`. Chốt lại
+(09-10-2026, sau khi thử bộ giải ngược và 7 kiểm tra công thức Qdrant):
 
-1. Nhận diện cần tính gì và trích xuất tham số từ câu hỏi (LLM, chỉ đọc hiểu).
-2. Chọn công thức: một trong 3 công thức cài sẵn, hoặc tìm trong quy chế (Qdrant).
-3. Tham số nào còn thiếu hoặc không hợp lệ thì thành câu hỏi trên panel, gộp chung với câu hỏi của
-   advisory trong cùng lượt.
-4. Python tính (`calc-engine`), rồi **Python render** công thức và từng bước. LLM chỉ viết phần nhận
-   xét ngắn, không viết lại con số nào.
+1. **Python chỉ tính XUÔI 3 công thức cài sẵn** (GPA, ĐTKHP, quy đổi điểm): LLM chỉ chọn công thức và
+   chép số; thiếu/sai số thì hỏi trên panel; Python render công thức và từng bước.
+2. **Mọi phép tính khác do LLM tự tính** (`main/chat_calculation_llm.yaml`): câu hỏi ngược ("cuối kỳ cần
+   bao nhiêu để được A+"), công thức trong tài liệu Qdrant (quy chế, học phí, xét tuyển, bài học...), câu
+   nối tiếp cần lịch sử chat ("quay lại môn A"). Kết quả luôn có nhãn **"Kết quả do AI tự tính, có thể
+   sai"** và nút Đúng/Sai (mục 7) - chủ sản phẩm chấp nhận LLM có thể tính sai, bắt lỗi bằng phản hồi.
+3. Câu hỏi còn thiếu (của cả hai đường) gộp với câu hỏi advisory thành một panel.
 
 ## Luồng của một task calculation
 
 ```
-              ┌──────────────── calculation_extractor (LLM, 1 lần/task) ───────────────┐
- task.query ─►│ {formula_id: gpa|course_score|grade_conversion|retrieved, params, retrieval_query} │
-              └─────────────────────────────────────────────────────────────────────────┘
-                 │ formula cài sẵn                         │ retrieved
-                 │                                         ▼
-                 │                    retrieve_chunks(retrieval_query) + access filter
-                 │                                         ▼
-                 │                    calculation_formula (LLM): status found|ambiguous|not_found
-                 │                                         ▼
-                 │                    kiểm tra provenance + expression.validate()
-                 │                         │ found & hợp lệ          │ ambiguous / not_found / sai
-                 ▼                         ▼                         ▼
-        formulas.missing_params / validate tham số              TaskOutcome.unresolved (không tính)
-                 │ thiếu/sai                    │ đủ
-                 ▼                              ▼
-     TaskOutcome.needs_input(questions)    TaskOutcome.computed(CalculationResult)
+ task.query ─► calculation_extractor (LLM): {formula_id: gpa|course_score|grade_conversion|previous|llm,
+                                             params, retrieval_query}
+                 │ cài sẵn / previous (tính xuôi)            │ llm
+                 ▼                                           ▼
+   formulas.missing_params / calculate            retrieve_chunks(retrieval_query) nếu có (access filter)
+                 │                                           ▼
+     NeedsInput(ParamSpec) | Computed            chat_calculation_llm (không stream): builtin rules +
+                                                 tài liệu [C1..] + known_values + lịch sử chat
+                                                             │
+                                          ask_user_form → NeedsInput (panel) | text → LlmAnswered
 ```
 
 ### Trạng thái của task (`app/graph/nodes/calculation.py`)
 
 ```python
-@dataclass(frozen=True)
-class CalculationPlan:            # cũng là field `plan` trong PendingCalculationTask
-    formula_id: Literal["gpa", "course_score", "grade_conversion", "retrieved"]
-    retrieved: RetrievedFormulaWithSource | None   # chỉ khi formula_id == "retrieved"
+class CalculationPlan:            # field `plan` của PendingCalculationTask
+    formula_id: Literal["gpa", "course_score", "grade_conversion", "llm"]
+    retrieval_query: str | None   # chỉ cho "llm"
 
 TaskOutcome = (
-    Computed(task_id, result: CalculationResult, source: Citation | None)
-  | NeedsInput(task_id, plan: CalculationPlan, known_params: dict, questions: list[Question])
-  | Unresolved(task_id, reason: Literal["extraction_failed", "formula_not_found", "formula_ambiguous", "formula_invalid"],
-               candidates: list[FormulaCandidate])
+    Computed(task_id, result: CalculationResult, plan, params)            # Python, cài sẵn
+  | LlmAnswered(task_id, query, text, plan, known_params, sources)        # LLM tự tính
+  | NeedsInput(task_id, plan, known_params, questions, lead)
+  | Unresolved(task_id, reason: Literal["llm_disabled", "llm_failed"])
 )
 ```
 
-`run_calculation_task(task, ...) -> TaskOutcome` là hàm duy nhất graph gọi cho mỗi task.
+`run_calculation_task` (lượt thường) và `resume_calculation_task` (lượt submit) là hai hàm graph gọi.
 
-## 1. Extractor: viết lại `agents/calculation_extractor.yaml`
-
-Output contract mới. LLM **không** tự nghĩ câu hỏi; danh sách câu hỏi do `formulas.missing_params`
-dựng ra.
+## 1. Extractor: `agents/calculation_extractor.yaml`
 
 ```json
-{
-  "formula_id": "course_score",
-  "params": {"tbtx": 8, "gk": 7, "ck": 6.5, "th": [9, 8], "tclt": 2, "tcth": 1},
-  "retrieval_query": null
-}
+{"formula_id": "course_score", "params": {"tbtx": 8, "gk": 7, "ck": 6.5, "th": [9, 8], "tclt": 2, "tcth": 1}, "retrieval_query": null}
 ```
 
-- Prompt liệt kê đúng 3 công thức cài sẵn kèm tên param, lấy từ `ParamSpec` (render vào template lúc
-  load, nên không phải khai báo hai nơi). Không còn `tuition_calculation`, `credit_check`.
-- Không khớp công thức cài sẵn nào thì trả `formula_id: "retrieved"` và `retrieval_query` là câu tìm
-  kiếm văn phong quy chế, ví dụ "công thức tính học phí theo số tín chỉ đăng ký".
-- Chỉ trích những số **người dùng đã nói**. Không suy đoán, không điền mặc định.
-- Parse theo pattern sẵn có (`Agent[None, str]`, `_load_json_object`, failover). **Fail closed:** JSON
-  hỏng, `formula_id` lạ hoặc LLM lỗi thì ra `Unresolved("extraction_failed")` với câu cố định "Mình
-  chưa hiểu bạn cần tính gì, bạn nói rõ hơn giúp mình (ví dụ: tính GPA, tính điểm tổng kết học phần)
-  nhé." **Không** rơi sang nhánh Qdrant.
+- Công thức cài sẵn **chỉ khi tính xuôi** đúng công thức đó (kể cả chưa đủ số). `previous`: tính xuôi lại
+  phép tính trong `<previous_calculation>` với số mới. `llm`: mọi trường hợp khác, kèm `retrieval_query`
+  (câu tìm tài liệu chứa công thức) hoặc `null` khi chỉ cần công thức cài sẵn (VD hỏi ngược điểm cuối kỳ).
+- Chỉ trích những số **người dùng đã nói**. Prompt liệt kê 3 công thức cài sẵn từ `ParamSpec`.
+- `parse_extraction`: `llm` luôn thắng; còn lại một công thức cài sẵn duy nhất do router luật khớp sẽ
+  thắng (kể cả khi output hỏng); output hỏng/không rõ mà router không khớp → `llm` (LLM vẫn hỏi lại được).
+  `previous` chỉ nhận khi có `last_calculation` cài sẵn.
 
 ### 1.1 Định tuyến công thức cài sẵn bằng luật (trước LLM)
 
-`formulas.py` khai báo `BUILTIN_TRIGGERS: dict[formula_id, re.Pattern]`, chạy trên câu hỏi đã chuẩn hoá
-(NFC, chữ thường):
+`BUILTIN_TRIGGERS` trong `formulas.py` (NFC, chữ thường). Khớp đúng một → khoá công thức cài sẵn đó
+(trừ khi LLM chọn `llm`); khớp nhiều → đưa danh sách vào `<allowed_formula_ids>` (luôn kèm `previous`
+khi có). Test: `tests/calculation/test_builtin_triggers.py`.
 
-| formula_id | Pattern (rút gọn) |
-|---|---|
-| `gpa` | `\bgpa\b`, `điểm trung bình (tích lũy\|học kỳ\|chung)`, `thang (điểm )?4` kèm nhiều môn |
-| `course_score` | `(điểm )?tổng kết (học phần\|môn)`, `lý thuyết.*thực hành`, `\b(tx\|gk\|ck)\b` |
-| `grade_conversion` | `quy đổi`, `điểm chữ`, `(được\|là) (điểm )?[abcdf]\+?\b` |
+Câu hỏi cho công thức cài sẵn được dựng từ `ParamSpec` (`number`, `number_list`, `number_or_list`,
+`course_table`); số Python từ chối được hỏi lại kèm lý do, ví dụ "Điểm cuối kỳ (bạn nhập 11, ...)".
 
-- Khớp **đúng một** pattern → `formula_id` bị khoá theo luật. LLM extractor chỉ còn trích `params`;
-  `formula_id` mà LLM trả về bị bỏ qua (khác luật thì ghi log `calculation.router_disagreement`).
-- Khớp **nhiều** pattern → đưa danh sách ứng viên vào prompt; LLM chỉ được chọn trong danh sách đó,
-  không được chọn `retrieved`.
-- Không khớp pattern nào → LLM được chọn tự do giữa 3 công thức cài sẵn và `retrieved`.
+## 2. LLM tự tính: `main/chat_calculation_llm.yaml`
 
-Nhờ vậy một câu hỏi GPA không thể bị đưa nhầm sang công thức lấy từ Qdrant. Bộ pattern được test bằng
-một danh sách câu hỏi mẫu (`tests/calculation/test_builtin_triggers.py`), mỗi công thức ≥ 10 câu khớp
-và ≥ 10 câu không khớp.
-- Param mà Python từ chối (sai kiểu, ngoài khoảng) **vẫn được hỏi lại**, kèm lý do trong `prompt` của
-  câu hỏi, ví dụ "Điểm cuối kỳ (bạn nhập 11, điểm phải từ 0 đến 10)".
-
-Câu hỏi được dựng từ `ParamSpec`:
-
-| `ParamSpec.kind` | `Question.kind` | Ghi chú |
-|---|---|---|
-| `number` | `number` | `min`/`max`/`step` lấy từ spec, `tab_label` lấy từ label rút gọn |
-| `number_list` | `number_list` | Dùng cho điểm thực hành TH1..THn |
-| `course_table` | `course_table` | Dùng cho GPA |
-
-## 2. Nhánh Qdrant: `agents/calculation_formula.yaml` (mới)
-
-Input: các chunk đã qua `build_access_filter` (dùng chung `retrieve_chunks`, `limit = 5`, không HyDE),
-kèm câu hỏi gốc và các param mà extractor đã trích được. Output:
-
-```json
-{
-  "status": "found",
-  "formula": {
-    "expression": "so_tc * don_gia_tc",
-    "variables": [{"name": "so_tc", "label": "Số tín chỉ đăng ký", "unit": "TC", "min": 1, "max": 40},
-                  {"name": "don_gia_tc", "label": "Đơn giá một tín chỉ", "unit": "đồng", "min": 0, "max": 10000000}],
-    "result_label": "Học phí học kỳ",
-    "values": {"so_tc": 20},
-    "source_chunk_id": "c_123",
-    "source_quote": "Học phí = số tín chỉ đăng ký × đơn giá tín chỉ"
-  },
-  "candidates": []
-}
-```
-
-### Provenance và kiểm tra ngữ nghĩa (fail closed)
-
-Công thức chỉ được dùng khi qua **tất cả** các kiểm tra sau, theo đúng thứ tự (rẻ trước, đắt sau). Trượt
-một kiểm tra thì `Unresolved("formula_invalid")` và log `calculation.formula_rejected` kèm số thứ tự của
-kiểm tra bị trượt.
-
-1. `source_chunk_id` là một chunk trong danh sách vừa retrieve cho chính người dùng này.
-2. `source_quote` (chuẩn hoá NFC, gộp khoảng trắng, không phân biệt hoa thường) là **chuỗi con** của
-   `content` của chunk đó. Câu trích không có thật thì bị từ chối.
-3. `expression.validate(formula)` pass (grammar allowlist, giới hạn, biến khớp, xem SPEC-calc-engine).
-4. `values` chỉ chứa những biến đã khai báo, và mỗi giá trị nằm trong `min`/`max` của biến đó.
-5. **Hằng số được neo vào câu trích:** mọi hằng số trong biểu thức (trừ `0`, `1`, và đối số làm tròn
-   của `round`) phải xuất hiện trong `source_quote`. Phần trăm trong câu trích được quy đổi thành số
-   (`20%` ↔ `0.2`), và `,` được coi như `.`. Hệ số mà câu trích không có thì nghĩa là LLM tự thêm vào.
-6. **Biến được neo vào câu trích:** mỗi `variable.label` phải có ít nhất một từ nội dung (≥ 3 ký tự,
-   không thuộc stopword tiếng Việt như "của", "các", "số"…) xuất hiện trong `source_quote` đã chuẩn
-   hoá. Biến không có gì trong câu trích tương ứng thì nghĩa là LLM tự bịa ra biến.
-7. **Verifier LLM độc lập** (`agents/calculation_formula_verifier.yaml`): một lần gọi riêng, **không**
-   thấy câu hỏi của người dùng hay output của lần chép, chỉ nhận `source_quote`, `expression`,
-   `variables` (name + label) và trả `{"equivalent": true|false, "reason": "..."}`. Prompt yêu cầu
-   kiểm tra từng toán tử, từng hệ số, và biến nào ở tử hay ở mẫu. `false`, JSON hỏng hoặc LLM lỗi đều
-   bị coi là trượt.
-
-### Khi có nhiều công thức hoặc không có công thức nào
-
-- `status = "ambiguous"`: các chunk có **từ 2 công thức trở lên** (khác phương thức, khoá, hệ, năm),
-  mỗi trường hợp một mục `candidates: [{summary, source_chunk_id}]`, kể cả khi nằm chung một đoạn.
-  Không tính. Trường hợp được hỏi trên **panel**: câu hỏi `choice` field `formula_case`, option
-  `c1..c9` (nhãn = tên trường hợp, mô tả = nguồn), không có "Khác", kèm lead "Quy chế có nhiều công
-  thức…". `CalculationPlan` lưu `candidates` + `retrieval_query` (+ `solve` nếu là câu hỏi ngược).
-  Ít hơn 2 ứng viên hợp lệ (chunk id không thuộc kết quả tìm kiếm) → `formula_invalid`.
-- Khi sinh viên chọn (`resume_formula_case`): tìm lại bằng `retrieval_query`, chỉ giữ chunk của trường
-  hợp đã chọn (không còn → `formula_not_found`), gọi formula agent với `<chosen_case>` rồi qua đủ 7
-  kiểm tra; thiếu số thì panel tiếp theo hỏi số. Vẫn `ambiguous` sau khi đã chọn → `formula_invalid`
-  (không hỏi lại cùng một câu). Trước đây câu hỏi trường hợp là text thường, nên câu trả lời
-  ("đại học chính quy á") bị classifier coi là câu hỏi mới và đi nhầm sang advisory.
-- `status = "not_found"`, hoặc không có chunk nào: trả lời cố định "Mình chưa tìm thấy công thức này
-  trong quy chế hiện có…" và gợi ý liên hệ Phòng Đào tạo. **Không tính, không đoán công thức.**
-- Prompt nói rõ: công thức mơ hồ hoặc thiếu hệ số thì trả `not_found` hoặc `ambiguous`, không tự bổ
-  sung cho đủ.
-
-### Trình bày kết quả công thức Qdrant
-
-Khác với 3 công thức cài sẵn, kết quả từ Qdrant **luôn** được trình bày như sau (Python render):
-
-- Nhãn đầu khối: **"Kết quả tham khảo theo quy chế"**, cuối khối có nút Đúng/Sai (mục 7.3).
-- `source_quote` nguyên văn, kèm tên văn bản (`chunk.source`, `heading_path`) và citation giống nhánh
-  advisory.
-- Biểu thức đã chép, rồi các bước thế số và kết quả.
-
-Không hỏi sinh viên xác nhận công thức (đã chốt 09-10-2026). Rủi ro còn lại là cả 7 kiểm tra đều sót
-một lỗi ngữ nghĩa. Không làm eval trước khi phát hành (đã chốt 09-10-2026). Thay vào đó là công tắc tắt
-khẩn cấp, trace đầy đủ, và phản hồi Đúng/Sai tạo ticket cho admin (mục 7). Rủi ro này được ghi vào
-`known-gaps.md`.
+- Input: `<builtin_rules>` (`describe_builtin_rules()`: trọng số, mọi bước làm tròn, bảng quy đổi - lấy từ
+  hằng số trong `formulas.py`), `<documents>` (≤ 5 chunk đã qua `build_access_filter`, đánh số `[C1]..`),
+  `<known_values>` (số đã biết + câu trả lời panel), lịch sử chat gần đây, câu hỏi.
+- Gọi **không stream** (`CHAT_CALC_LLM_TIMEOUT_SECONDS`, mặc định 60 s) để tách khối `ask_user_form` bằng
+  `FenceRedactor` trước khi hiện. Trình bày: công thức (kèm `[Cn]` nếu từ tài liệu), thay số, kết quả;
+  câu hỏi ngược phải kiểm tra bằng giá trị tìm được và giá trị liền kề.
+- Không có công thức trong tài liệu → LLM nói rõ, không tự nghĩ công thức.
+- Thiếu số / nhiều trường hợp → khối `ask_user_form` (`number`, `number_list`, `choice`, `text`) →
+  `llm_questions` dựng câu hỏi panel (field bỏ dấu bằng `slug`; field đã có trong known hoặc trùng thì bỏ
+  - chống hỏi vòng); câu dẫn của LLM hiện phía trên panel.
+- Hiển thị: `**Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**`, text của LLM, rồi
+  `Nguồn:` các chunk được trích `[Cn]`.
+- Công tắc `CHAT_CALC_LLM_ENABLED=false` → câu cố định "Hiện mình chỉ tự tính được GPA, điểm tổng kết
+  học phần và quy đổi điểm..."; lỗi/timeout → câu "Mình chưa tính được câu này lúc này...".
 
 ## 3. Graph wiring (`streaming_graph.py`)
 
@@ -197,7 +102,7 @@ plan_route
                                     │
                          ══ BARRIER: await calc_future ══
                                     │
-     1. stream khối tính (Python render) cho mỗi Computed, theo thứ tự T1..T3
+     1. stream khối tính cho mỗi Computed (Python render) / LlmAnswered (nhãn AI), theo thứ tự T1..T3
      2. stream câu cố định cho mỗi Unresolved
      3. node 10 generation (qua FenceRedactor) → token ra client
      4. lượt chỉ có calculation: nhận xét đã kiểm tra số (mục 3.2)
@@ -217,7 +122,7 @@ plan_route
 
 ### 3.2 Nhận xét (`main/chat_calculation.yaml`): không bao giờ hiện số chưa kiểm tra
 
-Chỉ dùng cho lượt **chỉ có** calculation và có ít nhất một `Computed`.
+Chỉ dùng cho lượt **chỉ có** calculation và có ít nhất một `Computed` (công thức cài sẵn). Kết quả LLM tự tính đã có lời giải thích của chính nó nên không có nhận xét riêng.
 
 1. Gọi LLM **không stream** (`run_agent_text_with_failover`). Nhận xét ngắn (tối đa 2 câu, `max_tokens` thấp),
    nên chờ trọn vẹn rồi mới gửi không ảnh hưởng trải nghiệm.
@@ -245,49 +150,36 @@ def build_round(outcomes, advisory_asks, *, original_query, chain_depth, assista
 
 ## 5. Resume (lượt submit)
 
-Input: `PendingRound` đã claim + `dict[question_id, NormalizedAnswer]` đã validate.
-
 ```
 answers → nhóm theo question.task_id
-  PendingCalculationTask: params = known_params ∪ {question.field: answer}
-      → formulas.calculate / expression.evaluate (không gọi LLM extractor, không retrieve lại)
-      → Computed | NeedsInput (vẫn sai, hiếm: chỉ khi ràng buộc chéo như TCLT + TCTH = 0)
-  PendingAdvisoryTask: confirmed_metadata ∪ {field: option_id | other_text}
-      → _run_advisory_flow(origin_task) như hiện nay
+  PendingCalculationTask: values = known_params ∪ {question.field: answer}
+      cài sẵn → formulas.calculate (không gọi LLM)
+      llm     → chat_calculation_llm lại với known_values mới (không gọi extractor, không qua classifier)
+  PendingAdvisoryTask: confirmed_metadata ∪ {field: option_id | other_text} → _run_advisory_flow
 ```
 
-- `other_text` của câu hỏi advisory được ghi vào `confirmed_metadata` dưới dạng text tự do. Prompt
-  `<student_declared_attributes>` đã coi metadata là thông tin sinh viên tự khai, không phải bộ lọc.
-- Các task calculation và advisory chạy song song như một lượt thường. Thứ tự stream giống mục 3.
-- Resume mà vẫn còn thiếu thì tạo panel mới với `chain_depth + 1` (không giới hạn, xem SPEC-clarification-panel §2.6).
-- Câu hỏi gốc của task được dùng làm câu hỏi (`original_query`), không dùng bản tóm tắt câu trả lời.
+Còn thiếu thì tạo panel mới với `chain_depth + 1` (không giới hạn; field đã trả lời không bao giờ bị hỏi lại).
 
 ## 6. Prompts
 
-| File | Trạng thái | Nội dung |
-|---|---|---|
-| `agents/calculation_extractor.yaml` | viết lại | mục 1 |
-| `agents/calculation_formula.yaml` | mới | mục 2: chép công thức |
-| `agents/calculation_formula_verifier.yaml` | mới | mục 2, kiểm tra 7: so biểu thức với câu trích, không thấy câu hỏi |
-| `main/chat_calculation.yaml` | mới | nhận xét cho lượt chỉ có calculation (mục 3.2, không stream, kiểm tra số); dùng `{header}`, `{response_style}`, `{calculation_payload}` (outputs + inputs), `{user_query}` |
-| `common/task_2.yaml`, `common/ask_user_form_guide.yaml` | sửa | bỏ phần mô tả Type A cũ và `chat_calculation_result.yaml` không tồn tại; nói rõ form luôn bị hệ thống lọc khỏi câu trả lời |
-| `main/chat_academic_advisory.yaml`, `main/chat_multi_intent_synthesis.yaml` | sửa | thêm `{calculation_results}`: **chỉ tiêu đề** các phép tính đã hiện, không có số (chuỗi "Không có" khi không có phép tính) |
+| File | Nội dung |
+|---|---|
+| `agents/calculation_extractor.yaml` | mục 1: cài sẵn (xuôi) / previous / llm |
+| `main/chat_calculation_llm.yaml` | mục 2: LLM tự tính, `ask_user_form` khi thiếu số |
+| `main/chat_calculation.yaml` | nhận xét sau khối tính cài sẵn (mục 3.2) |
+| `agents/message_classification.yaml` | quy tắc 1c nối tiếp phép tính, `<previous_calculation_turn>` (mục 9) |
+| `common/response_style.yaml` | phép nhân viết `×` |
+| `main/chat_academic_advisory.yaml`, `main/chat_multi_intent_synthesis.yaml` | `{calculation_results}`: chỉ tiêu đề phép tính đã hiện |
 
-Mỗi file mới phải thêm field vào `PromptTemplates` (`schema.py`) và một dòng trong `loader.py`. Snapshot
-`tests/rag/fixtures/advisory_prompt_snapshot.txt` được cập nhật.
+## 7. Công tắc, trace và phản hồi cho phép tính do LLM
 
-## 7. Công tắc, trace và phản hồi cho công thức Qdrant
+Không có eval trước khi phát hành (đã chốt 09-10-2026): công tắc tắt khẩn cấp, trace đầy đủ, và phản hồi
+Đúng/Sai tạo ticket để admin điều tra.
 
-Thay cho bộ eval trước khi phát hành (đã chốt 09-10-2026), có ba thứ: một công tắc tắt khẩn cấp, trace
-đầy đủ cho mỗi lần tính, và phản hồi Đúng/Sai từ người dùng để admin điều tra.
+### 7.1 Công tắc `CHAT_CALC_LLM_ENABLED` (mặc định `True`)
 
-### 7.1 Công tắc `CHAT_CALC_RETRIEVED_FORMULA_ENABLED` (mặc định `True`)
-
-- `True`: nhánh Qdrant chạy đầy đủ như mục 2 (7 kiểm tra, rồi Python tính).
-- `False`: vẫn retrieve và chạy kiểm tra 1–2 (chunk id, câu trích có thật), nhưng **không tính, không
-  hỏi tham số**. Chỉ hiện nguyên văn câu trích kèm nguồn, cùng câu cố định "Bạn thế số vào công thức
-  trên để tính nhé, hiện mình chưa tự tính loại công thức này." Ba công thức cài sẵn không bị ảnh hưởng.
-- Đổi qua biến môi trường hoặc `.env` rồi restart agent. Không cần màn hình admin.
+`False`: chỉ 3 công thức cài sẵn được tính xuôi; mọi phép tính khác trả câu cố định (mục 2). Đổi qua
+biến môi trường rồi restart agent.
 
 ### 7.2 Trace: tách phần công khai và phần chỉ staff đọc được
 
@@ -299,14 +191,15 @@ giờ đi qua `GET /messages/...` hay SSE.
 
 ```json
 {"calculation": {"schema_version": 1, "items": [
-  {"item_id": "T1", "run_id": "<budget.request_id>", "mode": "retrieved", "status": "computed",
-   "result_summary": "Học phí học kỳ: 8.400.000 đồng",
+  {"item_id": "T1", "run_id": "<budget.request_id>", "mode": "llm", "status": "computed",
+   "result_summary": null,
    "source_summary": {"title": "QĐ-123.pdf", "heading": "Chương II › Điều 8"}}
 ]}}
 ```
 
 `result_summary` và `source_summary` vốn đã nằm trong `content` mà người dùng thấy, nên không lộ thêm gì.
-Không có `question_raw`, `inputs`, `expression`, `source_quote`, `models` hay `prompt_versions`.
+`mode`: `builtin` (Python) hoặc `llm`. Không có `question_raw`, `inputs`, `answer`, `models` hay
+`prompt_versions`.
 
 **(b) Phần chỉ staff: bảng `calculation_traces` (backend)**
 
@@ -317,19 +210,18 @@ Không có `question_raw`, `inputs`, `expression`, `source_quote`, `models` hay 
 - Bảng có các cột: `id`, `message_id` (FK → `messages`, `ON DELETE CASCADE`), `item_id`, `run_id`,
   `trace jsonb`, `created_at`. Có `UNIQUE (message_id, item_id)`. Gửi lại cùng một cặp này thì upsert,
   nên idempotent khi thử lại.
-- Nội dung `trace` (tối đa 16 KB mỗi item):
+- Nội dung `trace` (tối đa 16 KB mỗi item), với `mode = "llm"`:
 
   ```json
-  {"question_raw": "…", "formula_id": "retrieved", "expression": "so_tc * don_gia_tc",
-   "variables": [{"name": "so_tc", "label": "Số tín chỉ đăng ký"}], "formula_hash": "sha256:<12>",
-   "inputs": [{"name": "so_tc", "label": "Số tín chỉ đăng ký", "value": "20", "origin": "message"}],
-   "outputs": [{"label": "Học phí học kỳ", "value": "8400000"}],
-   "source": {"chunk_id": "c_123", "document_id": "d_9", "source": "QĐ-123.pdf",
-              "heading_path": ["Chương II", "Điều 8"], "chunk_hash": "sha256:<12>"},
-   "source_quote": "…", "checks": [{"n": 1, "passed": true}],
-   "models": {"extractor": "…", "formula": "…", "verifier": "…"},
-   "prompt_versions": {"calculation_extractor": "sha256:<12>"}}
+  {"question_raw": "…", "status": "computed", "mode": "llm", "retrieval_query": "công thức học phí",
+   "known_params": {"so_tin_chi": 20, "don_gia": "420000"}, "answer": "<toàn bộ lời giải của LLM>",
+   "sources": [{"ref": "C1", "chunk_id": "c_123", "document_id": "d_9", "source": "QĐ-123.pdf",
+                "heading_path": ["Chương II", "Điều 8"], "chunk_hash": "sha256:<12>"}],
+   "models": {"llm": "<provider>/<model>"},
+   "prompt_versions": {"agent_calculation_extractor": "sha256:<12>", "chat_calculation_llm": "sha256:<12>"}}
   ```
+
+  Với `mode = "builtin"`: `formula_id`, `formula_hash`, `inputs`, `outputs`.
 
 - Không có API public nào đọc bảng này. Staff xem trace **thông qua ticket** (7.3), không đọc thẳng
   bảng. Dữ liệu tự xoá theo message nhờ cascade; chính sách lưu trữ riêng (nếu cần) để ticket sau.
@@ -340,11 +232,11 @@ Không có `question_raw`, `inputs`, `expression`, `source_quote`, `models` hay 
 
 ### 7.3 Phản hồi Đúng/Sai
 
-Áp dụng cho **mỗi item có `mode = "retrieved"` và `status = "computed"`**. Công thức cài sẵn không có
+Áp dụng cho **mỗi item có `mode = "llm"` và `status = "computed"`**. Công thức cài sẵn (Python) không có
 nút này.
 
-- Khối kết quả có nhãn đầu là **"Kết quả tham khảo theo quy chế"**, cuối khối có hai nút **Đúng** và
-  **Sai**.
+- Khối kết quả có nhãn đầu là **"Kết quả do AI tự tính, có thể sai..."**, cuối khối có hai nút **Đúng**
+  và **Sai**.
 - Bấm **Sai** thì bắt buộc chọn **một** lý do: `WRONG_FORMULA` (Sai công thức), `WRONG_RESULT` (Sai kết
   quả), `WRONG_SOURCE` (Sai nguồn/quy chế), `MISSING_INFO` (Thiếu thông tin), `OTHER` (Khác). Có thêm ô
   ghi chú không bắt buộc, tối đa 500 ký tự; chọn `OTHER` thì ô này thành bắt buộc. Form có dòng "Câu hỏi
@@ -359,7 +251,7 @@ user hoặc guest giống `startTurn`)
 ```
 
 1. Message phải là ASSISTANT, thuộc người gọi, và có `metadata.calculation.items[itemId]` với
-   `mode = "retrieved"` và `status = "computed"`. Không thoả thì trả `404`.
+   `mode = "llm"` và `status = "computed"`. Không thoả thì trả `404`.
 2. Ghi `metadata.calculation_feedback[itemId] = {verdict, reason, at}`. Không lưu `note` ở đây; `note` chỉ
    nằm trong ticket. Áp dụng cho cả user lẫn guest.
 3. `verdict = WRONG` **và người gọi là user đã đăng nhập** → tạo hoặc cập nhật **một ticket riêng cho item
@@ -391,22 +283,12 @@ user hoặc guest giống `startTurn`)
 Admin điều tra trong màn `support-tickets` hiện có, lọc theo type `AI_CALCULATION_WRONG`. Trace đầy đủ nằm
 trong `description`, nên không cần màn hình mới, và staff chỉ thấy trace qua quyền xem ticket sẵn có.
 
-## 8. Câu hỏi ngược và phép tính trước
+## 8. Phép tính trước (`last_calculation`)
 
-- Extractor trả thêm `solve: {unknowns, goal: {grade} | {comparator, value}, want}`; `unknowns` không
-  bao giờ nằm trong `params` và không bao giờ bị hỏi trên panel. `CalculationPlan.solve` được lưu trong
-  round nên lượt submit giải tiếp mà không gọi LLM.
-- Công thức cài sẵn: ẩn phải có `solve_step`, sai → `Unresolved("target_unsupported")` (câu cố định).
-  Công thức Qdrant: formula agent ghi `unknowns` (tên biến đã khai báo), extractor không biết tên biến
-  thì để `[]`; ẩn không khai báo hoặc mục tiêu điểm chữ → `target_unsupported`.
-- `last_calculation` (cột JSON trên `conversation_clarification_states`, migration `a4b5c6d7e8f9`): phép
-  tính `Computed` cuối cùng của lượt (bỏ `solve`), ghi cùng lúc với `confirmed_metadata`; lượt không có
-  phép tính thì giữ nguyên. Lượt sau đưa nó vào prompt extractor (`<previous_calculation>`) và thêm
-  `previous` vào `<allowed_formula_ids>` (router không được ép công thức khác). `formula_id="previous"`
-  → gộp `params` cũ với số mới; công thức Qdrant dùng lại plan đã kiểm tra, **không** retrieve lại.
-- Router: thêm trigger `(cuối|giữa) kỳ ... bao nhiêu điểm/thì/để`, `cần/phải thi/đạt bao nhiêu điểm`,
-  `qua môn` cho `course_score`; classifier coi câu hỏi ngược là `academic_calculation`.
-- Trace staff có thêm `solve`.
+- Cột JSON trên `conversation_clarification_states` (migration `a4b5c6d7e8f9`), ghi cùng `confirmed_metadata`:
+  phép tính cuối của lượt. Cài sẵn: kèm `params` (câu nối tiếp tính xuôi `formula_id="previous"` gộp số cũ
+  với số mới). LLM: chỉ `title` (câu hỏi) - số của nó nằm trong lịch sử chat, LLM đọc lại khi cần.
+- `title` đi vào classifier (`<previous_calculation_turn>`, mục 9). Lượt không có phép tính giữ nguyên.
 
 ## 9. Classifier qua nhiều lượt
 
@@ -430,58 +312,39 @@ Nguyên tắc: **câu trả lời cho câu hỏi của bot không bao giờ đư
 
 ## Testing Strategy
 
-- **Unit, `run_calculation_task`** (LLM giả bằng `tests/llm_mocks.py`): công thức cài sẵn đủ tham số
-  → `Computed`; thiếu `th` khi `tcth > 0` → `NeedsInput` với đúng câu hỏi; điểm 11 → câu hỏi có lý do;
-  extractor trả JSON hỏng, `formula_id` lạ hoặc LLM lỗi → `Unresolved("extraction_failed")`, **không retrieve**
-  (mock retrieval có 0 lời gọi).
-- **Provenance:** mỗi kiểm tra 1–7 có ít nhất một ca trượt riêng, gồm: chunk id lạ; câu trích bịa;
-  biểu thức bị allowlist từ chối; giá trị ngoài khoảng; hệ số `0.4` không có trong câu trích; biến
-  "phí bảo hiểm" không có trong câu trích; verifier trả `false`, JSON hỏng hoặc timeout. Thêm các ca
-  `ambiguous`, `not_found`, không có chunk nào, và ca hợp lệ: khối có nhãn "Kết quả tham khảo" và câu
-  trích.
-- **Graph:** chỉ calculation, đủ tham số (khối tính + nhận xét, không có panel); chỉ calculation, thiếu
-  tham số (câu dẫn cố định + panel, không gọi LLM generation); có cả hai loại đều thiếu (**một** panel
-  có câu hỏi của cả hai origin); có cả hai loại, calculation đủ còn advisory thiếu; resume chỉ chạy các
-  task còn pending, không gọi lại extractor; chain 3 panel thì dừng.
-- **Kiểm tra số trong nhận xét:** số lạ, nhắc lại số của kết quả, LLM timeout → nhận xét bị bỏ hẳn; nhận xét hợp lệ được giữ nguyên.
-- **Barrier:** advisory chuẩn bị xong trước calculation vẫn không gửi token nào trước khi khối tính được gửi (mô phỏng bằng calc chậm).
-- **Fail closed + router luật:** extractor trả JSON hỏng thì ra `extraction_failed`, không retrieve; câu GPA khớp luật mà LLM trả `retrieved` thì vẫn chạy `gpa`.
-- **Trace và công tắc:** `metadata.calculation` **không** chứa `question_raw`/`inputs`/`expression`/`source_quote`/`models` (test kiểm tra từng key); trace đầy đủ được push sang `/internal/calculation-traces` trước finalize; push lỗi thì lượt vẫn chạy và có log; `prompt_versions` đổi khi file YAML đổi; `models` phản ánh credential sau failover. Công tắc tắt: chỉ hiện câu trích, không gọi `evaluate`, không có panel.
-- **E2E** (`tests/e2e/test_calculation_flow_e2e.py`): hỏi ĐTKHP thiếu điểm TH → event `clarification`
-  → submit → khối tính ra `7.5 / B / 3.0`.
+- **Extractor** (`tests/graph/test_calculation_task.py`): `llm` không bị router ghi đè; router khoá công
+  thức cài sẵn kể cả khi output hỏng; output hỏng không có router → `llm`; `previous` cần
+  `last_calculation`; `llm_questions` bỏ field đã biết/trùng/sai kiểu.
+- **Công thức cài sẵn:** đủ số → `Computed`; thiếu → `NeedsInput` từ `ParamSpec`; điểm 11 → hỏi lại kèm lý do.
+- **Graph** (`tests/graph/test_calculation_node.py`): lượt chỉ có tính toán (khối tính + nhận xét đã
+  kiểm tra số); thiếu số → panel; lượt hỗn hợp → một panel, khối tính trước advisory; câu hỏi ngược sau
+  một phép tính → LLM nhận builtin rules + lịch sử, có nhãn AI, `mode = "llm"`; LLM hỏi số bằng
+  `ask_user_form` → panel → resume không gọi classifier/extractor, có `Nguồn:` cho `[C1]`.
+- **Classifier:** `<previous_calculation_turn>` được gửi; quy tắc 1c và ví dụ còn trong prompt.
 
 ## Boundaries
 
-- **Always:** con số chỉ đến từ `calc-engine`; khối tính được render bằng Python; chunk qua access
-  filter trước khi tới LLM công thức.
-- **Ask first:** thêm công thức cài sẵn thứ 4; bỏ hoặc nới bất kỳ kiểm tra nào trong 7 kiểm tra
-  provenance; bỏ nhãn "tham khảo"; cho LLM tự viết phần các bước.
-- **Never:** tính khi không tìm thấy hoặc không chắc công thức; để LLM nghĩ câu hỏi cho công thức cài
-  sẵn; gọi lại extractor hay retrieve lại khi resume; gửi ra client text LLM có số chưa qua whitelist;
-  đưa con số phép tính vào prompt node 10; rơi sang nhánh Qdrant khi extractor lỗi.
+- **Always:** Python tính xuôi 3 công thức cài sẵn; mọi kết quả LLM tự tính có nhãn AI + nút Đúng/Sai;
+  chunk qua access filter trước khi tới LLM; mọi câu hỏi lại đi qua panel.
+- **Ask first:** thêm công thức cài sẵn thứ 4; bỏ nhãn AI; stream câu trả lời LLM tự tính.
+- **Never:** để LLM nghĩ câu hỏi cho công thức cài sẵn; gọi lại extractor khi resume; đưa con số phép
+  tính vào prompt node 10.
 
 ## Success Criteria
 
-- [ ] Câu "điểm TX 8, GK 7, CK 6.5, TH 9 và 8, môn 2 TC LT 1 TC TH thì tổng kết bao nhiêu" trả về khối
-      tính đúng `7.5 / B / 3.0` mà không có panel.
-- [ ] Câu hỏi GPA không kèm điểm → panel có một tab `course_table`; submit → GPA đúng 2 chữ số thập phân.
-- [ ] Câu hỏi học phí: công thức có trong Qdrant thì tính và hiện nguồn; không có thì trả câu
-      "chưa tìm thấy công thức", và log cho thấy không có lời gọi calc-engine nào.
-- [ ] Lượt có cả hai loại câu hỏi đều thiếu thông tin → một panel → submit → một câu trả lời gồm khối
-      tính, sau đó là phần advisory.
-- [ ] `known-gaps.md` bỏ 3 mục "CalculationNode is a placeholder", "two branches at once" và
-      "Calculation results don't reach node 10", thêm mục rủi ro "LLM chép sai ý nghĩa công thức".
-      `PRODUCT.md` cập nhật mục Not this product / Open. `DECISIONS.md` ghi các quyết định của
-      UNISAGE-99.
+- [x] Câu ĐTKHP đủ số → khối tính `7.5 / B / 3.0`, không có panel.
+- [x] GPA không kèm điểm → panel `course_table`; submit → GPA 2 chữ số thập phân.
+- [x] "Cuối kỳ cần bao nhiêu để được A+" → LLM tự tính, có nhãn AI và nút Đúng/Sai.
+- [x] Học phí/xét tuyển: LLM tính theo tài liệu tìm được (kèm nguồn) hoặc nói không tìm thấy công thức;
+      thiếu số hoặc nhiều trường hợp → panel.
 
 ## Decisions (09-10-2026)
 
 - Giữ bước nhận xét LLM (`chat_calculation.yaml`) cho lượt chỉ có calculation.
-- `ambiguous` trả lời bằng text; đưa vào panel là ticket khác.
 - (Review lần 2) Barrier trước node 10 thay cho buffer token; nhận xét không stream, không nhắc lại kết quả
   và bị bỏ hẳn nếu có số ngoài whitelist; node 10 chỉ nhận tiêu đề phép tính; extractor fail closed; công
   thức cài sẵn được định tuyến bằng luật trước LLM.
-- Công thức Qdrant vẫn được tính, nhưng phải qua 7 kiểm tra (neo hằng số, neo biến, verifier LLM độc lập),
+- (Đã thay bằng LLM tự tính, xem dòng cuối) Công thức Qdrant vẫn được tính, nhưng phải qua 7 kiểm tra (neo hằng số, neo biến, verifier LLM độc lập),
   luôn gắn nhãn "Kết quả tham khảo theo quy chế", không hỏi sinh viên xác nhận.
 - Không làm eval trước khi phát hành. Thay bằng công tắc `CHAT_CALC_RETRIEVED_FORMULA_ENABLED`, trace và
   nút Đúng/Sai với 5 lý do.
@@ -489,3 +352,7 @@ Nguyên tắc: **câu trả lời cho câu hỏi của bot không bao giờ đư
   `source_summary`. Trace đầy đủ (câu hỏi gốc, điểm số, biểu thức, câu trích, model, prompt version) nằm ở
   bảng `calculation_traces` bên backend, và staff chỉ xem qua ticket. Mỗi item sai có một ticket riêng nhờ
   partial unique index `(message_id, calculation_item_id)`.
+- (09-10-2026, sau khi thử) **Bỏ bộ giải ngược (`solver.py`) và 7 kiểm tra công thức Qdrant**
+  (`expression.py`, `provenance.py`, formula agent, verifier). Python chỉ tính xuôi 3 công thức cài sẵn;
+  mọi phép tính khác do LLM tự tính với nhãn "AI tự tính, có thể sai" và nút Đúng/Sai. Công tắc đổi
+  tên thành `CHAT_CALC_LLM_ENABLED`; `mode` của item đổi từ `retrieved` thành `llm`.

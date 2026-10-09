@@ -45,22 +45,24 @@ reload - agent không đọc nó để ra quyết định (xem mục UNISAGE-99 
 Spec: `docs/specs/SPEC-calc-engine.md`, `SPEC-clarification-panel.md`, `SPEC-calculation-node.md`,
 `unisage-web/docs/specs/SPEC-clarification-panel-ui.md`; contract `contracts/chat-sse.md`.
 
-### Vì sao LLM không bao giờ tính, và node 10 không nhận con số nào?
+### Vì sao node 10 không nhận con số nào, và nhận xét sau khối tính bị kiểm tra số?
 
-LLM tính sai các phép cộng có trọng số mà khó phát hiện. Mọi con số đến từ `app/calculation/`
-(`Decimal`, làm tròn half-up), khối các bước do Python render. LLM chỉ chọn công thức, chép số người
-dùng đã nói, chép công thức từ quy chế và viết nhận xét. Nhận xét không stream, không được nhắc lại
+Với 3 công thức cài sẵn, mọi con số đến từ `app/calculation/` (`Decimal`, làm tròn half-up) và khối
+các bước do Python render; LLM chỉ chọn công thức, chép số người dùng đã nói và viết nhận xét. Nhận xét không stream, không được nhắc lại
 kết quả, và bị bỏ hẳn nếu có số ngoài các số sinh viên đã nhập; node 10 chỉ nhận **tiêu đề** phép tính đã hiển thị.
 
-### Vì sao 3 công thức cài sẵn, còn lại lấy từ Qdrant mà không có eval trước khi phát hành?
+### Vì sao Python chỉ tính xuôi 3 công thức cài sẵn, còn lại để LLM tự tính?
 
 GPA, điểm tổng kết học phần (LT/TH) và quy đổi thang điểm là câu hỏi phổ biến nhất và có công thức
-ổn định - cài sẵn thì nhanh, test được, và được chọn bằng router luật trước LLM nên câu hỏi GPA không
-thể bị đưa nhầm sang Qdrant. Công thức khác chép từ quy chế phải qua 7 kiểm tra fail-closed (chunk id,
-câu trích có thật, allowlist biểu thức, khoảng giá trị, neo hằng số, neo biến, verifier LLM độc lập),
-luôn gắn nhãn "Kết quả tham khảo theo quy chế". Chủ sản phẩm chọn **không** làm eval trước phát hành;
-thay bằng công tắc `CHAT_CALC_RETRIEVED_FORMULA_ENABLED`, trace đầy đủ (bảng `calculation_traces` chỉ
-staff đọc) và nút Đúng/Sai tạo ticket `AI_CALCULATION_WRONG` riêng cho từng item.
+ổn định - cài sẵn thì nhanh, test được, được chọn bằng router luật trước LLM, và Python hiện từng bước.
+Đã thử cho Python làm thêm (chép công thức Qdrant thành biểu thức qua 7 kiểm tra fail-closed, và bộ giải
+ngược chạy lại công thức xuôi), nhưng hai đường đó từ chối quá nhiều câu hỏi thật (công thức có
+`max(...)`, lũy thừa, LaTeX hỏng, công thức bài học) và phức tạp. Chủ sản phẩm chốt (09-10-2026):
+mọi phép tính khác do LLM tự tính, chấp nhận có thể sai, luôn gắn nhãn "Kết quả do AI tự tính, có thể
+sai" kèm nguồn; không eval trước phát hành mà dùng công tắc `CHAT_CALC_LLM_ENABLED`, trace đầy đủ (bảng
+`calculation_traces` chỉ staff đọc) và nút Đúng/Sai tạo ticket `AI_CALCULATION_WRONG` riêng cho từng item.
+LLM được đưa nguyên văn các quy tắc của 3 công thức (trọng số, làm tròn, bảng quy đổi) để hỏi ngược
+vẫn đúng quy tắc, và phải tự kiểm tra kết quả bằng cách thay ngược lại.
 
 ### Vì sao panel có state machine `OPEN → PROCESSING(claim_token, lease)` thay vì xoá state khi claim?
 
@@ -109,32 +111,21 @@ Chủ sản phẩm yêu cầu cần bao nhiêu thì hỏi hết. Không thể h�
 dựng (hữu hạn), thuộc tính advisory đã trả lời nằm trong `confirmed_metadata` và không bao giờ bị hỏi
 lại, và mỗi panel đều cần sinh viên tự trả lời. Server chỉ chặn ở 50 câu để từ chối payload bất thường.
 
-### Vì sao câu hỏi "cần bao nhiêu điểm để được A+" do Python giải, và công thức vẫn hardcode?
+### Vì sao 3 công thức vẫn hardcode thay vì ingest tài liệu?
 
-LLM không đảo ngược được công thức có nhiều bước làm tròn: với TX 9·8·7, GK 9, TH 6·9·9 (3+1 TC),
-LLM tính ra "CK 9.4" nhưng thực tế CK 9.5 chỉ cho ĐTKHP 8.8, phải thi từ 9.75 (làm tròn thành 10) mới
-được 9.0. `app/calculation/solver.py` không biết công thức nào: nó chạy lại **công thức xuôi** cho từng
-giá trị của biến cần tìm (bước 0.5 cho điểm thành phần, 1 cho tín chỉ, chia đôi cho số tiền), nên đúng
-với mọi quy tắc làm tròn, và dùng chung cho công thức cài sẵn lẫn công thức Qdrant đã qua 7 kiểm tra.
-LLM chỉ chỉ ra biến cần tìm và mục tiêu. Hai ẩn (GK và CK) → mức khi hai cột bằng nhau + bảng đánh đổi
-ngắn.
+Chưa có văn bản gốc của 3 công thức; tự soạn tài liệu để ingest chỉ là hardcode ở chỗ khó kiểm soát
+hơn. Khi có văn bản quy chế chính thức thì ingest để trích dẫn và đối chiếu hệ số, còn 3 công thức vẫn
+ở trong code. Phép tính cài sẵn gần nhất được lưu (`last_calculation`) để câu nối tiếp tính xuôi ("nếu
+giữa kỳ 8 thì sao") dùng lại số đã nhập - chỉ khi extractor chọn rõ `formula_id = "previous"`.
 
-Công thức xuôi vẫn hardcode trong `formulas.py`: không có văn bản quy chế chứa công thức ngược (và hiện
-chưa có văn bản gốc của 3 công thức), nên tự soạn tài liệu để ingest chỉ là hardcode ở chỗ khó kiểm
-soát hơn và còn có thể trượt 7 kiểm tra. Khi có văn bản quy chế chính thức thì ingest để trích dẫn và
-đối chiếu hệ số, nhưng 3 công thức vẫn ở trong code.
-
-Phép tính gần nhất của hội thoại được lưu (`last_calculation`) để câu nối tiếp như "thế cuối kỳ cần
-bao nhiêu để được A+" dùng lại số đã nhập - chỉ khi extractor chọn rõ `formula_id = "previous"`, để
-một phép tính mới cùng công thức không âm thầm thừa hưởng số cũ.
-
-### Vì sao "nhiều công thức" được hỏi trên panel, và classifier không phân loại lại câu trả lời?
+### Vì sao mọi câu hỏi lại của phép tính đi qua panel, và classifier không phân loại lại câu trả lời?
 
 Một câu hỏi lại bằng text thường không để lại trạng thái: câu trả lời ("đại học chính quy á") đi
 qua classifier như một câu hỏi mới và bị xếp nhầm sang advisory (lỗi thật 09-10-2026 với điểm xét
-tuyển). Nguyên tắc: câu trả lời cho câu hỏi của bot không bao giờ được phân loại lại - mọi câu hỏi
-lại đều là panel (lượt submit đi thẳng vào resume), còn câu gõ tự do sau một phép tính được
-classifier nhận kèm tên phép tính trước (`<previous_calculation_turn>`) và quy tắc nối tiếp riêng.
+tuyển). Nguyên tắc: câu trả lời cho câu hỏi của bot không bao giờ được phân loại lại - LLM tự tính
+mà thiếu số hay có nhiều trường hợp thì trả khối `ask_user_form`, thành panel (lượt submit đi thẳng
+vào resume); còn câu gõ tự do sau một phép tính được classifier nhận kèm tên phép tính trước
+(`<previous_calculation_turn>`) và quy tắc nối tiếp riêng.
 
 ### Vì sao logic `/chat/stream` nằm trong service?
 

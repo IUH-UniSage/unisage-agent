@@ -185,17 +185,18 @@ giờ xuất hiện trong response của message hay trong SSE.
 
 ```json
 {"calculation": {"schema_version": 1, "items": [
-  {"item_id": "T1", "run_id": "…", "mode": "retrieved", "status": "computed",
-   "result_summary": "Học phí học kỳ: 8.400.000 đồng",
+  {"item_id": "T1", "run_id": "…", "mode": "llm", "status": "computed",
+   "result_summary": null,
    "source_summary": {"title": "QĐ-123.pdf", "heading": "Chương II › Điều 8"}}
 ]}}
 ```
 
-- `mode` là `builtin` hoặc `retrieved`.
-- `status` là một trong `computed`, `needs_input`, `unresolved`, `quote_only`.
-- Web hiện nút **Đúng / Sai** cho item có `mode == "retrieved"` và `status == "computed"`. Khối markdown
-  tương ứng trong `content` bắt đầu bằng dòng `**Kết quả tham khảo theo quy chế**`. Nút được gắn sau
-  khối, theo thứ tự `items`.
+- `mode` là `builtin` (Python tính xuôi 3 công thức cài sẵn) hoặc `llm` (LLM tự tính: câu hỏi ngược,
+  công thức trong tài liệu...). `result_summary` chỉ có với `builtin`.
+- `status` là một trong `computed`, `needs_input`, `unresolved`.
+- Web hiện nút **Đúng / Sai** cho item có `mode == "llm"` và `status == "computed"`. Khối markdown tương
+  ứng trong `content` bắt đầu bằng dòng `**Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình
+  nhé**`. Nút được gắn sau khối, theo thứ tự `items`.
 
 ### `metadata.calculation_feedback` (do backend ghi)
 
@@ -217,7 +218,7 @@ giờ xuất hiện trong response của message hay trong SSE.
 - `reason`: phải là `null` khi `CORRECT`. Khi `WRONG` thì bắt buộc là một trong `WRONG_FORMULA`,
   `WRONG_RESULT`, `WRONG_SOURCE`, `MISSING_INFO`, `OTHER`.
 - `note`: tối đa 500 ký tự; bắt buộc khi `reason == "OTHER"`.
-- `400`: sai validation. `404`: message không thuộc người gọi, hoặc không có phần tử retrieved đã tính.
+- `400`: sai validation. `404`: message không thuộc người gọi, hoặc không có phần tử `llm` đã tính.
   `409`: ticket của phần tử đã được xử lý xong, không đổi phản hồi được nữa.
 - Guest gửi được, nhưng `ticketCreated` luôn là `false`.
 - Mỗi item sai (của user đã đăng nhập) có **một ticket riêng**. T1 và T2 cùng sai thì có 2 ticket. Report

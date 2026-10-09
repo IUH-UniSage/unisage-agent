@@ -454,3 +454,4 @@ mutation qua `httpClient`, cập nhật cache của messages, trạng thái đ�
 - [x] Router + classifier nhận câu hỏi ngược là `academic_calculation` / `course_score`
 - [x] "Nhiều công thức" hỏi trên panel (`formula_case`), chọn xong chỉ đọc công thức đó; câu trả lời không qua classifier
 - [x] Classifier nhận `<previous_calculation_turn>` + quy tắc 1c nối tiếp phép tính; phép nhân trong câu trả lời viết `×`
+- [x] Chốt lại (09-10-2026): Python chỉ tính xuôi 3 công thức cài sẵn; bỏ bộ giải ngược và 7 kiểm tra công thức Qdrant; mọi phép tính khác do LLM tự tính (`chat_calculation_llm.yaml`, nhãn "AI tự tính", Đúng/Sai cho `mode = "llm"`), hỏi thiếu số qua `ask_user_form` → panel; công tắc `CHAT_CALC_LLM_ENABLED`

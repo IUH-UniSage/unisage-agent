@@ -158,7 +158,8 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
-| `CHAT_CALC_RETRIEVED_FORMULA_ENABLED` | `true` | Có tính công thức chép từ quy chế (Qdrant) hay không. `false` = chỉ trích nguyên văn công thức kèm nguồn, không tính (công tắc tắt khẩn cấp - không có eval trước phát hành). Ba công thức cài sẵn không bị ảnh hưởng |
+| `CHAT_CALC_LLM_ENABLED` | `true` | Cho LLM tự tính những phép tính Python không tính (hỏi ngược, công thức trong tài liệu, câu nối tiếp), gắn nhãn "AI tự tính, có thể sai". `false` = chỉ tính 3 công thức cài sẵn (công tắc tắt khẩn cấp - không có eval trước phát hành) |
+| `CHAT_CALC_LLM_TIMEOUT_SECONDS` | `60` | Thời gian chờ lời gọi LLM tự tính (không stream, vì phải tách khối hỏi lại trước khi hiện) |
 | `CHAT_CLAIMED_TURN_DEADLINE_SECONDS` | `150` | Hạn chót cứng cho mọi việc của một lượt gửi câu trả lời panel sau khi claim (start_turn → graph → finalize); quá hạn thì bị cancel, không ghi thêm gì |
 | `CHAT_CLARIFICATION_LEASE_SECONDS` | `210` | Thời hạn giữ panel ở trạng thái `PROCESSING`; phải ≥ deadline + 60 s, nếu không agent từ chối khởi động |
 | `CHAT_RETRIEVAL_MAX_CHUNKS` | `16` | Số chunk ứng viên lấy từ Qdrant mỗi lượt cho rerank chấm. Nhiều câu hỏi con thì mỗi câu được `ceil(N/số câu)` |
