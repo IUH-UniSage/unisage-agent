@@ -88,7 +88,7 @@ Notes:
 - **Clarification panel** (`docs/specs/SPEC-clarification-panel.md`, `contracts/chat-sse.md`):
   10's `ask_user_form` blocks are removed from the stream by `FenceRedactor` and become choice
   questions; calculation tasks missing parameters add questions built from `ParamSpec`. One
-  panel per turn, one tab per question (max 12). State machine `none → OPEN → PROCESSING →
+  panel per turn, one tab per question (every question asked; no chain limit). State machine `none → OPEN → PROCESSING →
   none | OPEN` in `conversation_clarification_states`, fenced by `claim_token`, bounded by a
   lease that outlives the claimed turn's hard deadline. Java's `messages.metadata` is only a
   projection; the event is sent after both are written.

@@ -167,7 +167,7 @@ tiết và các khoảng trống đã biết.
   `AcademicSecurityContext` (xác thực từ JWT). Chỉ dùng để chọn nhánh quy định, không bao giờ dùng
   làm điều kiện lọc tài liệu.
 - **clarification panel / `PendingRound`** — một vòng hỏi-lại đang mở: panel nhiều tab (mỗi câu hỏi
-  một tab, tối đa 12) hiển thị phía trên ô chat, sinh viên phải trả lời hết hoặc huỷ. Câu hỏi đến
+  một tab, hỏi đủ mọi câu, không giới hạn số panel nối tiếp) hiển thị phía trên ô chat, sinh viên phải trả lời hết hoặc huỷ. Câu hỏi đến
   từ hai nguồn trong cùng lượt: tham số tính toán còn thiếu (dựng từ `ParamSpec`) và khối
   ```json ask_user_form``` mà GenerationSynthesisNode sinh ra (bị lọc khỏi câu trả lời). State nằm ở
   `conversation_clarification_states` (`none → OPEN → PROCESSING → none | OPEN`).
