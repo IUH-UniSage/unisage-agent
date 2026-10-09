@@ -183,6 +183,7 @@ async def run_generation_synthesis(
     trace: GraphTrace,
     history: Sequence[HistoryMessage] = (),
     sub_queries: Sequence[str] | None = None,
+    calculation_titles: Sequence[str] = (),
     purpose: str | None = None,
     credential: CredentialConfig | None = None,
     snapshot_version: int | None = None,
@@ -202,6 +203,7 @@ async def run_generation_synthesis(
             chunks=chunks,
             web_results=web_results,
             history=history,
+            calculation_titles=calculation_titles,
         )
     else:
         full_prompt = build_system_prompt(
@@ -212,6 +214,7 @@ async def run_generation_synthesis(
             chunks=chunks,
             web_results=web_results,
             history=history,
+            calculation_titles=calculation_titles,
         )
     # Only the two per-request blocks are worth dumping - the rest of the
     # prompt is static YAML that can be read from the templates directly.

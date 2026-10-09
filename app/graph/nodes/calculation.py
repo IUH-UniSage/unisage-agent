@@ -532,11 +532,3 @@ UNRESOLVED_MESSAGES: dict[UnresolvedReason, str] = {
         "thức, nên chưa tính giúp bạn. Bạn có thể liên hệ Phòng Đào tạo để được hướng dẫn nhé."
     ),
 }
-
-
-# Still streamed by the graph until it is wired to `run_calculation_task` (T18).
-CALCULATION_PLACEHOLDER_TEMPLATE = (
-    "Phần tính toán (GPA, tín chỉ, học phí) hiện đang được phát triển nên mình "
-    "chưa tính giúp bạn được. Bạn có thể tự tính theo công thức trong quy chế "
-    "đào tạo, hoặc liên hệ Phòng Đào tạo để được hỗ trợ nhé."
-)

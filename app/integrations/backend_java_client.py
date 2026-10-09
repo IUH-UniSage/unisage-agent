@@ -319,6 +319,19 @@ class BackendJavaClient:
             json_body={"conversationId": conversation_id, "status": "cancelled"},
         )
 
+    async def push_calculation_traces(
+        self, *, message_id: str, items: list[dict[str, Any]]
+    ) -> None:
+        """`POST /internal/calculation-traces` - the staff-only trace of each calculation
+        (question, numbers, formula, source, models). Upserted by (message, item)."""
+
+        await self._request(
+            "POST",
+            "/internal/calculation-traces",
+            authorization=None,
+            json_body={"messageId": message_id, "items": items},
+        )
+
     async def get_model_registry_version(self) -> int:
         """`GET /internal/model-registry/version`.
 

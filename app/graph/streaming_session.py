@@ -335,15 +335,27 @@ async def run_and_persist(
                 return
             round_stored = persisted is True and pending_round is not None
 
-            metadata: dict[str, Any] | None = None
+            metadata: dict[str, Any] = {}
             if round_stored and pending_round is not None:
-                metadata = {
-                    "clarification": {
-                        "schema_version": 1,
-                        "status": "open",
-                        "panel": pending_round.panel.public().model_dump(mode="json"),
-                    }
+                metadata["clarification"] = {
+                    "schema_version": 1,
+                    "status": "open",
+                    "panel": pending_round.panel.public().model_dump(mode="json"),
                 }
+            if graph_output is not None and graph_output.calculation_items:
+                metadata["calculation"] = {
+                    "schema_version": 1,
+                    "items": graph_output.calculation_items,
+                }
+                if graph_output.calculation_traces:
+                    # Diagnostics for staff (ticket on a "Sai" vote) - never blocks the turn.
+                    traces = graph_output.calculation_traces
+                    await _finalize_safely(
+                        lambda: java_client.push_calculation_traces(
+                            message_id=assistant_message_id, items=traces
+                        ),
+                        what="calculation.trace_push",
+                    )
             finalized = await _finalize_safely(
                 lambda: java_client.update_message(
                     message_id=assistant_message_id,
@@ -353,7 +365,7 @@ async def run_and_persist(
                     citations=(graph_output.citations or None)
                     if graph_output is not None
                     else None,
-                    metadata=metadata,
+                    metadata=metadata or None,
                     authorization=authorization,
                 ),
                 what=f"finalize message {assistant_message_id}",

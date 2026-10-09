@@ -75,3 +75,6 @@ class GraphOutput:
     pending_round: PendingRound | None = None
     # The advisory answer's captured ask_user_form blocks - input to the panel.
     ask_forms: tuple[dict[str, Any], ...] = ()
+    # metadata.calculation items (public) and the staff-only traces (SPEC-calculation-node §7.2).
+    calculation_items: list[dict[str, Any]] = field(default_factory=list)
+    calculation_traces: list[dict[str, Any]] = field(default_factory=list)

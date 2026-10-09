@@ -54,9 +54,15 @@ class _Java:
     def __init__(self, status: int = 200) -> None:
         self.status = status
         self.patches: list[dict[str, Any]] = []
+        self.paths: list[str] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        self.patches.append(json.loads(request.read()))
+        self.paths.append(request.url.path)
+        body = json.loads(request.read())
+        if request.url.path == "/internal/calculation-traces":
+            self.traces = body
+            return httpx.Response(200, json={})
+        self.patches.append(body)
         return httpx.Response(self.status, json={})
 
 
@@ -209,3 +215,25 @@ async def test_claimed_turn_whose_claim_was_lost_writes_nothing_to_java(
     assert java.patches == []
     assert isinstance(items[-1], DoneItem)
     assert not any(isinstance(item, TokenItem) for item in items)
+
+
+@pytest.mark.asyncio
+async def test_calculation_trace_is_pushed_before_the_public_summary_is_finalized(
+    db_session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    java = _Java()
+    public = [{"item_id": "T1", "run_id": "r", "mode": "builtin", "status": "computed"}]
+    private = [
+        {"itemId": "T1", "runId": "r", "trace": {"question_raw": "điểm 8 7 6", "inputs": []}}
+    ]
+    await _run(
+        db_session_factory,
+        java,
+        GraphOutput(response_text="x", calculation_items=public, calculation_traces=private),
+        monkeypatch,
+    )
+    assert java.paths == ["/internal/calculation-traces", f"/messages/{ASSISTANT_ID}"]
+    assert java.traces == {"messageId": ASSISTANT_ID, "items": private}
+    metadata = java.patches[0]["metadata"]
+    assert metadata == {"calculation": {"schema_version": 1, "items": public}}
+    assert "question_raw" not in json.dumps(metadata, ensure_ascii=False)

@@ -11,7 +11,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
-from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
+from app.graph.calculation_turn import NEEDS_INPUT_LEAD
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels
@@ -116,75 +116,6 @@ def _traced_nodes(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_calculation_only_turn_returns_placeholder_without_retrieval(
-    mock_sync_llm_model: Callable[[str], FunctionModel],
-    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    retrieval = _RecordingRetrieval([_CHUNK])
-    models = GraphModels(
-        classification=make_classification_llm_model("academic_calculation"),
-        query_transformation=mock_sync_llm_model("unused"),
-        generation=mock_streaming_llm_model(["unused"]),
-        retrieval=retrieval,
-    )
-    tokens: list[str] = []
-
-    with caplog.at_level("INFO", logger="unisage.graph"):
-        result = await run_graph(
-            _input("Tính GPA giúp em", confirmed_metadata={"he_dao_tao": "chinh_quy"}),
-            models,
-            _sink(tokens),
-            _TRACE,
-            _usage_recorder(),
-        )
-
-    assert result.response_text == CALCULATION_PLACEHOLDER_TEMPLATE
-    assert "".join(tokens) == CALCULATION_PLACEHOLDER_TEMPLATE
-    assert retrieval.queries == []
-    assert result.confirmed_metadata == {"he_dao_tao": "chinh_quy"}
-    assert result.citations == []
-    nodes = _traced_nodes(caplog)
-    assert nodes[-1] == "07_CalculationNode"
-    assert "06_QueryTransformationNode" not in nodes
-
-
-@pytest.mark.asyncio
-async def test_calculation_plus_procedure_answers_both_parts(
-    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
-    retrieval = _RecordingRetrieval([_CHUNK])
-    models = GraphModels(
-        classification=_mixed_classification_model(),
-        query_transformation=_echo_model(),
-        generation=mock_streaming_llm_model(["Thủ tục gồm 3 bước ", "[1]."]),
-        retrieval=retrieval,
-    )
-    tokens: list[str] = []
-
-    with caplog.at_level("INFO", logger="unisage.graph"):
-        result = await run_graph(
-            _input(_MIXED_MESSAGE), models, _sink(tokens), _TRACE, _usage_recorder()
-        )
-
-    expected = f"Thủ tục gồm 3 bước [1].\n\n{CALCULATION_PLACEHOLDER_TEMPLATE}"
-    assert result.response_text == expected
-    assert "".join(tokens) == expected
-    # Citations come from the advisory answer only - the placeholder has no [n].
-    assert len(result.citations) == 1
-    assert _traced_nodes(caplog)[-5:] == [
-        "06_QueryTransformationNode",
-        "08_RetrievalFilteringNode",
-        "09_PostRetrievalRerankNode",
-        "10_GenerationSynthesisNode",
-        "07_CalculationNode",
-    ]
-
-
-@pytest.mark.asyncio
 async def test_mixed_turn_retrieves_on_the_advisory_question_only(
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
@@ -203,50 +134,6 @@ async def test_mixed_turn_retrieves_on_the_advisory_question_only(
     (query,) = retrieval.queries
     assert query.startswith(_ADVISORY_QUERY)
     assert "GPA" not in query
-
-
-@pytest.mark.asyncio
-async def test_mixed_turn_keeps_the_clarification_raised_by_the_advisory_part(
-    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
-    models = GraphModels(
-        classification=_mixed_classification_model(),
-        query_transformation=_echo_model(),
-        generation=mock_streaming_llm_model([_ASK_FORM_ANSWER]),
-        retrieval=_RecordingRetrieval([_CHUNK]),
-    )
-
-    result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE, _usage_recorder())
-
-    assert result.pending_round is not None
-    assert [q.field for q in result.pending_round.panel.questions] == ["training_type"]
-    # The calculation task is T1, so the advisory part is T2.
-    assert result.pending_round.panel.questions[0].task_id == "T2"
-    # Resume must retrieve on the advisory question, not the GPA part.
-    assert result.pending_round.original_query == _ADVISORY_QUERY
-    assert result.response_text.endswith(CALCULATION_PLACEHOLDER_TEMPLATE)
-
-
-@pytest.mark.asyncio
-async def test_mixed_turn_without_context_falls_back_then_appends_the_placeholder(
-    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)  # nothing can pass
-    models = GraphModels(
-        classification=_mixed_classification_model(),
-        query_transformation=_echo_model(),
-        generation=mock_streaming_llm_model(["Chưa tìm thấy quy định phù hợp."]),
-        retrieval=_RecordingRetrieval([_CHUNK]),
-    )
-
-    result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE, _usage_recorder())
-
-    assert result.used_ticket_fallback is True
-    assert result.response_text.endswith(f"\n\n{CALCULATION_PLACEHOLDER_TEMPLATE}")
-    assert "chưa tìm thấy" in result.response_text.lower()
 
 
 def _two_advisory_classification_model() -> FunctionModel:
@@ -343,3 +230,180 @@ async def test_single_advisory_question_still_passes_its_resolved_query(
     (prompt,) = generation_prompts
     assert f"Câu hỏi độc lập: {message}" in prompt
     assert _RESOLVED_MARKER in prompt
+
+
+def _scripted(*outputs: object) -> FunctionModel:
+    """Non-streamed calls answered in order (classification, extractor, ...)."""
+
+    remaining = [o if isinstance(o, str) else json.dumps(o, ensure_ascii=False) for o in outputs]
+
+    def respond(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=remaining.pop(0))])
+
+    return FunctionModel(function=respond)
+
+
+def _note_model(note: str) -> FunctionModel:
+    def respond(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=note)])
+
+    return FunctionModel(function=respond)
+
+
+_COURSE_QUERY = (
+    "Môn 2 tín lý thuyết 1 tín thực hành, TX 8 GK 7 CK 6.5, TH 9 và 8 thì tổng kết bao nhiêu?"
+)
+_COURSE_TASK = {
+    "tasks": [{"intent": "academic_calculation", "query": _COURSE_QUERY}],
+    "confidence": 0.9,
+}
+_COURSE_PARAMS = {
+    "formula_id": "course_score",
+    "params": {"tclt": 2, "tcth": 1, "tbtx": 8, "gk": 7, "ck": 6.5, "th": [9, 8]},
+}
+
+
+@pytest.mark.asyncio
+async def test_calculation_only_turn_with_every_number_shows_steps_and_a_checked_note(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    retrieval = _RecordingRetrieval([_CHUNK])
+    models = GraphModels(
+        classification=_scripted(_COURSE_TASK, _COURSE_PARAMS),
+        query_transformation=_echo_model(),
+        generation=_note_model("Điểm chữ B nghĩa là bạn đã qua học phần."),
+        retrieval=retrieval,
+    )
+    tokens: list[str] = []
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _input(_COURSE_QUERY), models, _sink(tokens), _TRACE, _usage_recorder()
+        )
+
+    assert "".join(tokens) == result.response_text
+    assert "Kết quả: ĐTKHP **7.5** · Điểm chữ **B** · Thang 4 **3.0**" in result.response_text
+    assert result.response_text.endswith("Điểm chữ B nghĩa là bạn đã qua học phần.")
+    assert result.pending_round is None
+    assert retrieval.queries == []
+    assert result.calculation_items[0]["status"] == "computed"
+    assert result.calculation_items[0]["result_summary"] == "ĐTKHP: 7.5; Điểm chữ: B; Thang 4: 3.0"
+    assert "question_raw" not in result.calculation_items[0]
+    assert result.calculation_traces[0]["trace"]["question_raw"] == _COURSE_QUERY
+    assert "06_QueryTransformationNode" not in _traced_nodes(caplog)
+
+
+@pytest.mark.asyncio
+async def test_note_with_an_invented_number_is_replaced() -> None:
+    models = GraphModels(
+        classification=_scripted(_COURSE_TASK, _COURSE_PARAMS),
+        query_transformation=_echo_model(),
+        generation=_note_model("Bạn cần thêm 0.8 điểm để lên B+."),
+        retrieval=_RecordingRetrieval([]),
+    )
+    result = await run_graph(_input(_COURSE_QUERY), models, _sink([]), _TRACE, _usage_recorder())
+    assert "0.8" not in result.response_text
+    assert result.response_text.endswith("Kết quả: ĐTKHP 7.5, Điểm chữ B, Thang 4 3.0.")
+
+
+@pytest.mark.asyncio
+async def test_calculation_only_turn_missing_numbers_asks_on_the_panel_without_any_llm_answer(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    retrieval = _RecordingRetrieval([_CHUNK])
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_calculation"),
+        query_transformation=mock_sync_llm_model("unused"),
+        generation=_note_model("must not be called"),
+        retrieval=retrieval,
+    )
+    tokens: list[str] = []
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _input("Tính GPA giúp em", confirmed_metadata={"he_dao_tao": "chinh_quy"}),
+            models,
+            _sink(tokens),
+            _TRACE,
+            _usage_recorder(),
+        )
+
+    assert result.response_text == NEEDS_INPUT_LEAD == "".join(tokens)
+    assert result.pending_round is not None
+    (question,) = result.pending_round.panel.questions
+    assert (question.kind, question.field, question.task_id) == ("course_table", "courses", "T1")
+    assert retrieval.queries == []
+    assert result.confirmed_metadata == {"he_dao_tao": "chinh_quy"}
+    assert result.calculation_items[0]["status"] == "needs_input"
+    assert "07_CalculationNode" in _traced_nodes(caplog)
+
+
+@pytest.mark.asyncio
+async def test_mixed_turn_streams_the_calculation_before_the_advisory_answer(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    models = GraphModels(
+        classification=_mixed_classification_model(),
+        query_transformation=_echo_model(),
+        generation=mock_streaming_llm_model(["Thủ tục gồm 3 bước ", "[1]."]),
+        retrieval=_RecordingRetrieval([_CHUNK]),
+    )
+    tokens: list[str] = []
+
+    result = await run_graph(
+        _input(_MIXED_MESSAGE), models, _sink(tokens), _TRACE, _usage_recorder()
+    )
+
+    assert tokens[0] == f"{NEEDS_INPUT_LEAD}\n\n"
+    assert result.response_text == f"{NEEDS_INPUT_LEAD}\n\nThủ tục gồm 3 bước [1]."
+    assert "".join(tokens) == result.response_text
+    assert len(result.citations) == 1
+
+
+@pytest.mark.asyncio
+async def test_mixed_turn_asks_both_parts_on_one_panel(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    models = GraphModels(
+        classification=_mixed_classification_model(),
+        query_transformation=_echo_model(),
+        generation=mock_streaming_llm_model([_ASK_FORM_ANSWER]),
+        retrieval=_RecordingRetrieval([_CHUNK]),
+    )
+
+    result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.pending_round is not None
+    questions = result.pending_round.panel.questions
+    assert [(q.id, q.field, q.origin, q.task_id) for q in questions] == [
+        ("q1", "courses", "calculation", "T1"),
+        ("q2", "training_type", "advisory", "T2"),
+    ]
+    # Resume must retrieve on the advisory question, not the GPA part.
+    assert result.pending_round.original_query == _ADVISORY_QUERY
+    assert "ask_user_form" not in result.response_text
+
+
+@pytest.mark.asyncio
+async def test_mixed_turn_without_context_still_shows_the_calculation_first(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)  # nothing can pass
+    models = GraphModels(
+        classification=_mixed_classification_model(),
+        query_transformation=_echo_model(),
+        generation=mock_streaming_llm_model(["Chưa tìm thấy quy định phù hợp."]),
+        retrieval=_RecordingRetrieval([_CHUNK]),
+    )
+
+    result = await run_graph(_input(_MIXED_MESSAGE), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.used_ticket_fallback is True
+    assert result.response_text.startswith(NEEDS_INPUT_LEAD)
+    assert "chưa tìm thấy" in result.response_text.lower()
