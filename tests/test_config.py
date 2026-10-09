@@ -136,3 +136,20 @@ def test_tavily_include_domains_parse_from_comma_separated_env(
     fresh = Settings()
 
     assert fresh.TAVILY_INCLUDE_DOMAINS == ["iuh.edu.vn", "pdt.iuh.edu.vn"]
+
+
+def test_clarification_lease_must_outlive_the_claimed_turn_deadline() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    Settings(
+        _env_file=None, CHAT_CLAIMED_TURN_DEADLINE_SECONDS=150, CHAT_CLARIFICATION_LEASE_SECONDS=210
+    )
+    with pytest.raises(ValidationError, match="CHAT_CLARIFICATION_LEASE_SECONDS"):
+        Settings(
+            _env_file=None,
+            CHAT_CLAIMED_TURN_DEADLINE_SECONDS=150,
+            CHAT_CLARIFICATION_LEASE_SECONDS=200,
+        )

@@ -137,6 +137,14 @@ class ConversationClarificationState(Base):
     confirmed_metadata: Mapped[dict[str, str]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
     )
+    # Panel v2 state machine (UNISAGE-99): NULL = no round, OPEN, or PROCESSING while
+    # one request holds `claim_token` until `claim_expires_at`.
+    pending_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pending_panel_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
