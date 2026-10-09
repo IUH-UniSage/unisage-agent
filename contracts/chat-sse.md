@@ -169,7 +169,7 @@ của cuộc chat là ASSISTANT, `COMPLETED`, và có `clarification.status == "
     thái đã chọn. Options lấy từ `metadata.clarification.panel` của message ASSISTANT **ngay trước**
     message USER này (đối chiếu bằng `panel_id` và `question_id`). Không tìm thấy panel thì chỉ hiện
     `display`.
-  - `number` / `number_list` / `number_or_list` / `text`: hiện `display` (với `number_or_list`, `display` đã ghi rõ cách nhập, VD `"TBtx 7.3"` hoặc `"Từng cột: 8, 7, 7"`).
+  - `number` / `number_list` / `number_or_list` / `text`: hiện `display` (với `number_or_list`, `display` ghi rõ cách nhập: `"Nhập sẵn: 7.3"` hoặc `"Từng cột: 8, 7, 7"`).
   - `course_table`: bảng `rows`.
 - **Panel bị huỷ** (message ASSISTANT có `metadata.clarification.status == "cancelled"`): ngay dưới câu
   trả lời của message đó, hiện card thu gọn `Đã huỷ · N câu hỏi ⌄`. Mở ra thì thấy các câu hỏi và
