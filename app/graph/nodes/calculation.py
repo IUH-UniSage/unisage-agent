@@ -217,14 +217,14 @@ def question_for(spec: ParamSpec, reason: str | None = None) -> dict[str, Any]:
         "origin": "calculation",
         "field": spec.name,
     }
-    if spec.kind in ("number", "number_list"):
+    if spec.kind in ("number", "number_list", "number_or_list"):
         draft["number"] = {
             "min": plain(spec.min) if spec.min is not None else "0",
             "max": plain(spec.max) if spec.max is not None else "0",
             "step": plain(spec.step) if spec.step is not None else "1",
             "unit": spec.unit,
         }
-    if spec.kind in ("number_list", "course_table"):
+    if spec.kind in ("number_list", "number_or_list", "course_table"):
         draft["max_items"] = spec.max_items
     return draft
 

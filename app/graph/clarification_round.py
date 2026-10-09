@@ -3,7 +3,10 @@
 Questions come from two places: the advisory answer's captured ask_user_form
 blocks (choice questions the model asked for) and calculation tasks missing
 parameters (built deterministically from `ParamSpec`). Each task's questions
-keep their order; ids are assigned q1..q12 across the whole panel. Spec:
+keep their order; ids are assigned q1, q2, ... across the whole panel, and
+every question is asked - there is no per-panel or per-chain limit. A field
+the student already answered is in `confirmed_metadata` and never asked again,
+which is what keeps the model from asking in circles. Spec:
 docs/specs/SPEC-clarification-panel.md §1, SPEC-calculation-node.md §4.
 """
 
@@ -29,7 +32,6 @@ from app.schemas.intent import ClassifiedTask
 
 logger = logging.getLogger(__name__)
 
-MAX_CHAIN_DEPTH = 3
 _CHOICE_OPTIONS_MAX = 12
 
 
@@ -102,10 +104,9 @@ def advisory_task(task_id: str, origin_tasks: Sequence[ClassifiedTask]) -> Pendi
 def build_round(
     parts: Sequence[TaskQuestions], *, original_query: str, chain_depth: int
 ) -> PendingRound | None:
-    """One panel for every task that needs input, or None when nothing is asked.
-
-    Past 12 questions the rest is dropped (logged) - the follow-up turn asks again.
-    """
+    """One panel for every task that needs input - every question is asked - or None
+    when nothing is asked. Only an absurd number of questions (> PANEL_QUESTIONS_MAX)
+    is cut, and logged."""
 
     questions: list[Question] = []
     tasks: list[PendingAdvisoryTask | PendingCalculationTask] = []
@@ -133,17 +134,4 @@ def build_round(
         tasks=tasks,
         chain_depth=chain_depth,
         created_at=datetime.now(UTC),
-    )
-
-
-def unanswered_note(parts: Sequence[TaskQuestions]) -> str:
-    """What gets said instead of a 4th panel in a row (chain limit reached)."""
-
-    labels = [draft["prompt"] for part in parts for draft in part.questions]
-    if not labels:
-        return ""
-    return (
-        "\n\n_Mình vẫn chưa có đủ thông tin về: "
-        + "; ".join(labels)
-        + ". Câu trả lời trên dựa trên những gì bạn đã cung cấp._"
     )

@@ -13,12 +13,13 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 
 from app.schemas.intent import ClassifiedTask
 
-QUESTION_ID_PATTERN = r"^q([1-9]|1[0-2])$"
+QUESTION_ID_PATTERN = r"^q[1-9][0-9]?$"
 TASK_ID_PATTERN = r"^T[1-3]$"
-PANEL_QUESTIONS_MAX = 12
+# Every question of a turn is asked (no truncation); this only rejects absurd payloads.
+PANEL_QUESTIONS_MAX = 50
 LETTER_GRADES = ("A+", "A", "B+", "B", "C+", "C", "D+", "D", "F")
 
-QuestionKind = Literal["choice", "number", "number_list", "text", "course_table"]
+QuestionKind = Literal["choice", "number", "number_list", "number_or_list", "text", "course_table"]
 QuestionOrigin = Literal["advisory", "calculation"]
 
 
@@ -66,11 +67,11 @@ class _QuestionBody(_Strict):
                 2 <= len(self.options) <= 12 if kind == "choice" else not has_options
             ),
             "allow_other only for choice": kind == "choice" or not self.allow_other,
-            "number only for number/number_list": (self.number is not None)
-            == (kind in {"number", "number_list"}),
-            "max_items only for number_list (<=20) / course_table (<=30)": (
+            "number only for number/number_list/number_or_list": (self.number is not None)
+            == (kind in {"number", "number_list", "number_or_list"}),
+            "max_items only for number_list/number_or_list (<=20) / course_table (<=30)": (
                 self.max_items is not None and self.max_items <= 20
-                if kind == "number_list"
+                if kind in {"number_list", "number_or_list"}
                 else self.max_items is not None
                 if kind == "course_table"
                 else self.max_items is None
@@ -189,7 +190,8 @@ class PendingRound(_Strict):
     assistant_message_id: UUID | None = None
     original_query: str
     tasks: list[PendingTask] = Field(min_length=1, max_length=3)
-    chain_depth: int = Field(default=1, ge=1, le=3)
+    # How many panels in a row this question has needed (no limit - each needs the student).
+    chain_depth: int = Field(default=1, ge=1)
     created_at: datetime
 
     @model_validator(mode="after")

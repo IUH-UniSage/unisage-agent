@@ -110,6 +110,26 @@ def _normalize(answer: Answer, question: Question) -> NormalizedAnswer | str:
             return "cần nhập một số"
         error = _check_number(answer.number, question)
         return error or NormalizedAnswer(question, plain(answer.number), plain(answer.number))
+    if kind == "number_or_list":
+        if answer.number is not None:
+            error = _check_number(answer.number, question)
+            if error:
+                return error
+            return NormalizedAnswer(
+                question, plain(answer.number), f"Nhập sẵn: {plain(answer.number)}"
+            )
+        if not answer.numbers:
+            return "cần nhập giá trị hoặc từng cột"
+        if question.max_items is not None and len(answer.numbers) > question.max_items:
+            return f"tối đa {question.max_items} cột"
+        for number in answer.numbers:
+            error = _check_number(number, question)
+            if error:
+                return error
+        columns: list[JsonValue] = [plain(number) for number in answer.numbers]
+        return NormalizedAnswer(
+            question, columns, "Từng cột: " + ", ".join(plain(n) for n in answer.numbers)
+        )
     if kind == "number_list":
         numbers = answer.numbers
         if not numbers:

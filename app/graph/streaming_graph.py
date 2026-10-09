@@ -33,12 +33,10 @@ from app.graph.calculation_turn import (
     trace_items,
 )
 from app.graph.clarification_round import (
-    MAX_CHAIN_DEPTH,
     TaskQuestions,
     advisory_questions,
     advisory_task,
     build_round,
-    unanswered_note,
 )
 from app.graph.nodes.calculation import (
     CalculationDeps,
@@ -416,7 +414,7 @@ async def _turn_with_calculations(
             )
         )
     if previous_round is not None:
-        output = await _with_follow_up_round(output, parts, previous_round, token_sink)
+        output = _with_follow_up_round(output, parts, previous_round)
     else:
         output = replace(
             output,
@@ -433,23 +431,15 @@ async def _turn_with_calculations(
     return output
 
 
-async def _with_follow_up_round(
-    output: GraphOutput,
-    parts: list[TaskQuestions],
-    previous: PendingRound,
-    token_sink: TokenSink,
+def _with_follow_up_round(
+    output: GraphOutput, parts: list[TaskQuestions], previous: PendingRound
 ) -> GraphOutput:
-    """Chain another panel, unless MAX_CHAIN_DEPTH panels were already asked for this
-    question - then say what is still missing instead of asking again."""
+    """Whatever is still missing after a panel answer becomes the next panel (no limit:
+    each one needs the student to answer, and answered fields are never asked again)."""
 
-    depth = previous.chain_depth + 1
-    if depth > MAX_CHAIN_DEPTH:
-        note = unanswered_note(parts)
-        if not note:
-            return output
-        await token_sink(note)
-        return replace(output, response_text=output.response_text + note)
-    follow_up = build_round(parts, original_query=previous.original_query, chain_depth=depth)
+    follow_up = build_round(
+        parts, original_query=previous.original_query, chain_depth=previous.chain_depth + 1
+    )
     return replace(output, pending_round=follow_up)
 
 

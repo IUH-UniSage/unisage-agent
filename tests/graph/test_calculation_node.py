@@ -495,38 +495,27 @@ async def test_resume_mixed_round_computes_then_answers_the_advisory_question(
 
 
 @pytest.mark.asyncio
-async def test_resume_with_a_still_invalid_answer_chains_until_the_limit() -> None:
+async def test_resume_with_a_still_invalid_answer_asks_again_without_limit() -> None:
     models = GraphModels(
         classification=_scripted(),
         query_transformation=_echo_model(),
         generation=_note_model("unused"),
         retrieval=_RecordingRetrieval([]),
     )
-    # TCLT + TCTH = 0 is only caught when computing: ask again (depth 2)...
+    # TCLT + TCTH = 0 is only caught when computing: asked again, at any depth.
     resume = _resume_round()
     task = resume.pending_round.tasks[0]
     assert isinstance(task, PendingCalculationTask)
     broken = task.model_copy(update={"known_params": {**task.known_params, "tclt": 0, "tcth": 0}})
-    pending = resume.pending_round.model_copy(update={"tasks": [broken]})
-    result = await run_graph(
-        _input("x", resume=ResumeInput(pending_round=pending, answers=resume.answers)),
-        models,
-        _sink([]),
-        _TRACE,
-        _usage_recorder(),
-    )
-    assert result.pending_round is not None and result.pending_round.chain_depth == 2
-    assert result.pending_round.panel.questions[0].field == "tclt"
-
-    # ...but never a fourth panel in a row.
-    last = pending.model_copy(update={"chain_depth": 3})
-    tokens: list[str] = []
-    final = await run_graph(
-        _input("x", resume=ResumeInput(pending_round=last, answers=resume.answers)),
-        models,
-        _sink(tokens),
-        _TRACE,
-        _usage_recorder(),
-    )
-    assert final.pending_round is None
-    assert "Mình vẫn chưa có đủ thông tin về" in final.response_text
+    for depth in (1, 4):
+        pending = resume.pending_round.model_copy(update={"tasks": [broken], "chain_depth": depth})
+        result = await run_graph(
+            _input("x", resume=ResumeInput(pending_round=pending, answers=resume.answers)),
+            models,
+            _sink([]),
+            _TRACE,
+            _usage_recorder(),
+        )
+        assert result.pending_round is not None
+        assert result.pending_round.chain_depth == depth + 1
+        assert result.pending_round.panel.questions[0].field == "tclt"

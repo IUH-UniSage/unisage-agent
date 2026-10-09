@@ -3,7 +3,6 @@ from app.graph.clarification_round import (
     advisory_questions,
     advisory_task,
     build_round,
-    unanswered_note,
 )
 from app.schemas.intent import ClassifiedTask
 
@@ -68,19 +67,23 @@ def test_build_round_numbers_questions_across_tasks() -> None:
     assert pending.chain_depth == 2
 
 
-def test_build_round_caps_at_twelve_and_drops_tasks_without_questions() -> None:
+def test_build_round_asks_every_question() -> None:
     many = TaskQuestions(task=_task("T1").task, questions=_task("T1").questions * 7)
-    pending = build_round([many, _task("T2")], original_query="q", chain_depth=1)
+    pending = build_round([many, _task("T2")], original_query="q", chain_depth=5)
     assert pending is not None
-    assert len(pending.panel.questions) == 12
-    assert [task.task_id for task in pending.tasks] == ["T1"]
+    assert len(pending.panel.questions) == 16
+    assert pending.panel.questions[-1].id == "q16"
+    assert [task.task_id for task in pending.tasks] == ["T1", "T2"]
+    assert pending.chain_depth == 5
+
+
+def test_only_an_absurd_number_of_questions_is_cut() -> None:
+    many = TaskQuestions(task=_task("T1").task, questions=_task("T1").questions * 30)
+    pending = build_round([many], original_query="q", chain_depth=1)
+    assert pending is not None
+    assert len(pending.panel.questions) == 50
 
 
 def test_nothing_to_ask_gives_no_round() -> None:
     empty = TaskQuestions(task=_task("T1").task, questions=[])
     assert build_round([empty], original_query="q", chain_depth=1) is None
-    assert unanswered_note([empty]) == ""
-
-
-def test_unanswered_note_lists_prompts() -> None:
-    assert "Ngành học của bạn; Hệ đào tạo" in unanswered_note([_task("T1")])

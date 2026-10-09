@@ -127,7 +127,7 @@ GOOD_ANSWERS: tuple[dict[str, Any], ...] = (
         {**PRACTICE, "max_items": 21},
         {**COURSES, "max_items": None},
         {**TEXT, "max_length": None},
-        {**CHOICE, "id": "q13"},
+        {**CHOICE, "id": "q100"},
         {**CHOICE, "unexpected": 1},
         {**SCORE, "number": {**NUMBER, "min": "11"}},
     ],
@@ -137,11 +137,44 @@ def test_invalid_question_shapes_are_rejected(broken: dict[str, Any]) -> None:
         Question.model_validate(broken)
 
 
-def test_panel_allows_twelve_questions_but_not_thirteen() -> None:
-    questions = [{**SCORE, "id": f"q{i}"} for i in range(1, 13)]
-    assert len(_panel(*questions).questions) == 12
+def test_panel_holds_many_questions_up_to_the_sanity_cap() -> None:
+    questions = [{**SCORE, "id": f"q{i}"} for i in range(1, 51)]
+    assert len(_panel(*questions).questions) == 50
     with pytest.raises(ValidationError):
-        _panel(*questions, {**SCORE, "id": "q1"})
+        _panel(*questions, {**SCORE, "id": "q51"})
+
+
+TX: dict[str, Any] = {
+    "id": "q6",
+    "tab_label": "Điểm TX",
+    "prompt": "Điểm thường xuyên: nhập TBtx nếu đã biết, hoặc nhập từng cột",
+    "kind": "number_or_list",
+    "number": NUMBER,
+    "max_items": 20,
+    "origin": "calculation",
+    "task_id": "T2",
+    "field": "tbtx",
+}
+
+
+def test_number_or_list_accepts_either_a_value_or_columns() -> None:
+    panel = _panel(TX)
+    single = validate_answers(panel, _submit(panel, {"question_id": "q6", "number": "7.3"}))
+    assert (single["q6"].value, single["q6"].display) == ("7.3", "Nhập sẵn: 7.3")
+    columns = validate_answers(
+        panel, _submit(panel, {"question_id": "q6", "numbers": ["8", "7", "7"]})
+    )
+    assert (columns["q6"].value, columns["q6"].display) == (["8", "7", "7"], "Từng cột: 8, 7, 7")
+    errors = _errors(panel, {"question_id": "q6", "numbers": ["8", "11"]})
+    assert "từ 0 đến 10" in errors["q6"]
+    assert "cần nhập" in _errors(panel, {"question_id": "q6", "text": "8"})["q6"]
+
+
+def test_number_or_list_needs_number_and_max_items() -> None:
+    with pytest.raises(ValidationError):
+        Question.model_validate({**TX, "max_items": None})
+    with pytest.raises(ValidationError):
+        Question.model_validate({**TX, "number": None})
 
 
 def test_public_panel_drops_routing_fields() -> None:

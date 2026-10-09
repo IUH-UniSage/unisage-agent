@@ -798,49 +798,39 @@ async def test_resume_reruns_every_origin_task(
 
 
 @pytest.mark.asyncio
-async def test_resume_chains_another_panel_until_the_depth_limit(
+async def test_resume_keeps_asking_new_fields_but_never_an_answered_one(
     mock_sync_llm_model: Callable[[str], FunctionModel],
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
-    form = _FORM_JSON.replace("training_type", "cohort").replace("Hệ đào tạo", "Khoá")
     task = [ClassifiedTask(intent="academic_advisory", query="học phí", routing_mode="SINGLE")]
 
-    def models() -> GraphModels:
+    def run(form: str, depth: int) -> GraphInput:
+        return GraphInput(
+            conversation_id="c1",
+            user_message="x",
+            is_first_turn=False,
+            security=AcademicSecurityContext(),
+            resume=_resume(_advisory_round(task, chain_depth=depth)),
+        )
+
+    def models(form: str) -> GraphModels:
         built = _models(mock_sync_llm_model, mock_streaming_llm_model)
-        built.generation = mock_streaming_llm_model(["Bạn thuộc khoá nào?\n", form])
+        built.generation = mock_streaming_llm_model(["Bạn cho mình biết thêm nhé?\n", form])
         return built
 
-    second = await run_graph(
-        GraphInput(
-            conversation_id="c1",
-            user_message="x",
-            is_first_turn=False,
-            security=AcademicSecurityContext(),
-            resume=_resume(_advisory_round(task, chain_depth=2)),
-        ),
-        models(),
-        _sink([]),
-        _TRACE,
-        _usage_recorder(),
+    # A new field after the 5th panel in a row is still asked - there is no chain limit.
+    new_field = _FORM_JSON.replace("training_type", "cohort").replace("Hệ đào tạo", "Khoá")
+    later = await run_graph(
+        run(new_field, 5), models(new_field), _sink([]), _TRACE, _usage_recorder()
     )
-    assert second.pending_round is not None and second.pending_round.chain_depth == 3
+    assert later.pending_round is not None and later.pending_round.chain_depth == 6
+    assert [q.field for q in later.pending_round.panel.questions] == ["cohort"]
 
-    tokens: list[str] = []
-    third = await run_graph(
-        GraphInput(
-            conversation_id="c1",
-            user_message="x",
-            is_first_turn=False,
-            security=AcademicSecurityContext(),
-            resume=_resume(_advisory_round(task, chain_depth=3)),
-        ),
-        models(),
-        _sink(tokens),
-        _TRACE,
-        _usage_recorder(),
+    # Asking again for the field just answered (training_type) never opens a panel.
+    again = await run_graph(
+        run(_FORM_JSON, 1), models(_FORM_JSON), _sink([]), _TRACE, _usage_recorder()
     )
-    assert third.pending_round is None
-    assert "Mình vẫn chưa có đủ thông tin về: Khoá" in third.response_text
-    assert "Mình vẫn chưa có đủ thông tin về: Khoá" in "".join(tokens)
+    assert again.pending_round is None
+    assert again.confirmed_metadata == {"training_type": "chinh_quy"}
