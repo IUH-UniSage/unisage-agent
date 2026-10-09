@@ -15,9 +15,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import get_backend_java_client, get_graph_models, get_session_factory
-from app.api.v1 import clarification_flow
 from app.database.models import Base
 from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.integrations import backend_java_client
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
 from app.schemas.clarification import ClarificationPanel, PendingAdvisoryTask, PendingRound
@@ -53,7 +53,7 @@ def java(client: TestClient) -> Iterator[_Java]:
 
 @pytest.fixture(autouse=True)
 def _no_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(clarification_flow, "JAVA_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(backend_java_client, "JAVA_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
 
 
 def _factory() -> async_sessionmaker[AsyncSession]:
@@ -85,7 +85,7 @@ def _round() -> PendingRound:
         original_query="q",
         tasks=[
             PendingAdvisoryTask(
-                task_id="T1", origin_task=ClassifiedTask(intent="academic_advisory", query="q")
+                task_id="T1", origin_tasks=[ClassifiedTask(intent="academic_advisory", query="q")]
             )
         ],
         created_at=datetime.now(UTC),

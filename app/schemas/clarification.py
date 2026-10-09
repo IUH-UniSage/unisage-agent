@@ -220,10 +220,12 @@ class CalculationPlan(_Strict):
 
 
 class PendingAdvisoryTask(_Strict):
+    """The advisory part of the turn: one generation call answers every advisory task
+    together, so its questions resume all of them at once."""
+
     kind: Literal["advisory"] = "advisory"
     task_id: str = Field(pattern=TASK_ID_PATTERN)
-    origin_task: ClassifiedTask
-    sub_query_id: str | None = None
+    origin_tasks: list[ClassifiedTask] = Field(min_length=1, max_length=3)
 
 
 class PendingCalculationTask(_Strict):

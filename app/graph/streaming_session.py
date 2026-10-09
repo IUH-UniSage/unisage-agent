@@ -35,9 +35,12 @@ never has a chance to arrive after `event: done`.
 """
 
 import logging
+import uuid
 from asyncio import Queue
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -51,9 +54,16 @@ from app.core.errors.public_errors import (
 )
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
-from app.database.repositories.clarification_state import ClarificationStateRepository
+from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.database.session import async_session_factory
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem, WarningItem
+from app.graph.queue_items import (
+    ClarificationItem,
+    DoneItem,
+    ErrorItem,
+    QueueItem,
+    TokenItem,
+    WarningItem,
+)
 from app.graph.stream_error_codes import (
     LLM_STREAM_INTERRUPTED,
     MESSAGES,
@@ -63,7 +73,8 @@ from app.graph.stream_error_codes import (
 from app.graph.streaming import BudgetContext
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
-from app.integrations.backend_java_client import BackendJavaClient
+from app.integrations.backend_java_client import BackendJavaClient, with_java_retries
+from app.schemas.clarification import PendingRound
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +138,80 @@ def _admin_warnings(graph_output: GraphOutput, graph_input: GraphInput) -> list[
     ]
 
 
+_LOST_CLAIM = object()
+
+
+async def _finalize_safely(call: Callable[[], Awaitable[object]], *, what: str) -> bool:
+    """Retried PATCH; any non-Java exception (a client bug) also counts as a failure
+    instead of escaping - the end-of-stream sentinel must always be queued."""
+
+    try:
+        return await with_java_retries(call, what=what)
+    except Exception:
+        logger.exception("%s raised unexpectedly", what)
+        return False
+
+
+@dataclass(frozen=True)
+class ClaimContext:
+    """A submit turn holds the conversation's panel claim (PROCESSING) until it ends."""
+
+    token: uuid.UUID
+
+
+async def _store_round_state(
+    session_factory: async_sessionmaker[AsyncSession],
+    conversation_id: str,
+    claim: ClaimContext | None,
+    pending_round: PendingRound | None,
+    confirmed_metadata: dict[str, str],
+) -> object:
+    """True when written, False when the write failed or was refused, `_LOST_CLAIM`
+    when a submit turn no longer owns its claim."""
+
+    try:
+        async with session_factory() as session:
+            repo = ClarificationRoundRepository(session)
+            if claim is not None:
+                done = await repo.complete(
+                    conversation_id, claim.token, pending_round, confirmed_metadata
+                )
+                await session.commit()
+                return True if done else _LOST_CLAIM
+            if pending_round is not None:
+                opened = await repo.upsert_open(conversation_id, pending_round, confirmed_metadata)
+            else:
+                await repo.save_confirmed_metadata(conversation_id, confirmed_metadata)
+                opened = True
+            await session.commit()
+            return opened
+    except Exception:
+        logger.exception(
+            "failed to persist clarification state for conversation_id=%s", conversation_id
+        )
+        return False
+
+
+async def _revoke_round(
+    session_factory: async_sessionmaker[AsyncSession],
+    conversation_id: str,
+    pending_round: PendingRound,
+) -> None:
+    """The panel could not be projected to Java: take it back so no panel exists on
+    one side only."""
+
+    try:
+        async with session_factory() as session:
+            await ClarificationRoundRepository(session).revoke_open(
+                conversation_id, pending_round.panel.panel_id
+            )
+            await session.commit()
+    except Exception:
+        logger.exception(
+            "failed to revoke clarification round for conversation_id=%s", conversation_id
+        )
+
+
 async def run_and_persist(
     *,
     java_client: BackendJavaClient,
@@ -140,6 +225,7 @@ async def run_and_persist(
     queue: "Queue[QueueItem]",
     session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
     budget: BudgetContext | None = None,
+    claim: ClaimContext | None = None,
 ) -> None:
     """Run the graph, stream tokens into `queue`, always finalize.
 
@@ -221,43 +307,63 @@ async def run_and_persist(
                 reference=reference,
             )
 
-        try:
-            await java_client.update_message(
+        pending_round: PendingRound | None = None
+        if status == "COMPLETED" and graph_output is not None and graph_output.pending_round:
+            pending_round = graph_output.pending_round.model_copy(
+                update={"assistant_message_id": uuid.UUID(assistant_message_id)}
+            )
+        confirmed = (
+            graph_output.confirmed_metadata
+            if graph_output is not None
+            else graph_input.confirmed_metadata
+        )
+        # State first, projection second, event last: a client that receives
+        # `event: clarification` can always reload and submit that panel.
+        persisted = await _store_round_state(
+            session_factory, conversation_id, claim, pending_round, confirmed
+        )
+        if persisted is _LOST_CLAIM:
+            # Our claim was taken over (lease expired): another request owns the
+            # conversation now - write nothing more to Java.
+            return
+        round_stored = persisted is True and pending_round is not None
+
+        metadata: dict[str, Any] | None = None
+        if round_stored and pending_round is not None:
+            metadata = {
+                "clarification": {
+                    "schema_version": 1,
+                    "status": "open",
+                    "panel": pending_round.panel.public().model_dump(mode="json"),
+                }
+            }
+        finalized = await _finalize_safely(
+            lambda: java_client.update_message(
                 message_id=assistant_message_id,
                 conversation_id=conversation_id,
                 content=response_text,
                 status=status,
                 citations=(graph_output.citations or None) if graph_output is not None else None,
+                metadata=metadata,
                 authorization=authorization,
-            )
-        except Exception:
-            # Catches `BackendJavaError` (Java rejected/couldn't be reached)
-            # AND any other unexpected exception - a bug in the client must
-            # not prevent the clarification-state write below or the
-            # sentinel put in `finally` from happening.
-            logger.exception(
+            ),
+            what=f"finalize message {assistant_message_id}",
+        )
+        if not finalized:
+            logger.error(
                 "failed to PATCH backend-java final message state for conversation_id=%s, "
                 "message_id=%s (status=%s) - message stays STREAMING in Java's DB",
                 conversation_id,
                 assistant_message_id,
                 status,
             )
-
-        if graph_output is not None:
-            try:
-                async with session_factory() as session:
-                    repo = ClarificationStateRepository(session)
-                    await repo.upsert(
-                        conversation_id,
-                        pending_clarification=graph_output.pending_clarification,
-                        confirmed_metadata=graph_output.confirmed_metadata,
-                    )
-                    await session.commit()
-            except Exception:
-                logger.exception(
-                    "failed to persist clarification state for conversation_id=%s",
-                    conversation_id,
+        if round_stored and pending_round is not None:
+            if finalized:
+                await queue.put(
+                    ClarificationItem(pending_round.panel.public().model_dump(mode="json"))
                 )
+            else:
+                await _revoke_round(session_factory, conversation_id, pending_round)
     finally:
         # Closes exactly once here regardless of which path above ran - success,
         # graph exception, or (since this whole function keeps running independently

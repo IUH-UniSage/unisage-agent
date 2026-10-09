@@ -8,7 +8,7 @@ from pydantic_ai.models import Model
 from app.core.registry.model_registry import CredentialConfig
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification
+from app.schemas.clarification import PendingClarification, PendingRound
 from app.schemas.security import AcademicSecurityContext
 
 
@@ -64,3 +64,8 @@ class GraphOutput:
     # LLM rerank failing, ...) - sent to AI admins only, as `event: warning`.
     admin_warnings: list[AdminWarning] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
+    # The clarification panel this turn raises (stored, projected, then sent as
+    # `event: clarification` by run_and_persist), or None.
+    pending_round: PendingRound | None = None
+    # The advisory answer's captured ask_user_form blocks - input to the panel.
+    ask_forms: tuple[dict[str, Any], ...] = ()

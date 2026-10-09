@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import json
 import logging
 import uuid
@@ -33,7 +32,6 @@ from app.core.usage.cost_calculator import estimate as estimate_cost
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import (
     ClarificationRoundRepository,
-    ClarificationStateRepository,
 )
 from app.database.session import get_db_session
 from app.graph.clarification_answers import ClarificationInvalid, validate_answers
@@ -327,23 +325,14 @@ async def chat_stream_endpoint(
     client_ip = _resolve_client_ip(http_request, x_forwarded_for)
     guest_session_token = _resolve_guest_session_token(http_request)
 
-    clarification_read = asyncio.create_task(
-        ClarificationStateRepository(db_session).get_clarification(request.conversation_id)
+    turn = await _start_turn(
+        java_client,
+        conversation_id=request.conversation_id,
+        content=clean_message,
+        authorization=authorization,
+        guest_session_token=guest_session_token,
     )
-    try:
-        turn = await _start_turn(
-            java_client,
-            conversation_id=request.conversation_id,
-            content=clean_message,
-            authorization=authorization,
-            guest_session_token=guest_session_token,
-        )
-    except BaseException:
-        # Don't close the request's DB session under an in-flight query.
-        with contextlib.suppress(Exception):
-            await clarification_read
-        raise
-    pending_clarification, confirmed_metadata = await clarification_read
+    confirmed_metadata = round_state.confirmed_metadata
 
     first_turn = bool(turn.get("firstTurn"))
     history = _history_from_context(turn.get("context") or [])
@@ -375,8 +364,6 @@ async def chat_stream_endpoint(
         is_first_turn=first_turn,
         security=security,
         confirmed_metadata=confirmed_metadata,
-        pending_clarification=pending_clarification,
-        clarification_max_retry=settings.CHAT_CLARIFICATION_MAX_RETRY,
         history=history,
     )
 

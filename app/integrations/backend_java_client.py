@@ -20,6 +20,9 @@ This client is tested entirely with `httpx.MockTransport`, never a live
 Java instance.
 """
 
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 import httpx
@@ -28,6 +31,9 @@ from app.core.config import settings
 
 MessageRole = Literal["USER", "ASSISTANT"]
 MessageStatus = Literal["PENDING", "STREAMING", "COMPLETED", "ERROR"]
+
+
+logger = logging.getLogger(__name__)
 
 
 class BackendJavaError(Exception):
@@ -556,3 +562,24 @@ class BackendJavaClient:
             params=params or None,
         )
         return list(result) if result is not None else []
+
+
+JAVA_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.2, 0.4, 0.8)
+
+
+async def with_java_retries(call: Callable[[], Awaitable[object]], *, what: str) -> bool:
+    """Run a Java call up to 1 + len(JAVA_RETRY_DELAYS_SECONDS) times; True on success.
+
+    For writes that must land (the clarification projection, the final message
+    state) - Java's endpoints for these are idempotent, so a retry is safe.
+    """
+
+    for attempt, delay in enumerate((0.0, *JAVA_RETRY_DELAYS_SECONDS), start=1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await call()
+            return True
+        except BackendJavaError:
+            logger.warning("%s failed (attempt %d)", what, attempt, exc_info=True)
+    return False

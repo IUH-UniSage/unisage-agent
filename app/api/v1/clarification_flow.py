@@ -6,11 +6,10 @@ here is raised before `start_turn`, so a refused request creates no message
 and costs no quota. Spec: docs/specs/SPEC-clarification-panel.md §2.3-§2.5.
 """
 
-import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,13 +21,11 @@ from app.core.errors.exceptions import (
     ClarificationStaleException,
 )
 from app.database.repositories.clarification_state import ClarificationRoundRepository, RoundState
-from app.integrations.backend_java_client import BackendJavaClient, BackendJavaError
+from app.integrations.backend_java_client import BackendJavaClient, with_java_retries
 from app.schemas.chat import ChatStreamRequest
 from app.schemas.clarification import ClarificationCancel, PendingRound
 
 logger = logging.getLogger(__name__)
-
-JAVA_RETRY_DELAYS_SECONDS = (0.2, 0.4, 0.8)
 
 
 def gate_clarification(state: RoundState, request: ChatStreamRequest) -> PendingRound | None:
@@ -47,20 +44,6 @@ def gate_clarification(state: RoundState, request: ChatStreamRequest) -> Pending
     if state.round.panel.panel_id != action.panel_id:
         raise ClarificationStaleException()
     return state.round
-
-
-async def with_java_retries(call: Callable[[], Awaitable[object]], *, what: str) -> bool:
-    """Run a Java call up to 1 + len(JAVA_RETRY_DELAYS_SECONDS) times. True on success."""
-
-    for attempt, delay in enumerate((0.0, *JAVA_RETRY_DELAYS_SECONDS), start=1):
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            await call()
-            return True
-        except BackendJavaError:
-            logger.warning("%s failed (attempt %d)", what, attempt, exc_info=True)
-    return False
 
 
 async def _closed_stream(panel_id: uuid.UUID) -> AsyncGenerator[str, None]:

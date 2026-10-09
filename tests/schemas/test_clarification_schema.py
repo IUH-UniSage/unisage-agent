@@ -157,7 +157,7 @@ def test_pending_round_requires_matching_tasks() -> None:
     advisory = {
         "kind": "advisory",
         "task_id": "T1",
-        "origin_task": ClassifiedTask(intent="academic_advisory", query="q").model_dump(),
+        "origin_tasks": [ClassifiedTask(intent="academic_advisory", query="q").model_dump()],
     }
     calculation = {
         "kind": "calculation",

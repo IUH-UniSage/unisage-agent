@@ -22,6 +22,12 @@ from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
 from app.core.usage.usage_recorder import UsageRecorder
+from app.graph.clarification_round import (
+    TaskQuestions,
+    advisory_questions,
+    advisory_task,
+    build_round,
+)
 from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
@@ -217,6 +223,21 @@ async def _run_graph(
         advisory_tasks=route_plan.advisory_tasks,
         question=advisory_question,
         budget=budget,
+    )
+    advisory_part = TaskQuestions(
+        task=advisory_task(
+            f"T{len(route_plan.calculation_tasks) + 1}",
+            [task for task, _mode in route_plan.advisory_tasks],
+        ),
+        questions=advisory_questions(
+            output.ask_forms, confirmed_metadata=output.confirmed_metadata
+        ),
+    )
+    output = replace(
+        output,
+        pending_round=build_round(
+            [advisory_part], original_query=graph_input.user_message, chain_depth=1
+        ),
     )
     if not route_plan.calculation_tasks:
         return output
@@ -459,6 +480,7 @@ async def _run_advisory_flow(
         response_text=generation_result.response_text,
         confirmed_metadata=generation_result.confirmed_metadata,
         pending_clarification=generation_result.pending_clarification,
+        ask_forms=generation_result.ask_forms,
         citations=build_citations(
             generation_result.response_text, rerank_result.chunks, web_results
         ),

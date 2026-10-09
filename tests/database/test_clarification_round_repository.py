@@ -49,9 +49,9 @@ def _round(panel_id: uuid.UUID | None = None) -> PendingRound:
         tasks=[
             PendingAdvisoryTask(
                 task_id="T1",
-                origin_task=ClassifiedTask(
-                    intent="academic_advisory", query="Điều kiện tốt nghiệp?"
-                ),
+                origin_tasks=[
+                    ClassifiedTask(intent="academic_advisory", query="Điều kiện tốt nghiệp?")
+                ],
             )
         ],
         created_at=datetime.now(UTC),
