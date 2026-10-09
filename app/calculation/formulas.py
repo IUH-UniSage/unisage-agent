@@ -658,7 +658,7 @@ FORMULAS: dict[FormulaId, Formula] = {
             _credit_spec("tcth", "Số tín chỉ thực hành của học phần", "TC thực hành"),
             ParamSpec(
                 name="tbtx",
-                label="Điểm thường xuyên: nhập TBtx nếu đã biết, hoặc nhập từng cột TX1…TXn",
+                label="Điểm thường xuyên (các cột TX), thang 10",
                 tab_label="Điểm TX",
                 kind="number_or_list",
                 required=_unless_zero("tclt"),

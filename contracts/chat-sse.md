@@ -104,9 +104,9 @@ Response của lệnh huỷ chỉ có `clarification_closed` rồi `done`, khôn
   | `text` | [] | false | null | null | 1..200 |
   | `course_table` | [] | false | null | 1..30 | null |
 
-- `number_or_list`: tab có công tắc 2 lựa chọn - **"Nhập sẵn"** (một ô, gửi `number`) và **"Nhập từng cột"**
-  (danh sách ô, gửi `numbers`). `prompt` mô tả cả hai, VD "Điểm thường xuyên: nhập TBtx nếu đã biết, hoặc
-  nhập từng cột TX1…TXn". Mặc định là "Nhập từng cột".
+- `number_or_list`: mặc định hiện danh sách ô cho từng cột (gửi `numbers`); một dòng link bên dưới cho
+  đổi sang một ô nhập sẵn giá trị tổng hợp (gửi `number`) và ngược lại. `prompt` ngắn, VD
+  "Điểm thường xuyên (các cột TX), thang 10".
 - Cột của `course_table` cố định: `name` (string ≤ 80 hoặc null), `credits` (nguyên 1..10), `score`
   (`"0"`..`"10"` step 0.01, hoặc một trong `A+ A B+ B C+ C D+ D F`).
 - Client **không** nhận và **không** gửi `origin`, `task_id`, `field`.
