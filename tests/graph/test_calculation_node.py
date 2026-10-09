@@ -541,3 +541,52 @@ async def test_resume_with_a_still_invalid_answer_asks_again_without_limit() -> 
         assert result.pending_round is not None
         assert result.pending_round.chain_depth == depth + 1
         assert result.pending_round.panel.questions[0].field == "tclt"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_target_question_reuses_the_stored_calculation() -> None:
+    """Turn 1 computes the course score and hands it back as `last_calculation`;
+    turn 2 ("cuối kỳ cần bao nhiêu để được A+") solves on it - nothing asked again."""
+
+    first = await run_graph(
+        _input(_COURSE_QUERY),
+        GraphModels(
+            classification=_scripted(_COURSE_TASK, _COURSE_PARAMS),
+            query_transformation=_echo_model(),
+            generation=_note_model("Bạn cố gắng nhé."),
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert first.last_calculation is not None
+    assert first.last_calculation.plan.formula_id == "course_score"
+    assert first.last_calculation.params["ck"] == 6.5
+
+    follow_up = "thế cuối kỳ cần bao nhiêu để được A"
+    second = await run_graph(
+        _input(follow_up, last_calculation=first.last_calculation),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": follow_up}]},
+                {
+                    "formula_id": "previous",
+                    "params": {},
+                    "solve": {"unknowns": ["ck"], "goal": {"grade": "A"}},
+                },
+            ),
+            query_transformation=_echo_model(),
+            generation=_note_model("Bạn cố gắng nhé."),
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert second.pending_round is None
+    # TX 8, GK 7, TH 9·8: CK 9.5 → ĐLT 8.45 → 8.5, ĐTKHP 8.5 (A); CK 9.0 → 8.3.
+    assert "Kết quả: Cần CK tối thiểu **9.5**" in second.response_text
+    assert "CK = 9.0 → ĐTKHP 8.3 (chưa đạt)" in second.response_text
+    # The stored calculation stays the forward one (no target question attached).
+    assert second.last_calculation is not None and second.last_calculation.plan.solve is None

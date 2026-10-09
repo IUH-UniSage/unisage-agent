@@ -153,15 +153,47 @@ class RetrievedFormulaPlan(_Strict):
     source: FormulaSource
 
 
+class SolveGoal(_Strict):
+    comparator: Literal[">=", "<="]
+    value: Decimal
+    # The letter grade the goal came from ("A+"), shown next to the number.
+    grade: str | None = Field(default=None, max_length=2)
+
+
+class SolveSpec(_Strict):
+    """A target question ("cuối kỳ cần bao nhiêu để được A+"): which parameter(s)
+    the solver finds instead of asking, and the goal on the formula's result."""
+
+    unknowns: list[str] = Field(min_length=1, max_length=2)
+    goal: SolveGoal
+    want: Literal["min", "max"] = "min"
+
+    @model_validator(mode="after")
+    def _distinct(self) -> "SolveSpec":
+        if len(set(self.unknowns)) != len(self.unknowns):
+            raise ValueError("duplicate unknown")
+        return self
+
+
 class CalculationPlan(_Strict):
     formula_id: Literal["gpa", "course_score", "grade_conversion", "retrieved"]
     retrieved: RetrievedFormulaPlan | None = None
+    solve: SolveSpec | None = None
 
     @model_validator(mode="after")
     def _retrieved_iff_needed(self) -> "CalculationPlan":
         if (self.formula_id == "retrieved") != (self.retrieved is not None):
             raise ValueError("retrieved plan is required exactly for formula_id 'retrieved'")
         return self
+
+
+class LastCalculation(_Strict):
+    """The conversation's latest computed calculation (formula, verified regulation
+    plan included, and its parameters), so a follow-up like "thế cuối kỳ cần bao
+    nhiêu để được A+" reuses it instead of asking every number again."""
+
+    plan: CalculationPlan
+    params: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class PendingAdvisoryTask(_Strict):

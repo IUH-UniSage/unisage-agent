@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.database.models import ConversationClarificationState
 from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.schemas.clarification import (
+    CalculationPlan,
     ClarificationPanel,
+    LastCalculation,
     PendingAdvisoryTask,
     PendingRound,
 )
@@ -206,3 +208,29 @@ async def test_concurrent_claims_have_one_winner(
 
     results = await asyncio.gather(attempt(), attempt())
     assert sorted(results) == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_last_calculation_is_kept_until_a_new_one_is_written(
+    db_session: AsyncSession,
+) -> None:
+    repo = ClarificationRoundRepository(db_session)
+    first = LastCalculation(
+        plan=CalculationPlan(formula_id="grade_conversion"), params={"score10": 8}
+    )
+    await repo.save_confirmed_metadata("c1", {}, first)
+    await db_session.commit()
+    # A turn without a calculation (None) keeps the stored one.
+    await repo.save_confirmed_metadata("c1", {"program": "CNTT"})
+    await db_session.commit()
+    state = await repo.get_round("c1")
+    assert state.last_calculation == first and state.confirmed_metadata == {"program": "CNTT"}
+
+    pending = await _open(db_session, "c2")
+    token = uuid.uuid4()
+    assert await repo.claim("c2", pending.panel.panel_id, token, LEASE)
+    await db_session.commit()
+    second = LastCalculation(plan=CalculationPlan(formula_id="course_score"), params={"tclt": 3})
+    assert await repo.complete("c2", token, None, {}, second)
+    await db_session.commit()
+    assert (await repo.get_round("c2")).last_calculation == second

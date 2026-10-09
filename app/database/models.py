@@ -145,6 +145,11 @@ class ConversationClarificationState(Base):
     claim_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The latest computed calculation (`LastCalculation`), reused by a follow-up
+    # target question ("thế cuối kỳ cần bao nhiêu để được A+").
+    last_calculation: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

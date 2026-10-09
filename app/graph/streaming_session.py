@@ -76,7 +76,7 @@ from app.graph.streaming import BudgetContext
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient, with_java_retries
-from app.schemas.clarification import PendingRound
+from app.schemas.clarification import LastCalculation, PendingRound
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +169,7 @@ async def _store_round_state(
     claim: ClaimContext | None,
     pending_round: PendingRound | None,
     confirmed_metadata: dict[str, str],
+    last_calculation: LastCalculation | None = None,
 ) -> object:
     """True when written, False when the write failed or was refused, `_LOST_CLAIM`
     when a submit turn no longer owns its claim."""
@@ -178,14 +179,22 @@ async def _store_round_state(
             repo = ClarificationRoundRepository(session)
             if claim is not None:
                 done = await repo.complete(
-                    conversation_id, claim.token, pending_round, confirmed_metadata
+                    conversation_id,
+                    claim.token,
+                    pending_round,
+                    confirmed_metadata,
+                    last_calculation,
                 )
                 await session.commit()
                 return True if done else _LOST_CLAIM
             if pending_round is not None:
-                opened = await repo.upsert_open(conversation_id, pending_round, confirmed_metadata)
+                opened = await repo.upsert_open(
+                    conversation_id, pending_round, confirmed_metadata, last_calculation
+                )
             else:
-                await repo.save_confirmed_metadata(conversation_id, confirmed_metadata)
+                await repo.save_confirmed_metadata(
+                    conversation_id, confirmed_metadata, last_calculation
+                )
                 opened = True
             await session.commit()
             return opened
@@ -327,7 +336,12 @@ async def run_and_persist(
             # State first, projection second, event last: a client that receives
             # `event: clarification` can always reload and submit that panel.
             persisted = await _store_round_state(
-                session_factory, conversation_id, claim, pending_round, confirmed
+                session_factory,
+                conversation_id,
+                claim,
+                pending_round,
+                confirmed,
+                graph_output.last_calculation if status == "COMPLETED" and graph_output else None,
             )
             if persisted is _LOST_CLAIM:
                 # Our claim was taken over (lease expired): another request owns the

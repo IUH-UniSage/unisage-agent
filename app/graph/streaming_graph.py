@@ -75,7 +75,7 @@ from app.graph.streaming_state import (
     ResumeInput,
 )
 from app.rag.prompting.citations import build_citations
-from app.schemas.clarification import PendingCalculationTask, PendingRound
+from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
 from app.schemas.intent import ClassifiedTask, RoutingMode
 from app.schemas.web_search import WebSearchResult
 
@@ -310,7 +310,19 @@ def _calculation_deps(
         on_attempt=usage_recorder.bind("CalculationNode"),
         on_failover=_make_failover_applier(models),
         budget=budget,
+        previous=graph_input.last_calculation,
     )
+
+
+def _last_calculation(outcomes: Sequence[TaskOutcome]) -> LastCalculation | None:
+    """The turn's last computed calculation, without its target question (the next
+    follow-up states its own)."""
+
+    computed = [outcome for outcome in outcomes if isinstance(outcome, Computed)]
+    if not computed:
+        return None
+    last = computed[-1]
+    return LastCalculation(plan=last.plan.model_copy(update={"solve": None}), params=last.params)
 
 
 def _start_calculations(
@@ -427,7 +439,12 @@ async def _turn_with_calculations(
             run_id=budget.request_id if budget is not None else usage_recorder.request_id,
             deps=deps,
         )
-        output = replace(output, calculation_items=public, calculation_traces=private)
+        output = replace(
+            output,
+            calculation_items=public,
+            calculation_traces=private,
+            last_calculation=_last_calculation(outcomes),
+        )
     return output
 
 

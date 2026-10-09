@@ -58,7 +58,7 @@ from app.integrations.backend_java_client import (
 )
 from app.schemas.chat import CHAT_REQUEST_MAX_BYTES, ChatStreamRequest
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import ClarificationCancel, ClarificationSubmit
+from app.schemas.clarification import ClarificationCancel, ClarificationSubmit, LastCalculation
 from app.schemas.security import AcademicSecurityContext
 from app.services.clarification_service import (
     cancel_panel,
@@ -307,6 +307,7 @@ class ChatStreamService:
             message=message,
             caller=caller,
             confirmed_metadata=round_state.confirmed_metadata,
+            last_calculation=round_state.last_calculation,
             resume=resume,
             claim=claim,
         )
@@ -319,6 +320,7 @@ class ChatStreamService:
         message: str,
         caller: ChatCaller,
         confirmed_metadata: dict[str, str],
+        last_calculation: LastCalculation | None,
         resume: ResumeInput | None,
         claim: ClaimContext | None,
     ) -> AsyncGenerator[str, None]:
@@ -352,6 +354,7 @@ class ChatStreamService:
             confirmed_metadata=confirmed_metadata,
             history=_history_from_context(turn.get("context") or []),
             resume=resume,
+            last_calculation=last_calculation,
         )
 
         queue: asyncio.Queue[QueueItem] = asyncio.Queue()

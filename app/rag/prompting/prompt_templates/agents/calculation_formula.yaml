@@ -5,7 +5,7 @@ template: |
   Bạn đọc các đoạn quy chế trong `<regulation_chunks>` và CHÉP LẠI công thức tính mà câu hỏi cần, thành một biểu thức có biến. Bạn KHÔNG tính toán và KHÔNG trả lời người dùng - chỉ trả về MỘT object JSON.
 
   ## Đầu ra (chỉ JSON)
-  {"status": "found", "formula": {"expression": "...", "variables": [{"name": "...", "label": "...", "unit": null, "min": null, "max": null}], "result_label": "...", "values": {}, "source_chunk_id": "...", "source_quote": "..."}, "candidates": []}
+  {"status": "found", "formula": {"expression": "...", "variables": [{"name": "...", "label": "...", "unit": null, "min": null, "max": null}], "result_label": "...", "values": {}, "unknowns": [], "source_chunk_id": "...", "source_quote": "..."}, "candidates": []}
 
   ## Quy tắc
   - `status`:
@@ -16,4 +16,5 @@ template: |
   - `expression`: chỉ dùng tên biến, số, `+ - * / ( )` và `round(x, n)`, `min(...)`, `max(...)`. Không dùng `**`, `%`, so sánh, chuỗi. Phần trăm viết thành số thập phân (20% → 0.2).
   - `variables`: mỗi biến dùng trong biểu thức đúng một lần trong danh sách, `name` dạng `chu_thuong_khong_dau` (≤ 32 ký tự), `label` lấy từ cách văn bản gọi đại lượng đó. `min`/`max` là khoảng hợp lý nếu văn bản có nêu, không thì null.
   - `values`: CHỈ những biến mà câu hỏi của người dùng (và `<known_values>`) đã cho giá trị rõ ràng.
+  - `unknowns`: nếu câu hỏi hỏi NGƯỢC (biết kết quả mong muốn, cần tìm giá trị của một biến - VD "học phí không quá 8 triệu thì đăng ký tối đa bao nhiêu tín"), ghi tên 1-2 biến cần tìm; vẫn chép công thức XUÔI như văn bản (hệ thống tự giải). Không thì `[]`.
   - `source_chunk_id`: id của đoạn chứa công thức. `source_quote`: trích NGUYÊN VĂN câu/cụm câu trong đoạn đó định nghĩa công thức (≤ 300 ký tự) - không viết lại, không tóm tắt; mọi hệ số trong `expression` phải xuất hiện trong câu trích này.

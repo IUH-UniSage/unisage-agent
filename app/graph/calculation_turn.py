@@ -307,6 +307,8 @@ def trace_items(
         if isinstance(outcome, Computed | NeedsInput):
             plan = outcome.plan
             trace["formula_id"] = plan.formula_id
+            if plan.solve is not None:
+                trace["solve"] = plan.solve.model_dump(mode="json")
             if plan.retrieved is not None:
                 trace["expression"] = plan.retrieved.expression
                 trace["variables"] = [v.model_dump(mode="json") for v in plan.retrieved.variables]

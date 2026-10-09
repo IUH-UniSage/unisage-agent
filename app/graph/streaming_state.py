@@ -9,7 +9,7 @@ from app.core.registry.model_registry import CredentialConfig
 from app.graph.clarification_answers import NormalizedAnswer
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingRound
+from app.schemas.clarification import LastCalculation, PendingRound
 from app.schemas.security import AcademicSecurityContext
 
 
@@ -52,6 +52,8 @@ class GraphInput:
     history: list[HistoryMessage] = field(default_factory=list)
     # Set on a panel-submit turn: the claimed round and its validated answers.
     resume: ResumeInput | None = None
+    # The conversation's latest computed calculation (follow-up target questions).
+    last_calculation: LastCalculation | None = None
 
 
 @dataclass(frozen=True)
@@ -78,3 +80,5 @@ class GraphOutput:
     # metadata.calculation items (public) and the staff-only traces (SPEC-calculation-node §7.2).
     calculation_items: list[dict[str, Any]] = field(default_factory=list)
     calculation_traces: list[dict[str, Any]] = field(default_factory=list)
+    # This turn's latest computed calculation, stored for the next turn (None = keep).
+    last_calculation: LastCalculation | None = None
