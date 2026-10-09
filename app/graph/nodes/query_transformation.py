@@ -101,6 +101,7 @@ async def transform_query(
         on_failover=on_failover,
         on_attempt=on_attempt,
         budget=budget,
+        timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
     )
 
 
@@ -159,6 +160,7 @@ async def decompose_query(
         on_failover=on_failover,
         on_attempt=on_attempt,
         budget=budget,
+        timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
     )
     return _parse_sub_queries(output)
 

@@ -1,24 +1,27 @@
 """`app.api.deps::get_graph_models` — plan.md Task 5/"Cutover khỏi cấu hình `.env` tĩnh":
 builds the CHAT model from the model registry snapshot, and never falls back to any static
 credential - not even when `MODEL_REGISTRY_ENABLED` is off or no snapshot was ever loaded.
-No failover here (Task 5's explicit scope) - just the single highest-priority ACTIVE CHAT
-credential.
+A request starts on the highest-priority ACTIVE CHAT credential that `model_router` is not
+cooling down, falling back to the top-priority one when every credential is.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
 from pydantic_ai.models.openai import OpenAIChatModel
 
 import app.core.registry.model_registry as model_registry
+import app.core.registry.model_router as model_router_module
 from app.api.deps import get_graph_models
 from app.core.config import settings
 from app.core.errors.error_codes import ErrorCode
 from app.core.errors.llm_failure import LLMCallException
 from app.core.llm.rate_limited_model import RateLimitedModel
 from app.core.registry.model_registry import ModelRegistryError, parse_snapshot
+from app.core.registry.model_router import ModelRouter, _state_key
 from app.rag.retrieval.service import RetrievalService
 
 
@@ -27,6 +30,40 @@ def _reset_cached_snapshot() -> Any:
     model_registry._current_snapshot = None
     yield
     model_registry._current_snapshot = None
+
+
+class _FakeRedis:
+    """Just enough of `redis.asyncio.Redis` for `ModelRouter.get_next_credential()`:
+    a key is "set" iff it is in `blocked`."""
+
+    def __init__(self) -> None:
+        self.blocked: set[str] = set()
+
+    async def set(self, name: str, value: Any, *, ex: int | None = None) -> Any:
+        self.blocked.add(name)
+        return True
+
+    async def exists(self, name: str) -> int:
+        return 1 if name in self.blocked else 0
+
+    async def get(self, name: str) -> Any:
+        return None
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _FakeBackendClient:
+    async def report_health(self, **kwargs: Any) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def fake_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
+    redis = _FakeRedis()
+    router = ModelRouter(redis_client=redis, backend_client=_FakeBackendClient())
+    monkeypatch.setattr(model_router_module, "_default_router", router)
+    return redis
 
 
 def _snapshot_payload(credentials: list[dict[str, Any]]) -> dict[str, Any]:
@@ -68,7 +105,7 @@ def test_registry_enabled_builds_model_from_highest_priority_chat_credential(
     )
     monkeypatch.setattr(model_registry, "_current_snapshot", snapshot)
 
-    graph_models = get_graph_models()
+    graph_models = asyncio.run(get_graph_models())
 
     assert isinstance(graph_models.classification, RateLimitedModel)
     assert isinstance(graph_models.classification.wrapped, OpenAIChatModel)
@@ -83,7 +120,7 @@ def test_registry_enabled_shares_one_model_across_the_three_nodes(
     snapshot = parse_snapshot(_snapshot_payload([_chat_credential()]))
     monkeypatch.setattr(model_registry, "_current_snapshot", snapshot)
 
-    graph_models = get_graph_models()
+    graph_models = asyncio.run(get_graph_models())
 
     assert graph_models.classification is graph_models.query_transformation
     assert graph_models.classification is graph_models.generation
@@ -95,7 +132,7 @@ def test_registry_enabled_with_no_chat_credential_raises(monkeypatch: pytest.Mon
     monkeypatch.setattr(model_registry, "_current_snapshot", parse_snapshot(_snapshot_payload([])))
 
     with pytest.raises(LLMCallException) as exc_info:
-        get_graph_models()
+        asyncio.run(get_graph_models())
 
     # Surfaces to the client as a specific "CHAT model not configured" error, not a generic 500.
     assert exc_info.value.error_code is ErrorCode.LLM_NOT_CONFIGURED
@@ -110,7 +147,7 @@ def test_no_snapshot_loaded_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(model_registry, "_current_snapshot", None)
 
     with pytest.raises(LLMCallException) as exc_info:
-        get_graph_models()
+        asyncio.run(get_graph_models())
 
     # Surfaces to the client as a specific "CHAT model not configured" error, not a generic 500.
     assert exc_info.value.error_code is ErrorCode.LLM_NOT_CONFIGURED
@@ -127,7 +164,7 @@ def test_registry_flag_off_still_raises_no_legacy_fallback(monkeypatch: pytest.M
     monkeypatch.setattr(model_registry, "_current_snapshot", None)
 
     with pytest.raises(LLMCallException) as exc_info:
-        get_graph_models()
+        asyncio.run(get_graph_models())
 
     # Surfaces to the client as a specific "CHAT model not configured" error, not a generic 500.
     assert exc_info.value.error_code is ErrorCode.LLM_NOT_CONFIGURED
@@ -150,7 +187,7 @@ def test_rerank_uses_the_rerank_credential_when_one_is_active(
     )
     monkeypatch.setattr(model_registry, "_current_snapshot", snapshot)
 
-    graph_models = get_graph_models()
+    graph_models = asyncio.run(get_graph_models())
 
     assert graph_models.rerank_purpose == "RERANK"
     assert graph_models.rerank_credential is not None
@@ -164,7 +201,7 @@ def test_rerank_falls_back_to_extraction_while_no_rerank_row_exists(
     snapshot = _rerank_snapshot(EXTRACTION=[_chat_credential(id="extraction")])
     monkeypatch.setattr(model_registry, "_current_snapshot", snapshot)
 
-    graph_models = get_graph_models()
+    graph_models = asyncio.run(get_graph_models())
 
     assert graph_models.rerank_purpose == "EXTRACTION"
     assert graph_models.rerank_credential is not None
@@ -177,7 +214,50 @@ def test_rerank_is_skipped_with_a_reason_when_neither_purpose_has_a_row(
     monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
     monkeypatch.setattr(model_registry, "_current_snapshot", _rerank_snapshot())
 
-    graph_models = get_graph_models()
+    graph_models = asyncio.run(get_graph_models())
 
     assert graph_models.rerank is None
     assert graph_models.rerank_unavailable
+
+
+def test_starts_on_the_next_credential_while_the_top_priority_one_cools_down(
+    monkeypatch: pytest.MonkeyPatch, fake_redis: _FakeRedis
+) -> None:
+    snapshot = parse_snapshot(
+        _snapshot_payload(
+            [
+                _chat_credential(id="top", priority=1, modelName="gpt-4o-mini"),
+                _chat_credential(id="next", priority=2, modelName="gpt-4o"),
+            ]
+        )
+    )
+    monkeypatch.setattr(model_registry, "_current_snapshot", snapshot)
+    fake_redis.blocked.add(_state_key("top", 3))
+
+    graph_models = asyncio.run(get_graph_models())
+
+    assert graph_models.generation_credential.id == "next"
+
+
+def test_starts_on_the_top_priority_credential_when_every_one_cools_down(
+    monkeypatch: pytest.MonkeyPatch, fake_redis: _FakeRedis
+) -> None:
+    snapshot = parse_snapshot(
+        _snapshot_payload(
+            [
+                _chat_credential(id="top", priority=1),
+                _chat_credential(id="next", priority=2),
+            ]
+        )
+    )
+    monkeypatch.setattr(model_registry, "_current_snapshot", snapshot)
+    fake_redis.blocked.update({_state_key("top", 3), _state_key("next", 3)})
+    monkeypatch.setattr(model_router_module, "alert_credential_failure", _no_alert)
+
+    graph_models = asyncio.run(get_graph_models())
+
+    assert graph_models.generation_credential.id == "top"
+
+
+async def _no_alert(*args: Any, **kwargs: Any) -> None:
+    return None

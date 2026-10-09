@@ -13,6 +13,18 @@ rotated credential (new revision) always starts with clean state:
   from the snapshot once Java disables it and the next hot-reload picks that up; the
   marker is just the immediate stop-gap until that happens.
 
+On top of that, one model-level state, keyed by `(provider, model_name, api_base_url)`:
+
+- **Model open**: a 5xx/timeout/connection failure means the model itself is struggling,
+  so every other key on it would most likely fail the same way. Once
+  `_MODEL_TRIP_MIN_CREDENTIALS` different credentials of one model fail like that within
+  `_MODEL_TRIP_WINDOW_SECONDS`, every credential on that model is skipped in favour of
+  credentials on another model. The skip lasts `_MODEL_COOLDOWN_BASE_SECONDS`, doubling
+  (up to `_MODEL_COOLDOWN_MAX_SECONDS`) each time the first call after it fails again; the
+  backoff level is forgotten after `_MODEL_BACKOFF_MEMORY_SECONDS` without a new trip. When
+  every credential for a purpose is on an open model, the skip is ignored rather than
+  leaving the purpose with nothing - the per-credential cooldowns still apply.
+
 State lives in Redis (`REDIS_URL`, DB 0 — shared with the registry/hot-reload signal,
 never Celery's broker/backend DBs) under key prefix `mr:cb:` so every worker process
 agrees. When Redis is unreachable, the router degrades to **per-process, in-memory**
@@ -58,6 +70,7 @@ from app.core.errors.llm_error_classifier import (
     GoogleQuotaWindow,
     classify_llm_error,
     google_rate_limit,
+    is_model_wide_failure,
     provider_error_details,
     provider_status_code,
     zai_error_code,
@@ -99,6 +112,16 @@ _DAILY_QUOTA_RESET_MARGIN_SECONDS = 60.0
 # Z.ai's concurrency 429 clears when an in-flight call finishes - a short pause, not 30s.
 _ZAI_CONCURRENCY_COOLDOWN_SECONDS = 5.0
 
+# Model-level circuit breaker (see the module docstring).
+_MODEL_FAILURE_KEY_PREFIX = "mr:mf"
+_MODEL_OPEN_KEY_PREFIX = "mr:mo"
+_MODEL_LEVEL_KEY_PREFIX = "mr:ml"
+_MODEL_TRIP_MIN_CREDENTIALS = 2
+_MODEL_TRIP_WINDOW_SECONDS = 120.0
+_MODEL_COOLDOWN_BASE_SECONDS = 30.0
+_MODEL_COOLDOWN_MAX_SECONDS = 300.0
+_MODEL_BACKOFF_MEMORY_SECONDS = 600.0
+
 
 class _RedisLike(Protocol):
     """Structural subset of `redis.asyncio.Redis` this module actually calls - lets
@@ -107,6 +130,8 @@ class _RedisLike(Protocol):
     async def set(self, name: str, value: Any, *, ex: int | None = None) -> Any: ...
 
     async def exists(self, name: str) -> int: ...
+
+    async def get(self, name: str) -> Any: ...
 
     async def aclose(self) -> Any: ...
 
@@ -118,6 +143,28 @@ _UNKNOWN_REASON = "1"
 
 def _state_key(credential_id: str, revision: int) -> str:
     return f"{_KEY_PREFIX}:{credential_id}:{revision}"
+
+
+def _model_scope(credential: CredentialConfig) -> str:
+    """Credentials sharing this value call the same model on the same endpoint."""
+
+    return f"{credential.provider}|{credential.model_name}|{credential.api_base_url}"
+
+
+def _model_failure_key(scope: str, credential_id: str) -> str:
+    return f"{_MODEL_FAILURE_KEY_PREFIX}:{scope}:{credential_id}"
+
+
+def _model_open_key(scope: str) -> str:
+    return f"{_MODEL_OPEN_KEY_PREFIX}:{scope}"
+
+
+def _model_level_key(scope: str) -> str:
+    return f"{_MODEL_LEVEL_KEY_PREFIX}:{scope}"
+
+
+def _model_cooldown_seconds(level: int) -> float:
+    return min(_MODEL_COOLDOWN_BASE_SECONDS * 2**level, _MODEL_COOLDOWN_MAX_SECONDS)
 
 
 class _InMemoryCircuitState:
@@ -339,12 +386,25 @@ class ModelRouter:
             active_credentials_for(purpose),
             key=lambda credential: (credential.priority is None, credential.priority),
         )
+        first_on_open_model: CredentialConfig | None = None
+        open_models: dict[str, bool] = {}
         for credential in candidates:
             if exclude_ids is not None and credential.id in exclude_ids:
                 continue
             key = _state_key(credential.id, credential.revision)
-            if not await self._is_blocked(key):
+            if await self._is_blocked(key):
+                continue
+            scope = _model_scope(credential)
+            if scope not in open_models:
+                open_models[scope] = await self._is_blocked(_model_open_key(scope))
+            if not open_models[scope]:
                 return credential
+            if first_on_open_model is None:
+                first_on_open_model = credential
+        if first_on_open_model is not None:
+            # Every usable credential is on an open model - a call that may still succeed beats
+            # refusing outright.
+            return first_on_open_model
         await alert_credential_failure(
             None,
             "NO_AVAILABLE_CREDENTIAL",
@@ -368,16 +428,21 @@ class ModelRouter:
         an already-decided "no credential available", so any failure (Redis down, a test
         fake without `get`) just means "reason unknown", never an error."""
 
+        return await self._read(key)
+
+    async def _read(self, key: str) -> str | None:
+        """Best-effort read of a marker's value - `None` when it is unset or unreadable."""
+
         in_memory = self._in_memory.reason(key)
         if in_memory is not None:
             return in_memory
         try:
             if self._injected_redis_client is not None:
-                raw = await self._injected_redis_client.get(key)  # type: ignore[attr-defined]
+                raw = await self._injected_redis_client.get(key)
             else:
                 conn = self._new_redis_connection()
                 try:
-                    raw = await conn.get(key)  # type: ignore[attr-defined]
+                    raw = await conn.get(key)
                 finally:
                     await conn.aclose()
         except Exception:
@@ -445,6 +510,8 @@ class ModelRouter:
                 or self._default_cooldown_seconds
             )
             await self._mark(key, ttl, reason)
+            if is_model_wide_failure(exc):
+                await self._record_model_failure(credential, reason, purpose)
 
         await alert_credential_failure(credential, error_type.value, message, purpose=purpose)
 
@@ -468,6 +535,51 @@ class ModelRouter:
                 credential.revision,
                 exc_info=True,
             )
+
+    async def _record_model_failure(
+        self, credential: CredentialConfig, reason: str, purpose: str | None
+    ) -> None:
+        """Counts a model-wide failure of `credential` toward opening its model's circuit:
+        opens it once enough different credentials of the model failed recently, or right
+        away (with a doubled cooldown) when the model was opened recently and the first call
+        after that failed again."""
+
+        scope = _model_scope(credential)
+        await self._mark(
+            _model_failure_key(scope, credential.id), _MODEL_TRIP_WINDOW_SECONDS, reason
+        )
+        if await self._is_blocked(_model_open_key(scope)):
+            # Already open - a call that was in flight when it opened (or one made because no
+            # other model was left) failing too says nothing new.
+            return
+
+        raw_level = await self._read(_model_level_key(scope))
+        if raw_level is not None and raw_level.isdigit():
+            level = int(raw_level) + 1
+        else:
+            peers = [
+                peer
+                for peer in (active_credentials_for(purpose) if purpose else ())
+                if peer.id != credential.id and _model_scope(peer) == scope
+            ]
+            failed = 1
+            for peer in peers:
+                if await self._is_blocked(_model_failure_key(scope, peer.id)):
+                    failed += 1
+            if failed < _MODEL_TRIP_MIN_CREDENTIALS:
+                return
+            level = 0
+
+        cooldown = _model_cooldown_seconds(level)
+        await self._mark(_model_open_key(scope), cooldown, reason)
+        await self._mark(_model_level_key(scope), _MODEL_BACKOFF_MEMORY_SECONDS, str(level))
+        logger.warning(
+            "model_router: model %s/%s failing across credentials (%s) - skipping it for %ss",
+            credential.provider,
+            credential.model_name,
+            reason,
+            int(cooldown),
+        )
 
 
 _default_router: ModelRouter | None = None

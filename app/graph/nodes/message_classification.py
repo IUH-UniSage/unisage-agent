@@ -218,5 +218,6 @@ async def classify_intent(
         on_failover=on_failover,
         on_attempt=on_attempt,
         budget=budget,
+        timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
     )
     return parse_classification(output, message)

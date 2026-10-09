@@ -151,6 +151,12 @@ class Settings(BaseSettings):
     # Thinking for the short auxiliary calls (classification, query transformation, LLM
     # rerank); generation keeps the model default. False = the model's lowest level.
     CHAT_AUX_THINKING: bool | Literal["minimal", "low", "medium", "high"] = False
+    # A streamed answer with no visible text after this long fails over to the next
+    # credential; once text has started streaming it is never cut. 0 = no limit.
+    CHAT_FIRST_TOKEN_TIMEOUT_SECONDS: float = Field(default=20.0, ge=0)
+    # Whole-call limit for the non-streamed calls (classification, query transformation,
+    # LLM rerank) before failing over. 0 = no limit.
+    CHAT_AUX_CALL_TIMEOUT_SECONDS: float = Field(default=30.0, ge=0)
     # Classification also writes each advisory task's HyDE text / sub-queries, so
     # QueryTransformationNode only calls its own LLM when that output is missing.
     CHAT_CLASSIFY_WITH_RETRIEVAL: bool = True
