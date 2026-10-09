@@ -33,6 +33,7 @@ from pydantic_ai.models import Model
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.registry.model_registry import CredentialConfig
+from app.graph.fence_redactor import FenceRedactor
 from app.graph.streaming import (
     AttemptRecorder,
     BudgetContext,
@@ -178,9 +179,13 @@ async def _repair_missing_ask_form(
 
 @dataclass(frozen=True)
 class GenerationResult:
+    # What the student saw: the answer with every ask_user_form/confirmed_metadata
+    # block filtered out (FenceRedactor) - also what gets persisted in Java.
     response_text: str
     pending_clarification: PendingClarification | None
     confirmed_metadata: dict[str, str]
+    # The ```json ask_user_form blocks the model emitted (or the repair call added).
+    ask_forms: tuple[dict[str, Any], ...] = ()
 
 
 async def run_generation_synthesis(
@@ -238,10 +243,19 @@ async def run_generation_synthesis(
         f"{build_metadata_section(security, confirmed_metadata)}\n"
         f"{build_prepared_context_section(chunks, web_results)}",
     )
+    redactor = FenceRedactor()
+    visible: list[str] = []
+
+    async def redacting_sink(chunk: str) -> None:
+        shown = redactor.feed(chunk)
+        if shown:
+            visible.append(shown)
+            await token_sink(shown)
+
     full_text = await stream_agent_text(
         agent,
         full_prompt,
-        token_sink,
+        redacting_sink,
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,
@@ -250,18 +264,28 @@ async def run_generation_synthesis(
         on_attempt=on_attempt,
         budget=budget,
     )
+    tail = redactor.finish()
+    if tail:
+        visible.append(tail)
+        await token_sink(tail)
     if settings.CHAT_ALLOW_REPAIR_JSON:
-        full_text = await _repair_missing_ask_form(
+        # The repaired block is for the graph only - it never goes to the client.
+        repaired = await _repair_missing_ask_form(
             agent,
             full_text,
             chunks=chunks,
             web_results=web_results,
             security=security,
             confirmed_metadata=confirmed_metadata,
-            token_sink=token_sink,
+            token_sink=_discard,
             credential=credential,
             on_attempt=on_attempt,
         )
+        if repaired != full_text:
+            redactor.captured.extend(
+                block for block in _extract_json_blocks(repaired[len(full_text) :])
+            )
+            full_text = repaired
     confirmed_updates = collect_confirmed_metadata_updates(full_text, previous=previous_pending)
     updated_confirmed_metadata = (
         {**confirmed_metadata, **confirmed_updates} if confirmed_updates else confirmed_metadata
@@ -280,10 +304,17 @@ async def run_generation_synthesis(
             previous_pending, confirmed_metadata=updated_confirmed_metadata
         )
     return GenerationResult(
-        response_text=full_text,
+        response_text="".join(visible).rstrip(),
         pending_clarification=new_pending,
         confirmed_metadata=updated_confirmed_metadata,
+        ask_forms=tuple(
+            block for block in redactor.captured if block.get("type") == "ask_user_form"
+        ),
     )
+
+
+async def _discard(_token: str) -> None:
+    return None
 
 
 def _carry_forward_unanswered(

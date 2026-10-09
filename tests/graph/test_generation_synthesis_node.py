@@ -215,8 +215,8 @@ async def test_repairs_missing_ask_form_when_prose_asks_for_missing_attribute(
 ) -> None:
     """Known model failure mode: a clarification request in prose, without the
     mandatory JSON block. The repair follow-up call (second scripted response)
-    should supply it, and it should reach the caller both in `response_text`
-    and via `token_sink`."""
+    supplies it for the graph - it must never reach the client or `response_text`
+    (UNISAGE-99: the panel replaces the in-text form)."""
 
     prose_without_json = "Bạn vui lòng cho biết ngành học của bạn để mình tra học phí nhé!"
     repair_json = (
@@ -246,11 +246,42 @@ async def test_repairs_missing_ask_form_when_prose_asks_for_missing_attribute(
     assert result.pending_clarification is not None
     assert result.pending_clarification.missing_fields == ["nganh"]
     assert result.pending_clarification.options == [["cntt", "logistics"]]
-    assert prose_without_json in result.response_text
-    assert '"type": "ask_user_form"' in result.response_text
-    # The repaired JSON block must have reached the client via token_sink too,
-    # not just the returned response_text.
-    assert '"type": "ask_user_form"' in "".join(received)
+    assert result.response_text == prose_without_json
+    assert "ask_user_form" not in "".join(received)
+    assert [form["fields"][0]["field"] for form in result.ask_forms] == ["nganh"]
+
+
+@pytest.mark.asyncio
+async def test_model_emitted_form_is_filtered_from_stream_and_captured(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+) -> None:
+    chunks = [
+        "Học phí tuỳ ngành. Bạn học ngành nào?\n\n``",
+        '`json\n{"type": "ask_user_form", "fields": [{"field": "nganh", ',
+        '"options": [{"id": "cntt", "label": "CNTT"}, {"id": "kt", "label": "Kế toán"}]}]}\n``',
+        "`",
+    ]
+    agent = build_generation_agent(mock_streaming_llm_model(chunks))
+    received: list[str] = []
+
+    async def sink(token: str) -> None:
+        received.append(token)
+
+    result = await run_generation_synthesis(
+        agent,
+        user_query="học phí ngành tôi học là bao nhiêu?",
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+        previous_pending=None,
+        origin_node="QueryTransformationNode",
+        token_sink=sink,
+        trace=_TRACE,
+    )
+
+    assert result.response_text == "Học phí tuỳ ngành. Bạn học ngành nào?"
+    assert "```" not in "".join(received) and "ask_user_form" not in "".join(received)
+    assert len(result.ask_forms) == 1
 
 
 @pytest.mark.asyncio
