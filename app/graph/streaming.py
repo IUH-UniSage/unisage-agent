@@ -52,6 +52,7 @@ from pydantic_ai.usage import RunUsage
 
 from app.core.config import settings
 from app.core.llm.provider_models import build_model
+from app.core.llm.thinking import resolve_thinking
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import (
@@ -151,8 +152,8 @@ TokenSink = Callable[[str], Awaitable[None]]
 AgentFactory = Callable[[Model | str], Agent[None, str]]
 
 
-def auxiliary_model_settings() -> ModelSettings:
-    return ModelSettings(thinking=settings.CHAT_AUX_THINKING)
+def auxiliary_model_settings(model: Model | str) -> ModelSettings:
+    return ModelSettings(thinking=resolve_thinking(model, settings.CHAT_AUX_THINKING))
 
 
 def _timeout_or_none(seconds: float) -> float | None:

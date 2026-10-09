@@ -56,7 +56,7 @@ def build_classification_agent(model: Model | str) -> Agent[None, str]:
     return Agent(
         model=model,
         system_prompt=system_prompt,
-        model_settings=auxiliary_model_settings(),
+        model_settings=auxiliary_model_settings(model),
     )
 
 

@@ -65,7 +65,7 @@ def build_llm_rerank_agent(model: Model | str) -> Agent[None, str]:
     return Agent(
         model=model,
         system_prompt=get_templates().agent_reranker_compressor,
-        model_settings=auxiliary_model_settings(),
+        model_settings=auxiliary_model_settings(model),
     )
 
 
