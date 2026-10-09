@@ -311,11 +311,17 @@ instead of more regex.
 
 ### `CalculationNode` is a placeholder
 
+> **Đang xử lý ở UNISAGE-99** (`SPEC-calculation-node.md`). Mục này vẫn đúng với code hiện tại trên `main`; sẽ được gỡ hoặc
+> viết lại ở T20 của `changes/09-10-2026-calculation-flow/todo.md`.
+
 No extractor, no Calculator Tool, no data source for scores/tuition figures.
 `app/graph/nodes/calculation.py` streams a static "under development" message
 and never calls an LLM or tool.
 
 ### Resuming a clarification round in the MULTI flow re-runs every origin task
+
+> **Đang xử lý ở UNISAGE-99** (`SPEC-clarification-panel.md` + `SPEC-calculation-node.md` §5). Mục này vẫn đúng với code hiện tại trên `main`; sẽ được gỡ hoặc
+> viết lại ở T20 của `changes/09-10-2026-calculation-flow/todo.md`.
 
 `PendingClarification.origin_tasks` lets a resume turn re-run exactly the
 advisory tasks that were running when the round started, at their own modes
@@ -326,6 +332,9 @@ the one sub-query that was missing information. Splitting a form reply across
 several tasks/sub-queries this precisely is future work.
 
 ### A turn needing clarification from two branches at once isn't supported
+
+> **Đang xử lý ở UNISAGE-99** (`SPEC-clarification-panel.md`). Mục này vẫn đúng với code hiện tại trên `main`; sẽ được gỡ hoặc
+> viết lại ở T20 của `changes/09-10-2026-calculation-flow/todo.md`.
 
 `PendingClarification` has a single `origin_node`. Today only the advisory
 branch (node 06 onward) can raise a clarification form - `CalculationNode` is
@@ -360,6 +369,9 @@ be common, the HyDE fallback would need its own multi-question handling
 instead of treating the merged text as one question.
 
 ### Calculation results don't reach `GenerationSynthesisNode`'s prompt
+
+> **Đang xử lý ở UNISAGE-99** (`SPEC-calculation-node.md` §3). Mục này vẫn đúng với code hiện tại trên `main`; sẽ được gỡ hoặc
+> viết lại ở T20 của `changes/09-10-2026-calculation-flow/todo.md`.
 
 While `CalculationNode` is a placeholder, its static message is appended
 after the advisory answer deterministically (string concatenation outside
