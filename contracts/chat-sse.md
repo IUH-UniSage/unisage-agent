@@ -136,7 +136,7 @@ của cuộc chat là ASSISTANT, `COMPLETED`, và có `clarification.status == "
   "panel_id": "7f1c2a9e-…",
   "items": [
     {"question_id": "q1", "tab_label": "Khoá", "prompt": "Bạn thuộc khoá nào?", "kind": "choice",
-     "display": "K20"},
+     "option_id": "k20", "display": "K20"},
     {"question_id": "q3", "tab_label": "Điểm TH", "prompt": "Các cột điểm thực hành", "kind": "number_list",
      "display": "9, 8"},
     {"question_id": "q4", "tab_label": "Các môn", "prompt": "Nhập các môn để tính GPA", "kind": "course_table",
@@ -151,7 +151,24 @@ của cuộc chat là ASSISTANT, `COMPLETED`, và có `clarification.status == "
   history và cho client cũ.
 - `display` là text đã định dạng cho mọi kind trừ `course_table`; với `course_table` thì `display = null`
   và có `rows`.
+- `option_id`: chỉ có với `kind == "choice"`. Là id của option được chọn, hoặc `null` khi sinh viên chọn
+  "Khác" (khi đó `display` là text đã nhập). Các kind khác không có field này.
 - Message USER có `clarification_answers` thì web hiện thành card có border thay cho bong bóng.
+
+### Cách hiển thị card (theo mẫu UI của Claude)
+
+- **Header thu/mở được:** `Đã trả lời · N câu hỏi ⌃`, mặc định mở.
+- **Thân card**, mỗi câu hỏi gồm `prompt` và:
+  - `choice`: **toàn bộ options** của câu đó, mỗi option có label, description và "(Đề xuất)". Option đã
+    chọn có radio đầy; các option khác mờ đi. Chọn "Khác" thì có thêm một dòng "Khác: <display>" ở trạng
+    thái đã chọn. Options lấy từ `metadata.clarification.panel` của message ASSISTANT **ngay trước**
+    message USER này (đối chiếu bằng `panel_id` và `question_id`). Không tìm thấy panel thì chỉ hiện
+    `display`.
+  - `number` / `number_list` / `text`: hiện `display`.
+  - `course_table`: bảng `rows`.
+- **Panel bị huỷ** (message ASSISTANT có `metadata.clarification.status == "cancelled"`): ngay dưới câu
+  trả lời của message đó, hiện card thu gọn `Đã huỷ · N câu hỏi ⌄`. Mở ra thì thấy các câu hỏi và
+  options, không có lựa chọn nào được đánh dấu.
 
 ## 5b. Trace tính toán và phản hồi Đúng/Sai
 
