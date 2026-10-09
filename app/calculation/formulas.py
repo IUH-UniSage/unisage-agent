@@ -8,6 +8,8 @@ half-up via `round_half_up` - never Python's banker's `round()`.
 Spec: docs/specs/SPEC-calc-engine.md.
 """
 
+import re
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -684,3 +686,50 @@ def calculate(formula_id: FormulaId, params: Mapping[str, object]) -> Calculatio
     """Raises `CalculationInputError` (every bad or missing field at once)."""
 
     return FORMULAS[formula_id].compute(params)
+
+
+# ---------------------------------------------------------------------------
+# Rule-based routing to a built-in formula (runs before the LLM extractor)
+# ---------------------------------------------------------------------------
+
+BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
+    "gpa": (
+        re.compile(r"\bgpa\b"),
+        re.compile(r"điểm trung bình (chung |tích lũy |tích luỹ |học kỳ |học kì )"),
+        re.compile(r"\bđtb(c|tl)?\b"),
+        re.compile(r"trung bình (tích lũy|tích luỹ|học kỳ|học kì)"),
+    ),
+    "course_score": (
+        re.compile(r"(điểm )?tổng kết (học phần|môn)"),
+        re.compile(r"điểm học phần"),
+        re.compile(r"lý thuyết.{0,40}thực hành|thực hành.{0,40}lý thuyết"),
+        re.compile(r"\b(tx|tbtx|gk|ck)\b.{0,30}\b(tx|tbtx|gk|ck)\b"),
+        re.compile(r"giữa kỳ.{0,40}cuối kỳ|giữa kì.{0,40}cuối kì"),
+    ),
+    "grade_conversion": (
+        re.compile(r"quy đổi|qui đổi|đổi (sang|ra) (điểm chữ|thang 4|hệ 4)"),
+        re.compile(r"(là|được|ra) (điểm )?(chữ )?[abcdf]\+?(\s|$|\?|,|\.)"),
+        re.compile(r"điểm chữ"),
+    ),
+}
+
+
+def route_builtin(question: str) -> list[FormulaId]:
+    """Built-in formulas whose trigger matches the (lower-cased, NFC) question."""
+
+    text = unicodedata.normalize("NFC", question).lower()
+    return [
+        formula_id
+        for formula_id, patterns in BUILTIN_TRIGGERS.items()
+        if any(pattern.search(text) for pattern in patterns)
+    ]
+
+
+def describe_builtin_formulas() -> str:
+    """The formula list rendered into the extractor prompt (one source of truth)."""
+
+    lines: list[str] = []
+    for formula in FORMULAS.values():
+        params = "; ".join(f"`{spec.name}`: {spec.label}" for spec in formula.params)
+        lines.append(f"- `{formula.formula_id}` - {formula.description}. Tham số: {params}")
+    return "\n".join(lines)
