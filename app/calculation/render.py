@@ -25,5 +25,9 @@ def render_markdown(result: CalculationResult, *, notice: str | None = None) -> 
         f"{label} **{value}**" for label, value in result.outputs
     )
     lines += ["", f"Kết quả: {summary}"]
+    if len(result.table) > 1:
+        header, *rows = result.table
+        lines += ["", "| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+        lines += ["| " + " | ".join(row) + " |" for row in rows]
     lines += [f"> {warning}" for warning in result.warnings]
     return "\n".join(lines)

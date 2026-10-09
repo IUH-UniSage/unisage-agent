@@ -326,4 +326,5 @@ def evaluate(formula: RetrievedFormula, values: Mapping[str, object]) -> Calcula
         ),
         steps=tuple(steps),
         outputs=((label, fmt(result)),),
+        primary_value=result,
     )

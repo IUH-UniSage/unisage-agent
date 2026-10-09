@@ -10,7 +10,7 @@ Spec: docs/specs/SPEC-calc-engine.md.
 
 import re
 import unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
@@ -262,6 +262,7 @@ def grade_conversion(params: Mapping[str, object]) -> CalculationResult:
             ("Thang 4", fixed(band.gp4, 1)),
         ),
         summary=_conversion_summary("Điểm", rounded, band),
+        primary_value=rounded,
     )
 
 
@@ -493,6 +494,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
             ("Thang 4", fixed(band.gp4, 1)),
         ),
         summary=_conversion_summary("ĐTKHP", final, band),
+        primary_value=final,
     )
 
 
@@ -616,6 +618,7 @@ def gpa(params: Mapping[str, object]) -> CalculationResult:
         ),
         steps=tuple(steps),
         outputs=(("GPA", fixed(final, 2)), ("Tổng tín chỉ", str(total_credits))),
+        primary_value=final,
     )
 
 
@@ -654,9 +657,15 @@ class ParamSpec:
     step: Decimal | None = None
     unit: str | None = None
     max_items: int | None = None
+    # Target solver ("cần bao nhiêu"): grid step when this param can be the unknown
+    # (None = not solvable), short symbol shown in the answer, and whether the
+    # recorded value is half-point rounded (so the answer also gives the raw threshold).
+    solve_step: Decimal | None = None
+    symbol: str | None = None
+    half_point: bool = False
 
 
-def _score_spec(name: str, label: str, tab_label: str, credit_field: str) -> ParamSpec:
+def _score_spec(name: str, label: str, tab_label: str, credit_field: str, symbol: str) -> ParamSpec:
     return ParamSpec(
         name=name,
         label=label,
@@ -666,10 +675,13 @@ def _score_spec(name: str, label: str, tab_label: str, credit_field: str) -> Par
         min=SCORE_MIN,
         max=SCORE_MAX,
         step=Decimal("0.01"),
+        solve_step=Decimal("0.5"),
+        symbol=symbol,
+        half_point=True,
     )
 
 
-def _credit_spec(name: str, label: str, tab_label: str) -> ParamSpec:
+def _credit_spec(name: str, label: str, tab_label: str, symbol: str) -> ParamSpec:
     return ParamSpec(
         name=name,
         label=label,
@@ -679,6 +691,8 @@ def _credit_spec(name: str, label: str, tab_label: str) -> ParamSpec:
         max=Decimal(COMPONENT_CREDIT_MAX),
         step=Decimal(1),
         unit="TC",
+        solve_step=Decimal(1),
+        symbol=symbol,
     )
 
 
@@ -689,6 +703,10 @@ class Formula:
     description: str
     params: tuple[ParamSpec, ...]
     compute: Callable[[Mapping[str, object]], CalculationResult]
+    # What `primary_value` is called in a target question ("để ĐTKHP ≥ 9.0"); a
+    # letter-grade goal (A+...) is only accepted when it is a score on the 10 scale.
+    target_label: str | None = None
+    target_is_score10: bool = False
 
 
 FORMULAS: dict[FormulaId, Formula] = {
@@ -697,8 +715,8 @@ FORMULAS: dict[FormulaId, Formula] = {
         title="Điểm tổng kết học phần (lý thuyết + thực hành)",
         description="Điểm tổng kết một học phần từ điểm TX/GK/CK và các cột thực hành",
         params=(
-            _credit_spec("tclt", "Số tín chỉ lý thuyết của học phần", "TC lý thuyết"),
-            _credit_spec("tcth", "Số tín chỉ thực hành của học phần", "TC thực hành"),
+            _credit_spec("tclt", "Số tín chỉ lý thuyết của học phần", "TC lý thuyết", "TCLT"),
+            _credit_spec("tcth", "Số tín chỉ thực hành của học phần", "TC thực hành", "TCTH"),
             ParamSpec(
                 name="tbtx",
                 label="Điểm thường xuyên (các cột TX), thang 10",
@@ -709,9 +727,12 @@ FORMULAS: dict[FormulaId, Formula] = {
                 max=SCORE_MAX,
                 step=Decimal("0.01"),
                 max_items=PRACTICE_SCORES_MAX,
+                # As an unknown it is the average itself (not half-point rounded).
+                solve_step=Decimal("0.1"),
+                symbol="TBtx",
             ),
-            _score_spec("gk", "Điểm giữa kỳ, thang 10", "Điểm GK", "tclt"),
-            _score_spec("ck", "Điểm cuối kỳ, thang 10", "Điểm CK", "tclt"),
+            _score_spec("gk", "Điểm giữa kỳ, thang 10", "Điểm GK", "tclt", "GK"),
+            _score_spec("ck", "Điểm cuối kỳ, thang 10", "Điểm CK", "tclt", "CK"),
             ParamSpec(
                 name="th",
                 label="Các cột điểm thực hành, thang 10",
@@ -725,6 +746,8 @@ FORMULAS: dict[FormulaId, Formula] = {
             ),
         ),
         compute=course_score,
+        target_label="ĐTKHP",
+        target_is_score10=True,
     ),
     "gpa": Formula(
         formula_id="gpa",
@@ -765,13 +788,16 @@ def param_spec(formula_id: FormulaId, name: str) -> ParamSpec | None:
     return next((spec for spec in FORMULAS[formula_id].params if spec.name == name), None)
 
 
-def missing_params(formula_id: FormulaId, params: Mapping[str, object]) -> list[ParamSpec]:
-    """Required params not given yet, in display order."""
+def missing_params(
+    formula_id: FormulaId, params: Mapping[str, object], unknowns: Collection[str] = ()
+) -> list[ParamSpec]:
+    """Required params not given yet, in display order - except the unknowns of a
+    target question, which the solver finds instead of asking."""
 
     return [
         spec
         for spec in FORMULAS[formula_id].params
-        if params.get(spec.name) is None and spec.required(params)
+        if spec.name not in unknowns and params.get(spec.name) is None and spec.required(params)
     ]
 
 
@@ -798,6 +824,10 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
         re.compile(r"lý thuyết.{0,40}thực hành|thực hành.{0,40}lý thuyết"),
         re.compile(r"\b(tx|tbtx|gk|ck)\b.{0,30}\b(tx|tbtx|gk|ck)\b"),
         re.compile(r"giữa kỳ.{0,40}cuối kỳ|giữa kì.{0,40}cuối kì"),
+        # Target questions name one component: "cuối kì phải bao nhiêu thì được A+".
+        re.compile(r"(cuối|giữa) k[ỳì].{0,40}(bao nhiêu|mấy) (điểm|thì|để)"),
+        re.compile(r"(cần|phải|tối thiểu|ít nhất) (thi|được|đạt) (bao nhiêu|mấy) điểm"),
+        re.compile(r"qua môn"),
     ),
     "grade_conversion": (
         re.compile(r"quy đổi|qui đổi|đổi (sang|ra) (điểm chữ|thang 4|hệ 4)"),
