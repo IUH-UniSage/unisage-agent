@@ -31,11 +31,6 @@ class CalculationResult:
     # The one result line shown to the student (markdown); None = built from `outputs`.
     # Grade conversions fold the band lookup in here instead of repeating it as a step.
     summary: str | None = None
-    # The headline number (ĐTKHP, GPA, the regulation formula's result) at full
-    # precision - what the target solver compares against a goal.
-    primary_value: Decimal | None = None
-    # Optional extra table (header row first), e.g. the solver's trade-off table.
-    table: tuple[tuple[str, ...], ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

@@ -9,11 +9,11 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from app.calculation.formulas import param_spec
+from app.calculation.formulas import TIMES, param_spec
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
-from app.graph.calculation_turn import NEEDS_INPUT_LEAD
+from app.graph.calculation_turn import LLM_NOTICE, NEEDS_INPUT_LEAD
 from app.graph.clarification_answers import validate_answers
 from app.graph.clarification_round import (
     TaskQuestions,
@@ -25,6 +25,7 @@ from app.graph.nodes.calculation import question_for
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
+from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import (
     Answer,
     CalculationPlan,
@@ -543,10 +544,30 @@ async def test_resume_with_a_still_invalid_answer_asks_again_without_limit() -> 
         assert result.pending_round.panel.questions[0].field == "tclt"
 
 
+def _recording_model(*outputs: object) -> tuple[FunctionModel, list[str]]:
+    """Non-streamed calls answered in order; records each prompt."""
+
+    remaining = [o if isinstance(o, str) else json.dumps(o, ensure_ascii=False) for o in outputs]
+    prompts: list[str] = []
+
+    def respond(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        prompts.append("\n".join(str(getattr(part, "content", "")) for part in messages[-1].parts))
+        return ModelResponse(parts=[TextPart(content=remaining.pop(0))])
+
+    return FunctionModel(function=respond), prompts
+
+
+_LLM_ANSWER = (
+    f"**Công thức**: ĐLT = 20% {TIMES} TBtx + 30% {TIMES} GK + 50% {TIMES} CK\n\n"
+    "Thay số: CK 9.5 → ĐTKHP 8.5 (đạt); CK 9.0 → 8.3 (chưa đạt)\n\n"
+    "**Kết quả: cần CK tối thiểu 9.5**"
+)
+
+
 @pytest.mark.asyncio
-async def test_follow_up_target_question_reuses_the_stored_calculation() -> None:
-    """Turn 1 computes the course score and hands it back as `last_calculation`;
-    turn 2 ("cuối kỳ cần bao nhiêu để được A+") solves on it - nothing asked again."""
+async def test_target_question_after_a_calculation_is_answered_by_the_llm() -> None:
+    """Python only computes forward; "cuối kỳ cần bao nhiêu để được A" goes to the LLM
+    with the built-in rules, the numbers and the chat, under the AI notice."""
 
     first = await run_graph(
         _input(_COURSE_QUERY),
@@ -561,96 +582,107 @@ async def test_follow_up_target_question_reuses_the_stored_calculation() -> None
         _usage_recorder(),
     )
     assert first.last_calculation is not None
-    assert first.last_calculation.plan.formula_id == "course_score"
-    assert first.last_calculation.params["ck"] == 6.5
+    assert first.last_calculation.title == "Điểm tổng kết học phần (lý thuyết + thực hành)"
 
     follow_up = "thế cuối kỳ cần bao nhiêu để được A"
+    generation, prompts = _recording_model(_LLM_ANSWER)
+    retrieval = _RecordingRetrieval([_CHUNK])
     second = await run_graph(
-        _input(follow_up, last_calculation=first.last_calculation),
+        _input(
+            follow_up,
+            last_calculation=first.last_calculation,
+            history=[HistoryMessage(role="USER", content=_COURSE_QUERY)],
+        ),
         GraphModels(
             classification=_scripted(
                 {"tasks": [{"intent": "academic_calculation", "query": follow_up}]},
-                {
-                    "formula_id": "previous",
-                    "params": {},
-                    "solve": {"unknowns": ["ck"], "goal": {"grade": "A"}},
-                },
+                {"formula_id": "llm", "params": {}, "retrieval_query": None},
             ),
             query_transformation=_echo_model(),
-            generation=_note_model("Bạn cố gắng nhé."),
-            retrieval=_RecordingRetrieval([]),
+            generation=generation,
+            retrieval=retrieval,
         ),
         _sink([]),
         _TRACE,
         _usage_recorder(),
     )
-    assert second.pending_round is None
-    # TX 8, GK 7, TH 9·8: CK 9.5 → ĐLT 8.45 → 8.5, ĐTKHP 8.5 (A); CK 9.0 → 8.3.
-    assert "Kết quả: Cần CK tối thiểu **9.5**" in second.response_text
-    assert "CK = 9.0 → ĐTKHP 8.3 (chưa đạt)" in second.response_text
-    # The stored calculation stays the forward one (no target question attached).
-    assert second.last_calculation is not None and second.last_calculation.plan.solve is None
+    assert second.response_text.startswith(f"**{LLM_NOTICE}**")
+    assert "cần CK tối thiểu 9.5" in second.response_text
+    assert retrieval.queries == []  # built-in rules only, no document search
+    assert f"ĐLT = 20% {TIMES} TBtx + 30% {TIMES} GK + 50% {TIMES} CK" in prompts[0]
+    assert _COURSE_QUERY in prompts[0]  # the chat, where the numbers are
+    assert second.calculation_items[0]["mode"] == "llm"
+    assert second.calculation_items[0]["status"] == "computed"
+    assert second.calculation_traces[0]["trace"]["answer"] == _LLM_ANSWER
+    assert second.last_calculation is not None and second.last_calculation.title == follow_up
 
 
 @pytest.mark.asyncio
-async def test_several_formulas_are_a_panel_choice_and_the_answer_skips_the_classifier() -> None:
-    """The screenshot bug: "tính điểm xét tuyển" matched several formulas and asked in
-    free text, so "đại học chính quy á" was re-classified as advisory. Now the case is
-    a panel choice and its answer resumes the calculation without any classification."""
-
-    from tests.graph.test_calculation_retrieved import (
-        AMBIGUOUS,
-        CHUNK,
-        EXTRACTION,
-        VERIFIED,
-        _found,
+async def test_llm_asks_missing_numbers_on_the_panel_and_resume_skips_the_classifier() -> None:
+    query = "học phí 20 tín bao nhiêu"
+    ask = (
+        "Mình cần đơn giá một tín chỉ.\n\n```json\n"
+        + json.dumps(
+            {
+                "type": "ask_user_form",
+                "fields": [
+                    {"field": "don_gia", "label": "Đơn giá 1 tín chỉ (đồng)", "kind": "number"}
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n```"
     )
-    from tests.llm_mocks import FakeRetrievalService
-
-    query = "tính học phí giúp tôi"
+    generation, _ = _recording_model(ask)
+    retrieval = _RecordingRetrieval([_CHUNK])
     first = await run_graph(
         _input(query),
         GraphModels(
             classification=_scripted(
                 {"tasks": [{"intent": "academic_calculation", "query": query}]},
-                EXTRACTION,
-                AMBIGUOUS,
+                {
+                    "formula_id": "llm",
+                    "params": {"so_tin_chi": 20},
+                    "retrieval_query": "công thức học phí",
+                },
             ),
             query_transformation=_echo_model(),
-            generation=_note_model("unused"),
-            retrieval=FakeRetrievalService([CHUNK]),
+            generation=generation,
+            retrieval=retrieval,
         ),
         _sink([]),
         _TRACE,
         _usage_recorder(),
     )
-    assert "chọn trường hợp của mình" in first.response_text
+    assert first.response_text == "Mình cần đơn giá một tín chỉ."
+    assert retrieval.queries == ["công thức học phí"]
     assert first.pending_round is not None
     [question] = first.pending_round.panel.questions
-    assert (question.kind, question.field) == ("choice", "formula_case")
+    assert (question.kind, question.field) == ("number", "don_gia")
 
     submit = ClarificationSubmit(
         action="submit",
         panel_id=first.pending_round.panel.panel_id,
-        answers=[Answer(question_id=question.id, option_id="c1")],
+        answers=[Answer(question_id=question.id, number=Decimal(420000))],
     )
     resume = ResumeInput(
         pending_round=first.pending_round,
         answers=validate_answers(first.pending_round.panel, submit),
     )
+    generation, prompts = _recording_model(f"Học phí = 20 {TIMES} 420.000 = **8.400.000đ** [C1]")
     second = await run_graph(
-        _input("Trường hợp: Khoá 2023", resume=resume),
+        _input("Đơn giá 420000", resume=resume),
         GraphModels(
-            # Formula + verifier only: a classifier call would consume these and fail.
-            classification=_scripted(_found(), VERIFIED),
+            classification=_scripted(),  # any classifier/extractor call would fail
             query_transformation=_echo_model(),
-            generation=_note_model("Bạn nhớ đóng đúng hạn nhé."),
-            retrieval=FakeRetrievalService([CHUNK]),
+            generation=generation,
+            retrieval=_RecordingRetrieval([_CHUNK]),
         ),
         _sink([]),
         _TRACE,
         _usage_recorder(),
     )
-    assert "Kết quả tham khảo theo quy chế" in second.response_text
-    assert "8400000" in second.response_text
+    assert '"so_tin_chi": 20' in prompts[0] and '"don_gia": "420000"' in prompts[0]
+    assert "8.400.000đ" in second.response_text
+    assert "Nguồn:" in second.response_text and "[C1]" in second.response_text
     assert second.pending_round is None

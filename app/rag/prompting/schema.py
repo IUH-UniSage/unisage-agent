@@ -15,6 +15,7 @@ class PromptTemplates:
     chat_multi_intent_synthesis: str
     chat_ticket_fallback: str
     chat_calculation: str
+    chat_calculation_llm: str
     json_repair: str
 
     # Agents (system prompts of single-purpose LLM nodes)
@@ -23,8 +24,6 @@ class PromptTemplates:
     agent_message_classification_retrieval: str
     agent_multi_query_decomposer: str
     agent_calculation_extractor: str
-    agent_calculation_formula: str
-    agent_calculation_formula_verifier: str
     agent_reranker_compressor: str
     agent_multi_representation_enricher: str
 

@@ -129,89 +129,29 @@ class ClarificationPanel(_Strict):
 # --- pending round (server-side state) ---------------------------------------
 
 
-class FormulaVariableSpec(_Strict):
-    name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
-    label: str = Field(min_length=1, max_length=80)
-    unit: str | None = Field(default=None, max_length=20)
-    min: Decimal | None = None
-    max: Decimal | None = None
-
-
-class FormulaSource(_Strict):
-    chunk_id: str
-    document_id: str | None = None
-    source: str
-    heading_path: list[str] = Field(default_factory=list)
-    chunk_hash: str
-    source_quote: str = Field(max_length=600)
-
-
-class RetrievedFormulaPlan(_Strict):
-    expression: str = Field(max_length=200)
-    variables: list[FormulaVariableSpec] = Field(min_length=1, max_length=10)
-    result_label: str = Field(min_length=1, max_length=80)
-    source: FormulaSource
-
-
-class SolveGoal(_Strict):
-    comparator: Literal[">=", "<="]
-    value: Decimal
-    # The letter grade the goal came from ("A+"), shown next to the number.
-    grade: str | None = Field(default=None, max_length=2)
-
-
-class SolveSpec(_Strict):
-    """A target question ("cuối kỳ cần bao nhiêu để được A+"): which parameter(s)
-    the solver finds instead of asking, and the goal on the formula's result.
-    `unknowns` is empty only while a regulation formula is still to be read (the
-    formula agent names its variables then)."""
-
-    unknowns: list[str] = Field(default_factory=list, max_length=2)
-    goal: SolveGoal
-    want: Literal["min", "max"] = "min"
-
-    @model_validator(mode="after")
-    def _distinct(self) -> "SolveSpec":
-        if len(set(self.unknowns)) != len(self.unknowns):
-            raise ValueError("duplicate unknown")
-        return self
-
-
-class FormulaCandidate(_Strict):
-    """One of several regulation formulas that could apply, offered as a choice."""
-
-    option_id: str = Field(pattern=r"^c[1-9]$")
-    summary: str = Field(min_length=1, max_length=300)
-    chunk_id: str
-    source: str
-
-
 class CalculationPlan(_Strict):
-    formula_id: Literal["gpa", "course_score", "grade_conversion", "retrieved"]
-    retrieved: RetrievedFormulaPlan | None = None
-    solve: SolveSpec | None = None
-    # Several regulation formulas matched: the student picks one on the panel, then
-    # only that formula is read (from the same retrieval query).
-    candidates: list[FormulaCandidate] = Field(default_factory=list, max_length=9)
+    """How a pending calculation task is finished on resume: a built-in formula computed
+    by Python (forward only), or `llm` - the LLM computes it (target questions, formulas
+    from documents, follow-ups), retrieving with `retrieval_query` when set."""
+
+    formula_id: Literal["gpa", "course_score", "grade_conversion", "llm"]
     retrieval_query: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
-    def _retrieved_iff_needed(self) -> "CalculationPlan":
-        is_retrieved = self.formula_id == "retrieved"
-        if is_retrieved and (self.retrieved is None) == (not self.candidates):
-            raise ValueError("a regulation plan has either a verified formula or candidates")
-        if not is_retrieved and (self.retrieved is not None or self.candidates):
-            raise ValueError("a built-in plan has no regulation formula or candidates")
+    def _query_only_for_llm(self) -> "CalculationPlan":
+        if self.formula_id != "llm" and self.retrieval_query is not None:
+            raise ValueError("retrieval_query is only for an llm plan")
         return self
 
 
 class LastCalculation(_Strict):
-    """The conversation's latest computed calculation (formula, verified regulation
-    plan included, and its parameters), so a follow-up like "thế cuối kỳ cần bao
-    nhiêu để được A+" reuses it instead of asking every number again."""
+    """The conversation's latest calculation. A built-in one keeps its parameters, so a
+    forward follow-up ("nếu giữa kỳ 8 thì sao") reuses them instead of asking again;
+    its `title` tells the classifier a follow-up is still a calculation."""
 
     plan: CalculationPlan
     params: dict[str, JsonValue] = Field(default_factory=dict)
+    title: str | None = Field(default=None, max_length=200)
 
 
 class PendingAdvisoryTask(_Strict):

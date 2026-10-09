@@ -43,7 +43,9 @@ class TaskQuestions:
     questions: list[dict[str, Any]]
 
 
-def _slug(text: str) -> str:
+def slug(text: str) -> str:
+    """ASCII id from Vietnamese text: "Đơn giá" -> "don_gia"."""
+
     ascii_text = (
         unicodedata.normalize("NFKD", text.replace("đ", "d").replace("Đ", "D"))
         .encode("ascii", "ignore")
@@ -76,7 +78,7 @@ def advisory_questions(
                 if not isinstance(raw, Mapping):
                     continue
                 label = str(raw.get("label") or raw.get("id") or "").strip()[:120]
-                option_id = _slug(str(raw.get("id") or label))
+                option_id = slug(str(raw.get("id") or label))
                 if label and option_id and option_id not in {o.id for o in options}:
                     options.append(ChoiceOption(id=option_id, label=label))
             if len(options) < 2:

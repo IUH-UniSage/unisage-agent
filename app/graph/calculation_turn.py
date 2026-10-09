@@ -1,5 +1,6 @@
 """The calculation part of a turn, between the node and the graph: what is shown
-(rendered by Python), the short note after a calculation-only turn (checked
+(a built-in result rendered by Python, or the LLM's own calculation under the "AI
+tự tính" notice), the short note after a built-in calculation-only turn (checked
 against the numbers actually computed), and the trace.
 
 Spec: docs/specs/SPEC-calculation-node.md §3 and §7.
@@ -25,29 +26,26 @@ from app.graph.nodes.calculation import (
     UNRESOLVED_MESSAGES,
     CalculationDeps,
     Computed,
+    LlmAnswered,
     NeedsInput,
-    QuoteOnly,
     TaskOutcome,
     Unresolved,
 )
 from app.graph.streaming import generation_model_settings, run_agent_text_with_failover
 from app.rag.prompting import build_calculation_commentary_prompt, get_templates
-from app.schemas.clarification import FormulaSource, PendingCalculationTask
+from app.schemas.clarification import PendingCalculationTask
+from app.schemas.retrieval import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
-RETRIEVED_NOTICE = "Kết quả tham khảo theo quy chế"
+LLM_NOTICE = "Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé"
 NEEDS_INPUT_LEAD = "Mình cần thêm vài thông tin để tính giúp bạn:"
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 _HEADING_SEPARATOR = " \u203a "  # single right angle quote (RUF001 forbids the literal)
 # Scale names the note may mention without them being "new numbers".
 _ALWAYS_ALLOWED = frozenset({Decimal(0), Decimal(4), Decimal(10)})
 _EXTRACTOR_PROMPTS = ("agent_calculation_extractor",)
-_RETRIEVED_PROMPTS = (
-    "agent_calculation_extractor",
-    "agent_calculation_formula",
-    "agent_calculation_formula_verifier",
-)
+_LLM_PROMPTS = ("agent_calculation_extractor", "chat_calculation_llm")
 
 
 @dataclass(frozen=True)
@@ -61,10 +59,9 @@ class CalculationTask:
 # ---------------------------------------------------------------------------
 
 
-def _source_lines(source: FormulaSource) -> list[str]:
-    heading = _HEADING_SEPARATOR.join(source.heading_path)
-    where = f"{source.source}" + (f" - {heading}" if heading else "")
-    return [f"Nguồn: {where}", f'> "{source.source_quote}"']
+def _source_line(chunk: RetrievedChunk, index: int) -> str:
+    heading = _HEADING_SEPARATOR.join(chunk.heading_path)
+    return f"- [C{index}] {chunk.source}" + (f" - {heading}" if heading else "")
 
 
 def render_outcome(outcome: TaskOutcome) -> str:
@@ -72,24 +69,16 @@ def render_outcome(outcome: TaskOutcome) -> str:
     own lead, if any, is shown here)."""
 
     if isinstance(outcome, Computed):
-        if outcome.source is None:
-            return render_markdown(outcome.result)
-        body = render_markdown(outcome.result, notice=RETRIEVED_NOTICE)
-        return "\n".join([body, "", *_source_lines(outcome.source)])
-    if isinstance(outcome, QuoteOnly):
-        return "\n".join(
-            [
-                "**Công thức theo quy chế**",
-                "",
-                *_source_lines(outcome.source),
-                "",
-                "Bạn thế số vào công thức trên để tính nhé, hiện mình chưa tự tính loại công "
-                "thức này.",
-            ]
-        )
+        return render_markdown(outcome.result)
+    if isinstance(outcome, LlmAnswered):
+        lines = [f"**{LLM_NOTICE}**", "", outcome.text]
+        if outcome.sources:
+            # Numbered as the LLM saw them, so [C2] in the text matches its line here.
+            lines += ["", "Nguồn:"]
+            lines += [_source_line(chunk, index) for index, chunk in outcome.sources]
+        return "\n".join(lines)
     if isinstance(outcome, Unresolved):
         return UNRESOLVED_MESSAGES[outcome.reason]
-    # NeedsInput: the questions are on the panel; only a specific lead is shown here.
     return outcome.lead or ""
 
 
@@ -103,7 +92,13 @@ def render_outcomes(outcomes: Sequence[TaskOutcome]) -> str:
 def calculation_titles(outcomes: Sequence[TaskOutcome]) -> list[str]:
     """What node 10 is told was already shown - titles only, never a number."""
 
-    return [outcome.result.title for outcome in outcomes if isinstance(outcome, Computed)]
+    titles: list[str] = []
+    for outcome in outcomes:
+        if isinstance(outcome, Computed):
+            titles.append(outcome.result.title)
+        elif isinstance(outcome, LlmAnswered):
+            titles.append(f"Phép tính theo yêu cầu: {outcome.query[:80]}")
+    return titles
 
 
 def needs_input_parts(
@@ -229,29 +224,32 @@ def _hash(value: object) -> str:
 
 
 def _status(outcome: TaskOutcome) -> str:
-    if isinstance(outcome, Computed):
+    if isinstance(outcome, Computed | LlmAnswered):
         return "computed"
     if isinstance(outcome, NeedsInput):
         return "needs_input"
-    if isinstance(outcome, QuoteOnly):
-        return "quote_only"
     return "unresolved"
 
 
-def _source_of(outcome: TaskOutcome) -> FormulaSource | None:
-    if isinstance(outcome, Computed | QuoteOnly):
-        return outcome.source
-    if isinstance(outcome, NeedsInput) and outcome.plan.retrieved is not None:
-        return outcome.plan.retrieved.source
-    return None
-
-
 def _mode(outcome: TaskOutcome) -> str:
-    if isinstance(outcome, Computed | NeedsInput):
-        return "retrieved" if outcome.plan.formula_id == "retrieved" else "builtin"
-    if isinstance(outcome, QuoteOnly):
-        return "retrieved"
-    return "unknown"
+    if isinstance(outcome, Computed):
+        return "builtin"
+    if isinstance(outcome, LlmAnswered):
+        return "llm"
+    if isinstance(outcome, NeedsInput):
+        return "llm" if outcome.plan.formula_id == "llm" else "builtin"
+    return "llm"
+
+
+def _chunk_trace(index: int, chunk: RetrievedChunk) -> dict[str, JsonValue]:
+    return {
+        "ref": f"C{index}",
+        "chunk_id": chunk.chunk_id,
+        "document_id": str(chunk.metadata.get("document_id") or "") or None,
+        "source": chunk.source,
+        "heading_path": list(chunk.heading_path),
+        "chunk_hash": _hash(chunk.content),
+    }
 
 
 def trace_items(
@@ -261,7 +259,8 @@ def trace_items(
     run_id: str,
     deps: CalculationDeps,
 ) -> tuple[list[dict[str, JsonValue]], list[dict[str, JsonValue]]]:
-    """(public items for `metadata.calculation`, private traces for Java's staff table)."""
+    """(public items for `metadata.calculation`, private traces for Java's staff table).
+    Đúng/Sai buttons go on the `llm` items that were computed."""
 
     versions = get_templates().versions
     credential = deps.models.generation_credential
@@ -269,8 +268,8 @@ def trace_items(
     public: list[dict[str, JsonValue]] = []
     private: list[dict[str, JsonValue]] = []
     for outcome in outcomes:
-        source = _source_of(outcome)
         mode = _mode(outcome)
+        sources = outcome.sources if isinstance(outcome, LlmAnswered) else []
         item: dict[str, JsonValue] = {
             "item_id": outcome.task_id,
             "run_id": run_id,
@@ -282,8 +281,11 @@ def trace_items(
                 else None
             ),
             "source_summary": (
-                {"title": source.source, "heading": _HEADING_SEPARATOR.join(source.heading_path)}
-                if source is not None
+                {
+                    "title": sources[0][1].source,
+                    "heading": _HEADING_SEPARATOR.join(sources[0][1].heading_path),
+                }
+                if sources
                 else None
             ),
         }
@@ -292,38 +294,31 @@ def trace_items(
         trace: dict[str, JsonValue] = {
             "question_raw": queries.get(outcome.task_id, ""),
             "status": item["status"],
+            "mode": mode,
             "models": {"llm": model_name},
+            "prompt_versions": {
+                name: f"sha256:{versions.get(name, '')}"
+                for name in (_LLM_PROMPTS if mode == "llm" else _EXTRACTOR_PROMPTS)
+            },
         }
-        prompt_names = _RETRIEVED_PROMPTS if mode == "retrieved" else _EXTRACTOR_PROMPTS
-        trace["prompt_versions"] = {
-            name: f"sha256:{versions.get(name, '')}" for name in prompt_names
-        }
-        if isinstance(outcome, Computed | NeedsInput):
-            plan = outcome.plan
-            trace["formula_id"] = plan.formula_id
-            if plan.solve is not None:
-                trace["solve"] = plan.solve.model_dump(mode="json")
-            if plan.retrieved is not None:
-                trace["expression"] = plan.retrieved.expression
-                trace["variables"] = [v.model_dump(mode="json") for v in plan.retrieved.variables]
-                trace["formula_hash"] = _hash(
-                    {"expression": plan.retrieved.expression, "variables": trace["variables"]}
-                )
-            else:
-                trace["formula_hash"] = _hash(plan.formula_id)
         if isinstance(outcome, Computed):
+            trace["formula_id"] = outcome.plan.formula_id
+            trace["formula_hash"] = _hash(outcome.plan.formula_id)
             trace["inputs"] = [
                 {"label": label, "value": value} for label, value in outcome.result.inputs
             ]
             trace["outputs"] = [
                 {"label": label, "value": value} for label, value in outcome.result.outputs
             ]
-            trace["checks_passed"] = 7 if source is not None else None
+        if isinstance(outcome, LlmAnswered):
+            trace["retrieval_query"] = outcome.plan.retrieval_query
+            trace["known_params"] = dict(outcome.known_params)
+            trace["answer"] = outcome.text
+            trace["sources"] = [_chunk_trace(index, chunk) for index, chunk in sources]
         if isinstance(outcome, NeedsInput):
+            trace["formula_id"] = outcome.plan.formula_id
             trace["known_params"] = dict(outcome.known_params)
         if isinstance(outcome, Unresolved):
             trace["reason"] = outcome.reason
-        if source is not None:
-            trace["source"] = source.model_dump(mode="json")
         private.append({"itemId": outcome.task_id, "runId": run_id, "trace": trace})
     return public, private

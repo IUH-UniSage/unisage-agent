@@ -42,6 +42,7 @@ from app.graph.clarification_round import (
 from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
+    LlmAnswered,
     TaskOutcome,
     resume_calculation_task,
     run_calculation_task,
@@ -315,6 +316,7 @@ def _calculation_deps(
         on_failover=_make_failover_applier(models),
         budget=budget,
         previous=graph_input.last_calculation,
+        history=graph_input.history,
     )
 
 
@@ -323,20 +325,22 @@ def calculation_title(last: LastCalculation | None) -> str | None:
 
     if last is None:
         return None
-    if last.plan.formula_id != "retrieved":
-        return FORMULAS[last.plan.formula_id].title
-    return last.plan.retrieved.result_label if last.plan.retrieved is not None else None
+    if last.title:
+        return last.title
+    return FORMULAS[last.plan.formula_id].title if last.plan.formula_id != "llm" else None
 
 
 def _last_calculation(outcomes: Sequence[TaskOutcome]) -> LastCalculation | None:
-    """The turn's last computed calculation, without its target question (the next
-    follow-up states its own)."""
+    """The turn's last computed calculation: a built-in one with its parameters (forward
+    follow-ups reuse them), an LLM one by name only (its numbers stay in the chat)."""
 
-    computed = [outcome for outcome in outcomes if isinstance(outcome, Computed)]
-    if not computed:
+    done = [outcome for outcome in outcomes if isinstance(outcome, Computed | LlmAnswered)]
+    if not done:
         return None
-    last = computed[-1]
-    return LastCalculation(plan=last.plan.model_copy(update={"solve": None}), params=last.params)
+    last = done[-1]
+    if isinstance(last, Computed):
+        return LastCalculation(plan=last.plan, params=last.params, title=last.result.title)
+    return LastCalculation(plan=last.plan, title=last.query[:200])
 
 
 def _start_calculations(

@@ -149,9 +149,12 @@ class Settings(BaseSettings):
     INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS: int = Field(default=6, ge=0)
 
     # --- CHAT_: read on every chat turn ---
-    # Compute formulas copied from the regulations (Qdrant). Off = only quote the formula
-    # and its source, never calculate it (kill switch - there is no pre-release eval).
-    CHAT_CALC_RETRIEVED_FORMULA_ENABLED: bool = True
+    # Let the LLM answer calculations Python does not compute (target questions,
+    # formulas from documents, follow-ups). Off = only the 3 built-in formulas are
+    # calculated (kill switch - there is no pre-release eval; Đúng/Sai feedback instead).
+    CHAT_CALC_LLM_ENABLED: bool = True
+    # Timeout of that LLM call (not streamed: the whole answer is parsed before it is shown).
+    CHAT_CALC_LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0)
     # Hard deadline for everything a turn does after claiming a clarification panel
     # (start_turn → graph → finalize). Past it the task is cancelled before any more writes.
     CHAT_CLAIMED_TURN_DEADLINE_SECONDS: float = Field(default=150.0, gt=0)

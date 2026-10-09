@@ -38,6 +38,7 @@ __all__ = [
     "append_recent_history",
     "build_ask_user_form_guide",
     "build_calculation_commentary_prompt",
+    "build_calculation_llm_prompt",
     "build_history_section",
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
@@ -165,5 +166,29 @@ def build_calculation_commentary_prompt(*, user_query: str, calculation_payload:
         header=templates.header,
         response_style=templates.response_style,
         calculation_payload=calculation_payload,
+        user_query=user_query,
+    )
+
+
+def build_calculation_llm_prompt(
+    *,
+    user_query: str,
+    builtin_rules: str,
+    documents: str,
+    known_values: str,
+    history: Sequence[HistoryMessage],
+) -> str:
+    """`main/chat_calculation_llm.yaml`: a calculation the LLM does itself (target
+    questions, formulas from documents, follow-ups) - everything but the forward
+    calculation of the built-in formulas."""
+
+    templates = get_templates()
+    return templates.chat_calculation_llm.format(
+        header=templates.header,
+        response_style=templates.response_style,
+        builtin_rules=builtin_rules,
+        documents=documents or "(không có tài liệu)",
+        known_values=known_values,
+        history=build_history_section(history),
         user_query=user_query,
     )

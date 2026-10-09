@@ -43,8 +43,7 @@ def test_agent_templates_keep_literal_json_braces() -> None:
 
     assert '"sub_queries": [' in templates.agent_multi_query_decomposer
     assert '"formula_id": "course_score", "params": {' in templates.agent_calculation_extractor
-    assert '"status": "found", "formula": {' in templates.agent_calculation_formula
-    assert '{"equivalent": true' in templates.agent_calculation_formula_verifier
+    assert '"formula_id": "llm", "params": {' in templates.agent_calculation_extractor
 
 
 def test_task_2_no_longer_mentions_the_pending_block_or_confirmed_metadata() -> None:
@@ -67,8 +66,8 @@ def test_calculation_titles_reach_the_advisory_prompt_without_numbers() -> None:
 
 def test_template_versions_change_with_content() -> None:
     versions = get_templates().versions
-    assert len(versions["agent_calculation_formula"]) == 12
-    assert versions["agent_calculation_formula"] != versions["agent_calculation_extractor"]
+    assert len(versions["chat_calculation_llm"]) == 12
+    assert versions["chat_calculation_llm"] != versions["agent_calculation_extractor"]
 
 
 def test_ticket_fallback_templates_do_not_mention_rerank_score_or_a_button() -> None:
@@ -526,3 +525,13 @@ def test_json_repair_prompt_sees_the_same_web_results() -> None:
     )
 
     assert "[1] (lich-thi — https://pdt.iuh.edu.vn/lich-thi)" in prompt
+
+
+def test_calculation_llm_prompt_keeps_its_ask_form_json_after_formatting() -> None:
+    from app.rag.prompting import build_calculation_llm_prompt
+
+    prompt = build_calculation_llm_prompt(
+        user_query="q", builtin_rules="R", documents="", known_values="{}", history=[]
+    )
+    assert '{"type": "ask_user_form", "fields": [{"field":' in prompt
+    assert "(không có tài liệu)" in prompt

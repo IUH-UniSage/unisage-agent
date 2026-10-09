@@ -82,6 +82,7 @@ def _load_all_templates() -> PromptTemplates:
         chat_multi_intent_synthesis=_load_yaml_template(main / "chat_multi_intent_synthesis.yaml"),
         chat_ticket_fallback=_load_yaml_template(main / "chat_ticket_fallback.yaml"),
         chat_calculation=_load_yaml_template(main / "chat_calculation.yaml"),
+        chat_calculation_llm=_load_yaml_template(main / "chat_calculation_llm.yaml"),
         json_repair=_load_yaml_template(main / "json_repair.yaml"),
         agent_hyde_generator=_load_yaml_template(agents / "hyde_generator.yaml"),
         agent_message_classification=_load_yaml_template(agents / "message_classification.yaml"),
@@ -90,10 +91,6 @@ def _load_all_templates() -> PromptTemplates:
         ),
         agent_multi_query_decomposer=_load_yaml_template(agents / "multi_query_decomposer.yaml"),
         agent_calculation_extractor=_load_yaml_template(agents / "calculation_extractor.yaml"),
-        agent_calculation_formula=_load_yaml_template(agents / "calculation_formula.yaml"),
-        agent_calculation_formula_verifier=_load_yaml_template(
-            agents / "calculation_formula_verifier.yaml"
-        ),
         agent_reranker_compressor=_load_yaml_template(agents / "reranker_compressor.yaml"),
         agent_multi_representation_enricher=_load_yaml_template(
             agents / "multi_representation_enricher.yaml"
