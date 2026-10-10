@@ -3,7 +3,7 @@ version: '3'
 tasks:
   dev:
     desc: "Chạy FastAPI dev server qua uv run uvicorn"
-    dotenv: ['.env']
+    dotenv: ['.env.{{.env}}', '.env']
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     cmds:
@@ -11,18 +11,18 @@ tasks:
 
   prod:
     desc: "Chạy FastAPI production server qua gunicorn / uvicorn workers"
-    dotenv: ['.env']
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} gunicorn -w ${WORKERS:-4} -k uvicorn.workers.UvicornWorker -b {{.HOST}}:{{.PORT}} app.main:app'
 
   worker:
     desc: "Chạy Celery worker (ingestion, usage outbox drain, budget reconciliation)"
-    dotenv: ['.env']
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} celery -A app.worker.celery_app worker --loglevel=info {{.CLI_ARGS}}'
 
   beat:
     desc: "Chạy Celery beat scheduler (drain_usage_outbox, release_expired_reservations, reconcile_budget_committed, ...)"
-    dotenv: ['.env']
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} celery -A app.worker.celery_app beat --loglevel=info {{.CLI_ARGS}}'

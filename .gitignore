@@ -24,8 +24,11 @@ wheels/
 .installed.cfg
 *.egg
 
-# Environment variables
+# Environment variables (.env.dev / .env.eval / .env.prod per environment; only examples are committed)
 .env
+.env.*
+!.env.example
+!.env.*.example
 
 # Private ingestion corpus (academic PDFs) - data, not code; keep out of the repo
 storage/private/

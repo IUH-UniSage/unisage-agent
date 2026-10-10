@@ -43,7 +43,7 @@ MANIFEST_FIELDS = [
     "department_id", "is_public", "access_level", "label_source",
     "pages", "text_chars", "quality", "size_bytes", "sha256", "local_path",
     "tls_verified", "crawled_at",
-    "selected", "ingest_status", "document_id",
+    "selected", "ingest_status", "document_id", "title", "title_source",
 ]  # fmt: skip
 ERROR_FIELDS = ["source_url", "source_page", "unit", "reason"]
 
