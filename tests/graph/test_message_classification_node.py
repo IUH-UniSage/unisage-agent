@@ -12,6 +12,7 @@ from app.graph.nodes.message_classification import (
     MAX_TASKS,
     build_classification_agent,
     classify_intent,
+    describe_classification,
     parse_classification,
 )
 from app.schemas.chat_history import HistoryMessage
@@ -305,3 +306,110 @@ async def test_classification_mock_copies_the_message_into_a_single_task(
         "Thủ tục bảo lưu thế nào?",
         "SINGLE",
     )
+
+
+def test_parse_reads_hyde_text_of_a_single_task() -> None:
+    task = _task("academic_advisory", "còn khóa 2025?", "SINGLE")
+    task |= {"standalone_question": "Học phí khóa 2025?", "hyde_passage": "Mức thu học phí..."}
+
+    (parsed,) = parse_classification(_payload(task), "còn khóa 2025?").tasks
+
+    assert parsed.hyde_text == "Học phí khóa 2025?\n\nMức thu học phí..."
+    assert parsed.sub_queries is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (["a", "b", "c", "d"], ["a", "b", "c"]),
+        (["a", "a", " "], None),
+        ("a", None),
+    ],
+)
+def test_parse_reads_and_bounds_sub_queries_of_a_multi_task(
+    raw: object, expected: list[str] | None
+) -> None:
+    task = _task("academic_advisory", "CNTT và Kế toán?", "MULTI") | {"sub_queries": raw}
+
+    (parsed,) = parse_classification(_payload(task), "CNTT và Kế toán?").tasks
+
+    assert parsed.sub_queries == expected
+    assert parsed.hyde_text is None
+
+
+def test_parse_leaves_retrieval_text_empty_when_hyde_is_incomplete() -> None:
+    task = _task("academic_advisory", _MESSAGE, "SINGLE") | {"standalone_question": _MESSAGE}
+
+    (parsed,) = parse_classification(_payload(task), _MESSAGE).tasks
+
+    assert parsed.hyde_text is None
+
+
+def test_classification_retrieval_text_is_never_persisted() -> None:
+    task = _task("academic_advisory", "CNTT và Kế toán?", "MULTI") | {"sub_queries": ["a", "b"]}
+
+    (parsed,) = parse_classification(_payload(task), "CNTT và Kế toán?").tasks
+
+    assert "sub_queries" not in parsed.model_dump()
+    assert "hyde_text" not in parsed.model_dump()
+
+
+def test_classification_prompt_carries_the_retrieval_section_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "CHAT_CLASSIFY_WITH_RETRIEVAL", True)
+    with_retrieval = build_classification_agent("test")._system_prompts
+    monkeypatch.setattr(settings, "CHAT_CLASSIFY_WITH_RETRIEVAL", False)
+    without = build_classification_agent("test")._system_prompts
+
+    assert "hyde_passage" in "".join(with_retrieval)
+    assert "hyde_passage" not in "".join(without)
+
+
+def test_describe_classification_shows_the_retrieval_text_too() -> None:
+    task = _task("academic_advisory", "CNTT và Kế toán?", "MULTI") | {"sub_queries": ["a", "b"]}
+
+    described = json.loads(describe_classification(parse_classification(_payload(task), "x")))
+
+    assert described["tasks"][0]["sub_queries"] == ["a", "b"]
+    assert described["tasks"][0]["hyde_text"] is None
+    assert described["confidence"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_classifier_is_told_the_previous_calculation() -> None:
+    prompts: list[str] = []
+
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        prompts.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        return ModelResponse(
+            parts=[TextPart(content=_payload(_task("academic_calculation", "q", None)))]
+        )
+
+    agent = build_classification_agent(FunctionModel(function=respond))
+    await classify_intent(
+        agent,
+        "thế cuối kỳ cần bao nhiêu để được A+",
+        previous_calculation="Điểm tổng kết học phần (lý thuyết + thực hành)",
+    )
+    await classify_intent(agent, "điều kiện tốt nghiệp là gì?")
+
+    assert prompts[0].endswith(
+        "<previous_calculation_turn>Điểm tổng kết học phần (lý thuyết + thực hành)"
+        "</previous_calculation_turn>"
+    )
+    assert "<previous_calculation_turn>" not in prompts[1]
+
+
+def test_classifier_prompt_keeps_calculation_follow_ups_as_calculations() -> None:
+    """The multi-turn rule and its examples must stay in the prompt (regression for a
+    case answer like "đại học chính quy á" being re-classified as advisory)."""
+
+    from app.rag.prompting import get_templates
+
+    prompt = get_templates().agent_message_classification
+    assert "NỐI TIẾP PHÉP TÍNH" in prompt
+    assert '"đại học chính quy á"' in prompt
+    assert "<previous_calculation_turn>" in prompt

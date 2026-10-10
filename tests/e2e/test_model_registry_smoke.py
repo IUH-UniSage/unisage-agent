@@ -25,7 +25,7 @@ import pytest
 import redis as redis_sync
 
 from app.core.config import settings
-from app.worker.celery_app import BEAT_HEARTBEAT_REDIS_KEY
+from app.worker.tasks.periodic import BEAT_HEARTBEAT_REDIS_KEY
 
 pytestmark = pytest.mark.integration
 

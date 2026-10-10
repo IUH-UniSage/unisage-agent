@@ -12,9 +12,15 @@ template: |
   {task_1}
   {task_2}
 
+  ## Phép Tính Đã Trình Bày Phía Trên
+  <calculation_results>
+  {calculation_results}
+  </calculation_results>
+  Nếu khác "Không có": hệ thống ĐÃ hiển thị đầy đủ các phép tính này (công thức, các bước, kết quả) ngay trước câu trả lời của bạn. KHÔNG tính lại, KHÔNG chép lại số liệu hay các bước; chỉ trả lời phần tư vấn và có thể nhắc "như kết quả tính ở trên" khi cần.
+
   ## Hướng Dẫn Tổng Hợp Đa Truy Vấn (Multi-Intent Synthesis)
   Người dùng đang đưa ra một câu hỏi phức hợp gồm nhiều ý/thực thể khác nhau.
-  Bối cảnh trong `<academic_context>` là tổng hợp kết quả truy xuất song song từ các câu hỏi con:
+  Bối cảnh trong `<academic_context>` là tổng hợp kết quả truy xuất song song từ các câu hỏi con (câu hỏi con nào không tìm được văn bản thì có thể có trang web tương ứng trong `<websearch>`):
   {sub_queries_list}
 
   Nhiệm vụ của bạn:

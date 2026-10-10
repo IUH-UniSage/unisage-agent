@@ -8,8 +8,9 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 import app.core.registry.model_registry as model_registry
 import app.core.registry.model_router as model_router_module
 import app.core.usage.usage_outbox as usage_outbox_module
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
-from app.core.registry.model_router import ModelRouter, NoAvailableCredentialError
+from app.core.registry.model_router import ModelRouter
 from app.rag.enrichment.multi_representation import (
     MalformedExtractionResponseError,
     MultiRepresentationEnricher,
@@ -69,7 +70,9 @@ def test_enrich_returns_summary_and_configured_question_count() -> None:
 
 
 def test_enrich_falls_back_to_empty_on_malformed_json() -> None:
-    enricher = MultiRepresentationEnricher(model=_function_model("not valid json"), question_count=3)
+    enricher = MultiRepresentationEnricher(
+        model=_function_model("not valid json"), question_count=3
+    )
 
     enriched = enricher.enrich(_chunk())
 
@@ -194,9 +197,7 @@ def _patch_build_model(
     def fake_build_model(credential: CredentialConfig) -> FunctionModel:
         return models_by_credential_id[credential.id]
 
-    monkeypatch.setattr(
-        "app.rag.enrichment.multi_representation.build_model", fake_build_model
-    )
+    monkeypatch.setattr("app.rag.enrichment.multi_representation.build_model", fake_build_model)
     monkeypatch.setattr("app.graph.streaming.build_model", fake_build_model)
 
 
@@ -225,6 +226,41 @@ def test_provider_failure_falls_back_to_next_extraction_credential(
     # The primary credential's failure was reported to Java before falling back.
     assert len(backend.reports) == 1
     assert backend.reports[0]["credential_id"] == "cred-primary"
+
+
+def test_next_chunk_skips_a_credential_that_is_cooling_down(
+    fake_router: tuple[ModelRouter, _FakeBackendClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the primary fails once it is on cooldown; the following chunk must start from
+    the fallback instead of calling (and failing on) the primary again."""
+
+    _router, backend = fake_router
+    cred_primary = _credential("cred-primary", priority=1)
+    cred_fallback = _credential("cred-fallback", priority=2)
+    _set_extraction_snapshot(version=1, extraction=(cred_primary, cred_fallback))
+
+    primary_calls: list[int] = []
+
+    def primary(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        primary_calls.append(1)
+        raise RuntimeError("primary down")
+
+    _patch_build_model(
+        monkeypatch,
+        {
+            "cred-primary": FunctionModel(function=primary),
+            "cred-fallback": _function_model(_success_payload()),
+        },
+    )
+
+    enricher = MultiRepresentationEnricher(question_count=3)
+    first = enricher.enrich(_chunk())
+    second = enricher.enrich(_chunk())
+
+    assert first.summary == second.summary == "ok"
+    assert len(primary_calls) == 1
+    assert [report["credential_id"] for report in backend.reports] == ["cred-primary"]
 
 
 def test_malformed_response_on_fallback_credential_reported_permanent(
@@ -301,9 +337,7 @@ def test_total_credential_exhaustion_propagates_instead_of_returning_empty(
     cred_only = _credential("cred-only", priority=1)
     _set_extraction_snapshot(version=1, extraction=(cred_only,))
 
-    _patch_build_model(
-        monkeypatch, {"cred-only": _failing_model(RuntimeError("provider outage"))}
-    )
+    _patch_build_model(monkeypatch, {"cred-only": _failing_model(RuntimeError("provider outage"))})
 
     # RuntimeError classifies as TRANSIENT (unrecognized -> fail open), so the exclusion
     # is a cooldown rather than an immediate PERMANENT exclusion - either way, with only

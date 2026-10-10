@@ -10,14 +10,18 @@ candidate credential's `Model` the same way.
 
 from __future__ import annotations
 
+import httpx
 from pydantic_ai.models import Model
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.zai import ZaiModel
 from pydantic_ai.providers import Provider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.providers.zai import ZaiProvider
 
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client
+from app.core.llm.rate_limited_model import RateLimitedModel
 from app.core.registry.model_registry import CredentialConfig
 
 _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
@@ -32,6 +36,11 @@ _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 #     `httpx.AsyncClient` and stores it at `client._api_client._http_options.httpx_async_client`.
 #     It emits a `PydanticAIDeprecationWarning` ("use `httpx2.AsyncClient` instead") but does not
 #     raise - same non-fatal deprecation OpenAI's own path already carries.
+#   - "zai" (`ZaiProvider`, an OpenAI-compatible provider): accepts a plain `httpx.AsyncClient`
+#     like "openai", but its constructor has no `base_url` parameter (the URL is a fixed
+#     property) - `BaseUrlZaiProvider` below adds one so it fits `build_model()`'s uniform call.
+#     `ZaiModel` (an `OpenAIChatModel`) is what understands GLM's thinking mode and
+#     `reasoning_content`, which the plain OpenAI model would ignore.
 #
 # "anthropic" is deliberately NOT here, even though ADR 0005 assumed it would use the same
 # http_client= mechanism as OpenAI ("... AnthropicProvider, ... dùng cùng cơ chế http_client=").
@@ -63,9 +72,27 @@ _SELF_HOSTED_SOURCE_TYPE = "SELF_HOSTED"
 #     `provider_cls(base_url=..., api_key=..., http_client=...)` call without a SELF_HOSTED-style
 #     special case. Left out as a scoping decision, not an SSRF one; picking it back up just needs
 #     that one branch added to `build_model()`.
+
+
+class BaseUrlZaiProvider(ZaiProvider):
+    """`ZaiProvider` that uses the credential's own base URL - pydantic-ai's reads a fixed
+    `base_url` property, which `ZaiProvider.__init__` uses to build its client."""
+
+    def __init__(
+        self, *, base_url: str | None, api_key: str, http_client: httpx.AsyncClient
+    ) -> None:
+        self._configured_base_url = base_url
+        super().__init__(api_key=api_key, http_client=http_client)
+
+    @property
+    def base_url(self) -> str:
+        return self._configured_base_url or super().base_url
+
+
 _PROVIDER_MAP: dict[str, tuple[type[Model], type[Provider]]] = {
     "openai": (OpenAIChatModel, OpenAIProvider),
     "google": (GoogleModel, GoogleProvider),
+    "zai": (ZaiModel, BaseUrlZaiProvider),
 }
 
 
@@ -96,6 +123,10 @@ def build_model(credential: CredentialConfig) -> Model:
     `credential.provider`, since a self-hosted server speaks the OpenAI wire format. Every other
     `source_type` is looked up by `credential.provider` in `_PROVIDER_MAP`; no entry there raises
     `UnsupportedProviderError` — this function never builds anything in that case.
+
+    A credential with a positive `max_rpm` or `max_concurrency` comes back wrapped in
+    `RateLimitedModel`, which enforces those limits before every request (the native model is
+    its `.wrapped`).
     """
 
     http_client = build_provider_http_client(
@@ -115,4 +146,11 @@ def build_model(credential: CredentialConfig) -> Model:
         api_key=credential.api_key,
         http_client=http_client,
     )
-    return model_cls(credential.model_name or "", provider=provider)
+    return _with_limits(model_cls(credential.model_name or "", provider=provider), credential)
+
+
+def _with_limits(model: Model, credential: CredentialConfig) -> Model:
+    limits = (credential.max_rpm, credential.max_concurrency)
+    if any(limit is not None and limit > 0 for limit in limits):
+        return RateLimitedModel(model, credential)
+    return model

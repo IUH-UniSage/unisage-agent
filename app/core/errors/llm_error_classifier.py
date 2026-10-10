@@ -21,45 +21,20 @@ understood.
 
 from __future__ import annotations
 
-from enum import Enum
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import google.genai.errors as google_errors
+import httpx
 import openai
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
+from app.core.errors.provider_errors import MalformedExtractionResponseError
 from app.core.security.ssrf_guard import SsrfBlockedError
 
 
-class EmbeddingProviderError(Exception):
-    """Raised when the ACTIVE EMBEDDING credential itself is unusable — the actual provider call
-    failed (auth/connection/rate-limit/...), there is no ACTIVE EMBEDDING credential at all, or
-    the embedding identity guard (`app.core.registry.embedding_identity`) refused to use
-    it. Embedding never auto-fails-over — there is no other credential to
-    route to, so this is always terminal for the job. Every caller
-    (`OpenAIEmbedder.embed`, and transitively `app.worker.celery_app.embed_chunks` and
-    `app.rag.retrieval.service.RetrievalService`) must let this escape uncaught rather than
-    treat it as a per-chunk data problem.
-
-    `credential` (when known) is attached so a caller several frames away (`embed_chunks`) can
-    still build a `report_health` call without having to re-derive which credential failed.
-    """
-
-    def __init__(self, message: str, *, credential: Any = None) -> None:
-        super().__init__(message)
-        self.credential = credential
-
-
-class MalformedExtractionResponseError(Exception):
-    """Raised by a caller (never by a provider SDK itself) when a credential's response parsed
-    fine at the transport level but didn't match the shape the caller actually needed - e.g. a
-    fallback EXTRACTION credential's JSON missing the expected keys (see
-    `app/rag/enrichment/multi_representation.py`). Always PERMANENT: a credential that returns
-    the wrong shape isn't a transient blip, it needs SA attention rather than an automatic retry
-    against the exact same credential."""
-
-
-class ErrorType(str, Enum):
+class ErrorType(StrEnum):
     """Mirrors the Java-side `CredentialHealthErrorType` enum's two values and their meaning —
     same names, separate enum, since nothing here is serialized directly to that Java type
     (Task 10 builds the health-report body from this)."""
@@ -82,6 +57,8 @@ _QUOTA_EXHAUSTION_MARKERS = (
     "exceeded_quota",
     "exceeded your current quota",
     "out of credit",
+    # Z.ai code 1113: "Insufficient balance or no resource package. Please recharge."
+    "insufficient balance",
 )
 # Deliberately NOT included: Google's "RESOURCE_EXHAUSTED" status — the Gemini API returns that
 # same status for both an actual out-of-quota 429 and a plain short-term rate limit (there's no
@@ -116,10 +93,108 @@ def _dict_signals_quota_exhaustion(body: dict[str, Any]) -> bool:
     )
 
 
-def _quota_exhausted(*sources: object | None) -> bool:
-    """True if any of `sources` (a 429 response body, a status string, a message, ...) looks
-    like a quota/credit exhaustion signal rather than a plain rate limit."""
+class GoogleQuotaWindow(StrEnum):
+    """Which rolling window a Gemini 429 says was exceeded - read from the `quotaId` of the
+    `google.rpc.QuotaFailure` detail (e.g. `GenerateRequestsPerMinutePerProjectPerModel-FreeTier`,
+    `GenerateRequestsPerDayPerProjectPerModel-FreeTier`)."""
 
+    MINUTE = "MINUTE"
+    DAY = "DAY"
+
+
+@dataclass(frozen=True)
+class GoogleRateLimit:
+    window: GoogleQuotaWindow
+    # `google.rpc.RetryInfo.retryDelay` in seconds, when Google sent one.
+    retry_delay_seconds: float | None
+
+
+_QUOTA_FAILURE_TYPE = "type.googleapis.com/google.rpc.QuotaFailure"
+_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo"
+
+
+def _google_error_details(source: object) -> list[dict[str, Any]]:
+    """The `error.details` list of a Gemini error body (`{"error": {..., "details": [...]}}`),
+    as both `google_errors.APIError.details` and PydanticAI's `ModelHTTPError.body` carry it."""
+
+    if not isinstance(source, dict):
+        return []
+    error = source.get("error", source)
+    details = error.get("details") if isinstance(error, dict) else None
+    if not isinstance(details, list):
+        return []
+    return [detail for detail in details if isinstance(detail, dict)]
+
+
+def _parse_duration_seconds(raw: object) -> float | None:
+    # protobuf Duration JSON form: "39s", "0.5s".
+    if not isinstance(raw, str) or not raw.endswith("s"):
+        return None
+    try:
+        return max(0.0, float(raw[:-1]))
+    except ValueError:
+        return None
+
+
+def google_rate_limit(*sources: object | None) -> GoogleRateLimit | None:
+    """The quota window a Gemini 429 body reports as exceeded, or `None` when no source carries a
+    `QuotaFailure` detail naming one.
+
+    Gemini answers every free-tier limit hit - per minute and per day alike - with the same
+    "You exceeded your current quota, please check your plan and billing details" message, so
+    that text says nothing about credit; only the `quotaId` tells the windows apart. A per-day
+    violation wins over a per-minute one (it is the longer wait)."""
+
+    window: GoogleQuotaWindow | None = None
+    retry_delay: float | None = None
+    for source in sources:
+        for detail in _google_error_details(source):
+            kind = detail.get("@type")
+            if kind == _RETRY_INFO_TYPE:
+                retry_delay = _parse_duration_seconds(detail.get("retryDelay"))
+            elif kind == _QUOTA_FAILURE_TYPE:
+                violations = detail.get("violations")
+                for violation in violations if isinstance(violations, list) else []:
+                    quota_id = violation.get("quotaId") if isinstance(violation, dict) else None
+                    if not isinstance(quota_id, str):
+                        continue
+                    if "PerDay" in quota_id:
+                        window = GoogleQuotaWindow.DAY
+                    elif window is None and ("PerMinute" in quota_id or "PerSecond" in quota_id):
+                        window = GoogleQuotaWindow.MINUTE
+    if window is None:
+        return None
+    return GoogleRateLimit(window=window, retry_delay_seconds=retry_delay)
+
+
+# Z.ai code 1302 "Rate limit reached for requests": too many requests in flight at once for
+# the account and model - clears as soon as one of them finishes.
+ZAI_CONCURRENCY_LIMIT_CODE = "1302"
+
+
+def zai_error_code(*sources: object | None) -> str | None:
+    """Z.ai's own business error code (e.g. "1302") from an error body, which arrives either
+    unwrapped (`{"code": "1302", ...}`, the openai SDK's `body`) or as `{"error": {...}}`."""
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        error = source.get("error", source)
+        code = error.get("code") if isinstance(error, dict) else None
+        if isinstance(code, str | int) and str(code).isdigit():
+            return str(code)
+    return None
+
+
+def is_quota_exhausted(*sources: object | None) -> bool:
+    """True if any of `sources` (a 429 response body, a status string, a message, ...) looks
+    like a quota/credit exhaustion signal rather than a plain rate limit.
+
+    A Gemini 429 that names a per-minute/per-day quota window is a rate limit that resets on
+    its own, whatever its message says (see `google_rate_limit`)."""
+
+    if google_rate_limit(*sources) is not None:
+        return False
     for source in sources:
         if source is None:
             continue
@@ -137,12 +212,52 @@ def _classify_by_status_code(status_code: int, *quota_text_sources: object | Non
     if status_code in (401, 403):
         return ErrorType.PERMANENT
     if status_code == 429:
-        return ErrorType.PERMANENT if _quota_exhausted(*quota_text_sources) else ErrorType.TRANSIENT
+        return (
+            ErrorType.PERMANENT if is_quota_exhausted(*quota_text_sources) else ErrorType.TRANSIENT
+        )
     if status_code >= 500:
         return ErrorType.TRANSIENT
     # Any other 4xx (400/404/409/422/...) is unrecognized here — fail open toward TRANSIENT
     # per todo.md, rather than guessing it's a permanent credential problem.
     return ErrorType.TRANSIENT
+
+
+def provider_status_code(exc: BaseException) -> int | None:
+    """The HTTP status of a failed provider call, whichever layer raised it - `None` for a
+    failure with no HTTP response (connection refused, timeout, ...).
+
+    - PydanticAI (ADR 0005) usually re-wraps an HTTP failure into `ModelHTTPError` before a
+      call site sees it; a connection/timeout failure becomes the status-less
+      `ModelAPIError` instead.
+    - openai SDK (`openai` provider and `SELF_HOSTED`'s OpenAI-compatible transport):
+      `APIStatusError` and its subclasses (`AuthenticationError`, `RateLimitError`, ...).
+    - google-genai SDK: every failure is `errors.APIError`, told apart only by `exc.code`.
+    """
+
+    if isinstance(exc, ModelHTTPError | openai.APIStatusError):
+        return exc.status_code
+    if isinstance(exc, google_errors.APIError):
+        return exc.code if isinstance(exc.code, int) else None
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    return None
+
+
+def provider_error_details(exc: BaseException) -> tuple[object | None, ...]:
+    """Whatever text/body a provider attached to its error, for marker checks (quota
+    exhausted, context too long, ...).
+
+    openai's `exc.body` is already the unwrapped inner `error` object (so `body["code"]` is
+    directly e.g. "insufficient_quota"). For google-genai the free-text explanation lives in
+    `exc.message`/`exc.details`; its `exc.status` ("RESOURCE_EXHAUSTED") is deliberately not
+    used - Google returns the same value for a quota-exhausted and a plain rate-limited 429.
+    """
+
+    if isinstance(exc, ModelHTTPError | openai.APIStatusError):
+        return (exc.body,)
+    if isinstance(exc, google_errors.APIError):
+        return (exc.message, exc.details)
+    return (str(exc),)
 
 
 def classify_llm_error(exc: Exception) -> ErrorType:
@@ -156,39 +271,35 @@ def classify_llm_error(exc: Exception) -> ErrorType:
     if isinstance(exc, MalformedExtractionResponseError):
         return ErrorType.PERMANENT
 
-    # --- PydanticAI's own wrapping layer (ADR 0005) — checked before any raw SDK type, since a
-    # provider call site normally sees these instead of the raw SDK exception. ---
-    if isinstance(exc, ModelHTTPError):
-        return _classify_by_status_code(exc.status_code, exc.body)
-    if isinstance(exc, ModelAPIError):
-        # PydanticAI's generic wrap with no HTTP status attached — a provider's
-        # `_map_api_errors` (e.g. openai.py) routes a connection/timeout failure
-        # here, never into `ModelHTTPError`. No status code to inspect, so: connection error →
-        # TRANSIENT.
-        return ErrorType.TRANSIENT
-
-    # --- openai SDK (`openai` provider, and `SELF_HOSTED`'s OpenAI-compatible transport — the
-    # same SDK, so the same exception hierarchy applies to both). ---
-    if isinstance(exc, openai.APIConnectionError):
-        # Covers `openai.APITimeoutError` too (subclasses `APIConnectionError`).
-        return ErrorType.TRANSIENT
-    if isinstance(exc, openai.APIStatusError):
-        # Covers `AuthenticationError` (401), `PermissionDeniedError` (403), `RateLimitError`
-        # (429), `InternalServerError` (5xx) and any other status via the generic base class.
-        # `exc.body` here is already the unwrapped inner `error` object (openai's own
-        # `_make_status_error` does `body.get("error", body)` before constructing the
-        # exception), so `exc.body.get("code")` is directly e.g. `"insufficient_quota"`.
-        return _classify_by_status_code(exc.status_code, exc.body)
-
-    # --- google-genai SDK (`google` provider, `GoogleModel`/`GoogleProvider`) — no dedicated
-    # AuthenticationError/RateLimitError subclasses; every failure is `errors.APIError` (or its
-    # `ClientError`/`ServerError` subclasses), differentiated by `exc.code` (the HTTP status, an
-    # int). `exc.status` (e.g. "RESOURCE_EXHAUSTED") is Google's own status enum, already
-    # unwrapped from the response body by the SDK's `_get_status` — but it's the *same* value
-    # for a quota-exhausted 429 and a plain rate-limited 429, so it isn't passed as a quota
-    # signal here; `exc.message`/`exc.details` (which carry the actual free-text explanation)
-    # are what `_classify_by_status_code` checks for a quota marker instead. ---
-    if isinstance(exc, google_errors.APIError):
-        return _classify_by_status_code(exc.code, exc.message, exc.details)
-
+    status_code = provider_status_code(exc)
+    if status_code is not None:
+        return _classify_by_status_code(status_code, *provider_error_details(exc))
+    # No HTTP status: a connection error/timeout (openai `APIConnectionError`, PydanticAI
+    # `ModelAPIError`, ...) or something unrecognized - both fail open toward retrying.
     return ErrorType.TRANSIENT
+
+
+def is_model_wide_failure(exc: BaseException) -> bool:
+    """`True` for a failure that says the provider's MODEL is struggling (5xx, timeout,
+    connection error) rather than one credential (429, 401, ...) - every other key on the
+    same model would most likely fail the same way, so trying them one by one only adds
+    latency. Follows `__cause__` so a wrapped timeout still counts."""
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status_code = provider_status_code(current)
+        if status_code is not None:
+            return status_code >= 500
+        if isinstance(
+            current,
+            TimeoutError
+            | httpx.TimeoutException
+            | httpx.TransportError
+            | openai.APIConnectionError
+            | ModelAPIError,
+        ):
+            return True
+        current = current.__cause__
+    return False

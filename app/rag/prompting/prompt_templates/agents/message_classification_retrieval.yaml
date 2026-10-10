@@ -1,0 +1,31 @@
+# AGENT_MESSAGE_CLASSIFICATION_RETRIEVAL_PROMPT
+description: "Phần nối thêm vào message_classification khi CHAT_CLASSIFY_WITH_RETRIEVAL bật - classifier viết luôn truy vấn tìm kiếm (HyDE cho SINGLE, sub-query cho MULTI) để QueryTransformationNode không phải gọi LLM lần nữa. Quy tắc rút gọn từ hyde_generator.yaml và multi_query_decomposer.yaml - sửa quy tắc ở đó thì sửa cả ở đây."
+template: |
+  ## Truy vấn tìm kiếm cho task `academic_advisory` (BẮT BUỘC)
+  Mỗi task `academic_advisory` có thêm field truy vấn tìm kiếm, ngoài `intent`/`query`/`routing_mode` ở trên. Các ví dụ phía trên chỉ minh họa phân loại - output thật luôn có thêm các field này như ví dụ dưới. Task khác nhãn không có các field này.
+
+  ### `routing_mode = "SINGLE"` → `standalone_question` + `hyde_passage`
+  - `standalone_question`: nếu câu hỏi là câu nối tiếp/rút gọn (VD "còn khóa <năm học khác> thì sao?"), dùng lịch sử hội thoại viết lại thành MỘT câu hỏi độc lập: giữ CHỦ ĐỀ của lượt trước và các tiêu chí người dùng không đổi (bậc/hệ đào tạo, khóa/năm học, khối/ngành, cơ sở), chỉ thay tiêu chí vừa nêu. Câu phản hồi/làm rõ không chứa nội dung hỏi ("ý tôi là...", "sao không trả lời?") → viết lại đúng câu hỏi gần nhất của chính người dùng trong lịch sử; lời trả lời/từ chối của trợ lý KHÔNG phải nguồn nội dung. Câu hỏi đã đầy đủ thì giữ nguyên. TUYỆT ĐỐI KHÔNG tự thêm khóa/năm học, bậc/hệ, khối/ngành hay cơ sở mà cả câu hỏi lẫn lịch sử đều không nhắc tới.
+  - `hyde_passage`: MỘT câu ngắn (tối đa 30 từ) theo văn phong văn bản hành chính của Nhà trường, nêu thông tin mà `standalone_question` cần tìm. PHẢI chứa nguyên văn mọi từ khóa của `standalone_question` (chủ đề, bậc/hệ, khóa/năm học, khối/ngành, cơ sở; tên/viết tắt trường giữ nguyên như "iuh"), không thay bằng từ đồng nghĩa, không lan sang chủ đề không được hỏi, không bịa con số cụ thể (mức tiền, ngày tháng, số điều khoản). Không xin lỗi, không từ chối, không nhắc tới trợ lý hay hội thoại.
+
+  ### `routing_mode = "MULTI"` → `sub_queries`
+  - `sub_queries`: 2 đến 3 câu hỏi con độc lập để tìm kiếm song song. Mỗi câu chứa đầy đủ thực thể, không dùng đại từ ("nó", "ngành đó").
+  - Mọi tiêu chí phạm vi người dùng nêu (ngành/khối, bậc/hệ, cơ sở/phân hiệu, khóa/năm học) PHẢI chép vào MỌI câu hỏi con, dù chỉ nói một lần; chỉ bỏ khi chính câu hỏi con đó nêu giá trị khác thay thế. Không chắc → vẫn chép.
+  - Giữ nguyên chữ người dùng dùng cho chủ đề và tiêu chí. Lịch sử chỉ dùng để hiểu câu nối tiếp, không tạo câu hỏi con cho nội dung lượt trước.
+
+  ### Ví dụ output đầy đủ
+  User: "Điều kiện nhận học bổng loại giỏi là gì?"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "Điều kiện nhận học bổng loại giỏi là gì?", "routing_mode": "SINGLE", "standalone_question": "Điều kiện nhận học bổng loại giỏi là gì?", "hyde_passage": "Sinh viên được xét cấp học bổng loại giỏi khi đáp ứng điều kiện về điểm trung bình học kỳ và điểm rèn luyện theo quy định."}], "confidence": 0.95}
+
+  Lịch sử: "- Người dùng: Học phí đại học chính quy khóa 2024 ngành CNTT bao nhiêu?"
+  User: "còn khóa 2025 thì sao?"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "còn khóa 2025 thì sao?", "routing_mode": "SINGLE", "standalone_question": "Học phí đại học chính quy khóa 2025 ngành CNTT là bao nhiêu?", "hyde_passage": "Mức thu học phí đại học chính quy khóa 2025 ngành CNTT là ... đồng/tín chỉ."}], "confidence": 0.9}
+
+  User: "Học phí khóa 2024 hệ chính quy ngành CNTT và Kế toán chênh nhau bao nhiêu?"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "Học phí khóa 2024 hệ chính quy ngành CNTT và Kế toán chênh nhau bao nhiêu?", "routing_mode": "MULTI", "sub_queries": ["Định mức học phí hệ chính quy khóa 2024 ngành Công nghệ thông tin", "Định mức học phí hệ chính quy khóa 2024 ngành Kế toán"]}], "confidence": 0.93}
+
+  User: "địa chỉ cơ sở Quảng Ngãi và học phí đại học chính quy"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "địa chỉ cơ sở Quảng Ngãi và học phí đại học chính quy", "routing_mode": "MULTI", "sub_queries": ["Địa chỉ của cơ sở Quảng Ngãi", "Định mức học phí đại học chính quy tại cơ sở Quảng Ngãi"]}], "confidence": 0.9}
+
+  User: "Tính giúp điểm GPA cho mình và cho mình biết thủ tục đăng ký tốt nghiệp"
+  Output: {"tasks": [{"intent": "academic_calculation", "query": "Tính giúp điểm GPA cho mình", "routing_mode": null}, {"intent": "academic_advisory", "query": "Thủ tục đăng ký tốt nghiệp là gì?", "routing_mode": "SINGLE", "standalone_question": "Thủ tục đăng ký tốt nghiệp là gì?", "hyde_passage": "Sinh viên thực hiện thủ tục đăng ký tốt nghiệp bằng cách nộp hồ sơ đăng ký xét tốt nghiệp theo quy định của Nhà trường."}], "confidence": 0.9}

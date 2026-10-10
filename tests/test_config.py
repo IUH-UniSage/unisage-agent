@@ -3,25 +3,39 @@ import pytest
 from app.core.config import Settings
 
 
-def test_new_settings_have_sane_defaults() -> None:
+def test_new_settings_have_sane_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Env-driven settings for Java integration, clarification, and
-    retrieval/rerank load with sane defaults."""
+    retrieval/rerank load with sane defaults.
 
-    fresh = Settings()
+    Reads neither `.env` nor the shell: a dev machine's `.env` routinely
+    overrides these (e.g. a lower rerank threshold), which would otherwise
+    fail this test for reasons unrelated to the code's defaults."""
+
+    for name in (
+        "BACKEND_JAVA_BASE_URL",
+        "CHAT_RETRIEVAL_MAX_CHUNKS",
+        "CHAT_CONTEXT_MAX_CHUNKS",
+        "CHAT_RERANK_SCORE_THRESHOLD",
+        "CHAT_LLM_RERANK_RESCUE_MIN_SCORE",
+        "CHAT_LLM_RERANK_RESCUE_KEEP",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    fresh = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert fresh.BACKEND_JAVA_BASE_URL == "http://localhost:8401/api/v1"
-    assert fresh.CHAT_CLARIFICATION_MAX_RETRY == 2
-    assert fresh.CHAT_RETRIEVAL_MAX_CHUNKS == 8
+    assert fresh.CHAT_RETRIEVAL_MAX_CHUNKS == 16
+    assert fresh.CHAT_CONTEXT_MAX_CHUNKS == 8
+    assert fresh.CHAT_LLM_RERANK_RESCUE_MIN_SCORE == 0.75
+    assert fresh.CHAT_LLM_RERANK_RESCUE_KEEP == 2
     assert fresh.CHAT_RERANK_SCORE_THRESHOLD == 0.70
 
 
 def test_settings_load_overrides_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CHAT_CLARIFICATION_MAX_RETRY", "5")
     monkeypatch.setenv("CHAT_RERANK_SCORE_THRESHOLD", "0.5")
 
     fresh = Settings()
 
-    assert fresh.CHAT_CLARIFICATION_MAX_RETRY == 5
     assert fresh.CHAT_RERANK_SCORE_THRESHOLD == 0.5
 
 
@@ -93,3 +107,45 @@ def test_development_env_skips_all_checks(monkeypatch: pytest.MonkeyPatch) -> No
     fresh = Settings()
 
     assert fresh.APP_ENV == "development"
+
+
+def test_web_search_defaults_are_off_and_domain_restricted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("CHAT_WEB_SEARCH_ENABLED", "TAVILY_API_KEY", "TAVILY_INCLUDE_DOMAINS"):
+        monkeypatch.delenv(name, raising=False)
+
+    fresh = Settings(_env_file=None)
+
+    assert fresh.CHAT_WEB_SEARCH_ENABLED is False
+    assert fresh.TAVILY_API_KEY == ""
+    assert fresh.TAVILY_INCLUDE_DOMAINS == ["iuh.edu.vn"]
+    assert fresh.CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN == 2
+    assert fresh.CHAT_WEB_SEARCH_MAX_QUERIES == 2
+
+
+def test_tavily_include_domains_parse_from_comma_separated_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TAVILY_INCLUDE_DOMAINS", "iuh.edu.vn, pdt.iuh.edu.vn ,")
+
+    fresh = Settings()
+
+    assert fresh.TAVILY_INCLUDE_DOMAINS == ["iuh.edu.vn", "pdt.iuh.edu.vn"]
+
+
+def test_clarification_lease_must_outlive_the_claimed_turn_deadline() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    Settings(
+        _env_file=None, CHAT_CLAIMED_TURN_DEADLINE_SECONDS=150, CHAT_CLARIFICATION_LEASE_SECONDS=210
+    )
+    with pytest.raises(ValidationError, match="CHAT_CLARIFICATION_LEASE_SECONDS"):
+        Settings(
+            _env_file=None,
+            CHAT_CLAIMED_TURN_DEADLINE_SECONDS=150,
+            CHAT_CLARIFICATION_LEASE_SECONDS=200,
+        )

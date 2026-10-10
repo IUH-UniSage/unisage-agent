@@ -28,12 +28,13 @@ from pydantic_ai.settings import ModelSettings
 
 from app.core.config import settings
 from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.llm_failure import admin_failure_message
 from app.core.llm.embedding_probe import EmbeddingFingerprint, measure_fingerprint
 from app.core.llm.http_client import ProviderConnectionInfo, build_provider_http_client_sync
 from app.core.llm.provider_models import build_model
+from app.core.llm.thinking import resolve_thinking
 from app.core.observability.alerting import alert_credential_failure
 from app.core.registry.model_registry import CredentialConfig
-from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import (
     BackendJavaClient,
     BackendJavaConnectionError,
@@ -99,6 +100,7 @@ def _credential_from_candidate(candidate: dict[str, Any]) -> CredentialConfig:
         priority=None,
         max_rpm=candidate.get("maxRpm"),
         api_key=candidate.get("apiKey") or "",
+        max_concurrency=candidate.get("maxConcurrency"),
     )
 
 
@@ -123,7 +125,9 @@ async def _run_minimal_completion(credential: CredentialConfig) -> None:
     await asyncio.wait_for(
         agent.run(
             _MINIMAL_COMPLETION_PROMPT,
-            model_settings=ModelSettings(max_tokens=_MINIMAL_COMPLETION_MAX_TOKENS, thinking=False),
+            model_settings=ModelSettings(
+                max_tokens=_MINIMAL_COMPLETION_MAX_TOKENS, thinking=resolve_thinking(model, False)
+            ),
         ),
         timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
     )
@@ -146,7 +150,9 @@ def _measure_embedding_fingerprint_sync(credential: CredentialConfig) -> Embeddi
     return _measure_embedding_fingerprint_openai_sync(credential)
 
 
-def _measure_embedding_fingerprint_openai_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
+def _measure_embedding_fingerprint_openai_sync(
+    credential: CredentialConfig,
+) -> EmbeddingFingerprint:
     """Through the same SSRF-pinned sync factory `app.rag.embeddings.openai_embedder.OpenAIEmbedder`
     uses."""
 
@@ -167,7 +173,9 @@ def _measure_embedding_fingerprint_openai_sync(credential: CredentialConfig) -> 
     return measure_fingerprint(_embed)
 
 
-def _measure_embedding_fingerprint_google_sync(credential: CredentialConfig) -> EmbeddingFingerprint:
+def _measure_embedding_fingerprint_google_sync(
+    credential: CredentialConfig,
+) -> EmbeddingFingerprint:
     """Through the same SSRF-pinned sync factory + `embedContent` batching
     `app.rag.embeddings.google_embedder.GoogleEmbedder` uses."""
 
@@ -312,7 +320,9 @@ async def _verify_one_job(job: dict[str, Any], *, client: BackendJavaClient) -> 
     except Exception as exc:
         error_type = classify_llm_error(exc)
         result_type = "TRANSIENT" if error_type is ErrorType.TRANSIENT else "PERMANENT"
-        message = safe_error_message(exc, credential.api_key)
+        message = admin_failure_message(
+            exc, purpose=purpose, api_key=credential.api_key, credential=credential
+        )
         logger.warning(
             "verification job %s: chat_model %s attempt %s failed (%s) - %s: %s",
             job_id,

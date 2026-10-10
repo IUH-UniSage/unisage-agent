@@ -6,9 +6,10 @@ from typing import Any
 from pydantic_ai.models import Model
 
 from app.core.registry.model_registry import CredentialConfig
+from app.graph.clarification_answers import NormalizedAnswer
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification
+from app.schemas.clarification import LastCalculation, PendingRound
 from app.schemas.security import AcademicSecurityContext
 
 
@@ -26,6 +27,19 @@ class GraphModels:
     retrieval: RetrievalServiceProtocol
     generation_credential: CredentialConfig | None = None
     snapshot_version: int | None = None
+    # LLMRerankNode's model - the top-priority RERANK credential (EXTRACTION while no
+    # RERANK row exists), not CHAT's. None skips the node; `rerank_unavailable` then says
+    # why (for the AI-admin warning). `rerank_purpose` is the pool failover draws from.
+    rerank: Model | str | None = None
+    rerank_credential: CredentialConfig | None = None
+    rerank_purpose: str = "RERANK"
+    rerank_unavailable: str | None = None
+
+
+@dataclass(frozen=True)
+class ResumeInput:
+    pending_round: PendingRound
+    answers: dict[str, NormalizedAnswer]
 
 
 @dataclass
@@ -35,15 +49,36 @@ class GraphInput:
     is_first_turn: bool
     security: AcademicSecurityContext
     confirmed_metadata: dict[str, str] = field(default_factory=dict)
-    pending_clarification: PendingClarification | None = None
-    clarification_max_retry: int = 2
     history: list[HistoryMessage] = field(default_factory=list)
+    # Set on a panel-submit turn: the claimed round and its validated answers.
+    resume: ResumeInput | None = None
+    # The conversation's latest computed calculation (follow-up target questions).
+    last_calculation: LastCalculation | None = None
+
+
+@dataclass(frozen=True)
+class AdminWarning:
+    code: str
+    message: str
 
 
 @dataclass
 class GraphOutput:
     response_text: str
     confirmed_metadata: dict[str, str] = field(default_factory=dict)
-    pending_clarification: PendingClarification | None = None
     used_ticket_fallback: bool = False
+    used_web_search: bool = False
+    # Things an AI admin should fix that did not stop the turn (web search or the
+    # LLM rerank failing, ...) - sent to AI admins only, as `event: warning`.
+    admin_warnings: list[AdminWarning] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
+    # The clarification panel this turn raises (stored, projected, then sent as
+    # `event: clarification` by run_and_persist), or None.
+    pending_round: PendingRound | None = None
+    # The advisory answer's captured ask_user_form blocks - input to the panel.
+    ask_forms: tuple[dict[str, Any], ...] = ()
+    # metadata.calculation items (public) and the staff-only traces (SPEC-calculation-node §7.2).
+    calculation_items: list[dict[str, Any]] = field(default_factory=list)
+    calculation_traces: list[dict[str, Any]] = field(default_factory=list)
+    # This turn's latest computed calculation, stored for the next turn (None = keep).
+    last_calculation: LastCalculation | None = None

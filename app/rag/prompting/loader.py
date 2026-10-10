@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -75,13 +77,18 @@ def _load_all_templates() -> PromptTemplates:
     main = templates_dir / "main"
     agents = templates_dir / "agents"
 
-    return PromptTemplates(
+    templates = PromptTemplates(
         chat_academic_advisory=_load_yaml_template(main / "chat_academic_advisory.yaml"),
         chat_multi_intent_synthesis=_load_yaml_template(main / "chat_multi_intent_synthesis.yaml"),
         chat_ticket_fallback=_load_yaml_template(main / "chat_ticket_fallback.yaml"),
+        chat_calculation=_load_yaml_template(main / "chat_calculation.yaml"),
+        chat_calculation_llm=_load_yaml_template(main / "chat_calculation_llm.yaml"),
         json_repair=_load_yaml_template(main / "json_repair.yaml"),
         agent_hyde_generator=_load_yaml_template(agents / "hyde_generator.yaml"),
         agent_message_classification=_load_yaml_template(agents / "message_classification.yaml"),
+        agent_message_classification_retrieval=_load_yaml_template(
+            agents / "message_classification_retrieval.yaml"
+        ),
         agent_multi_query_decomposer=_load_yaml_template(agents / "multi_query_decomposer.yaml"),
         agent_calculation_extractor=_load_yaml_template(agents / "calculation_extractor.yaml"),
         agent_reranker_compressor=_load_yaml_template(agents / "reranker_compressor.yaml"),
@@ -96,9 +103,15 @@ def _load_all_templates() -> PromptTemplates:
         response_style=_load_yaml_template(common / "response_style.yaml"),
         citation_rules=_load_yaml_template(common / "citation_rules.yaml"),
         prepared_context=_load_yaml_template(common / "prepared_context.yaml"),
+        web_search_context=_load_yaml_template(common / "web_search_context.yaml"),
         task_1=_load_yaml_template(common / "task_1.yaml"),
         task_2=_load_yaml_template(common / "task_2.yaml"),
         ask_user_form_guide=_load_yaml_template(common / "ask_user_form_guide.yaml"),
-        confirmed_metadata_guide=_load_yaml_template(common / "confirmed_metadata_guide.yaml"),
         ticket_fallback=_load_yaml_template(common / "ticket_fallback.yaml"),
     )
+    versions = {
+        item.name: hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+        for item in fields(templates)
+        if isinstance(value := getattr(templates, item.name), str)
+    }
+    return replace(templates, versions=versions)

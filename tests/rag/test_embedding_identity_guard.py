@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.registry.embedding_identity import (
     EmbeddingIdentityMismatchError,
     ensure_embedding_identity,

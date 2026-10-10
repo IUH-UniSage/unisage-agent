@@ -25,18 +25,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.registry.model_registry as model_registry
 import app.core.registry.model_router as model_router_module
-from app.api.v1.chat import _sse_token_generator
 from app.core.config import settings
+from app.core.errors.llm_failure import FailureReason
 from app.core.registry.model_registry import CredentialConfig, ModelRegistrySnapshot, parse_snapshot
 from app.core.registry.model_router import ModelRouter
 from app.core.usage.usage_recorder import UsageRecorder
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
-from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED, LLM_UNAVAILABLE
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem, WarningItem
+from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
 from app.graph.streaming_session import run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+from app.services.chat_stream_service import _sse_token_generator
 from tests.llm_mocks import (
     FakeRetrievalService,
     make_classification_llm_model,
@@ -460,7 +461,7 @@ async def test_error_before_first_chunk_credential_exhausted_is_llm_unavailable(
     assert not any(isinstance(item, TokenItem) for item in items)
     assert isinstance(items[-1], DoneItem)
     assert isinstance(items[-2], ErrorItem)
-    assert items[-2].code == LLM_UNAVAILABLE
+    assert items[-2].code == FailureReason.LLM_UNAVAILABLE
     assert items[-2].retryable is False
     assert patched["body"]["status"] == "ERROR"
 
@@ -571,3 +572,19 @@ async def test_no_response_ever_mixes_content_from_two_models(
     assert all("MODEL-D" not in token for token in tokens)
     assert patched["body"]["content"] == "MODEL-C-1"
     assert patched["body"]["status"] == "ERROR"
+
+
+@pytest.mark.asyncio
+async def test_warning_is_sent_as_its_own_sse_event_before_done() -> None:
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
+    await queue.put(TokenItem("Trả lời"))
+    await queue.put(WarningItem(code="WEB_SEARCH_TIMEOUT", message="Tavily không phản hồi"))
+    await queue.put(DoneItem())
+
+    body = "".join([chunk async for chunk in _sse_token_generator(queue)])
+
+    assert (
+        'event: warning\ndata: {"code": "WEB_SEARCH_TIMEOUT", "message": "Tavily không phản hồi"}'
+        in body
+    )
+    assert body.endswith("event: done\ndata: {}\n\n")

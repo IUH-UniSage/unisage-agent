@@ -117,9 +117,9 @@ def test_embedding_returns_404_when_no_draft_exists_for_the_document(client: Tes
     assert response.status_code == 404
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embedding_returns_202_and_task_id_for_valid_request(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -147,9 +147,9 @@ def test_embedding_returns_202_and_task_id_for_valid_request(
     assert response.json()["data"]["task_id"]
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_valid_request_dispatches_task_with_request_department_and_level(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -178,9 +178,9 @@ def test_valid_request_dispatches_task_with_request_department_and_level(
     assert point_kwargs["access_level"] == 2
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_successful_embedding_dispatch_marks_draft_as_embedding(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,
@@ -218,9 +218,9 @@ def test_successful_embedding_dispatch_marks_draft_as_embedding(
     assert body["task_percent"] == 100
 
 
-@patch("app.worker.celery_app.qdrant_store")
-@patch("app.worker.celery_app.MultiRepresentationEnricher")
-@patch("app.worker.celery_app.build_embedder")
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
 def test_embedding_uses_canonical_metadata_and_only_client_content(
     mock_embedder_cls: MagicMock,
     mock_enricher_cls: MagicMock,

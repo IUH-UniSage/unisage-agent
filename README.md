@@ -1,12 +1,14 @@
 # UniSage AI Agent (`unisage-agent`)
 
-`unisage-agent` is the AI/RAG and graph orchestration service for the UniSage
-academic assistant. The current repository is a lightweight base scaffold built
-with FastAPI, Pydantic Graph, SQLAlchemy, PostgreSQL, and pgvector.
+`unisage-agent` is the AI service of the UniSage academic assistant. It answers
+students' academic questions with retrieval-augmented generation over the
+documents they are allowed to read, and runs the document ingestion pipeline
+(preview → chunk → embed into Qdrant).
 
-The service is organized as a pipeline-oriented modular monolith so each RAG
-stage can be implemented incrementally without introducing full DDD or
-Hexagonal layers too early.
+Built with FastAPI, pydantic-ai, SQLAlchemy (PostgreSQL), Qdrant, Redis and
+Celery. Product rules live in [`docs/product/PRODUCT.md`](docs/product/PRODUCT.md)
+and the reasons behind them in [`docs/product/DECISIONS.md`](docs/product/DECISIONS.md);
+where those are silent, the code is the source of truth.
 
 ## Quick Start
 
@@ -14,10 +16,11 @@ Hexagonal layers too early.
 
 - Python 3.12+
 - [go-task](https://taskfile.dev/) for Taskfile commands
-- PostgreSQL 16 with pgvector when running migrations or persistence features
-
-PostgreSQL and external model keys are not required to try the current
-provider-free fallback flow.
+- PostgreSQL 16 (this service's own database: ingestion drafts, clarification state)
+- Qdrant, Redis and MinIO (`.devcontainer/docker-compose.yml` starts Redis and Qdrant;
+  MinIO is shared with `unisage-backend`)
+- `unisage-backend` running: it owns conversations and messages, and, with the model
+  registry enabled, the LLM credentials this service uses
 
 ### Windows PowerShell
 
@@ -83,11 +86,16 @@ Run everything directly when `go-task` is unavailable:
 
 ## API Endpoints
 
+Every route sits under `/api/v1` and, except health, requires the `X-Internal-Secret`
+header the API Gateway adds; clients never call this service directly.
+
 - Swagger UI: `http://127.0.0.1:8402/docs`
-- ReDoc: `http://127.0.0.1:8402/redoc`
-- Health: `GET /api/v1/health`
-- Chat: `POST /api/v1/chat`
-- Text ingestion: `POST /api/v1/ingestion`
+- Health: `GET /api/v1/health` (Postgres, Redis, Qdrant, usage outbox, model registry)
+- Chat: `POST /api/v1/chat/stream` (Server-Sent Events)
+- Ingestion: `POST /api/v1/ingestion/preview`, `POST /api/v1/ingestion/chunking`,
+  `POST /api/v1/ingestion/embedding`, `GET /api/v1/ingestion/jobs/{document_id}`,
+  `WS /api/v1/ingestion/events`
+- Indexed chunks: `GET|DELETE /api/v1/documents/{document_id}/chunks/...`
 
 ## Development Commands
 
@@ -123,99 +131,70 @@ Run `task --list-all` to see every available command.
 unisage-agent/
 |-- app/
 |   |-- main.py              # FastAPI application entry point
-|   |-- api/                 # Routes and request dependency wiring
-|   |-- core/                # Settings and cross-cutting concerns
+|   |-- api/                 # Routes, dependency wiring, error handlers
+|   |-- core/                # Settings, security, errors, observability, model registry,
+|   |                        # LLM providers, budget, pricing, usage tracking
+|   |-- graph/               # Chat orchestrator (`streaming_graph.py`) and its nodes
 |   |-- rag/
-|   |   |-- ingestion/       # Loading, parsing, and ingestion orchestration
-|   |   |-- chunking/        # Recursive and semantic chunking
-|   |   |-- embeddings/      # Embedding implementations
-|   |   |-- retrieval/       # Vector, keyword, hybrid, and context building
-|   |   |-- reranking/       # Reranking implementations
-|   |   `-- generation/      # Grounded responses, citations, and suggestions
-|   |-- graph/               # Pydantic Graph state and orchestration nodes
-|   |-- database/            # Async sessions, models, and repositories
-|   `-- schemas/             # API and pipeline contracts
-|-- docs/                    # Architecture and onboarding documentation
+|   |   |-- ingestion/       # Parsing (PDF/DOCX/TXT/XLSX), table-aware regions
+|   |   |-- chunking/        # Recursive, token, semantic, markdown, table-row, Excel-row
+|   |   |-- enrichment/      # Summary + sample questions per chunk (multi-representation)
+|   |   |-- embeddings/      # Embedding provider
+|   |   |-- vectorstore/     # Qdrant collection, permission filter
+|   |   |-- retrieval/       # Dense search over the 3 named vectors
+|   |   |-- reranking/       # Score threshold
+|   |   `-- prompting/       # YAML prompt templates, prompt builder, citations
+|   |-- integrations/        # backend-java, Tavily, Slack clients
+|   |-- worker/              # Celery app, periodic and ingestion tasks
+|   |-- database/            # Async sessions, models, repositories
+|   |-- schemas/             # API and pipeline contracts
+|   `-- tools/               # Operator CLIs (embedding identity, dead-letter replay)
+|-- docs/                    # Product rules, specs, configuration guide
 |-- migrations/              # Alembic environment and versions
-|-- scripts/                 # Development utilities
-|-- storage/                 # Local development storage
-|-- taskfiles/               # Modular Taskfile commands
-|-- tests/                   # Pytest suite
-`-- .devcontainer/           # Python and PostgreSQL/pgvector environment
+|-- changes/                 # Dated plans and task lists for each piece of work
+|-- tests/                   # Pytest suite (`tests/e2e` needs live services)
+`-- .devcontainer/           # Python, Redis and Qdrant development environment
 ```
 
 Dependency direction:
 
 ```text
-API -> Graph -> RAG services -> Database repositories
+API -> Graph -> RAG services -> Database repositories / Qdrant
 ```
 
 API handlers validate and delegate. Graph nodes orchestrate the RAG stages.
-Provider logic stays in its corresponding RAG package, while SQL stays in
-repositories.
+Provider logic stays in its RAG package or `core/llm`, SQL stays in repositories.
 
-## Current Runtime Flow
+## Chat Flow
 
-```mermaid
-flowchart LR
-    Client["Client / Backend"] --> API["FastAPI"]
+`app/graph/streaming_graph.py` is a plain async function, `run_graph`, that
+branches with ordinary `if` statements. It is not a `pydantic_graph.Graph`,
+because `Graph.run()` returns one final output and can't stream tokens. Node
+names (`01_…` to `11_…`) exist for `GraphTrace` logs and to match the original
+design. See [`docs/architecture/rag-pipeline.md`](docs/architecture/rag-pipeline.md)
+for the full flow.
 
-    API --> Chat["Chat endpoint"]
-    Chat --> Graph["Pydantic Graph"]
-    Graph --> Intent["Intent detection"]
-    Intent --> Retrieval["Fallback retrieval"]
-    Retrieval --> Rerank["Deterministic rerank"]
-    Rerank --> Generation["Fallback generation"]
-    Generation --> Response["Response + citations"]
+## Configuration
 
-    API --> Ingestion["Ingestion endpoint"]
-    Ingestion --> Parser["Text parser"]
-    Parser --> Chunking["Recursive chunking"]
-    Chunking --> Chunks["Ingestion response"]
-```
-
-The base currently uses an in-memory fallback corpus, deterministic scoring,
-deterministic reranking, and provider-free generation. It validates the API,
-package boundaries, graph execution, metadata visibility, citations, and tests
-without claiming the complete SRS pipeline is already implemented.
-
-The target SRS-aligned pipeline, including trusted access context, HyDE,
-sub-query routing, Dense/BM25/RRF retrieval, Cross-Encoder reranking, context
-compression, and safe fallback behavior, is documented in
-[`docs/architecture/rag-pipeline.md`](docs/architecture/rag-pipeline.md).
-
-## Database
-
-Start PostgreSQL with pgvector:
-
-```powershell
-docker compose -f .devcontainer/docker-compose.yml up -d db
-task db:up
-```
-
-The initial ingestion endpoint only parses and chunks text. Persisting
-documents, embeddings, and vectors is follow-up work.
+Every setting is an environment variable read by `app/core/config.py`; see
+[`docs/guide/cau-hinh.md`](docs/guide/cau-hinh.md). With `APP_ENV=production`
+the service refuses to start on an unsafe internal secret or backend URL.
 
 ## Verification
 
-```powershell
+```bash
 task test
 task code:check-strict
 ```
 
 ## Commit and Branch Conventions
 
-- Branch: `<prefix>/<owner>-<task-id>-<short-name>`
-- Commit: `<type>(<scope>): [UNISAGE-xxx] <short English title>`
+- Branch: `<prefix>/<owner>-<task-id>-<short-name>`; an `enhance/` branch without a
+  Jira ticket uses `enhance/<owner>-<short-name>`
+- Commit: `<type>(<scope>): [UNISAGE-xxx] <short English title>`, without the ticket
+  when there is none
 - Use English Conventional Commits without emoji.
 - Never commit directly to `main` or force-push a shared branch.
-
-Example:
-
-```text
-feature/huyen-unisage-02-rag-agent-base
-feat(rag): [UNISAGE-02] implement retrieval flow
-```
 
 ## Documentation
 

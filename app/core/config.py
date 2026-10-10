@@ -1,8 +1,11 @@
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+# Covers clock skew between agent workers sharing the clarification lease.
+CLARIFICATION_LEASE_MARGIN_SECONDS = 60.0
 _DEFAULT_INTERNAL_SECRET = "unisage-internal-secret-key-2026"
 _MIN_INTERNAL_SECRET_LENGTH = 32
 _DEV_ONLY_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
@@ -22,6 +25,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "UniSage AI Agent Service"
     APP_ENV: str = "development"
     APP_DEBUG: bool = True
+    # ANSI colors on console log lines (only when the stream is a terminal).
+    LOG_COLOR: bool = True
 
     # Internal service-to-service auth: must match the shared secret the API
     # Gateway sends as `X-Internal-Secret` on every proxied request (see
@@ -114,19 +119,99 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "unisage_chunks"
 
+    # --- TAVILY_: web search API used by WebSearchNode when retrieval finds nothing for a
+    # sub-query (see app/graph/nodes/web_search.py). Empty key = web search is skipped. ---
+    TAVILY_API_KEY: str = ""
+    TAVILY_BASE_URL: str = "https://api.tavily.com"
+    # Comma-separated in .env. Only these sites (and their subdomains) are searched - the
+    # answer must come from the university's own pages, never a forum or another school.
+    TAVILY_INCLUDE_DOMAINS: Annotated[list[str], NoDecode] = ["iuh.edu.vn"]
+    # `basic` costs 1 credit per search, `advanced` 2 but returns longer, more relevant snippets.
+    TAVILY_SEARCH_DEPTH: Literal["basic", "advanced"] = "basic"
+    # Deadline for the whole search call. Tavily usually answers in ~3s but has spikes
+    # past 10s; a timeout only drops web results, the turn still ends in the ticket fallback.
+    TAVILY_TIMEOUT_SECONDS: float = 15.0
+
     # --- INGEST_: only ever read at document-ingestion time (chunking,
     # enrichment) - never during a chat turn ---
     INGEST_MULTI_REP_QUESTION_COUNT: int = 3
     INGEST_SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800
     INGEST_CHUNKING_VERSION: str = "2026-09-structural-v2"
+    # Minimum seconds between the START of two consecutive extraction calls in one embed job.
+    # Free-tier keys allow ~15 requests/minute, but a sequential job easily goes faster than
+    # that; 0 disables the pause. A call that already took longer than this adds no extra wait.
+    INGEST_EXTRACTION_MIN_INTERVAL_SECONDS: float = Field(default=0.0, ge=0)
+    # When every EXTRACTION credential is cooling down, wait this long before retrying the
+    # same chunk. A bit over the router's 30s default cooldown so the first key is usable again.
+    INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS: float = Field(default=35.0, ge=0)
+    # How many such waits one chunk gets before the embed job is failed. 0 = never wait.
+    INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS: int = Field(default=6, ge=0)
 
     # --- CHAT_: read on every chat turn ---
-    CHAT_CLARIFICATION_MAX_RETRY: int = 2
-    CHAT_RETRIEVAL_MAX_CHUNKS: int = 8
+    # Let the LLM answer calculations Python does not compute (target questions,
+    # formulas from documents, follow-ups). Off = only the 3 built-in formulas are
+    # calculated (kill switch - there is no pre-release eval; Đúng/Sai feedback instead).
+    CHAT_CALC_LLM_ENABLED: bool = True
+    # Timeout of that LLM call (not streamed: the whole answer is parsed before it is shown).
+    CHAT_CALC_LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0)
+    # Hard deadline for everything a turn does after claiming a clarification panel
+    # (start_turn → graph → finalize). Past it the task is cancelled before any more writes.
+    CHAT_CLAIMED_TURN_DEADLINE_SECONDS: float = Field(default=150.0, gt=0)
+    # How long a claimed panel stays PROCESSING before another request may treat it as
+    # abandoned. Must exceed the deadline by CLARIFICATION_LEASE_MARGIN_SECONDS so a claimed
+    # turn is always dead before its lease can be taken over.
+    CHAT_CLARIFICATION_LEASE_SECONDS: float = Field(default=210.0, gt=0)
+    # Thinking for the short auxiliary calls (classification, query transformation, LLM
+    # rerank). False = the model's lowest level.
+    CHAT_AUX_THINKING: bool | Literal["minimal", "low", "medium", "high"] = False
+    # Thinking for the answer itself (generation, ticket fallback). False = the model's lowest
+    # level (fastest first token); None = the model's own default (gpt-5-mini: medium).
+    CHAT_GENERATION_THINKING: bool | Literal["minimal", "low", "medium", "high"] | None = False
+    # A streamed answer with no visible text after this long fails over to the next
+    # credential; once text has started streaming it is never cut. 0 = no limit.
+    CHAT_FIRST_TOKEN_TIMEOUT_SECONDS: float = Field(default=20.0, ge=0)
+    # Whole-call limit for the non-streamed calls (classification, query transformation,
+    # LLM rerank) before failing over. 0 = no limit.
+    CHAT_AUX_CALL_TIMEOUT_SECONDS: float = Field(default=30.0, ge=0)
+    # Classification also writes each advisory task's HyDE text / sub-queries, so
+    # QueryTransformationNode only calls its own LLM when that output is missing.
+    CHAT_CLASSIFY_WITH_RETRIEVAL: bool = True
+    # Candidates fetched per turn (split across sub-queries) for rerank to judge.
+    # CONTEXT_MAX_CHUNKS separately caps what reaches the generation prompt, so recall
+    # can grow without bloating the prompt - also when the LLM rerank fails open.
+    CHAT_RETRIEVAL_MAX_CHUNKS: int = Field(default=16, ge=1)
+    CHAT_CONTEXT_MAX_CHUNKS: int = Field(default=8, ge=1)
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
+    # LLMRerankNode: one call to the RERANK model (EXTRACTION if none) per turn checks
+    # which reranked chunks actually answer which sub-query - the score threshold alone
+    # lets a chunk through on shared keywords. A sub-query left with none goes to
+    # WebSearchNode. Each chunk is shown to the model cut to SNIPPET_CHARS.
+    CHAT_LLM_RERANK_ENABLED: bool = True
+    CHAT_LLM_RERANK_SNIPPET_CHARS: int = Field(default=800, ge=100)
+    # When the LLM rerank keeps nothing for any sub-query, each sub-query whose best
+    # chunk reached RESCUE_MIN_SCORE keeps its top RESCUE_KEEP by score: a small model
+    # drops e.g. a fill-in form full of dot leaders whose "Hồ sơ đính kèm" line is the
+    # answer, and the turn would end in TicketFallback with the right document retrieved.
+    CHAT_LLM_RERANK_RESCUE_MIN_SCORE: float = Field(default=0.75, ge=0, le=1)
+    CHAT_LLM_RERANK_RESCUE_KEEP: int = Field(default=2, ge=0)
+    # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
+    # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
+    # bound how much web text reaches the system prompt (~3000 chars at the defaults),
+    # however long the question or however many sub-queries it split into.
+    CHAT_WEB_SEARCH_ENABLED: bool = False
+    # Tavily bills per search, not per result, so asking for more candidates is free;
+    # MIN_SCORE and PER_TURN still bound what reaches the prompt.
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=5, ge=1, le=20)
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=2, ge=1)
+    # Searches per turn: a message with several tasks can leave many sub-queries without
+    # chunks, but only PER_TURN pages reach the prompt, so the rest would be paid-for
+    # searches thrown away. The worst-missed sub-queries are searched first.
+    CHAT_WEB_SEARCH_MAX_QUERIES: int = Field(default=2, ge=1)
+    CHAT_WEB_SEARCH_MIN_SCORE: float = Field(default=0.5, ge=0.0, le=1.0)
+    CHAT_WEB_SEARCH_RESULT_MAX_CHARS: int = Field(default=1500, ge=100)
 
     # GenerationSynthesisNode's JSON-repair follow-up call (see
     # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
@@ -170,6 +255,23 @@ class Settings(BaseSettings):
     # since under-reserving would let a request through that a THROTTLE/BLOCK
     # budget should have caught.
     BUDGET_ESTIMATE_MAX_OUTPUT_TOKENS: int = 2000
+
+    @field_validator("TAVILY_INCLUDE_DOMAINS", mode="before")
+    @classmethod
+    def _split_domains(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [domain.strip() for domain in value.split(",") if domain.strip()]
+        return value
+
+    @model_validator(mode="after")
+    def _lease_outlives_claimed_turn(self) -> "Settings":
+        margin = CLARIFICATION_LEASE_MARGIN_SECONDS
+        if self.CHAT_CLARIFICATION_LEASE_SECONDS < self.CHAT_CLAIMED_TURN_DEADLINE_SECONDS + margin:
+            raise ValueError(
+                "CHAT_CLARIFICATION_LEASE_SECONDS must be at least "
+                f"CHAT_CLAIMED_TURN_DEADLINE_SECONDS + {margin:g}"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":

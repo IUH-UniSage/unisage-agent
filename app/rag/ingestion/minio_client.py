@@ -1,11 +1,12 @@
 from functools import lru_cache
 
+import urllib3
 from minio import Minio
 from minio.error import S3Error
 
 from app.core.config import settings
 from app.core.errors.error_codes import ErrorCode
-from app.core.errors.exceptions import UniSageException
+from app.core.errors.exceptions import StorageUnavailableException, UniSageException
 
 
 class ObjectNotFoundException(UniSageException):
@@ -44,4 +45,8 @@ def get_object_bytes(object_key: str) -> bytes:
     except S3Error as exc:
         if exc.code == "NoSuchKey":
             raise ObjectNotFoundException(object_key) from exc
-        raise
+        # AccessDenied, NoSuchBucket, ... - S3's own error code says which.
+        raise StorageUnavailableException(f"S3 {exc.code}") from exc
+    except (urllib3.exceptions.HTTPError, OSError) as exc:
+        # Connection refused / DNS / timeout - MinIO itself is unreachable.
+        raise StorageUnavailableException(type(exc).__name__) from exc

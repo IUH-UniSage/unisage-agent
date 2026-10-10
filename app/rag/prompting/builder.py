@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Sequence
 
 from app.core.timezone import now_ict
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
+from app.schemas.web_search import WebSearchResult
 
 from .loader import get_known_metadata_fields, get_templates
 
@@ -19,7 +18,7 @@ _NO_DEPARTMENT_ACCESS = "    - (không có phòng ban nào được cấp quyề
 _NO_RETRIEVED_CONTEXT = "  (không có tài liệu liên quan)"
 _NO_HISTORY = "  (đây là lượt đầu tiên, chưa có lịch sử)"
 _HISTORY_ROLE_LABELS = {"USER": "Người dùng", "ASSISTANT": "Trợ lý"}
-NO_PENDING_CLARIFICATION = "Không có"
+NOTHING = "Không có"
 
 RECENT_HISTORY_LIMIT = 4
 _RECENT_ASSISTANT_MAX_CHARS = 300
@@ -28,6 +27,13 @@ _JSON_BLOCK_PATTERN = re.compile(r"```json.*?```", re.DOTALL)
 # Amounts like "60.000.000" - the previous turn's figures belong to a
 # different question, and would otherwise be copied into this turn's output.
 _AMOUNT_PATTERN = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
+# The tags that frame retrieved text in `prepared_context.yaml` /
+# `web_search_context.yaml`. Text from a document or a web page that contains
+# one of them could close the frame early and have what follows read as
+# prompt rather than data.
+_CONTEXT_FRAME_TAG_PATTERN = re.compile(
+    r"<\s*(/?)\s*(academic_context|websearch|current_date)\s*>", re.IGNORECASE
+)
 
 
 def build_metadata_section(
@@ -138,6 +144,13 @@ def append_recent_history(query: str, history: Sequence[HistoryMessage]) -> str:
     )
 
 
+def _neutralize_frame_tags(text: str) -> str:
+    """Escape any context-frame tag inside retrieved text (`<websearch>` ->
+    `&lt;websearch&gt;`) so the only real frame tags are the template's own."""
+
+    return _CONTEXT_FRAME_TAG_PATTERN.sub(r"&lt;\1\2&gt;", text)
+
+
 def _page_suffix(chunk: RetrievedChunk) -> str:
     """`", tr. X"` / `", tr. X-Y"` when the chunk carries a real page number
     (PDF only - `page_start` stays `None` for HTML/DOCX/TXT/XLSX), else `""`.
@@ -151,7 +164,9 @@ def _page_suffix(chunk: RetrievedChunk) -> str:
     return f", tr. {chunk.page_start}"
 
 
-def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
+def build_prepared_context_section(
+    chunks: Sequence[RetrievedChunk], web_results: Sequence[WebSearchResult] = ()
+) -> str:
     """Build `{prepared_context}` - the `<academic_context>` block, chunks numbered
     to match the `[1][2]` citation indices the generation prompt asks the model to use,
     plus the `<current_date>` block (today, ICT/GMT+7) so the model has a real-world
@@ -159,40 +174,41 @@ def build_prepared_context_section(chunks: Sequence[RetrievedChunk]) -> str:
     or for checking whether a document's stated effective date has passed.
 
     Each chunk's source is suffixed with its page number(s) when available
-    (`_page_suffix`); `citation_rules.yaml` tells the LLM to cite them."""
+    (`_page_suffix`); `citation_rules.yaml` tells the LLM to cite them.
+
+    `web_results` (WebSearchNode, only for sub-queries that found no chunk)
+    fill the `<websearch>` block right below, numbered on from the last chunk
+    so one `[n]` sequence covers both - `build_citations` resolves it the
+    same way."""
 
     context_chunks = (
         "\n".join(
-            f"  [{index}] ({chunk.source}{_page_suffix(chunk)}) {chunk.content}"
+            f"  [{index}] ({_neutralize_frame_tags(chunk.source)}{_page_suffix(chunk)}) "
+            f"{_neutralize_frame_tags(chunk.content)}"
             for index, chunk in enumerate(chunks, 1)
         )
         or _NO_RETRIEVED_CONTEXT
     )
     current_date = now_ict().strftime("%d/%m/%Y")
     return get_templates().prepared_context.format(
-        context_chunks=context_chunks, current_date=current_date
+        context_chunks=context_chunks,
+        web_search_context=_build_web_search_context(web_results, first_index=len(chunks) + 1),
+        current_date=current_date,
     )
 
 
-def build_missing_metadata_block(pending: PendingClarification | None) -> str:
-    """`<missing_metadata_to_confirm>` content - JSON `ask_user_form` shape sourced
-    from `pending_clarification`, or the `"Không có"` sentinel that keeps
-    `{task_2}` silent for this turn."""
+def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_index: int) -> str:
+    """The `<websearch>` block, or nothing at all - a turn without web
+    results doesn't pay for the web-source rules in its prompt."""
 
-    if pending is None:
-        return NO_PENDING_CLARIFICATION
-    fields = [
-        {
-            "field": field,
-            "options": (
-                [{"id": option_id, "label": option_id} for option_id in options]
-                if options is not None
-                else None
-            ),
-        }
-        for field, options in zip(pending.missing_fields, pending.options, strict=True)
-    ]
-    return json.dumps({"type": "ask_user_form", "fields": fields}, ensure_ascii=False)
+    if not web_results:
+        return ""
+    entries = "\n".join(
+        f"  [{index}] ({_neutralize_frame_tags(result.title)} — "
+        f"{_neutralize_frame_tags(result.url)}) {_neutralize_frame_tags(result.content)}"
+        for index, result in enumerate(web_results, first_index)
+    )
+    return "\n" + get_templates().web_search_context.format(web_results=entries) + "\n"
 
 
 def build_json_repair_prompt(
@@ -201,6 +217,7 @@ def build_json_repair_prompt(
     *,
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
+    web_results: Sequence[WebSearchResult] = (),
 ) -> str:
     """Build the standalone prompt for GenerationSynthesisNode's JSON-repair
     follow-up call (see `_repair_missing_ask_form` there) - no header needed,
@@ -219,7 +236,7 @@ def build_json_repair_prompt(
     templates = get_templates()
     return templates.json_repair.format(
         previous_response=previous_response,
-        academic_context=build_prepared_context_section(chunks),
+        academic_context=build_prepared_context_section(chunks, web_results),
         academic_metadata=build_metadata_section(security, confirmed_metadata),
         ask_user_form_guide=build_ask_user_form_guide(),
     )
@@ -244,14 +261,18 @@ def render_resolved_user_query(user_query: str, resolved_query: str | None) -> s
     return f'{resolved}\n\n(Nguyên văn người dùng vừa nhắn ở lượt này: "{user_query}")'
 
 
-def build_task_2_section(pending: PendingClarification | None) -> str:
-    """Build `{task_2}` - nested format: `task_2.yaml` embeds the static
-    `ask_user_form_guide.yaml`/`confirmed_metadata_guide.yaml` plus the
-    dynamic missing-metadata block."""
+def build_task_2_section() -> str:
+    """Build `{task_2}` - `task_2.yaml` embeds `ask_user_form_guide.yaml`. Answers to a
+    clarification panel arrive structured and are already folded into
+    `confirmed_metadata`, so the model never re-reads a pending form."""
 
-    templates = get_templates()
-    return templates.task_2.format(
-        missing_metadata_to_confirm=build_missing_metadata_block(pending),
-        ask_user_form_guide=build_ask_user_form_guide(),
-        confirmed_metadata_guide=templates.confirmed_metadata_guide,
-    )
+    return get_templates().task_2.format(ask_user_form_guide=build_ask_user_form_guide())
+
+
+def build_calculation_results_section(titles: Sequence[str]) -> str:
+    """`{calculation_results}`: titles only - never a number - of the calculations
+    already shown above the advisory answer."""
+
+    if not titles:
+        return NOTHING
+    return "\n".join(f"- {title} (đã tính ở trên)" for title in titles)
