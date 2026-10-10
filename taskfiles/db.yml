@@ -51,3 +51,39 @@ tasks:
     dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic current'
+
+  models:export:
+    desc: "Xuất model AI (chat_models + model_prices) của DB backend-java ra storage/model_registry.sql (mặc định từ assistant_DB; đổi bằng from=<db>)"
+    vars:
+      SOURCE_DB: '{{.from | default "assistant_DB"}}'
+      OUT: '{{joinPath .ROOT_DIR "storage" "model_registry.sql"}}'
+    cmds:
+      # The script runs inside the Postgres container; only its stdout comes back to the host file.
+      - docker exec -i unisage-postgres sh -s -- "{{.SOURCE_DB}}" < "{{joinPath .ROOT_DIR "scripts" "model_registry_dump.sh"}}" > "{{.OUT}}"
+      - echo "Đã xuất model của {{.SOURCE_DB}} -> {{.OUT}} (file chứa API key đã mã hoá, đã gitignore)"
+
+  models:import:
+    desc: "Nạp storage/model_registry.sql vào DB backend-java của env (vd task db:models:import env=eval)"
+    dotenv: ['.env.{{.env}}', '.env']
+    vars:
+      IN: '{{joinPath .ROOT_DIR "storage" "model_registry.sql"}}'
+    preconditions:
+      - sh: '[ -f "{{.IN}}" ]'
+        msg: "Chưa có {{.IN}} - chạy task db:models:export trước"
+    cmds:
+      # Target = BACKEND_DB_NAME of .env.<env> (eval: assistant_eval); refuse to import into the
+      # database the file came from. backend-java must have started once on the target (Flyway).
+      - |
+        target="${BACKEND_DB_NAME:-assistant_DB}"
+        read -r header < "{{.IN}}"
+        case "$header" in
+          *"from database $target at"*) echo "Dừng: file được xuất từ chính $target"; exit 1 ;;
+        esac
+        echo "Nạp model vào $target ..."
+        docker exec -i unisage-postgres psql -U postgres -d "$target" -v ON_ERROR_STOP=1 < "{{.IN}}"
+
+  models:copy:
+    desc: "Copy model AI từ dev sang env (vd task db:models:copy env=eval) = export rồi import"
+    cmds:
+      - task: models:export
+      - task: models:import

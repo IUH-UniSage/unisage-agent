@@ -40,6 +40,7 @@ tasks:
         printf "{{.C}}{{.L}}{{.R}}  {{.Y}}DATABASE (db){{.R}}\n"
         printf "{{.C}}{{.L}}{{.R}}    {{.G}}task db:up{{.R}}                  - Bật Postgres + MinIO (backend) và Redis + Qdrant, tạo DB của env nếu thiếu\n"
         printf "{{.C}}{{.L}}{{.R}}    {{.G}}task db:upgrade{{.R}}             - Apply database migrations (alembic upgrade head)\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task db:models:copy env=eval{{.R}} - Copy model AI (chat_models, model_prices) từ DB dev sang DB của env\n"
         printf "{{.C}}{{.L}}{{.R}}\n"
         printf "{{.C}}{{.L}}{{.R}}  {{.Y}}MÔI TRƯỜNG (env){{.R}}  thêm env=eval|prod vào be:* / db:* (mặc định dev)\n"
         printf "{{.C}}{{.L}}{{.R}}    {{.G}}task be:dev env=eval{{.R}}        - Chạy với .env.eval (đè lên .env)\n"
