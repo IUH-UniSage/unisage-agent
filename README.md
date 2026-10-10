@@ -119,6 +119,7 @@ task code:fix
 # Database / infrastructure (add env=eval|prod for another environment, default dev)
 task db:up                 # Postgres + MinIO (backend-java) + Redis + Qdrant; creates this env's DBs if missing
 task db:upgrade            # alembic upgrade head
+task db:models:copy env=eval   # copy AI models (chat_models, model_prices) from the dev backend DB; SQL goes to storage/ (gitignored)
 task env:show env=eval     # which DB / bucket / collection / Redis an env points at
 task db:current
 task db:history

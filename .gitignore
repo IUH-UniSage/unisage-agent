@@ -32,6 +32,8 @@ wheels/
 
 # Private ingestion corpus (academic PDFs) - data, not code; keep out of the repo
 storage/private/
+# task db:models:export output: model registry with encrypted API keys
+storage/*.sql
 
 # IDEs
 .vscode/
