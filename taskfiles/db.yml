@@ -3,25 +3,51 @@ version: '3'
 tasks:
   migrate:
     desc: "Tạo migration mới (usage: task db:migrate -- 'message')"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic revision --autogenerate -m "{{.CLI_ARGS}}"'
 
   up:
-    desc: "Apply tất cả migrations"
+    desc: "Bật hạ tầng dev: Postgres (5433) + MinIO (backend-java), Redis (6379) + Qdrant (6333); tạo DB của env nếu thiếu"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      # -f with an absolute path: compose takes that file's folder as the project dir (and reads
+      # its .env), whatever directory `task` was started from.
+      - docker compose -f "{{joinPath .ROOT_DIR .BACKEND_DIR "docker-compose.yml"}}" up -d unisage-db unisage-minio
+      - docker compose -f "{{joinPath .ROOT_DIR ".devcontainer" "docker-compose.yml"}}" up -d redis qdrant
+      # The loops/checks run inside the Postgres container (Linux), and Task's own shell
+      # interpreter runs the rest, so this works the same from Windows, macOS or Linux hosts.
+      - docker exec unisage-postgres sh -c 'until pg_isready -U postgres -q; do sleep 1; done'
+      # DB names for this env: the agent's from DB_URL, backend-java's from BACKEND_DB_NAME (set
+      # only in .env.<env>; dev keeps backend-java's own assistant_DB).
+      - |
+        agent_db="${DB_URL##*/}"; agent_db="${agent_db%%\?*}"
+        for db in "${BACKEND_DB_NAME:-assistant_DB}" "$agent_db"; do
+          docker exec unisage-postgres sh -c "psql -U postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='$db'\" | grep -q 1 || createdb -U postgres '$db'"
+          echo "Postgres DB $db: OK"
+        done
+      - echo "env={{.env}} sẵn sàng (Postgres, MinIO, Redis, Qdrant). Tiếp theo - task db:upgrade env={{.env}}"
+
+  upgrade:
+    desc: "Apply tất cả migrations (alembic upgrade head)"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic upgrade head'
 
   down:
     desc: "Rollback 1 migration"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic downgrade -1'
 
   history:
     desc: "Xem lịch sử migrations"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic history'
 
   current:
     desc: "Xem migration hiện tại"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic current'

@@ -116,8 +116,10 @@ task code:check
 task code:check-strict
 task code:fix
 
-# Database
-task db:up
+# Database / infrastructure (add env=eval|prod for another environment, default dev)
+task db:up                 # Postgres + MinIO (backend-java) + Redis + Qdrant; creates this env's DBs if missing
+task db:upgrade            # alembic upgrade head
+task env:show env=eval     # which DB / bucket / collection / Redis an env points at
 task db:current
 task db:history
 task db:migrate -- "migration message"
