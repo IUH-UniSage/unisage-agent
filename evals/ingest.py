@@ -282,11 +282,25 @@ def main() -> None:
     if os.getenv("APP_ENV") != "eval":
         sys.exit("APP_ENV is not 'eval': run through `task ... env=eval` or set APP_ENV=eval")
 
+    if not (args.dataset / "manifest.csv").is_file():
+        sys.exit(
+            f"no manifest.csv in {args.dataset}: set EVAL_DATASET_DIR in .env/.env.eval or pass "
+            "dataset=<gateway repo>/dataset/official to task"
+        )
+    if args.only is not None and not args.only.is_file():
+        sys.exit(f"--only list not found: {args.only}")
     state = DownloadState(args.dataset)
     rows = pick_rows(state, args.only, args.limit)
     missing = [row["file_id"] for row in rows if not row.get("title")]
     if missing:
         sys.exit(f"rows without a title (run evals.titles first): {missing[:10]}")
+    no_pdf = [row["local_path"] for row in rows if not (args.dataset / row["local_path"]).is_file()]
+    if no_pdf:
+        sys.exit(
+            f"{len(no_pdf)} PDF(s) missing under {args.dataset}, e.g. {no_pdf[0]}. Download: "
+            "hf download hgjyhm/unisage-iuh-dataset --repo-type dataset "
+            '--include "official/files/**" --local-dir <gateway repo>/dataset'
+        )
     print(f"{len(rows)} rows to ingest via {args.gateway}")
     if args.dry_run:
         for row in rows:

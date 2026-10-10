@@ -1,18 +1,27 @@
 version: '3'
 
 vars:
-  DATASET: '{{.DATASET | default "../unisage-gateway/dataset/official"}}'
-  DEMO_LIST: '{{.DATASET}}/../demo/demo_manifest.csv'
+  # Folder holding manifest.csv (the gateway repo's dataset/official). Priority:
+  # `task ... dataset=<path>` > EVAL_DATASET_DIR in .env.<env>/.env (paste a full path, Windows
+  # backslashes are fine) > first of ../unisage-gateway or ../api-gateway that exists.
+  DATASET_GUESS:
+    sh: 'for d in ../unisage-gateway ../api-gateway; do if [ -f "$d/dataset/official/manifest.csv" ]; then echo "$d/dataset/official"; exit 0; fi; done; echo ../unisage-gateway/dataset/official'
 
 tasks:
   ingest:
     desc: "Nạp tài liệu selected của manifest qua luồng upload thật (vd task eval:ingest env=eval -- --limit 1)"
     dotenv: ['.env.{{.env}}', '.env']
     cmds:
-      - '{{.UV_RUN}} evals.ingest --dataset "{{.DATASET}}" {{.CLI_ARGS}}'
+      - |
+        dataset="{{.dataset}}"; dataset="${dataset:-${EVAL_DATASET_DIR:-{{.DATASET_GUESS}}}}"
+        echo "dataset: $dataset"
+        {{.UV_RUN}} evals.ingest --dataset "$dataset" {{.CLI_ARGS}}
 
   ingest:demo:
     desc: "Nạp 106 tài liệu của bộ demo (vd task eval:ingest:demo env=eval -- --dry-run)"
     dotenv: ['.env.{{.env}}', '.env']
     cmds:
-      - '{{.UV_RUN}} evals.ingest --dataset "{{.DATASET}}" --only "{{.DEMO_LIST}}" {{.CLI_ARGS}}'
+      - |
+        dataset="{{.dataset}}"; dataset="${dataset:-${EVAL_DATASET_DIR:-{{.DATASET_GUESS}}}}"
+        echo "dataset: $dataset"
+        {{.UV_RUN}} evals.ingest --dataset "$dataset" --only "$dataset/../demo/demo_manifest.csv" {{.CLI_ARGS}}
