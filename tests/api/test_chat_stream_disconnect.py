@@ -60,20 +60,21 @@ from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 class _JavaBackend:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
-        self._next_id = 1
         self.patched = asyncio.Event()
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read()) if request.content else {}
         self.calls.append({"method": request.method, "path": request.url.path, "body": body})
 
-        if request.method == "GET" and request.url.path.startswith("/messages/conversation/"):
-            return httpx.Response(200, json=[])
-        if request.method == "POST" and request.url.path == "/messages":
-            message_id = f"msg-{self._next_id}"
-            self._next_id += 1
+        if request.method == "POST" and request.url.path == "/messages/turn":
             return httpx.Response(
-                201, json={"id": message_id, "status": body.get("status", "COMPLETED")}
+                201,
+                json={
+                    "firstTurn": False,
+                    "context": [],
+                    "userMessage": {"id": "msg-1"},
+                    "assistantMessage": {"id": "msg-2"},
+                },
             )
         if request.method == "PATCH" and request.url.path.startswith("/messages/"):
             # Signal AFTER recording the call, so a waiter unblocked by this

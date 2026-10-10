@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from qdrant_client.http.models import QueryResponse, ScoredPoint
 
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.errors.provider_errors import EmbeddingProviderError
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 from app.rag.retrieval.service import RetrievalService
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
@@ -42,7 +42,9 @@ def _embedder_returning(vector: list[float]) -> OpenAIEmbedder:
 def test_retrieve_embeds_query_and_maps_qdrant_points_to_retrieved_chunks() -> None:
     fake_qdrant = MagicMock()
     fake_qdrant.collection_exists.return_value = True
-    fake_qdrant.query_points.return_value = QueryResponse(points=[_scored_point("c1", 0.83)])
+    fake_qdrant.query_batch_points.return_value = [
+        QueryResponse(points=[_scored_point("c1", 0.83)])
+    ] * 3
     service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1, 0.2]))
 
     chunks = service.retrieve("học phí học kỳ này bao nhiêu", security=AcademicSecurityContext())
@@ -53,11 +55,34 @@ def test_retrieve_embeds_query_and_maps_qdrant_points_to_retrieved_chunks() -> N
     assert chunks[0].source == "docs/handbook.pdf"
     assert chunks[0].score == 0.83
     # Fans out across all 3 named vectors (content/summary/questions).
-    assert fake_qdrant.query_points.call_count == 3
-    used_vectors = {call.kwargs["using"] for call in fake_qdrant.query_points.call_args_list}
-    assert used_vectors == {"content_vector", "summary_vector", "questions_vector"}
-    for call in fake_qdrant.query_points.call_args_list:
-        assert call.kwargs["query"] == [0.1, 0.2]
+    requests = fake_qdrant.query_batch_points.call_args.kwargs["requests"]
+    assert {request.using for request in requests} == {
+        "content_vector",
+        "summary_vector",
+        "questions_vector",
+    }
+    for request in requests:
+        assert request.query == [0.1, 0.2]
+
+
+def test_retrieve_many_embeds_all_queries_in_one_call_and_keeps_results_per_query() -> None:
+    fake_openai_client = MagicMock()
+    fake_openai_client.embeddings.create.return_value = MagicMock(
+        data=[MagicMock(embedding=[0.1]), MagicMock(embedding=[0.2])]
+    )
+    embedder = OpenAIEmbedder(model="text-embedding-3-small", client=fake_openai_client)
+    fake_qdrant = MagicMock()
+    fake_qdrant.collection_exists.return_value = True
+    fake_qdrant.query_batch_points.return_value = [
+        QueryResponse(points=[_scored_point("c1", 0.8)])
+    ] * 3 + [QueryResponse(points=[_scored_point("c2", 0.7)])] * 3
+    service = RetrievalService(client=fake_qdrant, embedder=embedder)
+
+    per_query = service.retrieve_many(["q1", "q2"], security=AcademicSecurityContext(), limit=4)
+
+    assert [[chunk.chunk_id for chunk in chunks] for chunks in per_query] == [["c1"], ["c2"]]
+    fake_openai_client.embeddings.create.assert_called_once()
+    fake_qdrant.query_batch_points.assert_called_once()
 
 
 def test_retrieve_returns_empty_list_when_collection_does_not_exist() -> None:
@@ -71,13 +96,15 @@ def test_retrieve_returns_empty_list_when_collection_does_not_exist() -> None:
     chunks = service.retrieve("bất kỳ câu hỏi nào", security=AcademicSecurityContext())
 
     assert chunks == []
-    fake_qdrant.query_points.assert_not_called()
+    fake_qdrant.query_batch_points.assert_not_called()
 
 
 def test_retrieve_clamps_score_into_the_0_1_range_the_schema_requires() -> None:
     fake_qdrant = MagicMock()
     fake_qdrant.collection_exists.return_value = True
-    fake_qdrant.query_points.return_value = QueryResponse(points=[_scored_point("c1", 1.5)])
+    fake_qdrant.query_batch_points.return_value = [
+        QueryResponse(points=[_scored_point("c1", 1.5)])
+    ] * 3
     service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1]))
 
     chunks = service.retrieve("câu hỏi", security=AcademicSecurityContext())
@@ -112,7 +139,7 @@ def test_retrieve_maps_structural_metadata_including_source_locator() -> None:
             },
         },
     )
-    fake_qdrant.query_points.return_value = QueryResponse(points=[point])
+    fake_qdrant.query_batch_points.return_value = [QueryResponse(points=[point])] * 3
     service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1]))
 
     chunks = service.retrieve("nội dung điều 5", security=AcademicSecurityContext())
@@ -131,7 +158,9 @@ def test_retrieve_defaults_structural_metadata_for_a_legacy_point() -> None:
 
     fake_qdrant = MagicMock()
     fake_qdrant.collection_exists.return_value = True
-    fake_qdrant.query_points.return_value = QueryResponse(points=[_scored_point("c1", 0.5)])
+    fake_qdrant.query_batch_points.return_value = [
+        QueryResponse(points=[_scored_point("c1", 0.5)])
+    ] * 3
     service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1]))
 
     chunks = service.retrieve("câu hỏi", security=AcademicSecurityContext())
@@ -144,19 +173,19 @@ def test_retrieve_defaults_structural_metadata_for_a_legacy_point() -> None:
 def test_retrieve_passes_explicit_limit_through_to_qdrant() -> None:
     fake_qdrant = MagicMock()
     fake_qdrant.collection_exists.return_value = True
-    fake_qdrant.query_points.return_value = QueryResponse(points=[])
+    fake_qdrant.query_batch_points.return_value = [QueryResponse(points=[])] * 3
     service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1]))
 
     service.retrieve("câu hỏi", security=AcademicSecurityContext(), limit=3)
 
-    _, kwargs = fake_qdrant.query_points.call_args
-    assert kwargs["limit"] == 3
+    requests = fake_qdrant.query_batch_points.call_args.kwargs["requests"]
+    assert {request.limit for request in requests} == {3}
 
 
 def test_retrieve_applies_the_callers_access_filter_to_every_vector_query() -> None:
     fake_qdrant = MagicMock()
     fake_qdrant.collection_exists.return_value = True
-    fake_qdrant.query_points.return_value = QueryResponse(points=[])
+    fake_qdrant.query_batch_points.return_value = [QueryResponse(points=[])] * 3
     service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1]))
     security = AcademicSecurityContext(
         department_access=[DepartmentAccessEntry(department_id="KHOA_CNTT", access_level=2)]
@@ -164,9 +193,10 @@ def test_retrieve_applies_the_callers_access_filter_to_every_vector_query() -> N
 
     service.retrieve("câu hỏi", security=security)
 
-    assert fake_qdrant.query_points.call_count == 3
-    for call in fake_qdrant.query_points.call_args_list:
-        query_filter = call.kwargs["query_filter"]
+    requests = fake_qdrant.query_batch_points.call_args.kwargs["requests"]
+    assert len(requests) == 3
+    for request in requests:
+        query_filter = request.filter
         assert isinstance(query_filter.should, list)
         assert len(query_filter.should) == 2  # public (access_level=0) + KHOA_CNTT grant
 

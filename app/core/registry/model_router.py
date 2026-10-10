@@ -13,6 +13,18 @@ rotated credential (new revision) always starts with clean state:
   from the snapshot once Java disables it and the next hot-reload picks that up; the
   marker is just the immediate stop-gap until that happens.
 
+On top of that, one model-level state, keyed by `(provider, model_name, api_base_url)`:
+
+- **Model open**: a 5xx/timeout/connection failure means the model itself is struggling,
+  so every other key on it would most likely fail the same way. Once
+  `_MODEL_TRIP_MIN_CREDENTIALS` different credentials of one model fail like that within
+  `_MODEL_TRIP_WINDOW_SECONDS`, every credential on that model is skipped in favour of
+  credentials on another model. The skip lasts `_MODEL_COOLDOWN_BASE_SECONDS`, doubling
+  (up to `_MODEL_COOLDOWN_MAX_SECONDS`) each time the first call after it fails again; the
+  backoff level is forgotten after `_MODEL_BACKOFF_MEMORY_SECONDS` without a new trip. When
+  every credential for a purpose is on an open model, the skip is ignored rather than
+  leaving the purpose with nothing - the per-credential cooldowns still apply.
+
 State lives in Redis (`REDIS_URL`, DB 0 — shared with the registry/hot-reload signal,
 never Celery's broker/backend DBs) under key prefix `mr:cb:` so every worker process
 agrees. When Redis is unreachable, the router degrades to **per-process, in-memory**
@@ -44,17 +56,38 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
+from zoneinfo import ZoneInfo
 
 import redis.asyncio as redis_asyncio
 
 from app.core.config import settings
-from app.core.errors.llm_error_classifier import ErrorType, classify_llm_error
+from app.core.errors.llm_error_classifier import (
+    ZAI_CONCURRENCY_LIMIT_CODE,
+    ErrorType,
+    GoogleQuotaWindow,
+    classify_llm_error,
+    google_rate_limit,
+    is_model_wide_failure,
+    provider_error_details,
+    provider_status_code,
+    zai_error_code,
+)
+from app.core.errors.llm_failure import (
+    FailureReason,
+    admin_failure_message,
+    describe_llm_failure,
+    stamp_failed_model,
+)
 from app.core.observability.alerting import alert_credential_failure
+from app.core.registry.errors import (
+    CredentialLocallyLimitedError,
+    NoAvailableCredentialError,
+    NoBudgetAvailableError,
+)
 from app.core.registry.model_registry import CredentialConfig, active_credentials_for
-from app.core.security.redaction import safe_error_message
 from app.integrations.backend_java_client import BackendJavaClient
 
 if TYPE_CHECKING:
@@ -70,30 +103,24 @@ _DEFAULT_COOLDOWN_SECONDS = 30.0
 # thing doing the real work (Java setting the row DISABLED, and the next snapshot
 # reload dropping it, is), just the immediate stop-gap until that's picked up.
 _EXCLUDED_TTL_SECONDS = 24 * 60 * 60.0
+# A Gemini per-minute 429 without a `RetryInfo.retryDelay`: the window is a rolling minute.
+_PER_MINUTE_QUOTA_COOLDOWN_SECONDS = 60.0
+# Gemini per-day quotas reset at midnight Pacific time; wait a little past it so the first
+# call after the cooldown doesn't race the reset.
+_DAILY_QUOTA_RESET_ZONE = ZoneInfo("America/Los_Angeles")
+_DAILY_QUOTA_RESET_MARGIN_SECONDS = 60.0
+# Z.ai's concurrency 429 clears when an in-flight call finishes - a short pause, not 30s.
+_ZAI_CONCURRENCY_COOLDOWN_SECONDS = 5.0
 
-
-class NoAvailableCredentialError(Exception):
-    """No usable (non-cooling-down, non-excluded) credential exists for `purpose` -
-    the trigger condition for the "no available credential" alert."""
-
-    def __init__(self, purpose: str) -> None:
-        self.purpose = purpose
-        super().__init__(f"No available credential for purpose={purpose!r}")
-
-
-class NoBudgetAvailableError(Exception):
-    """Every remaining candidate for `purpose` was denied by budget enforcement
-    (PROVIDER-scope BLOCK/THROTTLE), distinct from `NoAvailableCredentialError` so
-    callers can map it to a budget-specific error response instead of
-    LLM_UNAVAILABLE."""
-
-    def __init__(self, purpose: str, last_deny_reason: str) -> None:
-        self.purpose = purpose
-        self.last_deny_reason = last_deny_reason
-        super().__init__(
-            f"Every credential for purpose={purpose!r} was denied by budget "
-            f"enforcement (last reason: {last_deny_reason})"
-        )
+# Model-level circuit breaker (see the module docstring).
+_MODEL_FAILURE_KEY_PREFIX = "mr:mf"
+_MODEL_OPEN_KEY_PREFIX = "mr:mo"
+_MODEL_LEVEL_KEY_PREFIX = "mr:ml"
+_MODEL_TRIP_MIN_CREDENTIALS = 2
+_MODEL_TRIP_WINDOW_SECONDS = 120.0
+_MODEL_COOLDOWN_BASE_SECONDS = 30.0
+_MODEL_COOLDOWN_MAX_SECONDS = 300.0
+_MODEL_BACKOFF_MEMORY_SECONDS = 600.0
 
 
 class _RedisLike(Protocol):
@@ -104,11 +131,40 @@ class _RedisLike(Protocol):
 
     async def exists(self, name: str) -> int: ...
 
+    async def get(self, name: str) -> Any: ...
+
     async def aclose(self) -> Any: ...
+
+
+# Stored as the marker's value when the failure's reason isn't known (also what markers
+# written before reasons were stored hold: "1").
+_UNKNOWN_REASON = "1"
 
 
 def _state_key(credential_id: str, revision: int) -> str:
     return f"{_KEY_PREFIX}:{credential_id}:{revision}"
+
+
+def _model_scope(credential: CredentialConfig) -> str:
+    """Credentials sharing this value call the same model on the same endpoint."""
+
+    return f"{credential.provider}|{credential.model_name}|{credential.api_base_url}"
+
+
+def _model_failure_key(scope: str, credential_id: str) -> str:
+    return f"{_MODEL_FAILURE_KEY_PREFIX}:{scope}:{credential_id}"
+
+
+def _model_open_key(scope: str) -> str:
+    return f"{_MODEL_OPEN_KEY_PREFIX}:{scope}"
+
+
+def _model_level_key(scope: str) -> str:
+    return f"{_MODEL_LEVEL_KEY_PREFIX}:{scope}"
+
+
+def _model_cooldown_seconds(level: int) -> float:
+    return min(_MODEL_COOLDOWN_BASE_SECONDS * 2**level, _MODEL_COOLDOWN_MAX_SECONDS)
 
 
 class _InMemoryCircuitState:
@@ -119,10 +175,15 @@ class _InMemoryCircuitState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._expires_at: dict[str, float] = {}
+        self._reasons: dict[str, str] = {}
 
-    def mark(self, key: str, ttl_seconds: float) -> None:
+    def mark(self, key: str, ttl_seconds: float, reason: str = _UNKNOWN_REASON) -> None:
         with self._lock:
             self._expires_at[key] = time.monotonic() + max(0.0, ttl_seconds)
+            self._reasons[key] = reason
+
+    def reason(self, key: str) -> str | None:
+        return self._reasons.get(key) if self.is_marked(key) else None
 
     def is_marked(self, key: str) -> bool:
         with self._lock:
@@ -131,6 +192,7 @@ class _InMemoryCircuitState:
                 return False
             if expiry <= time.monotonic():
                 del self._expires_at[key]
+                self._reasons.pop(key, None)
                 return False
             return True
 
@@ -155,6 +217,33 @@ def _extract_retry_after_seconds(exc: Exception) -> float | None:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _seconds_until_daily_quota_reset(now: datetime | None = None) -> float:
+    local_now = (now or datetime.now(UTC)).astimezone(_DAILY_QUOTA_RESET_ZONE)
+    next_midnight = datetime.combine(
+        local_now.date() + timedelta(days=1), datetime.min.time(), tzinfo=_DAILY_QUOTA_RESET_ZONE
+    )
+    return (next_midnight - local_now).total_seconds() + _DAILY_QUOTA_RESET_MARGIN_SECONDS
+
+
+def _rate_limit_cooldown_seconds(exc: Exception) -> float | None:
+    """How long a provider's 429 says to stay off this credential - for a Gemini quota window,
+    until the next daily reset (per day) or Google's own `retryDelay`, else a minute (per minute);
+    a few seconds for Z.ai's concurrency limit. `None` for anything else, leaving the
+    `Retry-After`/default cooldown in charge."""
+
+    if provider_status_code(exc) != 429:
+        return None
+    details = provider_error_details(exc)
+    if zai_error_code(*details) == ZAI_CONCURRENCY_LIMIT_CODE:
+        return _ZAI_CONCURRENCY_COOLDOWN_SECONDS
+    rate_limit = google_rate_limit(*details)
+    if rate_limit is None:
+        return None
+    if rate_limit.window is GoogleQuotaWindow.DAY:
+        return _seconds_until_daily_quota_reset()
+    return rate_limit.retry_delay_seconds or _PER_MINUTE_QUOTA_COOLDOWN_SECONDS
 
 
 def _error_code_for(exc: Exception) -> str:
@@ -237,7 +326,7 @@ class ModelRouter:
             except Exception:  # pragma: no cover - best-effort cleanup only
                 pass
 
-    async def _mark(self, key: str, ttl_seconds: float) -> None:
+    async def _mark(self, key: str, ttl_seconds: float, reason: str = _UNKNOWN_REASON) -> None:
         """Best-effort Redis write; falls back to this process's in-memory state on any
         Redis failure rather than raising. Always also marks in-memory, so an
         in-flight failure that happened to hit Redis-down keeps working even if Redis
@@ -247,7 +336,7 @@ class ModelRouter:
 
         if self._injected_redis_client is not None:
             try:
-                await self._injected_redis_client.set(key, "1", ex=ttl_int)
+                await self._injected_redis_client.set(key, reason, ex=ttl_int)
                 return
             except Exception:
                 logger.warning(
@@ -255,7 +344,7 @@ class ModelRouter:
                     key,
                     exc_info=True,
                 )
-                self._in_memory.mark(key, ttl_seconds)
+                self._in_memory.mark(key, ttl_seconds, reason)
                 return
 
         try:
@@ -266,18 +355,18 @@ class ModelRouter:
                 key,
                 exc_info=True,
             )
-            self._in_memory.mark(key, ttl_seconds)
+            self._in_memory.mark(key, ttl_seconds, reason)
             return
 
         try:
-            await conn.set(key, "1", ex=ttl_int)
+            await conn.set(key, reason, ex=ttl_int)
         except Exception:
             logger.warning(
                 "model_router: Redis unavailable marking %s - degrading to in-memory state",
                 key,
                 exc_info=True,
             )
-            self._in_memory.mark(key, ttl_seconds)
+            self._in_memory.mark(key, ttl_seconds, reason)
         finally:
             try:
                 await conn.aclose()
@@ -297,19 +386,70 @@ class ModelRouter:
             active_credentials_for(purpose),
             key=lambda credential: (credential.priority is None, credential.priority),
         )
+        first_on_open_model: CredentialConfig | None = None
+        open_models: dict[str, bool] = {}
         for credential in candidates:
             if exclude_ids is not None and credential.id in exclude_ids:
                 continue
             key = _state_key(credential.id, credential.revision)
-            if not await self._is_blocked(key):
+            if await self._is_blocked(key):
+                continue
+            scope = _model_scope(credential)
+            if scope not in open_models:
+                open_models[scope] = await self._is_blocked(_model_open_key(scope))
+            if not open_models[scope]:
                 return credential
+            if first_on_open_model is None:
+                first_on_open_model = credential
+        if first_on_open_model is not None:
+            # Every usable credential is on an open model - a call that may still succeed beats
+            # refusing outright.
+            return first_on_open_model
         await alert_credential_failure(
             None,
             "NO_AVAILABLE_CREDENTIAL",
             f"Every credential for purpose={purpose!r} is cooling down or excluded",
             purpose=purpose,
         )
-        raise NoAvailableCredentialError(purpose)
+        reasons = [
+            await self._suspension_reason(_state_key(credential.id, credential.revision))
+            for credential in candidates
+            if exclude_ids is None or credential.id not in exclude_ids
+        ]
+        raise NoAvailableCredentialError(
+            purpose,
+            suspension_reasons=tuple(
+                reason for reason in reasons if reason and reason != _UNKNOWN_REASON
+            ),
+        )
+
+    async def _suspension_reason(self, key: str) -> str | None:
+        """Best-effort read of why `key` is cooling down/excluded - only used to explain
+        an already-decided "no credential available", so any failure (Redis down, a test
+        fake without `get`) just means "reason unknown", never an error."""
+
+        return await self._read(key)
+
+    async def _read(self, key: str) -> str | None:
+        """Best-effort read of a marker's value - `None` when it is unset or unreadable."""
+
+        in_memory = self._in_memory.reason(key)
+        if in_memory is not None:
+            return in_memory
+        try:
+            if self._injected_redis_client is not None:
+                raw = await self._injected_redis_client.get(key)
+            else:
+                conn = self._new_redis_connection()
+                try:
+                    raw = await conn.get(key)
+                finally:
+                    await conn.aclose()
+        except Exception:
+            return None
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="replace")
+        return raw if isinstance(raw, str) else None
 
     async def record_failure(
         self,
@@ -344,15 +484,34 @@ class ModelRouter:
         transient error into one Slack message.
         """
 
-        error_type = classify_llm_error(exc)
         key = _state_key(credential.id, credential.revision)
-        message = safe_error_message(exc, credential.api_key)
+        if isinstance(exc, CredentialLocallyLimitedError):
+            # Refused locally by its own `max_rpm`/`max_concurrency` - the provider never saw
+            # the call, so there's nothing to alert on or report as credential health. Just skip
+            # it until a slot frees up again.
+            await self._mark(key, exc.retry_after_seconds, FailureReason.LLM_RATE_LIMITED.value)
+            return
+
+        error_type = classify_llm_error(exc)
+        stamp_failed_model(exc, credential)
+        message = admin_failure_message(
+            exc, purpose=purpose, api_key=credential.api_key, credential=credential
+        )
+        # Kept as the marker's value so a LATER request that finds this credential
+        # suspended can still tell the client why (see `NoAvailableCredentialError`).
+        reason = describe_llm_failure(exc, purpose, credential).reason.value
 
         if error_type is ErrorType.PERMANENT:
-            await self._mark(key, self._excluded_ttl_seconds)
+            await self._mark(key, self._excluded_ttl_seconds, reason)
         else:
-            ttl = _extract_retry_after_seconds(exc) or self._default_cooldown_seconds
-            await self._mark(key, ttl)
+            ttl = (
+                _rate_limit_cooldown_seconds(exc)
+                or _extract_retry_after_seconds(exc)
+                or self._default_cooldown_seconds
+            )
+            await self._mark(key, ttl, reason)
+            if is_model_wide_failure(exc):
+                await self._record_model_failure(credential, reason, purpose)
 
         await alert_credential_failure(credential, error_type.value, message, purpose=purpose)
 
@@ -376,6 +535,51 @@ class ModelRouter:
                 credential.revision,
                 exc_info=True,
             )
+
+    async def _record_model_failure(
+        self, credential: CredentialConfig, reason: str, purpose: str | None
+    ) -> None:
+        """Counts a model-wide failure of `credential` toward opening its model's circuit:
+        opens it once enough different credentials of the model failed recently, or right
+        away (with a doubled cooldown) when the model was opened recently and the first call
+        after that failed again."""
+
+        scope = _model_scope(credential)
+        await self._mark(
+            _model_failure_key(scope, credential.id), _MODEL_TRIP_WINDOW_SECONDS, reason
+        )
+        if await self._is_blocked(_model_open_key(scope)):
+            # Already open - a call that was in flight when it opened (or one made because no
+            # other model was left) failing too says nothing new.
+            return
+
+        raw_level = await self._read(_model_level_key(scope))
+        if raw_level is not None and raw_level.isdigit():
+            level = int(raw_level) + 1
+        else:
+            peers = [
+                peer
+                for peer in (active_credentials_for(purpose) if purpose else ())
+                if peer.id != credential.id and _model_scope(peer) == scope
+            ]
+            failed = 1
+            for peer in peers:
+                if await self._is_blocked(_model_failure_key(scope, peer.id)):
+                    failed += 1
+            if failed < _MODEL_TRIP_MIN_CREDENTIALS:
+                return
+            level = 0
+
+        cooldown = _model_cooldown_seconds(level)
+        await self._mark(_model_open_key(scope), cooldown, reason)
+        await self._mark(_model_level_key(scope), _MODEL_BACKOFF_MEMORY_SECONDS, str(level))
+        logger.warning(
+            "model_router: model %s/%s failing across credentials (%s) - skipping it for %ss",
+            credential.provider,
+            credential.model_name,
+            reason,
+            int(cooldown),
+        )
 
 
 _default_router: ModelRouter | None = None

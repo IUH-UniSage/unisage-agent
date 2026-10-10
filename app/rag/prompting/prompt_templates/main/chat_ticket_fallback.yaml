@@ -9,5 +9,5 @@ template: |
   {ticket_fallback}
 
   ## Thông Báo Người Dùng
-  Không tìm thấy văn bản quy chế đủ liên quan cho câu hỏi: "{user_query}".
-  Hãy tạo phản hồi fallback chuẩn mực theo Quy Tắc Phản Hồi Fallback ở trên.
+  Hệ thống chưa tìm được đoạn văn bản đủ khớp để trả lời chắc chắn câu hỏi: "{user_query}".
+  Hãy tạo phản hồi fallback theo Quy Tắc Phản Hồi Fallback ở trên.

@@ -65,6 +65,12 @@ addopts = "-m 'not integration'"
 where = ["."]
 include = ["app*"]
 
+# Non-Python files read at runtime (Redis budget scripts, prompt templates) - without
+# this a non-editable install (wheel) would ship the packages without them.
+[tool.setuptools.package-data]
+"app.core.budget" = ["lua/*.lua"]
+"app.rag.prompting" = ["*.json", "prompt_templates/**/*.yaml"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100
@@ -80,9 +86,10 @@ module = ["pymupdf4llm", "celery", "celery.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# celery ships without inline type annotations, so `@celery_app.task` is seen
-# as an untyped decorator under strict mode; relax that check just here.
-module = "app.worker.celery_app"
+# celery ships without inline type annotations, so `@celery_app.task` and
+# `@worker_process_init.connect` are seen as untyped decorators under strict mode;
+# relax that check just for the modules that declare tasks/signal handlers.
+module = ["app.worker.tasks.*", "app.worker.signals"]
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]

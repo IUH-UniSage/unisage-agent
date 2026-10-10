@@ -119,7 +119,7 @@ class ConversationClarificationState(Base):
     is Python's own internal processing state, not chat history, and lives
     in Python's own schema/database by design (see tasks/plan.md).
 
-    `pending_clarification` holds a `PendingClarification`-shaped JSON object
+    `pending_clarification` holds a `PendingRound`-shaped JSON object
     (see `app/schemas/clarification.py`) or `None` when nothing is pending.
     `confirmed_metadata` accumulates self-declared student attributes across
     the whole conversation and never expires on its own - it is only ever
@@ -136,6 +136,19 @@ class ConversationClarificationState(Base):
     )
     confirmed_metadata: Mapped[dict[str, str]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
+    )
+    # Panel v2 state machine (UNISAGE-99): NULL = no round, OPEN, or PROCESSING while
+    # one request holds `claim_token` until `claim_expires_at`.
+    pending_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pending_panel_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # The latest computed calculation (`LastCalculation`), reused by a follow-up
+    # target question ("thế cuối kỳ cần bao nhiêu để được A+").
+    last_calculation: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

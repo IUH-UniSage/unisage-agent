@@ -1,7 +1,7 @@
 """In-memory snapshot of `backend-java`'s model registry (plan.md "Internal API
 contract" endpoint #1, "Cutover khỏi cấu hình `.env` tĩnh").
 
-Loaded once at FastAPI startup (`app.main.lifespan`) and once per Celery worker
+Loaded once at FastAPI startup (`app.core.lifespan`) and once per Celery worker
 process (`app.worker.celery_app`'s `worker_process_init` handler) — Task 4 does
 not wire hot-reload/polling (that's Task 7), so within a process this snapshot
 never changes after the initial load.
@@ -53,6 +53,9 @@ class CredentialConfig:
     # never read for routing/verification decisions. Last, with a default, so every
     # existing positional/keyword construction site (tests especially) keeps working.
     display_name: str | None = None
+    # In-flight provider calls allowed at once; None = no limit (same as max_rpm). Defaulted for
+    # the same reason as display_name.
+    max_concurrency: int | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,7 @@ def _parse_credential(raw: dict[str, Any]) -> CredentialConfig:
         max_rpm=raw.get("maxRpm"),
         api_key=raw.get("apiKey") or "",
         display_name=raw.get("displayName"),
+        max_concurrency=raw.get("maxConcurrency"),
     )
 
 
@@ -237,10 +241,11 @@ async def init_model_registry(
 
     _current_snapshot = snapshot
     logger.info(
-        "Loaded model registry snapshot version=%s chat=%d embedding=%d extraction=%d",
+        "Loaded model registry snapshot version=%s chat=%d embedding=%d extraction=%d rerank=%d",
         snapshot.version,
         len(snapshot.credentials_for("CHAT")),
         len(snapshot.credentials_for("EMBEDDING")),
         len(snapshot.credentials_for("EXTRACTION")),
+        len(snapshot.credentials_for("RERANK")),
     )
     return snapshot

@@ -16,6 +16,7 @@ from app.rag.vectorstore.qdrant_store import (
     ensure_collection,
     get_collection_dimension,
     search_chunks,
+    search_chunks_batch,
     upsert_chunk,
 )
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
@@ -226,25 +227,30 @@ def test_search_chunks_returns_empty_list_when_collection_missing() -> None:
     points = search_chunks(client, query_vector=[0.1, 0.2], limit=5)
 
     assert points == []
-    client.query_points.assert_not_called()
+    client.query_batch_points.assert_not_called()
 
 
 def test_search_chunks_queries_all_three_named_vectors_with_payload_attached() -> None:
     client = MagicMock()
     client.collection_exists.return_value = True
     scored_point = ScoredPoint(id="c1", version=0, score=0.9, payload={"chunk_id": "c1"})
-    client.query_points.return_value = QueryResponse(points=[scored_point])
+    client.query_batch_points.return_value = [QueryResponse(points=[scored_point])] * 3
 
     points = search_chunks(client, query_vector=[0.1, 0.2], limit=5)
 
     assert points == [scored_point]
-    assert client.query_points.call_count == 3
-    used_vectors = {call.kwargs["using"] for call in client.query_points.call_args_list}
-    assert used_vectors == {"content_vector", "summary_vector", "questions_vector"}
-    for call in client.query_points.call_args_list:
-        assert call.kwargs["collection_name"] == settings.QDRANT_COLLECTION
-        assert call.kwargs["query"] == [0.1, 0.2]
-        assert call.kwargs["with_payload"] is True
+    client.query_batch_points.assert_called_once()
+    call = client.query_batch_points.call_args
+    assert call.kwargs["collection_name"] == settings.QDRANT_COLLECTION
+    requests = call.kwargs["requests"]
+    assert {request.using for request in requests} == {
+        "content_vector",
+        "summary_vector",
+        "questions_vector",
+    }
+    for request in requests:
+        assert request.query == [0.1, 0.2]
+        assert request.with_payload is True
 
 
 def test_search_chunks_keeps_the_best_score_per_chunk_across_vectors() -> None:
@@ -258,7 +264,7 @@ def test_search_chunks_keeps_the_best_score_per_chunk_across_vectors() -> None:
     high_score = ScoredPoint(id="c1", version=0, score=0.85, payload={"chunk_id": "c1"})
     other_chunk = ScoredPoint(id="c2", version=0, score=0.5, payload={"chunk_id": "c2"})
 
-    client.query_points.side_effect = [
+    client.query_batch_points.return_value = [
         QueryResponse(points=[low_score]),  # content_vector
         QueryResponse(points=[other_chunk]),  # summary_vector
         QueryResponse(points=[high_score]),  # questions_vector
@@ -275,7 +281,7 @@ def test_search_chunks_keeps_the_best_score_per_chunk_across_vectors() -> None:
 def test_search_chunks_respects_limit_after_merging() -> None:
     client = MagicMock()
     client.collection_exists.return_value = True
-    client.query_points.side_effect = [
+    client.query_batch_points.return_value = [
         QueryResponse(
             points=[
                 ScoredPoint(id=f"c{i}", version=0, score=1.0 - i * 0.1, payload={})
@@ -290,6 +296,24 @@ def test_search_chunks_respects_limit_after_merging() -> None:
 
     assert len(points) == 2
     assert [p.id for p in points] == ["c0", "c1"]
+
+
+def test_search_chunks_batch_keeps_each_querys_results_apart() -> None:
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    first = ScoredPoint(id="c1", version=0, score=0.9, payload={})
+    second = ScoredPoint(id="c2", version=0, score=0.8, payload={})
+    client.query_batch_points.return_value = [QueryResponse(points=[first])] * 3 + [
+        QueryResponse(points=[second])
+    ] * 3
+
+    results = search_chunks_batch(client, query_vectors=[[0.1], [0.2]], limits=[5, 5])
+
+    assert results == [[first], [second]]
+    client.query_batch_points.assert_called_once()
+    assert [
+        request.query for request in client.query_batch_points.call_args.kwargs["requests"]
+    ] == [[0.1]] * 3 + [[0.2]] * 3
 
 
 def test_ensure_collection_creates_department_access_level_and_is_public_payload_index() -> None:
@@ -443,11 +467,12 @@ def test_build_access_filter_public_clause_never_references_department_or_level(
 def test_search_chunks_passes_query_filter_to_every_named_vector_query() -> None:
     client = MagicMock()
     client.collection_exists.return_value = True
-    client.query_points.return_value = QueryResponse(points=[])
+    client.query_batch_points.return_value = [QueryResponse(points=[])] * 3
     access_filter = build_access_filter(AcademicSecurityContext())
 
     search_chunks(client, query_vector=[0.1], limit=5, query_filter=access_filter)
 
-    assert client.query_points.call_count == 3
-    for call in client.query_points.call_args_list:
-        assert call.kwargs["query_filter"] is access_filter
+    requests = client.query_batch_points.call_args.kwargs["requests"]
+    assert len(requests) == 3
+    for request in requests:
+        assert request.filter == access_filter

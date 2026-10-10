@@ -287,3 +287,63 @@ class EmbeddingDraftLegacyException(UniSageException):
                 "trước khi embed."
             ),
         )
+
+
+class DocumentUnreadableException(UniSageException):
+    """The uploaded file's bytes can't be parsed as its extension says (corrupt, renamed,
+    password-protected, not UTF-8 text, ...) - a problem with the file, not the server."""
+
+    def __init__(self, filename: str, reason: str) -> None:
+        super().__init__(
+            ErrorCode.DOCUMENT_UNREADABLE,
+            message=(
+                f"Không đọc được nội dung file '{filename}' ({reason}). File có thể bị hỏng, "
+                "sai định dạng so với đuôi file, có mật khẩu hoặc không phải UTF-8."
+            ),
+        )
+
+
+class StorageUnavailableException(UniSageException):
+    """MinIO failed for a reason other than "object not found" (unreachable, access denied,
+    missing bucket, ...)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            ErrorCode.STORAGE_ERROR,
+            message=f"Không truy cập được kho lưu trữ file (MinIO): {reason}. Thử lại sau nhé.",
+        )
+
+
+class ClarificationInvalidException(UniSageException):
+    """A panel submit failed validation against the stored panel; `errors` maps
+    question_id -> reason. The panel stays open."""
+
+    def __init__(self, errors: dict[str, str]) -> None:
+        super().__init__(ErrorCode.CLARIFICATION_INVALID, errors=errors)
+
+
+class ClarificationStaleException(UniSageException):
+    """The panel was already answered/cancelled, is being answered by another request,
+    or the panel_id is not the open one."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.CLARIFICATION_STALE)
+
+
+class ClarificationPendingException(UniSageException):
+    """A plain message while a panel is open - it must be answered or cancelled first."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.CLARIFICATION_PENDING)
+
+
+class ClarificationProcessingException(UniSageException):
+    """A plain message while the previous panel answer is still being processed."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.CLARIFICATION_PROCESSING)
+
+
+class RequestTooLargeException(UniSageException):
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.REQUEST_TOO_LARGE)

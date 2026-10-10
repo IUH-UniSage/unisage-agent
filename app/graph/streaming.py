@@ -37,6 +37,7 @@ in `on_attempt`'s SAME call - no separate hook is needed for that half
 because nothing about "before" needs anything failure/success-shaped.
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -46,9 +47,15 @@ from typing import TYPE_CHECKING
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage
 
+from app.core.config import settings
+from app.core.errors.llm_error_classifier import provider_status_code
 from app.core.llm.provider_models import build_model
+from app.core.llm.thinking import resolve_thinking
+from app.core.observability.graph_trace import active_trace
+from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import (
     ModelRouter,
@@ -121,12 +128,65 @@ def _credential_label(credential: CredentialConfig) -> str:
     return credential.display_name or credential.id
 
 
+async def _next_credential_or_raise(
+    router: ModelRouter, purpose: str, failure: Exception
+) -> CredentialConfig:
+    """`router.get_next_credential(purpose)`, but when nothing is left the raised
+    `NoAvailableCredentialError` carries `failure` - the provider error that just took
+    out the last candidate - so the client is told the real cause (bad API key, quota,
+    ...) instead of a generic "no credential available"."""
+
+    try:
+        return await router.get_next_credential(purpose)
+    except NoAvailableCredentialError as exhausted:
+        if exhausted.last_error is not None:
+            raise
+        raise NoAvailableCredentialError(
+            purpose, last_error=failure, suspension_reasons=exhausted.suspension_reasons
+        ) from failure
+
+
+def _failure_label(exc: Exception) -> str:
+    """Short reason for a failover log line - the HTTP status when there is one."""
+
+    status = provider_status_code(exc)
+    return f"{type(exc).__name__}:{status}" if status is not None else type(exc).__name__
+
+
+def _trace_model_switch(
+    agent: Agent[None, str],
+    credential: CredentialConfig,
+    failed_credential: CredentialConfig | None,
+    reason: str,
+) -> None:
+    """Logs the node's new model/credential when this runs inside a traced graph request."""
+
+    trace = active_trace()
+    if trace is not None:
+        trace.model_switch(agent, credential, failed_credential=failed_credential, reason=reason)
+
+
 TokenSink = Callable[[str], Awaitable[None]]
 
 # Rebuilds an `Agent` around a freshly-built fallback `Model` - the two
 # current call sites' `build_generation_agent`/`build_ticket_fallback_agent`
 # (both just `Agent(model=model)`, no tools/deps attached) satisfy this.
 AgentFactory = Callable[[Model | str], Agent[None, str]]
+
+
+def auxiliary_model_settings(model: Model | str) -> ModelSettings:
+    return ModelSettings(thinking=resolve_thinking(model, settings.CHAT_AUX_THINKING))
+
+
+def generation_model_settings(model: Model | str) -> ModelSettings:
+    if settings.CHAT_GENERATION_THINKING is None:
+        return ModelSettings()
+    return ModelSettings(thinking=resolve_thinking(model, settings.CHAT_GENERATION_THINKING))
+
+
+def _timeout_or_none(seconds: float) -> float | None:
+    return seconds if seconds > 0 else None
+
 
 # Called once, right after a failover picks a replacement credential/model -
 # lets the caller propagate the switch to the REST of the same request (see
@@ -164,7 +224,7 @@ async def stream_agent_text(
     replacement credential is fetched via `model_router.get_next_credential()`,
     a fresh `Agent` is built around it (`agent_factory`), and the SAME prompt
     is retried from scratch. This repeats until either a call succeeds or
-    `model_router.NoAvailableCredentialError` propagates (the
+    `NoAvailableCredentialError` propagates (the
     `LLM_UNAVAILABLE` case - handled by the caller, not here).
 
     `on_failover`, when supplied, is called once right after a replacement
@@ -213,9 +273,13 @@ async def stream_agent_text(
                 router=failover_router,
             )
             if selected is not active_credential:
+                denied_credential = active_credential
                 active_credential = selected
                 active_model = build_model(active_credential)
                 active_agent = agent_factory(active_model) if agent_factory else active_agent
+                _trace_model_switch(
+                    active_agent, active_credential, denied_credential, "PROVIDER_BUDGET_DENIED"
+                )
                 if on_failover is not None:
                     on_failover(active_credential, active_model)
         else:
@@ -225,21 +289,29 @@ async def stream_agent_text(
         streamed_any = False
         started_at = time.monotonic()
         try:
-            async with active_agent.run_stream(prompt) as result:
-                async for chunk in result.stream_text(delta=True):
-                    collected.append(chunk)
-                    await token_sink(chunk)
-                    if chunk:
-                        # Only real (non-empty) content counts as "already
-                        # streamed" - a thinking-model provider (Gemini 3)
-                        # can emit an empty/marker delta before any visible
-                        # text, and treating that as the point of no return
-                        # would block a perfectly safe failover on a request
-                        # the user never actually saw any output for.
-                        streamed_any = True
-                # Usage is only final once the stream has been fully consumed -
-                # must be read here, still inside the `async with`, not after.
-                usage = result.usage
+            # Bounds only the wait for the first visible text (a stuck provider raises
+            # `TimeoutError`, which fails over like any other pre-output failure) - lifted
+            # as soon as text arrives so a long answer is never cut mid-stream.
+            async with asyncio.timeout(
+                _timeout_or_none(settings.CHAT_FIRST_TOKEN_TIMEOUT_SECONDS)
+            ) as first_token_deadline:
+                async with active_agent.run_stream(prompt) as result:
+                    async for chunk in result.stream_text(delta=True):
+                        collected.append(chunk)
+                        await token_sink(chunk)
+                        if chunk:
+                            # Only real (non-empty) content counts as "already
+                            # streamed" - a thinking-model provider (Gemini 3)
+                            # can emit an empty/marker delta before any visible
+                            # text, and treating that as the point of no return
+                            # would block a perfectly safe failover on a request
+                            # the user never actually saw any output for.
+                            if not streamed_any:
+                                first_token_deadline.reschedule(None)
+                            streamed_any = True
+                    # Usage is only final once the stream has been fully consumed -
+                    # must be read here, still inside the `async with`, not after.
+                    usage = result.usage
             committed_usd = _safe_record_attempt(
                 on_attempt,
                 AttemptOutcome(
@@ -299,14 +371,17 @@ async def stream_agent_text(
             await failover_router.record_failure(
                 active_credential, exc, snapshot_version=snapshot_version, purpose=purpose
             )
-            # Raises `NoAvailableCredentialError` if every credential for
-            # `purpose` is cooling down/excluded - left uncaught here, it
-            # propagates to the caller as the `LLM_UNAVAILABLE` trigger.
+            # Raises `NoAvailableCredentialError` (carrying `exc` as its
+            # `last_error`) if every credential for `purpose` is cooling
+            # down/excluded - left uncaught here, it propagates to the caller.
             failed_credential = active_credential
-            active_credential = await failover_router.get_next_credential(purpose)
+            active_credential = await _next_credential_or_raise(failover_router, purpose, exc)
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
             attempt_index += 1
+            _trace_model_switch(
+                active_agent, active_credential, failed_credential, _failure_label(exc)
+            )
             logger.warning(
                 "stream_agent_text: credential %s failed (%s) before any output was "
                 "streamed - failing over to credential %s",
@@ -330,6 +405,7 @@ async def run_agent_text_with_failover(
     on_failover: FailoverCallback | None = None,
     on_attempt: AttemptRecorder | None = None,
     budget: BudgetContext | None = None,
+    timeout_seconds: float | None = None,
 ) -> str:
     """Runs `agent.run(prompt)`, returning `result.output or ""`, with the same
     opt-in failover wiring as `stream_agent_text()` - see the module docstring
@@ -337,6 +413,9 @@ async def run_agent_text_with_failover(
 
     `on_failover`/`on_attempt`/`budget` - see `stream_agent_text()`'s docstring;
     same purpose here.
+
+    `timeout_seconds` (None or 0 = no limit) caps each attempt; running out raises
+    `TimeoutError`, which fails over like any other provider failure.
     """
 
     active_agent = agent
@@ -365,9 +444,13 @@ async def run_agent_text_with_failover(
                 router=failover_router,
             )
             if selected is not active_credential:
+                denied_credential = active_credential
                 active_credential = selected
                 active_model = build_model(active_credential)
                 active_agent = agent_factory(active_model) if agent_factory else active_agent
+                _trace_model_switch(
+                    active_agent, active_credential, denied_credential, "PROVIDER_BUDGET_DENIED"
+                )
                 if on_failover is not None:
                     on_failover(active_credential, active_model)
         else:
@@ -375,7 +458,8 @@ async def run_agent_text_with_failover(
 
         started_at = time.monotonic()
         try:
-            result = await active_agent.run(prompt)
+            async with asyncio.timeout(_timeout_or_none(timeout_seconds or 0)):
+                result = await active_agent.run(prompt)
             committed_usd = _safe_record_attempt(
                 on_attempt,
                 AttemptOutcome(
@@ -418,10 +502,13 @@ async def run_agent_text_with_failover(
                 active_credential, exc, snapshot_version=snapshot_version, purpose=purpose
             )
             failed_credential = active_credential
-            active_credential = await failover_router.get_next_credential(purpose)
+            active_credential = await _next_credential_or_raise(failover_router, purpose, exc)
             active_model = build_model(active_credential)
             active_agent = agent_factory(active_model)
             attempt_index += 1
+            _trace_model_switch(
+                active_agent, active_credential, failed_credential, _failure_label(exc)
+            )
             logger.warning(
                 "run_agent_text_with_failover: credential %s failed (%s) - failing over "
                 "to credential %s",

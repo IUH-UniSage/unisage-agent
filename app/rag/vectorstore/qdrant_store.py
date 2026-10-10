@@ -180,26 +180,51 @@ def search_chunks(
     a failure, for the retrieval node calling this.
     """
 
-    if not client.collection_exists(settings.QDRANT_COLLECTION):
-        return []
+    return search_chunks_batch(
+        client, query_vectors=[query_vector], limits=[limit], query_filter=query_filter
+    )[0]
 
-    best_by_id: dict[str | int | UUID, models.ScoredPoint] = {}
-    for vector_name in _VECTOR_NAMES:
-        response = client.query_points(
-            collection_name=settings.QDRANT_COLLECTION,
-            query=query_vector,
+
+def search_chunks_batch(
+    client: QdrantClient,
+    *,
+    query_vectors: list[list[float]],
+    limits: list[int],
+    query_filter: models.Filter | None = None,
+) -> list[list[models.ScoredPoint]]:
+    """`search_chunks` for several queries at once: every query x named
+    vector goes out in one `query_batch_points` round trip."""
+
+    if not client.collection_exists(settings.QDRANT_COLLECTION):
+        return [[] for _ in query_vectors]
+
+    requests = [
+        models.QueryRequest(
+            query=vector,
             using=vector_name,
             limit=limit,
             with_payload=True,
-            query_filter=query_filter,
+            filter=query_filter,
         )
-        for point in response.points:
-            existing = best_by_id.get(point.id)
-            if existing is None or point.score > existing.score:
-                best_by_id[point.id] = point
+        for vector, limit in zip(query_vectors, limits, strict=True)
+        for vector_name in _VECTOR_NAMES
+    ]
+    responses = client.query_batch_points(
+        collection_name=settings.QDRANT_COLLECTION, requests=requests
+    )
 
-    ranked = sorted(best_by_id.values(), key=lambda point: point.score, reverse=True)
-    return ranked[:limit]
+    per_query = len(_VECTOR_NAMES)
+    results: list[list[models.ScoredPoint]] = []
+    for index, limit in enumerate(limits):
+        best_by_id: dict[str | int | UUID, models.ScoredPoint] = {}
+        for response in responses[index * per_query : (index + 1) * per_query]:
+            for point in response.points:
+                existing = best_by_id.get(point.id)
+                if existing is None or point.score > existing.score:
+                    best_by_id[point.id] = point
+        ranked = sorted(best_by_id.values(), key=lambda point: point.score, reverse=True)
+        results.append(ranked[:limit])
+    return results
 
 
 def scroll_chunks_by_document(client: QdrantClient, document_id: str) -> list[models.Record]:

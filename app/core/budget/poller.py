@@ -28,7 +28,7 @@ async def _poll_loop(interval: float) -> None:
 
 def start_budget_snapshot_poller(*, interval: float | None = None) -> asyncio.Task[None]:
     """Starts the periodic refresh loop as a background task on the CURRENT event
-    loop. The caller owns cancelling it on shutdown (see `app.main`'s lifespan)."""
+    loop. The caller owns cancelling it on shutdown (see `app.core.lifespan`)."""
 
     resolved_interval = (
         interval if interval is not None else settings.BUDGET_SNAPSHOT_REFRESH_SECONDS

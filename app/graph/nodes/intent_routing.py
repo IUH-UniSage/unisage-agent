@@ -14,8 +14,6 @@ EndRoute = Literal["SOCIAL_CHAT", "OFF_TOPIC"]
 # If any of these is present, the message's other tasks are dropped.
 _ACADEMIC_INTENTS = frozenset({"academic_advisory", "academic_calculation"})
 
-SOCIAL_CHAT_TEMPLATE = "Không có gì đâu, bạn cần hỏi thêm gì cứ nhắn cho mình nhé!"
-
 
 @dataclass(frozen=True)
 class RoutePlan:

@@ -14,7 +14,7 @@ from redis import asyncio as redis_asyncio
 
 from app.core.budget.tracker import BudgetTracker
 from app.core.config import settings
-from app.core.errors.llm_error_classifier import EmbeddingProviderError
+from app.core.errors.provider_errors import EmbeddingBudgetRejectedError, EmbeddingProviderError
 from app.core.llm.http_client import (
     ProviderConnectionInfo,
     build_provider_http_client,
@@ -104,7 +104,7 @@ class GoogleEmbedder:
     This class is the Google-native counterpart, selected by
     `app.rag.embeddings.provider.build_embedder()` purely from the ACTIVE EMBEDDING credential's
     `provider` field - same public contract as `OpenAIEmbedder` (`embed()`/`embed_tracked()`/
-    `identity_key`/`credential`), so every caller (`app.worker.celery_app.embed_chunks`,
+    `identity_key`/`credential`), so every caller (`app.worker.tasks.ingestion.embed_chunks`,
     `app.rag.chunking.semantic.SemanticChunker`, `app.rag.retrieval.service.RetrievalService`)
     can use either interchangeably without knowing which one it got.
 
@@ -162,7 +162,9 @@ class GoogleEmbedder:
             return []
 
         model, client = self._ensure_resolved()
-        return await self._call_provider_tracked(client, model, texts, usage_recorder, budget_tracker)
+        return await self._call_provider_tracked(
+            client, model, texts, usage_recorder, budget_tracker
+        )
 
     def _ensure_resolved(self) -> tuple[str, Client]:
         model = self.model
@@ -190,11 +192,14 @@ class GoogleEmbedder:
                 estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
             )
             if reserve_result != "OK":
-                raise EmbeddingProviderError(
+                raise EmbeddingBudgetRejectedError(
                     f"EMBEDDING budget reservation rejected: {reserve_result}",
+                    reason=reserve_result,
                     credential=credential,
                 )
-            vectors = await self._call_provider_tracked(client, model, texts, recorder, budget_tracker)
+            vectors = await self._call_provider_tracked(
+                client, model, texts, recorder, budget_tracker
+            )
             status = "SUCCESS"
             return vectors
         finally:
@@ -282,8 +287,10 @@ class GoogleEmbedder:
             estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
         )
         if acquire_result != "OK":
-            raise EmbeddingProviderError(
-                f"EMBEDDING provider budget denied: {acquire_result}", credential=credential
+            raise EmbeddingBudgetRejectedError(
+                f"EMBEDDING provider budget denied: {acquire_result}",
+                reason=acquire_result,
+                credential=credential,
             )
 
         started_at = time.monotonic()

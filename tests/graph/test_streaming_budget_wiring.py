@@ -15,8 +15,9 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.core.budget.snapshot import set_current_budget_snapshot
 from app.core.budget.tracker import BudgetTracker
+from app.core.registry.errors import NoBudgetAvailableError
 from app.core.registry.model_registry import CredentialConfig
-from app.core.registry.model_router import ModelRouter, NoBudgetAvailableError
+from app.core.registry.model_router import ModelRouter
 from app.graph.streaming import BudgetContext, run_agent_text_with_failover
 
 

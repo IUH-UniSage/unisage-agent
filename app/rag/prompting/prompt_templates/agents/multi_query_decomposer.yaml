@@ -11,6 +11,9 @@ template: |
 
   ## Requirements
   - Mỗi câu hỏi con phải chứa đầy đủ thực thể và ngữ cảnh hành chính (không dùng đại từ thay thế "nó", "ngành đó").
+  - GIỮ PHẠM VI CỦA CẢ CÂU TRONG MỌI CÂU HỎI CON: mỗi tiêu chí phạm vi người dùng nêu — ngành/khối, bậc/hệ đào tạo (chính quy, cao học...), cơ sở/phân hiệu (Quảng Ngãi, Thanh Hóa...), khóa/năm học — PHẢI được chép vào MỌI câu hỏi con, dù người dùng chỉ nói một lần, ở đầu hay cuối tin nhắn. Chỉ bỏ khi chính câu hỏi con đó nêu một giá trị khác thay thế (VD câu so sánh hai ngành: mỗi câu hỏi con giữ ngành của nó; vế sau nói rõ "ở trụ sở chính").
+  - Thừa một tiêu chí phạm vi chỉ làm tìm kiếm hẹp hơn một chút; THIẾU tiêu chí làm tìm ra số liệu của ngành/hệ/cơ sở khác. Không chắc tiêu chí có áp dụng cho vế đó không → vẫn chép.
+  - KHÔNG LÀM RƠI TỪ KHÓA: giữ nguyên chữ người dùng dùng cho chủ đề và tiêu chí, không thay bằng từ đồng nghĩa.
   - Trả về JSON chứa mảng `sub_queries: List[str]`.
   - CHỈ trả về đúng một object JSON, không thêm chữ, giải thích hay markdown code fence.
   - Nếu tin nhắn có kèm lịch sử hội thoại, chỉ dùng lịch sử để hiểu câu hỏi nối tiếp; không tạo câu hỏi con cho nội dung của lượt trước.
@@ -25,10 +28,34 @@ template: |
     ]
   }
 
+  Input: "địa chỉ cơ sở Quảng Ngãi và học phí đại học chính quy"
+  Output: {
+    "sub_queries": [
+      "Địa chỉ của cơ sở Quảng Ngãi",
+      "Định mức học phí đại học chính quy tại cơ sở Quảng Ngãi"
+    ]
+  }
+
+  Input: "Chương trình khung ngành công nghệ thông tin và học phí. chương trình chính quy"
+  Output: {
+    "sub_queries": [
+      "Chương trình khung ngành Công nghệ thông tin hệ chính quy",
+      "Định mức học phí ngành Công nghệ thông tin hệ chính quy"
+    ]
+  }
+
+  Input: "Học phí khóa 2024 hệ chính quy ngành CNTT và Kế toán chênh nhau bao nhiêu?"
+  Output: {
+    "sub_queries": [
+      "Định mức học phí hệ chính quy khóa 2024 ngành Công nghệ thông tin",
+      "Định mức học phí hệ chính quy khóa 2024 ngành Kế toán"
+    ]
+  }
+
   Input: "Học phí ngành CNTT bao nhiêu, với lại điều kiện học bổng là gì?"
   Output: {
     "sub_queries": [
       "Định mức học phí ngành Công nghệ thông tin theo khóa học",
-      "Điều kiện xét cấp học bổng"
+      "Điều kiện xét cấp học bổng ngành Công nghệ thông tin"
     ]
   }

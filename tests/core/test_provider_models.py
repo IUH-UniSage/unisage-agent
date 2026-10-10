@@ -7,28 +7,31 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from openai import AsyncOpenAI
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.zai import ZaiModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.llm.provider_models import UnsupportedProviderError, build_model
+from app.core.llm.rate_limited_model import RateLimitedModel
 from app.core.registry.model_registry import CredentialConfig
 from app.core.security.ssrf_guard import PinnedNetworkBackend
 
 
 def _credential(**overrides: object) -> CredentialConfig:
-    defaults: dict[str, object] = dict(
-        id="11111111-1111-1111-1111-111111111111",
-        revision=3,
-        source_type="CLOUD_API",
-        provider="openai",
-        model_name="gpt-4o-mini",
-        api_base_url="https://api.openai.com/v1",
-        priority=1,
-        max_rpm=500,
-        api_key="sk-real-secret-value",
-    )
+    defaults: dict[str, object] = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "revision": 3,
+        "source_type": "CLOUD_API",
+        "provider": "openai",
+        "model_name": "gpt-4o-mini",
+        "api_base_url": "https://api.openai.com/v1",
+        "priority": 1,
+        "max_rpm": 500,
+        "api_key": "sk-real-secret-value",
+    }
     defaults.update(overrides)
     return CredentialConfig(**defaults)  # type: ignore[arg-type]
 
@@ -36,8 +39,24 @@ def _credential(**overrides: object) -> CredentialConfig:
 def test_openai_provider_builds_openai_chat_model() -> None:
     model = build_model(_credential())
 
-    assert isinstance(model, OpenAIChatModel)
+    assert isinstance(model, RateLimitedModel)
+    assert isinstance(model.wrapped, OpenAIChatModel)
     assert model.model_name == "gpt-4o-mini"
+
+
+def test_credential_without_max_rpm_builds_the_native_model_unwrapped() -> None:
+    model = build_model(_credential(max_rpm=None))
+
+    assert isinstance(model, OpenAIChatModel)
+
+
+def test_rate_limited_model_carries_its_credential() -> None:
+    credential = _credential()
+
+    model = build_model(credential)
+
+    assert isinstance(model, RateLimitedModel)
+    assert model.credential is credential
 
 
 def test_self_hosted_uses_openai_compatible_transport_regardless_of_provider_string() -> None:
@@ -50,7 +69,8 @@ def test_self_hosted_uses_openai_compatible_transport_regardless_of_provider_str
 
     model = build_model(credential)
 
-    assert isinstance(model, OpenAIChatModel)
+    assert isinstance(model, RateLimitedModel)
+    assert isinstance(model.wrapped, OpenAIChatModel)
     assert model.model_name == "llama-3-70b"
 
 
@@ -125,7 +145,8 @@ def test_google_provider_builds_google_model() -> None:
 
     model = build_model(credential)
 
-    assert isinstance(model, GoogleModel)
+    assert isinstance(model, RateLimitedModel)
+    assert isinstance(model.wrapped, GoogleModel)
     assert isinstance(model.provider, GoogleProvider)
     assert model.model_name == "gemini-2.0-flash"
 
@@ -149,3 +170,49 @@ def test_google_provider_http_client_reaches_pinned_backend(
         "GoogleProvider's http_client never reached PinnedNetworkBackend.connect_tcp"
     )
     assert all(host == "generativelanguage.googleapis.com" for host, _ in connect_tcp_spy)
+
+
+def _zai_credential(**overrides: object) -> CredentialConfig:
+    values: dict[str, object] = {
+        "provider": "zai",
+        "model_name": "glm-4.7-flash",
+        "api_base_url": "https://api.z.ai/api/paas/v4",
+        "max_rpm": None,
+    }
+    values.update(overrides)
+    return _credential(**values)
+
+
+def test_zai_provider_builds_zai_model_on_the_credential_base_url() -> None:
+    model = build_model(_zai_credential(api_base_url="https://open.bigmodel.cn/api/paas/v4"))
+
+    assert isinstance(model, ZaiModel)
+    assert model.model_name == "glm-4.7-flash"
+    assert str(model.client.base_url) == "https://open.bigmodel.cn/api/paas/v4/"
+
+
+def test_zai_without_base_url_uses_the_default_endpoint() -> None:
+    model = build_model(_zai_credential(api_base_url=None))
+
+    assert isinstance(model, ZaiModel)
+    assert str(model.client.base_url) == "https://api.z.ai/api/paas/v4/"
+
+
+def test_max_concurrency_alone_wraps_the_model() -> None:
+    model = build_model(_zai_credential(max_concurrency=1))
+
+    assert isinstance(model, RateLimitedModel)
+    assert isinstance(model.wrapped, ZaiModel)
+
+
+def test_zai_http_client_reaches_pinned_backend(
+    connect_tcp_spy: list[tuple[str, int]],
+) -> None:
+    model = build_model(_zai_credential())
+    assert isinstance(model, ZaiModel)
+    client: AsyncOpenAI = model.client
+
+    _drive_one_request(client._client)
+
+    assert connect_tcp_spy, "ZaiProvider's http_client never reached PinnedNetworkBackend"
+    assert all(host == "api.z.ai" for host, _ in connect_tcp_spy)

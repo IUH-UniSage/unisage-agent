@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
+from pydantic_ai.models import Model
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors.exceptions import (
@@ -10,8 +11,17 @@ from app.core.errors.exceptions import (
     InvalidTrustedContextException,
     MissingTrustedContextException,
 )
-from app.core.llm.provider_models import build_model
-from app.core.registry.model_registry import get_current_snapshot, require_top_priority_credential
+from app.core.errors.llm_failure import LLMCallException, describe_llm_failure
+from app.core.llm.provider_models import UnsupportedProviderError, build_model
+from app.core.registry.errors import NoAvailableCredentialError
+from app.core.registry.model_registry import (
+    CredentialConfig,
+    ModelRegistryError,
+    active_credentials_for,
+    get_current_snapshot,
+    require_top_priority_credential,
+)
+from app.core.registry.model_router import get_default_router
 from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
@@ -44,20 +54,53 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return async_session_factory
 
 
-def get_graph_models() -> GraphModels:
+async def _starting_credential(purpose: str) -> CredentialConfig:
+    """The credential a request starts on: the best one `model_router` is not cooling down
+    (or skipping because its model is failing), so a new request does not open on the key the
+    previous one just failed over from. Raises `ModelRegistryError` when `purpose` has no
+    ACTIVE credential at all; when every one is cooling down, the top-priority one is used
+    anyway - the request still gets its shot, exactly as before the router was consulted."""
+
+    top_priority = require_top_priority_credential(purpose)
+    try:
+        return await get_default_router().get_next_credential(purpose)
+    except NoAvailableCredentialError:
+        return top_priority
+
+
+async def get_graph_models() -> GraphModels:
     """FastAPI dependency: the 3 LLM-backed nodes' models for the streaming graph.
 
     Overridden in tests with `pydantic_ai.models.function.FunctionModel` doubles (see
-    tests/llm_mocks.py). Production builds from the highest-priority ACTIVE CHAT credential in
-    the snapshot `init_model_registry()` already loaded at startup (plan.md "Cutover khỏi cấu
-    hình `.env` tĩnh") — no failover yet (Task 5's explicit scope), no re-fetch here (hot-reload
-    is Task 7), and never a `.env` fallback if the snapshot has no CHAT credential: that raises,
-    it does not paper over the gap.
+    tests/llm_mocks.py). Production builds from the CHAT credential `_starting_credential` picks
+    out of the snapshot `init_model_registry()` already loaded at startup (plan.md "Cutover khỏi
+    cấu hình `.env` tĩnh") - never a `.env` fallback if the snapshot has no CHAT credential: that
+    raises, it does not paper over the gap.
     """
 
-    credential = require_top_priority_credential("CHAT")
-    model = build_model(credential)
+    try:
+        credential = await _starting_credential("CHAT")
+        model = build_model(credential)
+    except (ModelRegistryError, UnsupportedProviderError) as exc:
+        # Raised before the SSE stream exists, so this is the client's only chance to
+        # learn why chat is unusable ("no CHAT credential", "unsupported provider")
+        # instead of a generic 500.
+        raise LLMCallException(describe_llm_failure(exc, purpose="CHAT")) from exc
     snapshot = get_current_snapshot()
+
+    # LLMRerankNode runs on the RERANK model, or on EXTRACTION while no RERANK row is
+    # configured. Missing both must not block chat: the node is skipped and AI admins
+    # are told why.
+    rerank_purpose = "RERANK" if active_credentials_for("RERANK") else "EXTRACTION"
+    rerank_model: Model | None = None
+    rerank_credential: CredentialConfig | None = None
+    rerank_unavailable: str | None = None
+    try:
+        rerank_credential = await _starting_credential(rerank_purpose)
+        rerank_model = build_model(rerank_credential)
+    except (ModelRegistryError, UnsupportedProviderError) as exc:
+        rerank_credential = None
+        rerank_unavailable = describe_llm_failure(exc, purpose=rerank_purpose).message
 
     return GraphModels(
         classification=model,
@@ -66,6 +109,10 @@ def get_graph_models() -> GraphModels:
         retrieval=RetrievalService(),
         generation_credential=credential,
         snapshot_version=snapshot.version if snapshot is not None else None,
+        rerank=rerank_model,
+        rerank_credential=rerank_credential,
+        rerank_purpose=rerank_purpose,
+        rerank_unavailable=rerank_unavailable,
     )
 
 

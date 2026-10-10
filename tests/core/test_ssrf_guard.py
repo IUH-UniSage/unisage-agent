@@ -67,7 +67,14 @@ class _FakeDelegate(httpcore.AsyncNetworkBackend):
     def __init__(self) -> None:
         self.connect_calls: list[tuple[str, int]] = []
 
-    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+    async def connect_tcp(
+        self,
+        host,
+        port,
+        timeout=None,  # noqa: ASYNC109 - mirrors httpcore's AsyncNetworkBackend
+        local_address=None,
+        socket_options=None,
+    ):
         self.connect_calls.append((host, port))
         raise RuntimeError("no real socket in this test — call recorded, that's enough")
 

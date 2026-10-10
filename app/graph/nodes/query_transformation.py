@@ -25,6 +25,7 @@ from app.graph.streaming import (
     AttemptRecorder,
     BudgetContext,
     FailoverCallback,
+    auxiliary_model_settings,
     run_agent_text_with_failover,
 )
 from app.rag.prompting import append_recent_history, get_templates
@@ -44,11 +45,19 @@ class SubQuery:
 
 
 def build_query_transformation_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, system_prompt=get_templates().agent_hyde_generator)
+    return Agent(
+        model=model,
+        system_prompt=get_templates().agent_hyde_generator,
+        model_settings=auxiliary_model_settings(model),
+    )
 
 
 def build_decomposer_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, system_prompt=get_templates().agent_multi_query_decomposer)
+    return Agent(
+        model=model,
+        system_prompt=get_templates().agent_multi_query_decomposer,
+        model_settings=auxiliary_model_settings(model),
+    )
 
 
 def _fold_confirmed_metadata_into_query(user_query: str, confirmed_metadata: dict[str, str]) -> str:
@@ -92,6 +101,7 @@ async def transform_query(
         on_failover=on_failover,
         on_attempt=on_attempt,
         budget=budget,
+        timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
     )
 
 
@@ -150,6 +160,7 @@ async def decompose_query(
         on_failover=on_failover,
         on_attempt=on_attempt,
         budget=budget,
+        timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
     )
     return _parse_sub_queries(output)
 
@@ -172,6 +183,13 @@ async def _transform_task(
     on_attempt: AttemptRecorder | None,
     budget: BudgetContext | None,
 ) -> list[SubQuery]:
+    # Classification never saw confirmed metadata, so its text can't be reused then.
+    if not confirmed_metadata:
+        if mode == "MULTI" and task.sub_queries:
+            return [SubQuery(question=query, retrieval_text=query) for query in task.sub_queries]
+        if mode == "SINGLE" and task.hyde_text:
+            return [SubQuery(question=task.query, retrieval_text=task.hyde_text)]
+
     if mode == "MULTI" and decomposer_agent is not None:
         sub_queries = await decompose_query(
             decomposer_agent,

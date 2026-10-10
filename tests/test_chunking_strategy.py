@@ -31,7 +31,6 @@ async def test_dispatch_reaches_text_based_strategies_on_a_pdf(
 async def test_dispatch_reaches_semantic_strategy_without_live_openai_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unittest.mock import AsyncMock
 
     from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 

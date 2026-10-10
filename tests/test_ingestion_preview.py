@@ -78,3 +78,60 @@ def test_preview_returns_403_when_department_not_granted(client: TestClient) -> 
     )
 
     assert response.status_code == 403
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_preview_returns_422_for_non_utf8_text(
+    mock_get_object_bytes: MagicMock, client: TestClient
+) -> None:
+    mock_get_object_bytes.return_value = "điểm".encode("utf-16")
+
+    response = client.post(
+        "/api/v1/ingestion/preview",
+        json={"department_id": "CNTT", "object_key": "docs/handbook.txt"},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == 4222
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_preview_reports_storage_failure_specifically(
+    mock_get_object_bytes: MagicMock, client: TestClient
+) -> None:
+    from app.core.errors.exceptions import StorageUnavailableException
+
+    mock_get_object_bytes.side_effect = StorageUnavailableException("S3 AccessDenied")
+
+    response = client.post(
+        "/api/v1/ingestion/preview",
+        json={"department_id": "CNTT", "object_key": "docs/handbook.txt"},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == 5018
+    assert "AccessDenied" in response.json()["message"]
+
+
+@patch("app.api.v1.ingestion.minio_client.get_object_bytes")
+def test_infrastructure_failures_name_the_component(
+    mock_get_object_bytes: MagicMock, client: TestClient
+) -> None:
+    """A backing service failing (here Qdrant-style, via its own exception type) must say
+    which service, not a generic 500."""
+
+    from qdrant_client.http.exceptions import ResponseHandlingException
+
+    mock_get_object_bytes.side_effect = ResponseHandlingException(ConnectionError("down"))
+
+    response = client.post(
+        "/api/v1/ingestion/preview",
+        json={"department_id": "CNTT", "object_key": "docs/handbook.txt"},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == 5017
+    assert response.json()["errors"] == {"component": "qdrant"}

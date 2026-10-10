@@ -166,7 +166,7 @@ def test_multi_representation_call_site_uses_pinned_backend_async(
 def test_graph_model_call_site_uses_pinned_backend_async(
     async_connect_tcp_spy: list[tuple[str, int]],
 ) -> None:
-    graph_models = get_graph_models()
+    graph_models = asyncio.run(get_graph_models())
     # Reach through pydantic_ai's OpenAIChatModel -> OpenAIProvider -> AsyncOpenAI down to
     # the exact httpx.AsyncClient get_graph_models() built via build_provider_http_client()
     # - not a new one - and issue one real request through it, proving that object (not

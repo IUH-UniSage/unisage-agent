@@ -12,7 +12,7 @@ app/
 ├── api/          # FastAPI routes and dependency wiring
 ├── core/         # Settings and cross-cutting concerns
 ├── rag/          # Ingestion, chunking, embeddings, retrieval, reranking, generation
-├── graph/        # Pydantic Graph state and orchestration nodes
+├── graph/        # Chat orchestrator (`streaming_graph.py`, plain async) and its nodes
 ├── database/     # SQLAlchemy session, models, and repositories
 └── schemas/      # API and pipeline contracts
 ```
@@ -31,7 +31,7 @@ document ingestion, retrieval evaluation, and model configuration.
 
 - Use Python 3.12 syntax and strict type hints.
 - Keep request and response models in `app/schemas`.
-- Apply `user_faculty` and `user_level` metadata filtering before returning RAG chunks.
+- Apply the `department_access` permission filter (`build_access_filter`) before returning RAG chunks.
 - Keep provider-specific code inside its RAG stage.
 - Keep runtime text files UTF-8 encoded.
 - Do not commit `.env`, credentials, tokens, caches, or virtual environments.

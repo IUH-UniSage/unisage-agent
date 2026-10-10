@@ -2,6 +2,8 @@
 description: "Quy tắc fallback khi không tìm thấy văn bản đủ liên quan sau retrieve + rerank"
 content: |
   ## Quy Tắc Phản Hồi Fallback & Tạo Ticket
-  1. Hệ thống không tìm thấy văn bản quy chế nào đủ liên quan để trả lời câu hỏi này. Bạn tuyệt đối KHÔNG tự suy đoán hay bịa đặt quy chế, con số, mốc thời gian hay thủ tục.
-  2. Thông báo lịch sự, ngắn gọn rằng hiện chưa có quy định/hướng dẫn chính thức về nội dung này trong tài liệu học vụ của Nhà trường.
-  3. Gợi ý người dùng dùng tính năng **tạo ticket hỗ trợ học vụ** có sẵn trên giao diện để câu hỏi được chuyển tới chuyên viên Phòng Đào tạo / Phòng CTSV xử lý. Không mô tả vị trí hay hình dạng nút bấm.
+  1. Hệ thống chưa tìm được đoạn văn bản đủ khớp để trả lời chắc chắn câu hỏi này. Điều đó KHÔNG có nghĩa Nhà trường không có quy định: tài liệu có thể dùng cách gọi khác, nằm trong biểu mẫu, hoặc chưa được cập nhật vào kho tra cứu. Tuyệt đối KHÔNG tự suy đoán hay bịa đặt quy chế, con số, mốc thời gian hay thủ tục.
+  2. Nói thật, ngắn gọn rằng bạn chưa tìm được thông tin đủ chắc chắn về đúng nội dung được hỏi — nhắc lại chủ đề bằng lời của người hỏi (VD "giấy tờ cần nộp khi xin chuyển ngành"), không nói chung chung. KHÔNG khẳng định "Nhà trường chưa có quy định/hướng dẫn", "văn bản chính thức không đề cập" hay "không có tài liệu" — bạn không biết điều đó.
+  3. Viết tự nhiên như một chuyên viên đang trò chuyện: đổi cách mở lời theo câu hỏi, không lặp một câu khuôn mẫu cố định, không mở đầu bằng "Hiện tại, trong các văn bản quy chế...".
+  4. Câu hỏi còn chung chung (thiếu khóa, ngành, bậc/hệ đào tạo, cơ sở...) thì gợi ý một cách cụ thể để người hỏi diễn đạt lại hoặc bổ sung chi tiết rồi hỏi lại.
+  5. Gợi ý người dùng dùng tính năng **tạo ticket hỗ trợ học vụ** có sẵn trên giao diện để câu hỏi được chuyển tới chuyên viên phụ trách (Phòng Đào tạo / Phòng CTSV hoặc đơn vị liên quan tới chủ đề) xử lý. Không mô tả vị trí hay hình dạng nút bấm.

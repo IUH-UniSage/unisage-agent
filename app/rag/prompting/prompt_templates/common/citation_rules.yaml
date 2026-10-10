@@ -2,16 +2,17 @@
 description: "Quy tắc trích dẫn nguồn văn bản quy chế"
 content: |
   ## Quy Tắc Trích Dẫn Nguồn Văn Bản (Citation Engine Rules)
-  1. BẮT BUỘC: mọi câu, dòng danh sách hoặc dòng/ô bảng có con số, mức phí, điều kiện, mốc thời gian lấy từ `<academic_context>` phải kèm chỉ số trích dẫn `[1]`, `[2]` của đúng tài liệu chứa thông tin đó (chỉ số nằm ở đầu mỗi tài liệu trong `<academic_context>`). Câu trả lời dựa vào văn bản mà không có chỉ số nào là SAI.
+  Mọi ví dụ trong phần này chỉ minh hoạ CÁCH ĐẶT chỉ số; `X.XXX.XXX`/`Y.YYY.YYY` là chỗ trống, KHÔNG phải số liệu thật. TUYỆT ĐỐI không đưa số liệu, tên văn bản hay chỉ số nào từ ví dụ vào câu trả lời.
+  1. BẮT BUỘC: mọi câu, dòng danh sách hoặc dòng/ô bảng có con số, mức phí, điều kiện, mốc thời gian lấy từ `<academic_context>` hoặc `<websearch>` phải kèm chỉ số trích dẫn `[1]`, `[2]` của đúng tài liệu/trang chứa thông tin đó (chỉ số nằm ở đầu mỗi mục trong `<academic_context>` và `<websearch>`, đánh số liên tục qua cả hai khối). Câu trả lời dựa vào văn bản mà không có chỉ số nào là SAI.
   2. Đặt chỉ số ngay SAU câu hoặc đoạn dùng nguồn đó (trước dấu chấm câu cuối nếu có), để người đọc biết ý đó lấy từ đâu. Với danh sách, đặt chỉ số ở cuối từng mục; với bảng, xem quy tắc 3. Nhiều nguồn cho cùng một ý thì viết liền nhau: `[1][2]`.
-     - Đúng: `Mức thu học phí khối Công nghệ là 35.340.000 đồng/năm học [1].`
+     - Đúng: `Mức thu học phí khối Công nghệ là X.XXX.XXX đồng/năm học [1].`
      - Sai: bỏ hẳn chỉ số, hoặc chỉ ghi chỉ số dồn ở cuối câu trả lời.
   3. BẢNG MARKDOWN: chỉ số trích dẫn KHÔNG được bỏ qua bảng. MỖI hàng dữ liệu của bảng phải có chỉ số ở cuối ô số liệu (hoặc ô cuối cùng của hàng) của tài liệu chứa số liệu đó; hàng lấy từ tài liệu khác nhau thì mang chỉ số khác nhau. Bảng mà mọi hàng cùng một tài liệu vẫn phải ghi chỉ số ở từng hàng, không chỉ ghi một lần ở cuối bảng.
      - Đúng:
        `| Hệ Đào Tạo | Mức thu theo năm học |`
        `|---|---|`
-       `| Đại học chính quy | 38.350.000 [1] |`
-       `| Đại học chính quy tăng cường tiếng Anh | 48.000.000 [2] |`
+       `| Đại học chính quy | X.XXX.XXX [1] |`
+       `| Đại học chính quy tăng cường tiếng Anh | Y.YYY.YYY [2] |`
      - Sai: bảng đầy số liệu mà không hàng nào có `[n]`.
   4. TUYỆT ĐỐI KHÔNG viết phần liệt kê nguồn ở cuối câu trả lời (không có mục "Văn bản tham chiếu", không kèm dòng phân cách `---` hay biểu tượng 📌). KHÔNG tự viết lại tên văn bản, số quyết định hay số trang trong câu trả lời để làm nguồn: hệ thống tự hiển thị nguồn từ chỉ số `[n]` bạn đã ghi.
-  5. Tuyệt đối KHÔNG trích dẫn các tài liệu không tồn tại trong `<academic_context>`: chỉ dùng chỉ số `[n]` đang có trong đó, không tự đặt chỉ số mới. Ý nào không có căn cứ trong `<academic_context>` thì không gắn chỉ số.
+  5. Tuyệt đối KHÔNG trích dẫn các tài liệu không tồn tại trong `<academic_context>` hoặc `<websearch>`: chỉ dùng chỉ số `[n]` đang có trong đó, không tự đặt chỉ số mới. Ý nào không có căn cứ trong hai khối đó thì không gắn chỉ số.

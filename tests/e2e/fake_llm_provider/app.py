@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, Header, Request
@@ -29,7 +29,7 @@ from pydantic import BaseModel
 app = FastAPI(title="fake-llm-provider")
 
 
-class Mode(str, Enum):
+class Mode(StrEnum):
     OK = "ok"
     INVALID_KEY = "invalid_key"
     RATE_LIMITED = "rate_limited"

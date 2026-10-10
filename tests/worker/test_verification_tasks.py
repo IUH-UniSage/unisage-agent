@@ -307,7 +307,7 @@ def test_celery_task_takes_no_arguments() -> None:
     (or anything else) as an argument — claimed jobs must only ever exist in a local variable
     inside one task run, never on the broker."""
 
-    from app.worker.celery_app import verify_pending_credentials
+    from app.worker.tasks.periodic import verify_pending_credentials
 
     underlying = getattr(verify_pending_credentials, "run", verify_pending_credentials)
     signature = inspect.signature(underlying)
@@ -315,7 +315,7 @@ def test_celery_task_takes_no_arguments() -> None:
 
 
 def test_celery_task_ignores_its_result() -> None:
-    from app.worker.celery_app import verify_pending_credentials
+    from app.worker.tasks.periodic import verify_pending_credentials
 
     assert verify_pending_credentials.ignore_result is True
 

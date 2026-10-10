@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio.session import AsyncSession
 from app.api.deps import get_backend_java_client, get_graph_models, get_session_factory
 from app.core.config import settings
 from app.database.repositories.clarification_state import ClarificationStateRepository
+from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
@@ -56,7 +57,7 @@ _TRAINING_TYPE_ASK_FORM = (
 class _JavaBackend:
     """In-memory fake of backend-java's conversation/message store, with just
     enough state (a per-conversation message list) to answer
-    `GET /messages/conversation/{id}` truthfully across turns."""
+    `POST /messages/turn`'s context truthfully across turns."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -78,17 +79,31 @@ class _JavaBackend:
             conversation_id = request.url.path.rsplit("/", 1)[-1]
             return httpx.Response(200, json=self._history.get(conversation_id, []))
 
-        if request.method == "POST" and request.url.path == "/messages":
-            message_id = f"msg-{self._next_id}"
-            self._next_id += 1
-            record = {"id": message_id, **body}
-            self._history.setdefault(body["conversationId"], []).append(record)
-            return httpx.Response(201, json=record)
+        if request.method == "POST" and request.url.path == "/messages/turn":
+            history = self._history.setdefault(body["conversationId"], [])
+            context = list(history)
+            user = self._record("USER", body["content"], "COMPLETED")
+            assistant = self._record("ASSISTANT", "", "STREAMING")
+            history.extend([user, assistant])
+            return httpx.Response(
+                201,
+                json={
+                    "firstTurn": not context,
+                    "context": context,
+                    "userMessage": user,
+                    "assistantMessage": assistant,
+                },
+            )
 
         if request.method == "PATCH" and request.url.path.startswith("/messages/"):
             return httpx.Response(200, json={"status": body.get("status")})
 
         raise AssertionError(f"unexpected call {request.method} {request.url.path}")
+
+    def _record(self, role: str, content: str, status: str) -> dict[str, Any]:
+        record = {"id": f"msg-{self._next_id}", "role": role, "content": content, "status": status}
+        self._next_id += 1
+        return record
 
 
 @pytest.fixture(autouse=True)
@@ -231,7 +246,7 @@ async def test_guest_without_authorization_header_completes_full_round_trip(
     java = _JavaBackend()
     _install_java(java)
     # off_topic is the fully static, model-independent path (no `generation`
-    # call - see `OFF_TOPIC_TEMPLATE`). A general-knowledge question like this
+    # call - see `OFF_TOPIC_TEMPLATES`). A general-knowledge question like this
     # one is classified as off_topic (see message_classification.yaml).
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
         classification=make_classification_llm_model("off_topic"),
@@ -248,7 +263,6 @@ async def test_guest_without_authorization_header_completes_full_round_trip(
         assert response.status_code == 200
         body = "".join(response.iter_text())
 
-    # body is SSE `data: "<json-escaped-string>"`, so assert on a
-    # newline-free fragment rather than the raw (multi-line) template.
-    assert "chỉ có thể hỗ trợ các câu hỏi liên quan đến học vụ" in body
+    # body is SSE `data: "<json-escaped-string>"`; the template is picked at random.
+    assert any(json.dumps(template, ensure_ascii=False) in body for template in OFF_TOPIC_TEMPLATES)
     assert all(call["authorization"] is None for call in java.calls)
