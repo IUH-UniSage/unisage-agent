@@ -7,6 +7,7 @@ import pytest
 
 from evals.crawl.download import DownloadState, write_csv
 from evals.ingest import (
+    ApiError,
     Labels,
     Run,
     UniSageClient,
@@ -154,3 +155,18 @@ def test_pick_rows_skips_finished_and_filters_by_only(tmp_path: Path) -> None:
     state = DownloadState(tmp_path)
     assert [row["file_id"] for row in pick_rows(state, None, None)] == ["a1", "d4"]
     assert [row["file_id"] for row in pick_rows(state, only, None)] == ["d4"]
+
+
+def test_api_error_names_the_call_and_keeps_a_spring_error_body() -> None:
+    def spring_500(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500, json={"timestamp": "t", "status": 500, "error": "Internal Server Error"}
+        )
+
+    http = httpx.Client(base_url="http://gw", transport=httpx.MockTransport(spring_500))
+    with pytest.raises(ApiError) as caught:
+        UniSageClient(http).create_document({}, "a.pdf", b"x")
+
+    message = str(caught.value)
+    assert message.startswith("POST /api/v1/master/documents -> 500")
+    assert "Internal Server Error" in message

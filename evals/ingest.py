@@ -46,18 +46,30 @@ TERMINAL_TASK_STATES = {"SUCCESS", "FAILURE", "PARTIAL_FAILURE", "REVOKED"}
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: int | None, message: str) -> None:
-        super().__init__(f"{status} {code}: {message}")
+    """A gateway call that did not return `code == 1000`. The message names the call and
+    carries the response body as-is (a Spring/gateway error page has no `code`/`message`)."""
+
+    def __init__(self, response: httpx.Response, code: int | None, detail: str) -> None:
+        request = response.request
+        super().__init__(
+            f"{request.method} {request.url.path} -> {response.status_code} code={code}: {detail}"
+        )
         self.code = code
+        self.status = response.status_code
 
 
 def _data(response: httpx.Response) -> Any:
     try:
         body = response.json()
     except ValueError:
-        raise ApiError(response.status_code, None, response.text[:200]) from None
+        raise ApiError(response, None, response.text[:500] or "<empty body>") from None
+    if not isinstance(body, dict):
+        raise ApiError(response, None, str(body)[:500])
     if response.is_error or body.get("code") != SUCCESS_CODE:
-        raise ApiError(response.status_code, body.get("code"), str(body.get("message"))[:200])
+        detail = body.get("message") or body.get("error") or body
+        errors = body.get("errors")
+        text = f"{detail}" + (f" errors={errors}" if errors else "")
+        raise ApiError(response, body.get("code"), text[:500])
     return body.get("data")
 
 
