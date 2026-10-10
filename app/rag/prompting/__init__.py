@@ -186,6 +186,7 @@ def build_calculation_llm_prompt(
     return templates.chat_calculation_llm.format(
         header=templates.header,
         response_style=templates.response_style,
+        citation_rules=templates.citation_rules,
         builtin_rules=builtin_rules,
         documents=documents or "(không có tài liệu)",
         known_values=known_values,

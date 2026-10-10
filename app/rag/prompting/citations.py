@@ -58,20 +58,32 @@ def build_citations(
         if index > len(chunks):
             citations.append(_web_citation(index, web_results[index - len(chunks) - 1]))
             continue
-        chunk = chunks[index - 1]
-        document_id = chunk.metadata.get("document_id")
-        citations.append(
-            {
-                "index": index,
-                "documentId": str(document_id) if document_id else None,
-                "title": source_title(chunk.source),
-                "section": chunk.heading_path[-1] if chunk.heading_path else None,
-                "pageStart": chunk.page_start,
-                "pageEnd": chunk.page_end,
-                "sourceType": chunk.source_type,
-            }
-        )
+        citations.append(chunk_citation(index, chunks[index - 1]))
     return citations
+
+
+def chunk_citation(index: int, chunk: RetrievedChunk) -> dict[str, Any]:
+    document_id = chunk.metadata.get("document_id")
+    return {
+        "index": index,
+        "documentId": str(document_id) if document_id else None,
+        "title": source_title(chunk.source),
+        "section": chunk.heading_path[-1] if chunk.heading_path else None,
+        "pageStart": chunk.page_start,
+        "pageEnd": chunk.page_end,
+        "sourceType": chunk.source_type,
+    }
+
+
+def renumber_markers(response_text: str, mapping: dict[int, int]) -> str:
+    """Rewrite `[n]` / `[n, m]` markers through `mapping`; a marker of an index the
+    mapping does not know (one the model invented) is dropped."""
+
+    def replace(match: re.Match[str]) -> str:
+        indexes = [int(raw) for raw in match.group(1).split(",")]
+        return "".join(f"[{mapping[index]}]" for index in indexes if index in mapping)
+
+    return _MARKER_PATTERN.sub(replace, response_text)
 
 
 def _web_citation(index: int, result: WebSearchResult) -> dict[str, Any]:

@@ -14,7 +14,6 @@ Two ways to compute (docs/specs/SPEC-calculation-node.md):
 
 import json
 import logging
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -50,6 +49,7 @@ from app.graph.streaming import (
 )
 from app.graph.streaming_state import GraphModels
 from app.rag.prompting import build_calculation_llm_prompt, get_templates
+from app.rag.prompting.citations import cited_indexes
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import CalculationPlan, LastCalculation
 from app.schemas.retrieval import RetrievedChunk
@@ -61,7 +61,6 @@ BUILTIN_IDS: frozenset[str] = frozenset(FORMULAS)
 UnresolvedReason = Literal["llm_disabled", "llm_failed"]
 # Documents handed to the LLM for one calculation.
 LLM_CHUNKS_LIMIT = 5
-_CITATION = re.compile(r"\[C(\d+)\]")
 
 
 @dataclass(frozen=True)
@@ -84,7 +83,8 @@ class LlmAnswered:
     text: str
     plan: CalculationPlan
     known_params: dict[str, JsonValue]
-    # (the [Cn] number the LLM saw, chunk) for every document it cited.
+    # (the [n] marker in `text`, chunk) for every document it cited, in first-cited
+    # order; renumbered for the whole message before it is shown.
     sources: list[tuple[int, RetrievedChunk]] = field(default_factory=list)
 
 
@@ -297,7 +297,7 @@ def build_calculation_llm_agent(model: Model | str) -> Agent[None, str]:
 
 def _documents(chunks: Sequence[RetrievedChunk]) -> str:
     return "\n\n".join(
-        f"[C{index}] (nguồn: {chunk.source})\n{chunk.content}"
+        f"[{index}] (nguồn: {chunk.source})\n{chunk.content}"
         for index, chunk in enumerate(chunks, start=1)
     )
 
@@ -369,8 +369,7 @@ def llm_questions(
 
 
 def _cited(text: str, chunks: Sequence[RetrievedChunk]) -> list[tuple[int, RetrievedChunk]]:
-    indexes = sorted({int(match) for match in _CITATION.findall(text)})
-    return [(index, chunks[index - 1]) for index in indexes if 1 <= index <= len(chunks)]
+    return [(index, chunks[index - 1]) for index in cited_indexes(text, len(chunks))]
 
 
 async def llm_outcome(

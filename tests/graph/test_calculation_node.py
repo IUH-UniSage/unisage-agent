@@ -13,7 +13,7 @@ from app.calculation.formulas import TIMES, param_spec
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
-from app.graph.calculation_turn import LLM_NOTICE, NEEDS_INPUT_LEAD
+from app.graph.calculation_turn import LLM_NOTICE, NEEDS_INPUT_LEAD, number_citations
 from app.graph.clarification_answers import validate_answers
 from app.graph.clarification_round import (
     TaskQuestions,
@@ -21,7 +21,7 @@ from app.graph.clarification_round import (
     advisory_task,
     build_round,
 )
-from app.graph.nodes.calculation import question_for
+from app.graph.nodes.calculation import LlmAnswered, TaskOutcome, question_for
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
@@ -669,7 +669,9 @@ async def test_llm_asks_missing_numbers_on_the_panel_and_resume_skips_the_classi
         pending_round=first.pending_round,
         answers=validate_answers(first.pending_round.panel, submit),
     )
-    generation, prompts = _recording_model(f"Học phí = 20 {TIMES} 420.000 = **8.400.000đ** [C1]")
+    generation, prompts = _recording_model(
+        f"Đơn giá theo quy định [1][7]. Học phí = 20 {TIMES} 420.000 = **8.400.000đ**"
+    )
     second = await run_graph(
         _input("Đơn giá 420000", resume=resume),
         GraphModels(
@@ -684,5 +686,94 @@ async def test_llm_asks_missing_numbers_on_the_panel_and_resume_skips_the_classi
     )
     assert '"so_tin_chi": 20' in prompts[0] and '"don_gia": "420000"' in prompts[0]
     assert "8.400.000đ" in second.response_text
-    assert "Nguồn:" in second.response_text and "[C1]" in second.response_text
+    assert "[1]" in prompts[0] and "<academic_context>" in prompts[0]
+    # Sources are the [n] markers the client links, not a "Nguồn:" list; a marker of a
+    # document the LLM never saw ([7]) is dropped.
+    assert "Nguồn:" not in second.response_text
+    assert "theo quy định [1]." in second.response_text
+    assert [(c["index"], c["title"]) for c in second.citations] == [(1, "s")]
+    assert second.calculation_traces[0]["trace"]["sources"][0]["ref"] == "[1]"
     assert second.pending_round is None
+
+
+@pytest.mark.asyncio
+async def test_a_choice_answer_reaches_the_llm_as_its_label_so_it_is_not_asked_again() -> None:
+    query = "tính điểm xét tuyển giúp tôi"
+    ask = (
+        "Bạn xét tuyển theo phương thức nào?\n\n```json\n"
+        + json.dumps(
+            {
+                "type": "ask_user_form",
+                "fields": [
+                    {
+                        "field": "phuong_thuc",
+                        "label": "Phương thức xét tuyển",
+                        "kind": "choice",
+                        "options": [
+                            {"id": "xt1", "label": "XT1 (Học bạ)"},
+                            {"id": "xt3", "label": "XT3 (Kết quả thi ĐGNL)"},
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n```"
+    )
+    generation, _ = _recording_model(ask)
+    first = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "llm", "params": {}, "retrieval_query": None},
+            ),
+            query_transformation=_echo_model(),
+            generation=generation,
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert first.pending_round is not None
+    [question] = first.pending_round.panel.questions
+    xt3 = next(option for option in question.options if option.label.startswith("XT3"))
+    submit = ClarificationSubmit(
+        action="submit",
+        panel_id=first.pending_round.panel.panel_id,
+        answers=[Answer(question_id=question.id, option_id=xt3.id)],
+    )
+    resume = ResumeInput(
+        pending_round=first.pending_round,
+        answers=validate_answers(first.pending_round.panel, submit),
+    )
+    generation, prompts = _recording_model("Mình tính theo XT3.")
+    await run_graph(
+        _input("Phương thức xét tuyển: XT3", resume=resume),
+        GraphModels(
+            classification=_scripted(),
+            query_transformation=_echo_model(),
+            generation=generation,
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert '"phuong_thuc": "XT3 (Kết quả thi ĐGNL)"' in prompts[0]
+
+
+def test_llm_citations_are_numbered_after_the_advisory_sources() -> None:
+    other = RetrievedChunk(chunk_id="c2", content="Đơn giá", source="t", score=0.8)
+    plan = CalculationPlan(formula_id="llm", retrieval_query="học phí")
+    outcomes: list[TaskOutcome] = [
+        LlmAnswered("T1", "q1", "A [2] rồi B [1, 2]", plan, {}, [(2, other), (1, _CHUNK)]),
+        LlmAnswered("T2", "q2", "C [1]", plan, {}, [(1, _CHUNK)]),
+    ]
+    numbered, citations = number_citations(outcomes, first_index=4)
+    assert [o.text for o in numbered if isinstance(o, LlmAnswered)] == [
+        "A [4] rồi B [5][4]",
+        "C [6]",
+    ]
+    assert [(c["index"], c["title"]) for c in citations] == [(4, "t"), (5, "s"), (6, "s")]

@@ -16,6 +16,7 @@ mocks.
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
+from typing import Any
 
 from pydantic import JsonValue
 from pydantic_ai.models import Model
@@ -30,6 +31,7 @@ from app.graph.calculation_turn import (
     calculation_titles,
     commentary,
     needs_input_parts,
+    number_citations,
     render_outcomes,
     trace_items,
 )
@@ -251,7 +253,14 @@ async def _run_resume(
     answers_by_task: dict[str, dict[str, JsonValue]] = {}
     for answer in resume.answers.values():
         question = answer.question
-        answers_by_task.setdefault(question.task_id, {})[question.field] = answer.value
+        # A calculation's choice goes on as its label: the LLM never saw the "o1".."o12"
+        # ids the panel gave its options, so an id alone would make it ask again.
+        value = (
+            answer.display
+            if question.origin == "calculation" and question.kind == "choice"
+            else answer.value
+        )
+        answers_by_task.setdefault(question.task_id, {})[question.field] = value
         if question.origin == "advisory" and isinstance(answer.value, str):
             confirmed_metadata[question.field] = answer.value
 
@@ -392,10 +401,13 @@ async def _turn_with_calculations(
 
     outcomes: list[TaskOutcome] = []
     shown: list[str] = []
+    calculation_citations: list[dict[str, Any]] = []
 
-    async def show_calculations() -> list[str]:
+    async def show_calculations(first_citation: int = 1) -> list[str]:
         if calculations is not None:
-            outcomes.extend(await calculations)
+            numbered, cited = number_citations(await calculations, first_citation)
+            outcomes.extend(numbered)
+            calculation_citations.extend(cited)
         text = render_outcomes(outcomes)
         if text:
             text += "\n\n" if advisory is not None else ""
@@ -417,7 +429,11 @@ async def _turn_with_calculations(
                 budget=budget,
                 before_generation=show_calculations,
             )
-            output = replace(output, response_text="".join(shown) + output.response_text)
+            output = replace(
+                output,
+                response_text="".join(shown) + output.response_text,
+                citations=output.citations + calculation_citations,
+            )
         else:
             await show_calculations()
             text = "".join(shown)
@@ -428,7 +444,11 @@ async def _turn_with_calculations(
                     note = f"\n\n{note}"
                     await token_sink(note)
                     text += note
-            output = GraphOutput(response_text=text, confirmed_metadata=confirmed_metadata)
+            output = GraphOutput(
+                response_text=text,
+                confirmed_metadata=confirmed_metadata,
+                citations=calculation_citations,
+            )
     finally:
         if calculations is not None and not calculations.done():
             calculations.cancel()
@@ -489,7 +509,8 @@ async def _run_advisory_flow(
     advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
     question: str | None = None,
     budget: BudgetContext | None = None,
-    before_generation: Callable[[], Awaitable[list[str]]] | None = None,
+    # Called with the first citation index the advisory answer leaves free.
+    before_generation: Callable[[int], Awaitable[list[str]]] | None = None,
 ) -> GraphOutput:
     """Advisory branch: query transformation → retrieval → rerank → web search
     for the sub-queries rerank left empty → generation (or ticket fallback
@@ -594,7 +615,11 @@ async def _run_advisory_flow(
             trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
 
     # Barrier: the calculation blocks go out before any advisory token.
-    calculation_titles_shown = await before_generation() if before_generation else []
+    calculation_titles_shown = (
+        await before_generation(len(rerank_result.chunks) + len(web_results) + 1)
+        if before_generation
+        else []
+    )
 
     if not rerank_result.has_valid_context and not web_results:
         # TicketFallbackNode (streaming).

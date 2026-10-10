@@ -11,8 +11,9 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from pydantic import JsonValue
 from pydantic_ai import Agent
@@ -33,6 +34,7 @@ from app.graph.nodes.calculation import (
 )
 from app.graph.streaming import generation_model_settings, run_agent_text_with_failover
 from app.rag.prompting import build_calculation_commentary_prompt, get_templates
+from app.rag.prompting.citations import chunk_citation, renumber_markers
 from app.schemas.clarification import PendingCalculationTask
 from app.schemas.retrieval import RetrievedChunk
 
@@ -59,24 +61,42 @@ class CalculationTask:
 # ---------------------------------------------------------------------------
 
 
-def _source_line(chunk: RetrievedChunk, index: int) -> str:
-    heading = _HEADING_SEPARATOR.join(chunk.heading_path)
-    return f"- [C{index}] {chunk.source}" + (f" - {heading}" if heading else "")
+def number_citations(
+    outcomes: Sequence[TaskOutcome], first_index: int
+) -> tuple[list[TaskOutcome], list[dict[str, Any]]]:
+    """Give every document an LLM calculation cited one `[n]` for the whole message,
+    from `first_index` on (the advisory answer of a mixed turn keeps 1..first_index-1),
+    and the `citations` entries the client turns those markers into links with."""
+
+    numbered: list[TaskOutcome] = []
+    citations: list[dict[str, Any]] = []
+    next_index = first_index
+    for outcome in outcomes:
+        if not isinstance(outcome, LlmAnswered):
+            numbered.append(outcome)
+            continue
+        mapping: dict[int, int] = {}
+        sources: list[tuple[int, RetrievedChunk]] = []
+        for local, chunk in outcome.sources:
+            mapping[local] = next_index
+            sources.append((next_index, chunk))
+            citations.append(chunk_citation(next_index, chunk))
+            next_index += 1
+        numbered.append(
+            replace(outcome, text=renumber_markers(outcome.text, mapping), sources=sources)
+        )
+    return numbered, citations
 
 
 def render_outcome(outcome: TaskOutcome) -> str:
     """Markdown for one task; a task that needs input is asked on the panel (only its
-    own lead, if any, is shown here)."""
+    own lead, if any, is shown here). An LLM calculation's sources are its `[n]`
+    markers, which the client links through the message's `citations`."""
 
     if isinstance(outcome, Computed):
         return render_markdown(outcome.result)
     if isinstance(outcome, LlmAnswered):
-        lines = [f"**{LLM_NOTICE}**", "", outcome.text]
-        if outcome.sources:
-            # Numbered as the LLM saw them, so [C2] in the text matches its line here.
-            lines += ["", "Nguồn:"]
-            lines += [_source_line(chunk, index) for index, chunk in outcome.sources]
-        return "\n".join(lines)
+        return f"**{LLM_NOTICE}**\n\n{outcome.text}"
     if isinstance(outcome, Unresolved):
         return UNRESOLVED_MESSAGES[outcome.reason]
     return outcome.lead or ""
@@ -243,7 +263,7 @@ def _mode(outcome: TaskOutcome) -> str:
 
 def _chunk_trace(index: int, chunk: RetrievedChunk) -> dict[str, JsonValue]:
     return {
-        "ref": f"C{index}",
+        "ref": f"[{index}]",
         "chunk_id": chunk.chunk_id,
         "document_id": str(chunk.metadata.get("document_id") or "") or None,
         "source": chunk.source,

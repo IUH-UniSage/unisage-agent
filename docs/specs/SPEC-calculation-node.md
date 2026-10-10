@@ -77,17 +77,22 @@ Câu hỏi cho công thức cài sẵn được dựng từ `ParamSpec` (`number
 ## 2. LLM tự tính: `main/chat_calculation_llm.yaml`
 
 - Input: `<builtin_rules>` (`describe_builtin_rules()`: trọng số, mọi bước làm tròn, bảng quy đổi - lấy từ
-  hằng số trong `formulas.py`), `<documents>` (≤ 5 chunk đã qua `build_access_filter`, đánh số `[C1]..`),
+  hằng số trong `formulas.py`), `<academic_context>` (≤ 5 chunk đã qua `build_access_filter`, đánh số `[1]..`,
+  trích dẫn theo `common/citation_rules.yaml`),
   `<known_values>` (số đã biết + câu trả lời panel), lịch sử chat gần đây, câu hỏi.
 - Gọi **không stream** (`CHAT_CALC_LLM_TIMEOUT_SECONDS`, mặc định 60 s) để tách khối `ask_user_form` bằng
-  `FenceRedactor` trước khi hiện. Trình bày: công thức (kèm `[Cn]` nếu từ tài liệu), thay số, kết quả;
+  `FenceRedactor` trước khi hiện. Trình bày: công thức (kèm `[n]` nếu từ tài liệu), thay số, kết quả;
   câu hỏi ngược phải kiểm tra bằng giá trị tìm được và giá trị liền kề.
 - Không có công thức trong tài liệu → LLM nói rõ, không tự nghĩ công thức.
 - Thiếu số / nhiều trường hợp → khối `ask_user_form` (`number`, `number_list`, `choice`, `text`) →
   `llm_questions` dựng câu hỏi panel (field bỏ dấu bằng `slug`; field đã có trong known hoặc trùng thì bỏ
-  - chống hỏi vòng); câu dẫn của LLM hiện phía trên panel.
-- Hiển thị: `**Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**`, text của LLM, rồi
-  `Nguồn:` các chunk được trích `[Cn]`.
+  - chống hỏi vòng); câu dẫn của LLM hiện phía trên panel. Số liệu phụ thuộc một lựa chọn (phương thức,
+  trường hợp) thì lượt đầu chỉ hỏi `choice`, sau đó mới hỏi số của nhánh đã chọn; mỗi field đúng một số.
+  Lúc resume, câu trả lời `choice` vào `known_values` bằng **nhãn** lựa chọn (LLM không biết id `o1..`).
+- Hiển thị: `**Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**` rồi text của LLM.
+  Nguồn là các chỉ số `[n]` trong text, client biến thành link qua `citations` của message
+  (`number_citations`: đánh số lại cho cả message, nối tiếp sau nguồn của câu trả lời advisory trong lượt
+  hỗn hợp; chỉ số tài liệu LLM không thấy bị bỏ).
 - Công tắc `CHAT_CALC_LLM_ENABLED=false` → câu cố định "Hiện mình chỉ tự tính được GPA, điểm tổng kết
   học phần và quy đổi điểm..."; lỗi/timeout → câu "Mình chưa tính được câu này lúc này...".
 
