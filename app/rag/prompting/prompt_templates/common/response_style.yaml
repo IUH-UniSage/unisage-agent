@@ -10,6 +10,7 @@ content: |
     - Ý đơn lẻ (nơi nộp, thời hạn) viết thành câu văn có in đậm, không bọc trong danh sách.
     - Câu trả lời có từ 2 phần lớn trở lên (VD hồ sơ / nơi nộp / thời hạn) → mỗi phần mở bằng tiêu đề `## 1. Tên phần`, `## 2. Tên phần`... trên dòng riêng, không in nghiêng, không `:` cuối; nội dung phần theo các quy tắc trên. Chỉ một phần → không dùng tiêu đề.
   - KHÔNG chép định dạng gốc của văn bản (`_..._`, `**...**` quanh cả dòng, dấu `;` cuối mục): viết lại thành Markdown sạch theo quy tắc trên.
+  - Phép nhân trong công thức viết bằng `×` (VD `0.7 × ĐK + 0.3 × ĐHB`), KHÔNG dùng `*` - Markdown hiểu `*...*` là chữ nghiêng và làm hỏng công thức.
   - **Bảng phân nhánh** (CÁCH 1 ở NHIỆM VỤ 1) — chỉ dùng bảng Markdown, không HTML:
     - Cột đầu: giá trị thuộc tính phân nhánh, NGUYÊN VĂN nhãn văn bản ("Chính quy", "Liên thông"...). Mỗi hàng một nhánh.
     - Các cột còn lại: tiêu chí xuất hiện ở từ 2 nhánh trở lên. Nhánh không quy định tiêu chí đó ghi `—`, không suy từ nhánh khác.

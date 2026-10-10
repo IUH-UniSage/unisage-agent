@@ -13,16 +13,40 @@ calls `BackendJavaClient` itself, keeping graph logic testable without HTTP
 mocks.
 """
 
-from collections.abc import Sequence
-from dataclasses import replace
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, replace
 
+from pydantic import JsonValue
 from pydantic_ai.models import Model
 
+from app.calculation.formulas import FORMULAS
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
 from app.core.usage.usage_recorder import UsageRecorder
-from app.graph.nodes.calculation import CALCULATION_PLACEHOLDER_TEMPLATE
+from app.graph.calculation_turn import (
+    CalculationTask,
+    calculation_titles,
+    commentary,
+    needs_input_parts,
+    render_outcomes,
+    trace_items,
+)
+from app.graph.clarification_round import (
+    TaskQuestions,
+    advisory_questions,
+    advisory_task,
+    build_round,
+)
+from app.graph.nodes.calculation import (
+    CalculationDeps,
+    Computed,
+    LlmAnswered,
+    TaskOutcome,
+    resume_calculation_task,
+    run_calculation_task,
+)
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
 from app.graph.nodes.intent_routing import plan_route
@@ -41,22 +65,21 @@ from app.graph.nodes.query_transformation import (
     transform_tasks,
 )
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
-from app.graph.nodes.security_context import (
-    ClarificationGuardResult,
-    resolve_clarification_guard,
-)
 from app.graph.nodes.social_chat import social_chat_reply
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
 from app.graph.nodes.web_search import search_web
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
-from app.graph.streaming_state import AdminWarning, GraphInput, GraphModels, GraphOutput
+from app.graph.streaming_state import (
+    AdminWarning,
+    GraphInput,
+    GraphModels,
+    GraphOutput,
+    ResumeInput,
+)
 from app.rag.prompting.citations import build_citations
-from app.schemas.clarification import PendingClarification
+from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
 from app.schemas.intent import ClassifiedTask, RoutingMode
 from app.schemas.web_search import WebSearchResult
-
-_ORIGIN_NODE_QUERY_TRANSFORMATION = "QueryTransformationNode"
-
 
 # Prefixes of the AI-admin warnings (`event: warning`) this module raises.
 _LLM_RERANK_SKIPPED = "Bỏ qua bước lọc độ liên quan của tài liệu (mô hình Extraction): "
@@ -111,6 +134,12 @@ async def _run_graph(
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None = None,
 ) -> GraphOutput:
+    # A panel-submit turn resumes the claimed round - never a greeting or a new question.
+    if graph_input.resume is not None:
+        return await _run_resume(
+            graph_input, graph_input.resume, models, token_sink, trace, usage_recorder, budget
+        )
+
     # GreetingDetectionNode: fast path, no LLM.
     trace.node("01_GreetingDetectionNode")
     if detect_greeting(graph_input.user_message, first_turn=graph_input.is_first_turn):
@@ -120,29 +149,7 @@ async def _run_graph(
             confirmed_metadata=graph_input.confirmed_metadata,
         )
 
-    # Clarification Guard (SecurityContextExtractionNode).
-    trace.node("02_SecurityContextExtractionNode_ClarificationGuard")
-    guard_result = resolve_clarification_guard(
-        user_message=graph_input.user_message,
-        pending=graph_input.pending_clarification,
-        confirmed_metadata=graph_input.confirmed_metadata,
-        max_retry=graph_input.clarification_max_retry,
-    )
-    confirmed_metadata = guard_result.confirmed_metadata
-    pending_clarification = guard_result.pending_clarification
-
-    if guard_result.route_to_origin or pending_clarification is not None:
-        return await _run_advisory_flow(
-            graph_input,
-            models,
-            token_sink,
-            trace,
-            usage_recorder,
-            confirmed_metadata=confirmed_metadata,
-            pending_clarification=pending_clarification,
-            advisory_tasks=_resume_advisory_tasks(graph_input, guard_result),
-            budget=budget,
-        )
+    confirmed_metadata = graph_input.confirmed_metadata
 
     # MessageClassificationNode.
     classification_agent = build_classification_agent(models.classification)
@@ -162,6 +169,7 @@ async def _run_graph(
         on_failover=_make_failover_applier(models),
         on_attempt=usage_recorder.bind("MessageClassificationNode"),
         budget=budget,
+        previous_calculation=calculation_title(graph_input.last_calculation),
     )
     trace.prompt("03_MessageClassificationNode", describe_classification(classification))
 
@@ -176,7 +184,6 @@ async def _run_graph(
         return GraphOutput(
             response_text=social_text,
             confirmed_metadata=confirmed_metadata,
-            pending_clarification=pending_clarification,
         )
 
     if route_plan.end == "OFF_TOPIC":
@@ -186,17 +193,6 @@ async def _run_graph(
         return GraphOutput(
             response_text=off_topic_text,
             confirmed_metadata=confirmed_metadata,
-            pending_clarification=pending_clarification,
-        )
-
-    if not route_plan.advisory_tasks:
-        # Only calculation tasks: CalculationNode answers the whole turn.
-        trace.node("07_CalculationNode")
-        await token_sink(CALCULATION_PLACEHOLDER_TEMPLATE)
-        return GraphOutput(
-            response_text=CALCULATION_PLACEHOLDER_TEMPLATE,
-            confirmed_metadata=confirmed_metadata,
-            pending_clarification=pending_clarification,
         )
 
     # A mixed turn answers only the advisory question(s), so generation doesn't
@@ -206,78 +202,280 @@ async def _run_graph(
         if route_plan.calculation_tasks
         else None
     )
-    output = await _run_advisory_flow(
+    calculation_tasks = [
+        CalculationTask(task_id=f"T{index}", query=task.query)
+        for index, task in enumerate(route_plan.calculation_tasks, start=1)
+    ]
+    deps = _calculation_deps(graph_input, models, usage_recorder, budget)
+    advisory: AdvisoryPart | None = None
+    if route_plan.advisory_tasks:
+        advisory = AdvisoryPart(
+            task_id=f"T{len(calculation_tasks) + 1}",
+            tasks=list(route_plan.advisory_tasks),
+            question=advisory_question,
+        )
+    return await _turn_with_calculations(
         graph_input,
         models,
         token_sink,
         trace,
         usage_recorder,
+        budget,
         confirmed_metadata=confirmed_metadata,
-        pending_clarification=pending_clarification,
-        advisory_tasks=route_plan.advisory_tasks,
-        question=advisory_question,
-        budget=budget,
-    )
-    if not route_plan.calculation_tasks:
-        return output
-
-    # CalculationNode placeholder, appended outside the LLM.
-    trace.node("07_CalculationNode")
-    calculation_part = f"\n\n{CALCULATION_PLACEHOLDER_TEMPLATE}"
-    await token_sink(calculation_part)
-    return replace(output, response_text=output.response_text + calculation_part)
-
-
-def _single_advisory_task(query: str) -> tuple[ClassifiedTask, RoutingMode]:
-    """A resume turn re-runs the original question as one SINGLE advisory task."""
-
-    return (
-        ClassifiedTask(intent="academic_advisory", query=query, routing_mode="SINGLE"),
-        "SINGLE",
+        calculations=_start_calculations(calculation_tasks, deps, trace),
+        queries={task.task_id: task.query for task in calculation_tasks},
+        deps=deps,
+        advisory=advisory,
+        original_query=advisory_question or graph_input.user_message,
+        previous_round=None,
     )
 
 
-def _resume_advisory_tasks(
-    graph_input: GraphInput, guard_result: ClarificationGuardResult
-) -> list[tuple[ClassifiedTask, RoutingMode]]:
-    """Task(s) to re-run for a resume turn: several origin tasks are re-run on
-    their own queries unchanged (splitting a reply across tasks is a known
-    gap); a single task, or no recorded origin_tasks (legacy rows), folds
-    the reply into the resume query first."""
-
-    origin_tasks = guard_result.origin_tasks
-    if origin_tasks and len(origin_tasks) > 1:
-        return [(task, task.routing_mode or "SINGLE") for task in origin_tasks]
-
-    query = _resume_retrieval_query(graph_input, guard_result) or graph_input.user_message
-    if origin_tasks:
-        task = origin_tasks[0].model_copy(update={"query": query})
-        return [(task, task.routing_mode or "SINGLE")]
-    return [_single_advisory_task(query)]
-
-
-def _resume_retrieval_query(
+async def _run_resume(
     graph_input: GraphInput,
-    guard_result: ClarificationGuardResult,
-) -> str | None:
-    """What to retrieve on while a clarification round is open.
+    resume: ResumeInput,
+    models: GraphModels,
+    token_sink: TokenSink,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    budget: BudgetContext | None,
+) -> GraphOutput:
+    """A panel-submit turn: run only the tasks the panel was asked for, with the
+    answers already validated against the stored panel. Advisory answers become
+    confirmed_metadata and the original question is re-answered; calculation answers
+    complete the stored parameters - no extractor call, no retrieval."""
 
-    Matched reply: the reply is pure data (already folded in via
-    `confirmed_metadata`), so the original question alone is the topic.
+    trace.node("02_ClarificationResume")
+    pending = resume.pending_round
+    confirmed_metadata = dict(graph_input.confirmed_metadata)
+    answers_by_task: dict[str, dict[str, JsonValue]] = {}
+    for answer in resume.answers.values():
+        question = answer.question
+        answers_by_task.setdefault(question.task_id, {})[question.field] = answer.value
+        if question.origin == "advisory" and isinstance(answer.value, str):
+            confirmed_metadata[question.field] = answer.value
 
-    Unmatched reply: ambiguous - it may be an answer the deterministic guard
-    couldn't parse, or the student abandoning the form to ask something new.
-    Searching on the original question alone would ignore a genuinely new
-    question; searching on the reply alone loses the topic (the bug this
-    whole mechanism exists to fix). Keeping both covers either case.
-    """
+    outcomes: list[TaskOutcome] = []
+    queries: dict[str, str] = {}
+    advisory: AdvisoryPart | None = None
+    deps = _calculation_deps(graph_input, models, usage_recorder, budget)
+    for task in pending.tasks:
+        if isinstance(task, PendingCalculationTask):
+            queries[task.task_id] = task.query
+            outcomes.append(
+                await resume_calculation_task(
+                    task.task_id,
+                    task.query,
+                    task.plan,
+                    task.known_params,
+                    answers_by_task.get(task.task_id, {}),
+                    deps,
+                )
+            )
+        else:
+            advisory = AdvisoryPart(
+                task_id=task.task_id,
+                tasks=[(origin, origin.routing_mode or "SINGLE") for origin in task.origin_tasks],
+                question=pending.original_query,
+            )
 
-    original_query = guard_result.original_query
-    if not original_query:
+    return await _turn_with_calculations(
+        graph_input,
+        models,
+        token_sink,
+        trace,
+        usage_recorder,
+        budget,
+        confirmed_metadata=confirmed_metadata,
+        calculations=_done(outcomes) if outcomes else None,
+        queries=queries,
+        deps=deps,
+        advisory=advisory,
+        original_query=pending.original_query,
+        previous_round=pending,
+    )
+
+
+@dataclass(frozen=True)
+class AdvisoryPart:
+    task_id: str
+    tasks: list[tuple[ClassifiedTask, RoutingMode]]
+    question: str | None
+
+
+def _calculation_deps(
+    graph_input: GraphInput,
+    models: GraphModels,
+    usage_recorder: UsageRecorder,
+    budget: BudgetContext | None,
+) -> CalculationDeps:
+    return CalculationDeps(
+        models=models,
+        security=graph_input.security,
+        on_attempt=usage_recorder.bind("CalculationNode"),
+        on_failover=_make_failover_applier(models),
+        budget=budget,
+        previous=graph_input.last_calculation,
+        history=graph_input.history,
+    )
+
+
+def calculation_title(last: LastCalculation | None) -> str | None:
+    """What the classifier is told about the latest calculation: its name only."""
+
+    if last is None:
         return None
-    if guard_result.route_to_origin:
-        return original_query
-    return f"{original_query} {graph_input.user_message}"
+    if last.title:
+        return last.title
+    return FORMULAS[last.plan.formula_id].title if last.plan.formula_id != "llm" else None
+
+
+def _last_calculation(outcomes: Sequence[TaskOutcome]) -> LastCalculation | None:
+    """The turn's last computed calculation: a built-in one with its parameters (forward
+    follow-ups reuse them), an LLM one by name only (its numbers stay in the chat)."""
+
+    done = [outcome for outcome in outcomes if isinstance(outcome, Computed | LlmAnswered)]
+    if not done:
+        return None
+    last = done[-1]
+    if isinstance(last, Computed):
+        return LastCalculation(plan=last.plan, params=last.params, title=last.result.title)
+    return LastCalculation(plan=last.plan, title=last.query[:200])
+
+
+def _start_calculations(
+    tasks: Sequence[CalculationTask], deps: CalculationDeps, trace: GraphTrace
+) -> "asyncio.Task[list[TaskOutcome]] | None":
+    """Calculation tasks run alongside the advisory retrieval (they are awaited only at
+    the barrier right before node 10)."""
+
+    if not tasks:
+        return None
+    trace.node("07_CalculationNode")
+
+    async def run_all() -> list[TaskOutcome]:
+        return list(
+            await asyncio.gather(
+                *(run_calculation_task(task.task_id, task.query, deps) for task in tasks)
+            )
+        )
+
+    return asyncio.create_task(run_all())
+
+
+def _done(outcomes: list[TaskOutcome]) -> "asyncio.Task[list[TaskOutcome]]":
+    async def ready() -> list[TaskOutcome]:
+        return outcomes
+
+    return asyncio.ensure_future(ready())
+
+
+async def _turn_with_calculations(
+    graph_input: GraphInput,
+    models: GraphModels,
+    token_sink: TokenSink,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    budget: BudgetContext | None,
+    *,
+    confirmed_metadata: dict[str, str],
+    calculations: "asyncio.Task[list[TaskOutcome]] | None",
+    queries: dict[str, str],
+    deps: CalculationDeps,
+    advisory: AdvisoryPart | None,
+    original_query: str,
+    previous_round: PendingRound | None,
+) -> GraphOutput:
+    """Stream order: calculation blocks (Python) → advisory answer (node 10, which only
+    starts after the blocks were sent) or, for a calculation-only turn, the checked
+    note → one panel for everything still missing."""
+
+    outcomes: list[TaskOutcome] = []
+    shown: list[str] = []
+
+    async def show_calculations() -> list[str]:
+        if calculations is not None:
+            outcomes.extend(await calculations)
+        text = render_outcomes(outcomes)
+        if text:
+            text += "\n\n" if advisory is not None else ""
+            shown.append(text)
+            await token_sink(text)
+        return calculation_titles(outcomes)
+
+    try:
+        if advisory is not None:
+            output = await _run_advisory_flow(
+                graph_input,
+                models,
+                token_sink,
+                trace,
+                usage_recorder,
+                confirmed_metadata=confirmed_metadata,
+                advisory_tasks=advisory.tasks,
+                question=advisory.question,
+                budget=budget,
+                before_generation=show_calculations,
+            )
+            output = replace(output, response_text="".join(shown) + output.response_text)
+        else:
+            await show_calculations()
+            text = "".join(shown)
+            results = [o.result for o in outcomes if isinstance(o, Computed)]
+            if results:
+                note = await commentary(results, graph_input.user_message, deps)
+                if note:
+                    note = f"\n\n{note}"
+                    await token_sink(note)
+                    text += note
+            output = GraphOutput(response_text=text, confirmed_metadata=confirmed_metadata)
+    finally:
+        if calculations is not None and not calculations.done():
+            calculations.cancel()
+
+    parts = needs_input_parts(outcomes, queries)
+    if advisory is not None:
+        parts.append(
+            TaskQuestions(
+                task=advisory_task(advisory.task_id, [task for task, _mode in advisory.tasks]),
+                questions=advisory_questions(
+                    output.ask_forms, confirmed_metadata=output.confirmed_metadata
+                ),
+            )
+        )
+    if previous_round is not None:
+        output = _with_follow_up_round(output, parts, previous_round)
+    else:
+        output = replace(
+            output,
+            pending_round=build_round(parts, original_query=original_query, chain_depth=1),
+        )
+    if outcomes:
+        public, private = trace_items(
+            outcomes,
+            queries=queries,
+            run_id=budget.request_id if budget is not None else usage_recorder.request_id,
+            deps=deps,
+        )
+        output = replace(
+            output,
+            calculation_items=public,
+            calculation_traces=private,
+            last_calculation=_last_calculation(outcomes),
+        )
+    return output
+
+
+def _with_follow_up_round(
+    output: GraphOutput, parts: list[TaskQuestions], previous: PendingRound
+) -> GraphOutput:
+    """Whatever is still missing after a panel answer becomes the next panel (no limit:
+    each one needs the student to answer, and answered fields are never asked again)."""
+
+    follow_up = build_round(
+        parts, original_query=previous.original_query, chain_depth=previous.chain_depth + 1
+    )
+    return replace(output, pending_round=follow_up)
 
 
 async def _run_advisory_flow(
@@ -288,10 +486,10 @@ async def _run_advisory_flow(
     usage_recorder: UsageRecorder,
     *,
     confirmed_metadata: dict[str, str],
-    pending_clarification: PendingClarification | None,
     advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
     question: str | None = None,
     budget: BudgetContext | None = None,
+    before_generation: Callable[[], Awaitable[list[str]]] | None = None,
 ) -> GraphOutput:
     """Advisory branch: query transformation → retrieval → rerank → web search
     for the sub-queries rerank left empty → generation (or ticket fallback
@@ -395,6 +593,9 @@ async def _run_advisory_flow(
         for result in web_results:
             trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
 
+    # Barrier: the calculation blocks go out before any advisory token.
+    calculation_titles_shown = await before_generation() if before_generation else []
+
     if not rerank_result.has_valid_context and not web_results:
         # TicketFallbackNode (streaming).
         fallback_agent = build_ticket_fallback_agent(models.generation)
@@ -418,7 +619,6 @@ async def _run_advisory_flow(
         return GraphOutput(
             response_text=fallback_text,
             confirmed_metadata=confirmed_metadata,
-            pending_clarification=pending_clarification,
             used_ticket_fallback=True,
             admin_warnings=admin_warnings,
         )
@@ -441,13 +641,11 @@ async def _run_advisory_flow(
         confirmed_metadata=confirmed_metadata,
         chunks=rerank_result.chunks,
         web_results=web_results,
-        previous_pending=pending_clarification,
-        origin_node=_ORIGIN_NODE_QUERY_TRANSFORMATION,
         history=graph_input.history,
         token_sink=token_sink,
         trace=trace,
-        advisory_tasks=[task for task, _mode in advisory_tasks],
         sub_queries=sub_query_questions,
+        calculation_titles=calculation_titles_shown,
         purpose="CHAT",
         credential=models.generation_credential,
         snapshot_version=models.snapshot_version,
@@ -457,8 +655,8 @@ async def _run_advisory_flow(
     )
     return GraphOutput(
         response_text=generation_result.response_text,
-        confirmed_metadata=generation_result.confirmed_metadata,
-        pending_clarification=generation_result.pending_clarification,
+        confirmed_metadata=confirmed_metadata,
+        ask_forms=generation_result.ask_forms,
         citations=build_citations(
             generation_result.response_text, rerank_result.chunks, web_results
         ),

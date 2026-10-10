@@ -36,6 +36,102 @@ lý sang bên không sở hữu nó, và mỗi lần đổi hình dạng field p
 
 Luật nằm ở: `PRODUCT.md` › Objects, Source of truth.
 
+Từ UNISAGE-99, bảng này giữ `PendingRound` (panel v2) cùng state machine `OPEN/PROCESSING`;
+`messages.metadata.clarification` bên Java chỉ là **bản chiếu** để web hiển thị và dựng lại sau
+reload - agent không đọc nó để ra quyết định (xem mục UNISAGE-99 bên dưới).
+
+## UNISAGE-99 - Tính toán học vụ và panel hỏi lại
+
+Spec: `docs/specs/SPEC-calc-engine.md`, `SPEC-clarification-panel.md`, `SPEC-calculation-node.md`,
+`unisage-web/docs/specs/SPEC-clarification-panel-ui.md`; contract `contracts/chat-sse.md`.
+
+### Vì sao node 10 không nhận con số nào, và nhận xét sau khối tính bị kiểm tra số?
+
+Với 3 công thức cài sẵn, mọi con số đến từ `app/calculation/` (`Decimal`, làm tròn half-up) và khối
+các bước do Python render; LLM chỉ chọn công thức, chép số người dùng đã nói và viết nhận xét. Nhận xét không stream, không được nhắc lại
+kết quả, và bị bỏ hẳn nếu có số ngoài các số sinh viên đã nhập; node 10 chỉ nhận **tiêu đề** phép tính đã hiển thị.
+
+### Vì sao Python chỉ tính xuôi 3 công thức cài sẵn, còn lại để LLM tự tính?
+
+GPA, điểm tổng kết học phần (LT/TH) và quy đổi thang điểm là câu hỏi phổ biến nhất và có công thức
+ổn định - cài sẵn thì nhanh, test được, được chọn bằng router luật trước LLM, và Python hiện từng bước.
+Đã thử cho Python làm thêm (chép công thức Qdrant thành biểu thức qua 7 kiểm tra fail-closed, và bộ giải
+ngược chạy lại công thức xuôi), nhưng hai đường đó từ chối quá nhiều câu hỏi thật (công thức có
+`max(...)`, lũy thừa, LaTeX hỏng, công thức bài học) và phức tạp. Chủ sản phẩm chốt (09-10-2026):
+mọi phép tính khác do LLM tự tính, chấp nhận có thể sai, luôn gắn nhãn "Kết quả do AI tự tính, có thể
+sai" kèm nguồn; không eval trước phát hành mà dùng công tắc `CHAT_CALC_LLM_ENABLED`, trace đầy đủ (bảng
+`calculation_traces` chỉ staff đọc) và nút Đúng/Sai tạo ticket `AI_CALCULATION_WRONG` riêng cho từng item.
+LLM được đưa nguyên văn các quy tắc của 3 công thức (trọng số, làm tròn, bảng quy đổi) để hỏi ngược
+vẫn đúng quy tắc, và phải tự kiểm tra kết quả bằng cách thay ngược lại.
+
+### Vì sao panel có state machine `OPEN → PROCESSING(claim_token, lease)` thay vì xoá state khi claim?
+
+Xoá state rồi mới gọi Java qua mạng tạo ra khoảng trống: một tin nhắn thường gửi song song sẽ thấy
+"không có panel" và chạy như lượt bình thường, còn khôi phục bằng `WHERE ... IS NULL` có thể ghi đè
+nhầm. Với `PROCESSING` + `claim_token`, mọi chuyển trạng thái đều có fencing; lease (210 s) luôn dài
+hơn deadline cứng của lượt đã claim (150 s) cộng 60 s biên, nên khi lease hết hạn thì request cũ chắc
+chắn đã bị cancel.
+
+### Vì sao bản chiếu metadata không best-effort, và Huỷ không tạo lượt chat?
+
+Panel chỉ được gửi (`event: clarification`) sau khi cả state lẫn PATCH metadata đều thành công - PATCH
+lỗi thì thu hồi round. Dữ liệu card có border đi cùng `start_turn` (một transaction với message USER).
+Huỷ chỉ claim rồi PATCH bản chiếu qua `/internal/**` (gateway chặn từ bên ngoài): không message, không
+quota, không LLM. Cờ "bỏ qua quota" trên `/messages/turn` bị loại vì client tự gọi được endpoint đó.
+
+### Vì sao advisory vẫn sinh `ask_user_form` trong text?
+
+LLM là bên duy nhất biết văn bản chia nhánh theo thuộc tính nào. Giữ nguyên cơ chế đó nhưng
+`FenceRedactor` lọc khối JSON ngay trong stream (kể cả khi bị chia giữa các chunk) nên nó không bao
+giờ tới client hay nằm trong `content`; khối bị bắt trở thành câu hỏi choice của panel.
+
+### Thứ tự triển khai: backend → web → agent
+
+Web mới đọc được cả form legacy (read-only) lẫn panel; agent mới chặn tin nhắn bằng `409` khi panel
+đang mở, nên **không được** triển khai agent trước web - web cũ không hiện được panel và sinh viên sẽ
+bị kẹt. Backend phải lên trước vì agent gọi `StartTurnRequest.metadata`, `/internal/messages/{id}/
+clarification` và `/internal/calculation-traces`.
+
+### Vì sao làm tròn TBtx, ĐLT, ĐTH trước khi dùng, và TBtx có hai cách nhập?
+
+Chủ sản phẩm xác nhận (09-10-2026): các cột thường xuyên có trọng số như nhau, và mỗi điểm thành phần
+(TBtx, ĐLT, ĐTH) làm tròn đến 0.1 rồi mới nhân/cộng ở bước sau. Sinh viên thường biết từng cột chứ
+không biết TBtx, nhưng có người đã có TBtx từ cổng sinh viên - nên câu hỏi `number_or_list` cho chọn
+"Nhập sẵn" hoặc "Nhập từng cột".
+
+### Vì sao điểm thành phần làm tròn 0.5 trước khi tính?
+
+Quy chế ghi điểm quá trình và điểm thi được làm tròn theo nửa điểm (lẻ dưới 0.25 → 0, từ 0.25 đến dưới
+0.75 → 0.5, từ 0.75 → 1). Chủ sản phẩm xác nhận áp dụng (09-10-2026) cho từng điểm sinh viên nhập (cột
+TX, GK, CK, cột TH); các giá trị trung bình (TBtx, ĐLT, ĐTH, ĐTKHP) vẫn làm tròn 0.1.
+
+### Vì sao panel không giới hạn số câu hỏi hay số panel nối tiếp?
+
+Chủ sản phẩm yêu cầu cần bao nhiêu thì hỏi hết. Không thể hỏi vòng vô hạn: câu hỏi tính toán do code
+dựng (hữu hạn), thuộc tính advisory đã trả lời nằm trong `confirmed_metadata` và không bao giờ bị hỏi
+lại, và mỗi panel đều cần sinh viên tự trả lời. Server chỉ chặn ở 50 câu để từ chối payload bất thường.
+
+### Vì sao 3 công thức vẫn hardcode thay vì ingest tài liệu?
+
+Chưa có văn bản gốc của 3 công thức; tự soạn tài liệu để ingest chỉ là hardcode ở chỗ khó kiểm soát
+hơn. Khi có văn bản quy chế chính thức thì ingest để trích dẫn và đối chiếu hệ số, còn 3 công thức vẫn
+ở trong code. Phép tính cài sẵn gần nhất được lưu (`last_calculation`) để câu nối tiếp tính xuôi ("nếu
+giữa kỳ 8 thì sao") dùng lại số đã nhập - chỉ khi extractor chọn rõ `formula_id = "previous"`.
+
+### Vì sao mọi câu hỏi lại của phép tính đi qua panel, và classifier không phân loại lại câu trả lời?
+
+Một câu hỏi lại bằng text thường không để lại trạng thái: câu trả lời ("đại học chính quy á") đi
+qua classifier như một câu hỏi mới và bị xếp nhầm sang advisory (lỗi thật 09-10-2026 với điểm xét
+tuyển). Nguyên tắc: câu trả lời cho câu hỏi của bot không bao giờ được phân loại lại - LLM tự tính
+mà thiếu số hay có nhiều trường hợp thì trả khối `ask_user_form`, thành panel (lượt submit đi thẳng
+vào resume); còn câu gõ tự do sau một phép tính được classifier nhận kèm tên phép tính trước
+(`<previous_calculation_turn>`) và quy tắc nối tiếp riêng.
+
+### Vì sao logic `/chat/stream` nằm trong service?
+
+Controller chỉ đọc HTTP request và trả về stream của `ChatStreamService`; chặn panel, claim, gọi Java
+và khởi chạy graph nằm trong `app/services/` (yêu cầu của chủ dự án: controller không chứa logic).
+
 ### Vì sao `unisage-agent` tin thẳng 5 header do Gateway bơm, không tự giải mã JWT?
 
 Giải mã và xác thực JWT là việc Gateway đã làm, dùng chung một khoá bí mật mà `unisage-agent` không

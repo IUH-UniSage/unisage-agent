@@ -4,6 +4,8 @@ from urllib.parse import urlsplit
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+# Covers clock skew between agent workers sharing the clarification lease.
+CLARIFICATION_LEASE_MARGIN_SECONDS = 60.0
 _DEFAULT_INTERNAL_SECRET = "unisage-internal-secret-key-2026"
 _MIN_INTERNAL_SECRET_LENGTH = 32
 _DEV_ONLY_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
@@ -147,7 +149,19 @@ class Settings(BaseSettings):
     INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS: int = Field(default=6, ge=0)
 
     # --- CHAT_: read on every chat turn ---
-    CHAT_CLARIFICATION_MAX_RETRY: int = 2
+    # Let the LLM answer calculations Python does not compute (target questions,
+    # formulas from documents, follow-ups). Off = only the 3 built-in formulas are
+    # calculated (kill switch - there is no pre-release eval; Đúng/Sai feedback instead).
+    CHAT_CALC_LLM_ENABLED: bool = True
+    # Timeout of that LLM call (not streamed: the whole answer is parsed before it is shown).
+    CHAT_CALC_LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0)
+    # Hard deadline for everything a turn does after claiming a clarification panel
+    # (start_turn → graph → finalize). Past it the task is cancelled before any more writes.
+    CHAT_CLAIMED_TURN_DEADLINE_SECONDS: float = Field(default=150.0, gt=0)
+    # How long a claimed panel stays PROCESSING before another request may treat it as
+    # abandoned. Must exceed the deadline by CLARIFICATION_LEASE_MARGIN_SECONDS so a claimed
+    # turn is always dead before its lease can be taken over.
+    CHAT_CLARIFICATION_LEASE_SECONDS: float = Field(default=210.0, gt=0)
     # Thinking for the short auxiliary calls (classification, query transformation, LLM
     # rerank). False = the model's lowest level.
     CHAT_AUX_THINKING: bool | Literal["minimal", "low", "medium", "high"] = False
@@ -248,6 +262,16 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [domain.strip() for domain in value.split(",") if domain.strip()]
         return value
+
+    @model_validator(mode="after")
+    def _lease_outlives_claimed_turn(self) -> "Settings":
+        margin = CLARIFICATION_LEASE_MARGIN_SECONDS
+        if self.CHAT_CLARIFICATION_LEASE_SECONDS < self.CHAT_CLAIMED_TURN_DEADLINE_SECONDS + margin:
+            raise ValueError(
+                "CHAT_CLARIFICATION_LEASE_SECONDS must be at least "
+                f"CHAT_CLAIMED_TURN_DEADLINE_SECONDS + {margin:g}"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":

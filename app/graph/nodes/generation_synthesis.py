@@ -1,24 +1,11 @@
-"""Generation synthesis node - streams the final response and extracts any
-`pending_clarification`/`confirmed_metadata` updates embedded in it.
+"""Generation synthesis node - streams the final answer.
 
-After the full response text has streamed, a deterministic (no extra LLM
-call) step scans every ```json fenced block in the response for two shapes:
-
-- `{"type": "ask_user_form", "fields": [...]}` - rebuilt into a
-  `PendingClarification` (last such block wins if the model emits more than
-  one) — keeping `retry_count` if the field set is unchanged from the
-  previous turn's pending clarification, resetting to 0 if it's a new field
-  set. `origin_node` (where the clarification should resume) is passed in
-  by the caller rather than derived from where the JSON was found, since
-  the detection point and the resume point can differ.
-- `{"type": "confirmed_metadata", "fields": {...}}` - a fallback for when
-  the Clarification Guard's deterministic matcher (security_context.py)
-  couldn't map a free-form reply to a pending option itself; the model
-  reads the same `<missing_metadata_to_confirm>` block and, if it can
-  confidently map the user's reply to one of the listed option ids, says so
-  here. Only fields the model was actually asked about (i.e. present in the
-  turn's pending clarification) are accepted - anything else is dropped, so
-  a model that misreads the instruction can't inject arbitrary metadata.
+The prompt may make the model end with a ```json {"type": "ask_user_form"}```
+block when it needs more information. `FenceRedactor` keeps every such block
+out of the stream and out of `response_text`; the captured forms are returned
+in `ask_forms` and become choice questions of the clarification panel
+(app/graph/clarification_round.py). A prose-only clarification request gets a
+second-chance repair call that supplies the missing block for the graph.
 """
 
 import json
@@ -33,6 +20,7 @@ from pydantic_ai.models import Model
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.registry.model_registry import CredentialConfig
+from app.graph.fence_redactor import FenceRedactor
 from app.graph.streaming import (
     AttemptRecorder,
     BudgetContext,
@@ -48,14 +36,11 @@ from app.rag.prompting import (
 )
 from app.rag.prompting.builder import build_metadata_section, build_prepared_context_section
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification
-from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
 
 _JSON_BLOCK_PATTERN = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
-_SUB_QUERY_ID_PATTERN = re.compile(r"SQ(\d+)")
 _CLARIFICATION_PHRASE_PATTERN = re.compile(
     r"cho\s+.{0,15}?bi[eế]t\b"
     r"|cung\s+c[aấ]p\b.{0,25}?th[oô]ng\s+tin\b"
@@ -178,9 +163,11 @@ async def _repair_missing_ask_form(
 
 @dataclass(frozen=True)
 class GenerationResult:
+    # What the student saw: the answer with every ask_user_form/confirmed_metadata
+    # block filtered out (FenceRedactor) - also what gets persisted in Java.
     response_text: str
-    pending_clarification: PendingClarification | None
-    confirmed_metadata: dict[str, str]
+    # The ```json ask_user_form blocks the model emitted (or the repair call added).
+    ask_forms: tuple[dict[str, Any], ...] = ()
 
 
 async def run_generation_synthesis(
@@ -192,13 +179,11 @@ async def run_generation_synthesis(
     confirmed_metadata: dict[str, str],
     chunks: list[RetrievedChunk],
     web_results: Sequence[WebSearchResult] = (),
-    previous_pending: PendingClarification | None,
-    origin_node: str,
     token_sink: TokenSink,
     trace: GraphTrace,
     history: Sequence[HistoryMessage] = (),
-    advisory_tasks: Sequence[ClassifiedTask] | None = None,
     sub_queries: Sequence[str] | None = None,
+    calculation_titles: Sequence[str] = (),
     purpose: str | None = None,
     credential: CredentialConfig | None = None,
     snapshot_version: int | None = None,
@@ -217,8 +202,8 @@ async def run_generation_synthesis(
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
             web_results=web_results,
-            pending_clarification=previous_pending,
             history=history,
+            calculation_titles=calculation_titles,
         )
     else:
         full_prompt = build_system_prompt(
@@ -228,8 +213,8 @@ async def run_generation_synthesis(
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
             web_results=web_results,
-            pending_clarification=previous_pending,
             history=history,
+            calculation_titles=calculation_titles,
         )
     # Only the two per-request blocks are worth dumping - the rest of the
     # prompt is static YAML that can be read from the templates directly.
@@ -238,10 +223,19 @@ async def run_generation_synthesis(
         f"{build_metadata_section(security, confirmed_metadata)}\n"
         f"{build_prepared_context_section(chunks, web_results)}",
     )
+    redactor = FenceRedactor()
+    visible: list[str] = []
+
+    async def redacting_sink(chunk: str) -> None:
+        shown = redactor.feed(chunk)
+        if shown:
+            visible.append(shown)
+            await token_sink(shown)
+
     full_text = await stream_agent_text(
         agent,
         full_prompt,
-        token_sink,
+        redacting_sink,
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,
@@ -250,83 +244,38 @@ async def run_generation_synthesis(
         on_attempt=on_attempt,
         budget=budget,
     )
+    tail = redactor.finish()
+    if tail:
+        visible.append(tail)
+        await token_sink(tail)
     if settings.CHAT_ALLOW_REPAIR_JSON:
-        full_text = await _repair_missing_ask_form(
+        # The repaired block is for the graph only - it never goes to the client.
+        repaired = await _repair_missing_ask_form(
             agent,
             full_text,
             chunks=chunks,
             web_results=web_results,
             security=security,
             confirmed_metadata=confirmed_metadata,
-            token_sink=token_sink,
+            token_sink=_discard,
             credential=credential,
             on_attempt=on_attempt,
         )
-    confirmed_updates = collect_confirmed_metadata_updates(full_text, previous=previous_pending)
-    updated_confirmed_metadata = (
-        {**confirmed_metadata, **confirmed_updates} if confirmed_updates else confirmed_metadata
-    )
-    new_pending = collect_pending_clarification(
-        full_text,
-        origin_node=origin_node,
-        previous=previous_pending,
-        user_query=user_query,
-        confirmed_metadata=updated_confirmed_metadata,
-        origin_tasks=list(advisory_tasks) if advisory_tasks else None,
-        sub_query_count=len(sub_queries) if sub_queries else 1,
-    )
-    if new_pending is None:
-        new_pending = _carry_forward_unanswered(
-            previous_pending, confirmed_metadata=updated_confirmed_metadata
-        )
+        if repaired != full_text:
+            redactor.captured.extend(
+                block for block in _extract_json_blocks(repaired[len(full_text) :])
+            )
+            full_text = repaired
     return GenerationResult(
-        response_text=full_text,
-        pending_clarification=new_pending,
-        confirmed_metadata=updated_confirmed_metadata,
+        response_text="".join(visible).rstrip(),
+        ask_forms=tuple(
+            block for block in redactor.captured if block.get("type") == "ask_user_form"
+        ),
     )
 
 
-def _carry_forward_unanswered(
-    previous: PendingClarification | None,
-    *,
-    confirmed_metadata: dict[str, str],
-) -> PendingClarification | None:
-    """Keep a round alive when this turn's response dropped it silently.
-
-    A round only ends when its fields are answered - but the round lives in
-    the model's own JSON output, so if the model simply forgets to re-emit
-    `ask_user_form` while fields are still unanswered, the round (and with
-    it `original_query`) evaporates: the next turn sees no pending round,
-    treats the student's reply as a brand-new question, and the topic that
-    started it all (e.g. "học phí") is gone. Re-deriving from
-    `confirmed_metadata` instead of trusting the model's silence keeps the
-    state machine's own bookkeeping authoritative: fields answered by now
-    drop off, whatever is left stays pending.
-    """
-
-    if previous is None:
-        return None
-    labels = previous.option_labels or [None] * len(previous.missing_fields)
-    remaining = [
-        (field, options, label)
-        for field, options, label in zip(
-            previous.missing_fields,
-            previous.options,
-            list(labels[: len(previous.missing_fields)])
-            + [None] * max(0, len(previous.missing_fields) - len(labels)),
-            strict=True,
-        )
-        if field not in confirmed_metadata and options is not None
-    ]
-    if not remaining:
-        return None
-    return previous.model_copy(
-        update={
-            "missing_fields": [field for field, _options, _label in remaining],
-            "options": [options for _field, options, _label in remaining],
-            "option_labels": [label for _field, _options, label in remaining],
-        }
-    )
+async def _discard(_token: str) -> None:
+    return None
 
 
 def _extract_json_blocks(text: str) -> list[dict[str, Any]]:
@@ -339,147 +288,3 @@ def _extract_json_blocks(text: str) -> list[dict[str, Any]]:
         if isinstance(parsed, dict):
             blocks.append(parsed)
     return blocks
-
-
-def collect_confirmed_metadata_updates(
-    full_text: str,
-    *,
-    previous: PendingClarification | None,
-) -> dict[str, str]:
-    """Fallback confirmation from the model's own reading of the reply -
-    only accepts fields the user was actually asked about this turn."""
-
-    if previous is None:
-        return {}
-    allowed_fields = set(previous.missing_fields)
-
-    merged: dict[str, str] = {}
-    for block in _extract_json_blocks(full_text):
-        if block.get("type") != "confirmed_metadata":
-            continue
-        fields = block.get("fields")
-        if not isinstance(fields, dict):
-            continue
-        for field, value in fields.items():
-            if isinstance(field, str) and isinstance(value, str) and field in allowed_fields:
-                merged[field] = value
-    return merged
-
-
-def collect_pending_clarification(
-    full_text: str,
-    *,
-    origin_node: str,
-    previous: PendingClarification | None,
-    user_query: str = "",
-    confirmed_metadata: dict[str, str] | None = None,
-    origin_tasks: list[ClassifiedTask] | None = None,
-    sub_query_count: int = 1,
-) -> PendingClarification | None:
-    """Rebuild the pending round from the model's `ask_user_form` block.
-
-    Two classes of field are dropped here rather than trusted, because both
-    produce a round that can never close:
-
-    - **Already answered** - a field whose value is in `confirmed_metadata`.
-      The prompt tells the model not to re-ask these, but when it does
-      anyway, persisting it strands the conversation: the student already
-      said "chính quy", so nothing they type next will read as new
-      information. (Asking a NARROWER follow-up is still fine - that carries
-      a different field name, see task_1.yaml "HỎI SÂU THÊM MỘT CẤP".)
-    - **Free-text (`options: null`)** - the Clarification Guard matches
-      against option ids/labels, so a typed value can never be matched, and
-      only the model volunteering a `confirmed_metadata` block would ever
-      record it. Values like a GPA are self-declared numbers the assistant
-      is forbidden to draw conclusions from anyway (task_1.yaml, "CẤM TỰ
-      KẾT LUẬN TÌNH TRẠNG HỌC VỤ"), so they are stated as thresholds in
-      prose for the student to check themselves - never collected as form
-      state.
-
-    A third case is dropped at the very top, before any of the above: the
-    whole block is discarded if its lead-in sentence is a conditional offer
-    (`_is_conditional_offer`) - same check `_repair_missing_ask_form` uses,
-    but needed here too because this function also runs when the model
-    attaches `ask_user_form` directly in its PRIMARY response (no repair
-    call involved at all) - observed live: a fully-answered, unrelated
-    question followed by "Nếu bạn có nhu cầu tìm hiểu thêm..., vui lòng cho
-    biết nhé!" plus a populated (hallucinated) form, all in one pass.
-    """
-    ask_form_blocks = [
-        block for block in _extract_json_blocks(full_text) if block.get("type") == "ask_user_form"
-    ]
-    if not ask_form_blocks:
-        return None
-    if _is_conditional_offer(full_text):
-        return None
-    parsed = ask_form_blocks[-1]
-
-    fields_spec = parsed.get("fields") or []
-    missing_fields: list[str] = []
-    options: list[list[str] | None] = []
-    option_labels: list[list[str] | None] = []
-    for field_spec in fields_spec:
-        missing_fields.append(field_spec["field"])
-        raw_options = field_spec.get("options")
-        options.append([option["id"] for option in raw_options] if raw_options else None)
-        # Keep the labels too, not just the ids: the user sees (and often
-        # types back) the label - "Công nghệ Thông tin", not "cntt" - so the
-        # deterministic Guard needs both to resolve a hand-typed reply
-        # without burning a retry and falling through to the LLM.
-        option_labels.append(
-            [str(option.get("label") or option["id"]) for option in raw_options]
-            if raw_options
-            else None
-        )
-
-    already_confirmed = confirmed_metadata or {}
-    keep = [
-        index
-        for index, field in enumerate(missing_fields)
-        if field not in already_confirmed and options[index] is not None
-    ]
-    missing_fields = [missing_fields[index] for index in keep]
-    options = [options[index] for index in keep]
-    option_labels = [option_labels[index] for index in keep]
-
-    if not missing_fields:
-        # A known model slip: it sometimes appends `{"type": "ask_user_form",
-        # "fields": []}` after a complete answer (often triggered by an
-        # innocuous closing courtesy line like "let me know if you need
-        # anything else", misread as a clarification request). An empty
-        # `fields` array means nothing to ask - treat exactly like no block
-        # at all, rather than persisting a hollow PendingClarification that
-        # would make every future turn think a round is still open.
-        return None
-
-    retry_count = (
-        previous.retry_count
-        if previous is not None and previous.missing_fields == missing_fields
-        else 0
-    )
-    original_query = previous.original_query if previous is not None else user_query
-
-    # Only trust an ask_user_form's sub_query_id when it names one of THIS
-    # turn's sub-queries - a stale or made-up SQk would misroute the resume.
-    raw_sub_query_id = parsed.get("sub_query_id")
-    sub_query_match = (
-        _SUB_QUERY_ID_PATTERN.fullmatch(raw_sub_query_id)
-        if isinstance(raw_sub_query_id, str)
-        else None
-    )
-    pending_sub_query_id = (
-        raw_sub_query_id
-        if sub_query_match and 1 <= int(sub_query_match.group(1)) <= sub_query_count
-        else None
-    )
-
-    return PendingClarification(
-        origin_node=origin_node,
-        missing_fields=missing_fields,
-        options=options,
-        option_labels=option_labels,
-        retry_count=retry_count,
-        original_query=original_query,
-        pending_sub_query_id=pending_sub_query_id,
-        origin_tasks=origin_tasks,
-    )

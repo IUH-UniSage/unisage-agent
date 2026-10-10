@@ -469,7 +469,7 @@ def test_chat_detail_needs_an_identified_ai_admin(
     assert set(response.json()["errors"]) == {"reference"}
 
 
-_INJECTION_LOGGER = "app.api.v1.chat"
+_INJECTION_LOGGER = "app.services.chat_stream_service"
 _STUDENT_HEADERS = {
     "X-User-Id": "u-secret-id",
     "X-User-Role": "SINH_VIEN",

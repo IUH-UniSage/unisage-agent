@@ -14,7 +14,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import PendingClarification
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
@@ -22,11 +21,11 @@ from app.schemas.web_search import WebSearchResult
 from .builder import (
     append_recent_history,
     build_ask_user_form_guide,
+    build_calculation_results_section,
     build_history_section,
     build_json_repair_prompt,
     build_known_metadata_fields_section,
     build_metadata_section,
-    build_missing_metadata_block,
     build_prepared_context_section,
     build_task_2_section,
     render_resolved_user_query,
@@ -38,10 +37,11 @@ __all__ = [
     "PromptTemplates",
     "append_recent_history",
     "build_ask_user_form_guide",
+    "build_calculation_commentary_prompt",
+    "build_calculation_llm_prompt",
     "build_history_section",
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
-    "build_missing_metadata_block",
     "build_multi_intent_prompt",
     "build_system_prompt",
     "build_ticket_fallback_prompt",
@@ -58,7 +58,6 @@ def _base_params(
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
     web_results: Sequence[WebSearchResult],
-    pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage],
 ) -> dict[str, str]:
     """Blocks shared by every GenerationSynthesisNode frame."""
@@ -74,7 +73,7 @@ def _base_params(
         "citation_rules": templates.citation_rules,
         "prepared_context": build_prepared_context_section(chunks, web_results),
         "task_1": templates.task_1,
-        "task_2": build_task_2_section(pending_clarification),
+        "task_2": build_task_2_section(),
     }
 
 
@@ -85,9 +84,9 @@ def build_system_prompt(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
-    pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage] = (),
     web_results: Sequence[WebSearchResult] = (),
+    calculation_titles: Sequence[str] = (),
 ) -> str:
     """Advisory frame for a single question. `resolved_query` (the standalone
     rewrite of a follow-up) is shown ahead of the raw message."""
@@ -98,10 +97,10 @@ def build_system_prompt(
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
             web_results=web_results,
-            pending_clarification=pending_clarification,
             history=history,
         ),
         user_query=render_resolved_user_query(user_query, resolved_query),
+        calculation_results=build_calculation_results_section(calculation_titles),
     )
 
 
@@ -112,9 +111,9 @@ def build_multi_intent_prompt(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     chunks: Sequence[RetrievedChunk],
-    pending_clarification: PendingClarification | None,
     history: Sequence[HistoryMessage] = (),
     web_results: Sequence[WebSearchResult] = (),
+    calculation_titles: Sequence[str] = (),
 ) -> str:
     """Multi-intent frame for several sub-queries, listed as `SQk. ...`."""
 
@@ -124,11 +123,11 @@ def build_multi_intent_prompt(
             confirmed_metadata=confirmed_metadata,
             chunks=chunks,
             web_results=web_results,
-            pending_clarification=pending_clarification,
             history=history,
         ),
         sub_queries_list=render_sub_queries_list(sub_queries),
         user_query=user_query,
+        calculation_results=build_calculation_results_section(calculation_titles),
     )
 
 
@@ -157,3 +156,39 @@ def build_ticket_fallback_prompt(
 
 def render_sub_queries_list(sub_queries: Sequence[str]) -> str:
     return "\n".join(f"SQ{index}. {query}" for index, query in enumerate(sub_queries, 1))
+
+
+def build_calculation_commentary_prompt(*, user_query: str, calculation_payload: str) -> str:
+    """`main/chat_calculation.yaml`: the short note after a calculation-only turn."""
+
+    templates = get_templates()
+    return templates.chat_calculation.format(
+        header=templates.header,
+        response_style=templates.response_style,
+        calculation_payload=calculation_payload,
+        user_query=user_query,
+    )
+
+
+def build_calculation_llm_prompt(
+    *,
+    user_query: str,
+    builtin_rules: str,
+    documents: str,
+    known_values: str,
+    history: Sequence[HistoryMessage],
+) -> str:
+    """`main/chat_calculation_llm.yaml`: a calculation the LLM does itself (target
+    questions, formulas from documents, follow-ups) - everything but the forward
+    calculation of the built-in formulas."""
+
+    templates = get_templates()
+    return templates.chat_calculation_llm.format(
+        header=templates.header,
+        response_style=templates.response_style,
+        builtin_rules=builtin_rules,
+        documents=documents or "(không có tài liệu)",
+        known_values=known_values,
+        history=build_history_section(history),
+        user_query=user_query,
+    )

@@ -1,5 +1,5 @@
 # ACADEMIC_PROMPT_ASK_USER_FORM_GUIDE
-description: "Định dạng JSON ask_user_form để thu thập một hoặc nhiều thuộc tính còn thiếu. Options đến từ node trước (nguồn cố định) hoặc trích nguyên văn nhãn nhánh trong văn bản."
+description: "Định dạng JSON ask_user_form để thu thập một hoặc nhiều thuộc tính còn thiếu. Hệ thống lọc khối này khỏi câu trả lời (sinh viên không bao giờ thấy JSON) và dựng panel câu hỏi từ nó. Options trích nguyên văn nhãn nhánh trong văn bản."
 content: |
   ## ASK_USER_FORM_GUIDE — JSON FORM THU THẬP THUỘC TÍNH
 
@@ -18,14 +18,13 @@ content: |
   Ví dụ trên CHỈ minh hoạ định dạng. Tên field và options phải đến từ văn bản lượt này — viết field mà `<academic_context>` không hề nhắc tới là chép ví dụ, lỗi nghiêm trọng.
 
   - `fields` luôn là mảng; thứ tự mảng là thứ tự hiển thị (thuộc tính quan trọng/dễ trả lời lên đầu).
-  - `sub_query_id`: CHỈ thêm ở luồng nhiều câu hỏi con, ghi mã câu hỏi con còn thiếu (VD `"sub_query_id": "SQ2"`); câu hỏi đơn thì bỏ.
-  - `field`: có trong `<missing_metadata_to_confirm>` thì COPY nguyên văn. Tự phát hiện thì trùng khái niệm trong bảng dưới PHẢI dùng đúng tên đã liệt kê (tránh cùng khái niệm bị lưu hai tên, VD `nganh_hoc`/`nganh_dao_tao`); không trùng thì tự đặt (chữ thường, không dấu, nối `_`). Bảng không giới hạn field được hỏi; ngoại lệ là quy tắc "HỎI SÂU THÊM MỘT CẤP" ở NHIỆM VỤ 1.
+  - `field`: trùng khái niệm trong bảng dưới PHẢI dùng đúng tên đã liệt kê (tránh cùng khái niệm bị lưu hai tên, VD `nganh_hoc`/`nganh_dao_tao`); không trùng thì tự đặt (chữ thường, không dấu, nối `_`). Bảng không giới hạn field được hỏi; ngoại lệ là quy tắc "HỎI SÂU THÊM MỘT CẤP" ở NHIỆM VỤ 1.
 
     {known_metadata_fields}
 
-  - `label`: nhãn ngắn theo ngôn ngữ người dùng.
-  - `options`: BẮT BUỘC ≥ 2 lựa chọn, KHÔNG BAO GIỜ `null` (hệ thống drop field `options: null`). Nguồn node trước → copy nguyên văn. Nguồn văn bản → `id` là nhãn nhánh nguyên văn hoặc dạng không dấu của nó, liệt kê ĐỦ mọi nhánh văn bản có, đúng thứ tự (VD văn bản có bảng 10 ngành → đủ 10 ngành); không bịa nhánh. `label` chỉ để hiển thị, backend map theo `id`.
-  - Thuộc tính không có tập giá trị hữu hạn (GPA, số tín chỉ, điểm rèn luyện) KHÔNG đưa vào form, không bịa lựa chọn — nêu ngưỡng văn bản quy định ("GPA tối thiểu 2.0 [1]") và mời người dùng tự đối chiếu.
+  - `label`: nhãn ngắn theo ngôn ngữ người dùng (dùng làm tiêu đề tab và câu hỏi trên panel).
+  - `options`: BẮT BUỘC ≥ 2 lựa chọn, KHÔNG BAO GIỜ `null` (hệ thống drop field `options: null`). `id` là nhãn nhánh nguyên văn hoặc dạng không dấu của nó, liệt kê ĐỦ mọi nhánh văn bản có, đúng thứ tự (VD văn bản có bảng 10 ngành → đủ 10 ngành); không bịa nhánh. `label` chỉ để hiển thị, backend map theo `id`.
+  - Thuộc tính không có tập giá trị hữu hạn (GPA, số tín chỉ, điểm rèn luyện) KHÔNG đưa vào form, không bịa lựa chọn — nêu ngưỡng văn bản quy định ("GPA tối thiểu 2.0 [1]"). Panel luôn tự thêm lựa chọn "Khác" cho sinh viên tự nhập, nên KHÔNG thêm option "Khác" vào JSON.
   - Thuộc tính LỒNG NHAU (VD `loai_hinh_clc` chỉ tồn tại khi `he_dao_tao = chinh_quy_clc`) KHÔNG chung form — hỏi cái gốc trước.
   - Quá 4 field là dấu hiệu nên dùng CÁCH 1 thay vì hỏi.
   - KHÔNG liệt kê lại các option bằng văn xuôi — chỉ để trong JSON.

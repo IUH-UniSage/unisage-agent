@@ -166,10 +166,15 @@ tiết và các khoảng trống đã biết.
 - **`confirmed_metadata`** — thuộc tính sinh viên **tự khai** (hệ đào tạo, khoá...), khác hẳn
   `AcademicSecurityContext` (xác thực từ JWT). Chỉ dùng để chọn nhánh quy định, không bao giờ dùng
   làm điều kiện lọc tài liệu.
-- **`pending_clarification`** — một vòng hỏi-lại đang mở khi LLM cần thêm thuộc tính mới trả lời tiếp
-  được. Có hai nguồn: Type A (CalculationNode tự biết thiếu gì trước khi gọi generation) và Type B
-  (GenerationSynthesisNode tự phát hiện lúc đọc văn bản, ghi vào output dưới dạng khối
-  ```json ask_user_form```).
+- **clarification panel / `PendingRound`** — một vòng hỏi-lại đang mở: panel nhiều tab (mỗi câu hỏi
+  một tab, hỏi đủ mọi câu, không giới hạn số panel nối tiếp) hiển thị phía trên ô chat, sinh viên phải trả lời hết hoặc huỷ. Câu hỏi đến
+  từ hai nguồn trong cùng lượt: tham số tính toán còn thiếu (dựng từ `ParamSpec`) và khối
+  ```json ask_user_form``` mà GenerationSynthesisNode sinh ra (bị lọc khỏi câu trả lời). State nằm ở
+  `conversation_clarification_states` (`none → OPEN → PROCESSING → none | OPEN`).
+- **công thức cài sẵn / AI tự tính** — GPA, điểm tổng kết học phần, quy đổi điểm nằm sẵn trong
+  `app/calculation/formulas.py` và do Python tính xuôi. Mọi phép tính khác (hỏi ngược "cần bao nhiêu để
+  được A+", công thức trong tài liệu) do LLM tự tính, luôn gắn nhãn "Kết quả do AI tự tính, có thể sai"
+  và có nút Đúng/Sai.
 - **rerank** — bước chấm lại điểm liên quan giữa câu hỏi và từng chunk sau khi retrieval trả về. Hiện
   chỉ lọc ngưỡng trên điểm cosine có sẵn, chưa có cross-encoder thật (xem `known-gaps.md`).
 - **`is_public`** — cờ trên một chunk (kế thừa từ `Document.isPublic` bên `unisage-backend`): `true`
@@ -218,8 +223,9 @@ nhiều, hoặc chunk đúng lấy được nhưng xếp sai thứ hạng), ph�
 - Không tự xác thực người dùng — luôn tin header Gateway đã xác thực sẵn.
 - Không lưu nội dung hội thoại — đó là việc của `unisage-backend`.
 - Không tự nâng quyền qua bất kỳ hình thức tự khai nào trong hội thoại.
-- Không tính toán học vụ thật (GPA, học phí) — `CalculationNode` hiện chỉ là placeholder, trả thông
-  báo "đang phát triển", chưa gọi Calculator Tool hay lấy dữ liệu điểm sinh viên.
+- Không lấy điểm thật của sinh viên — chỉ tính từ số liệu sinh viên tự nhập trong hội thoại (UNISAGE-99).
+- Không để LLM tự tính hay tự bịa công thức — không tìm thấy hoặc không chắc công thức thì nói không
+  tính được.
 - Không có kho lưu trữ hội thoại lâu dài riêng của mình.
 - Không tạo phòng ban/quyền hạn — đọc từ `department_access` do Gateway bơm, không tự định nghĩa.
 - Không tự đăng ký hay sửa cấu hình model LLM — đó là việc của Super Admin qua `unisage-backend`.
@@ -230,6 +236,6 @@ nhiều, hoặc chunk đúng lấy được nhưng xếp sai thứ hạng), ph�
 
 - `OPEN — chủ sản phẩm`: ngưỡng rerank đúng nên là bao nhiêu, sau khi có bộ câu hỏi đo thật? — hiện
   chưa có default: chờ số đo.
-- `OPEN — nghiệp vụ`: `CalculationNode` lấy dữ liệu điểm/tín chỉ/học phí từ đâu — gọi ngược
-  `unisage-backend`, hay chỉ tính từ số liệu người dùng tự nhập trong hội thoại? — default hiện tại:
-  placeholder, chưa quyết.
+- `OPEN — chủ sản phẩm`: tỉ lệ đúng của phép tính do AI tự tính — chưa có eval trước phát hành (đã
+  chốt bỏ); theo dõi qua phản hồi Đúng/Sai và ticket `AI_CALCULATION_WRONG`, tắt bằng
+  `CHAT_CALC_LLM_ENABLED` nếu cần.

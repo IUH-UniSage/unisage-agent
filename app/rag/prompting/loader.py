@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -75,10 +77,12 @@ def _load_all_templates() -> PromptTemplates:
     main = templates_dir / "main"
     agents = templates_dir / "agents"
 
-    return PromptTemplates(
+    templates = PromptTemplates(
         chat_academic_advisory=_load_yaml_template(main / "chat_academic_advisory.yaml"),
         chat_multi_intent_synthesis=_load_yaml_template(main / "chat_multi_intent_synthesis.yaml"),
         chat_ticket_fallback=_load_yaml_template(main / "chat_ticket_fallback.yaml"),
+        chat_calculation=_load_yaml_template(main / "chat_calculation.yaml"),
+        chat_calculation_llm=_load_yaml_template(main / "chat_calculation_llm.yaml"),
         json_repair=_load_yaml_template(main / "json_repair.yaml"),
         agent_hyde_generator=_load_yaml_template(agents / "hyde_generator.yaml"),
         agent_message_classification=_load_yaml_template(agents / "message_classification.yaml"),
@@ -103,6 +107,11 @@ def _load_all_templates() -> PromptTemplates:
         task_1=_load_yaml_template(common / "task_1.yaml"),
         task_2=_load_yaml_template(common / "task_2.yaml"),
         ask_user_form_guide=_load_yaml_template(common / "ask_user_form_guide.yaml"),
-        confirmed_metadata_guide=_load_yaml_template(common / "confirmed_metadata_guide.yaml"),
         ticket_fallback=_load_yaml_template(common / "ticket_fallback.yaml"),
     )
+    versions = {
+        item.name: hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+        for item in fields(templates)
+        if isinstance(value := getattr(templates, item.name), str)
+    }
+    return replace(templates, versions=versions)

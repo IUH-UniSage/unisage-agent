@@ -312,3 +312,38 @@ class StorageUnavailableException(UniSageException):
             ErrorCode.STORAGE_ERROR,
             message=f"Không truy cập được kho lưu trữ file (MinIO): {reason}. Thử lại sau nhé.",
         )
+
+
+class ClarificationInvalidException(UniSageException):
+    """A panel submit failed validation against the stored panel; `errors` maps
+    question_id -> reason. The panel stays open."""
+
+    def __init__(self, errors: dict[str, str]) -> None:
+        super().__init__(ErrorCode.CLARIFICATION_INVALID, errors=errors)
+
+
+class ClarificationStaleException(UniSageException):
+    """The panel was already answered/cancelled, is being answered by another request,
+    or the panel_id is not the open one."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.CLARIFICATION_STALE)
+
+
+class ClarificationPendingException(UniSageException):
+    """A plain message while a panel is open - it must be answered or cancelled first."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.CLARIFICATION_PENDING)
+
+
+class ClarificationProcessingException(UniSageException):
+    """A plain message while the previous panel answer is still being processed."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.CLARIFICATION_PROCESSING)
+
+
+class RequestTooLargeException(UniSageException):
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.REQUEST_TOO_LARGE)

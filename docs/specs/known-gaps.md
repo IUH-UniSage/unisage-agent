@@ -309,29 +309,49 @@ matched conversations. If matches are mostly real attacks, consider refusing wit
 template (like OffTopic); if attacks get through without a match, consider an LLM classifier
 instead of more regex.
 
-### `CalculationNode` is a placeholder
+### Resuming a clarification round re-runs every advisory origin task
 
-No extractor, no Calculator Tool, no data source for scores/tuition figures.
-`app/graph/nodes/calculation.py` streams a static "under development" message
-and never calls an LLM or tool.
+One generation call answers all advisory tasks of a turn, so its `ask_user_form` questions belong
+to one `PendingAdvisoryTask` holding every origin task; a panel submit re-runs all of them on
+the original question, even if only one actually needed the answer. Splitting a panel answer
+across advisory tasks precisely is future work. (Calculation tasks resume one by one - they keep
+their own parameters.)
 
-### Resuming a clarification round in the MULTI flow re-runs every origin task
+### LLM-computed calculations can be wrong
 
-`PendingClarification.origin_tasks` lets a resume turn re-run exactly the
-advisory tasks that were running when the round started, at their own modes
-(see AD6/AD15). But it always re-runs **all** of them - `pending_sub_query_id`
-(which `SQk` the `ask_user_form` actually targeted) is recorded and
-round-tripped through the database, but nothing yet uses it to resume only
-the one sub-query that was missing information. Splitting a form reply across
-several tasks/sub-queries this precisely is future work.
+Only the forward calculation of the 3 built-in formulas is done by Python. Target questions
+("cuối kỳ cần bao nhiêu để được A+"), formulas found in documents and follow-ups are computed
+by the LLM (`main/chat_calculation_llm.yaml`), which can misapply a rounding step, pick the
+wrong case of a formula, or take a number from the wrong earlier calculation in the chat.
+There is no pre-release eval (product decision, UNISAGE-99). Mitigations: the built-in rules
+are given verbatim (`describe_builtin_rules()`), the answer must check its result by
+substituting it back, every such answer is labelled "Kết quả do AI tự tính, có thể sai" with
+its sources, the kill switch `CHAT_CALC_LLM_ENABLED` turns it off, and Đúng/Sai feedback files
+an `AI_CALCULATION_WRONG` ticket with the staff-only trace (question, known values, full answer,
+cited chunks).
 
-### A turn needing clarification from two branches at once isn't supported
+**When to revisit:** once tickets show a pattern - e.g. move a frequent target question back to
+deterministic code.
 
-`PendingClarification` has a single `origin_node`. Today only the advisory
-branch (node 06 onward) can raise a clarification form - `CalculationNode` is
-still a placeholder and never does. Once CalculationNode does real work, a
-turn where both the calculation and advisory branches need to ask something
-in the same turn has no way to hold two clarification rounds in parallel.
+### A guest's "Sai" vote creates no ticket
+
+`tickets.user_id` is NOT NULL, so a guest's feedback is only stored in
+`messages.metadata.calculation_feedback`; staff don't see it in the ticket screen. A dedicated
+feedback table (with statistics) is a separate ticket.
+
+### A failed claimed turn loses its panel
+
+If the graph fails after a panel submit was claimed and `start_turn` created the USER message,
+the round is consumed, not restored (product decision): the USER message with the answer summary
+is in history, so the student can simply ask again with full context.
+
+### A process frozen longer than the clarification lease
+
+The claimed turn's hard deadline (`CHAT_CLAIMED_TURN_DEADLINE_SECONDS`) runs in the event loop;
+a process stopped entirely (SIGSTOP, VM pause) past the lease (`CHAT_CLARIFICATION_LEASE_SECONDS`)
+can wake up after another request took the conversation over. Every state write is fenced by
+`claim_token` and the finalize PATCH is skipped when the claim was lost, so only SSE tokens to
+the long-disconnected old client could leak.
 
 ### At most 3 tasks per message
 
@@ -358,12 +378,3 @@ retrieval. No evaluation data yet on how often the decomposer actually fails
 on genuinely independent (non-comparison) questions - if this turns out to
 be common, the HyDE fallback would need its own multi-question handling
 instead of treating the merged text as one question.
-
-### Calculation results don't reach `GenerationSynthesisNode`'s prompt
-
-While `CalculationNode` is a placeholder, its static message is appended
-after the advisory answer deterministically (string concatenation outside
-the LLM, see AD14) rather than being reasoned about together with the
-advisory answer. Once CalculationNode does real work, its result should flow
-into node 10's prompt so the model can phrase both parts as one coherent
-answer instead of two concatenated pieces.

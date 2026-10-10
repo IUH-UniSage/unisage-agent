@@ -13,6 +13,12 @@ template: |
   {task_1}
   {task_2}
 
+  ## Phép Tính Đã Trình Bày Phía Trên
+  <calculation_results>
+  {calculation_results}
+  </calculation_results>
+  Nếu khác "Không có": hệ thống ĐÃ hiển thị đầy đủ các phép tính này (công thức, các bước, kết quả) ngay trước câu trả lời của bạn. KHÔNG tính lại, KHÔNG chép lại số liệu hay các bước; chỉ trả lời phần tư vấn và có thể nhắc "như kết quả tính ở trên" khi cần.
+
   ## Hướng Dẫn Xử Lý
   Dựa vào bối cảnh trích xuất ở trên (`<academic_context>`, và `<websearch>` nếu có), hãy trả lời trực
   diện, đầy đủ và chính xác câu hỏi của người dùng bên dưới. Áp đúng quy tắc

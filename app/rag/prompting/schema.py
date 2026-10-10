@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,8 @@ class PromptTemplates:
     chat_academic_advisory: str
     chat_multi_intent_synthesis: str
     chat_ticket_fallback: str
+    chat_calculation: str
+    chat_calculation_llm: str
     json_repair: str
 
     # Agents (system prompts of single-purpose LLM nodes)
@@ -37,5 +40,8 @@ class PromptTemplates:
     task_1: str
     task_2: str
     ask_user_form_guide: str
-    confirmed_metadata_guide: str
     ticket_fallback: str
+
+    # sha256[:12] of each template's text, by attribute name - the prompt version
+    # recorded in calculation traces.
+    versions: Mapping[str, str] = field(default_factory=dict)

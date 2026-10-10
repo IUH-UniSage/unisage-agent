@@ -20,6 +20,9 @@ This client is tested entirely with `httpx.MockTransport`, never a live
 Java instance.
 """
 
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 import httpx
@@ -28,6 +31,9 @@ from app.core.config import settings
 
 MessageRole = Literal["USER", "ASSISTANT"]
 MessageStatus = Literal["PENDING", "STREAMING", "COMPLETED", "ERROR"]
+
+
+logger = logging.getLogger(__name__)
 
 
 class BackendJavaError(Exception):
@@ -233,14 +239,21 @@ class BackendJavaClient:
         content: str,
         authorization: str | None = None,
         guest_session_token: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """`POST /messages/turn`: history + USER message + STREAMING placeholder in one call."""
+        """`POST /messages/turn`: history + USER message + STREAMING placeholder in one call.
 
+        `metadata` (only `clarification_answers`) is stored on the USER message in the
+        same transaction - the answered-panel card's data."""
+
+        body: dict[str, Any] = {"conversationId": conversation_id, "content": content}
+        if metadata is not None:
+            body["metadata"] = metadata
         result = await self._request(
             "POST",
             "/messages/turn",
             authorization=authorization,
-            json_body={"conversationId": conversation_id, "content": content},
+            json_body=body,
             guest_session_token=guest_session_token,
         )
         return dict(result) if result is not None else {}
@@ -293,6 +306,31 @@ class BackendJavaClient:
             json_body=body,
         )
         return dict(result) if result is not None else {}
+
+    async def cancel_clarification(self, *, message_id: str, conversation_id: str) -> None:
+        """`PATCH /internal/messages/{id}/clarification` - flips the panel projection in the
+        ASSISTANT message's metadata from `open` to `cancelled`. Idempotent on Java's side;
+        retried by the caller."""
+
+        await self._request(
+            "PATCH",
+            f"/internal/messages/{message_id}/clarification",
+            authorization=None,
+            json_body={"conversationId": conversation_id, "status": "cancelled"},
+        )
+
+    async def push_calculation_traces(
+        self, *, message_id: str, items: list[dict[str, Any]]
+    ) -> None:
+        """`POST /internal/calculation-traces` - the staff-only trace of each calculation
+        (question, numbers, formula, source, models). Upserted by (message, item)."""
+
+        await self._request(
+            "POST",
+            "/internal/calculation-traces",
+            authorization=None,
+            json_body={"messageId": message_id, "items": items},
+        )
 
     async def get_model_registry_version(self) -> int:
         """`GET /internal/model-registry/version`.
@@ -544,3 +582,24 @@ class BackendJavaClient:
             params=params or None,
         )
         return list(result) if result is not None else []
+
+
+JAVA_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.2, 0.4, 0.8)
+
+
+async def with_java_retries(call: Callable[[], Awaitable[object]], *, what: str) -> bool:
+    """Run a Java call up to 1 + len(JAVA_RETRY_DELAYS_SECONDS) times; True on success.
+
+    For writes that must land (the clarification projection, the final message
+    state) - Java's endpoints for these are idempotent, so a retry is safe.
+    """
+
+    for attempt, delay in enumerate((0.0, *JAVA_RETRY_DELAYS_SECONDS), start=1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await call()
+            return True
+        except BackendJavaError:
+            logger.warning("%s failed (attempt %d)", what, attempt, exc_info=True)
+    return False

@@ -1,6 +1,6 @@
 """Typed items pushed onto the queue between `run_and_persist` (producer) and
 `_sse_token_generator` (consumer) - `app/graph/streaming_session.py` /
-`app/api/v1/chat.py`.
+`app/services/chat_stream_service.py`.
 
 Replaces the old `str | None` scheme (a token string, or `None` as the
 end-of-stream sentinel) with a small closed set of item types, so an error
@@ -11,6 +11,7 @@ before the single `DoneItem` that ends every stream.
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -44,9 +45,27 @@ class WarningItem:
 
 
 @dataclass(frozen=True)
+class ClarificationItem:
+    """One `event: clarification` - the public panel JSON (contracts/chat-sse.md §3).
+    Only queued after the round is stored AND projected into the message metadata."""
+
+    panel: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ClarificationClosedItem:
+    """`event: clarification_closed` - only in a cancel response."""
+
+    panel_id: str
+    status: str = "cancelled"
+
+
+@dataclass(frozen=True)
 class DoneItem:
     """End-of-stream sentinel - always the last item on the queue, put in
     `run_and_persist`'s outer `finally` no matter what happened before it."""
 
 
-QueueItem = TokenItem | ErrorItem | WarningItem | DoneItem
+QueueItem = (
+    TokenItem | ErrorItem | WarningItem | ClarificationItem | ClarificationClosedItem | DoneItem
+)
