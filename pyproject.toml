@@ -103,5 +103,7 @@ module = [
     "evals.crawl.download",
     "evals.crawl.triage",
     "evals.questions.plan",
+    "evals.titles",
+    "tests.evals.test_titles",
 ]
 disallow_untyped_calls = false
