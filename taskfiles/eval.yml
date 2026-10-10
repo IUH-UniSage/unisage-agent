@@ -1,0 +1,18 @@
+version: '3'
+
+vars:
+  DATASET: '{{.DATASET | default "../unisage-gateway/dataset/official"}}'
+  DEMO_LIST: '{{.DATASET}}/../demo/demo_manifest.csv'
+
+tasks:
+  ingest:
+    desc: "Nạp tài liệu selected của manifest qua luồng upload thật (vd task eval:ingest env=eval -- --limit 1)"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} evals.ingest --dataset "{{.DATASET}}" {{.CLI_ARGS}}'
+
+  ingest:demo:
+    desc: "Nạp 106 tài liệu của bộ demo (vd task eval:ingest:demo env=eval -- --dry-run)"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} evals.ingest --dataset "{{.DATASET}}" --only "{{.DEMO_LIST}}" {{.CLI_ARGS}}'
