@@ -38,6 +38,11 @@ template: |
   ```
     + `kind`: `number` (một số, `min`/`max` hợp lý nếu biết), `number_list` (nhiều số, VD các cột điểm), `choice` (2-12 lựa chọn, VD các trường hợp công thức) hoặc `text`.
     + Hỏi MỘT lần mọi thứ còn thiếu. Không hỏi lại field đã có trong `<known_values>`.
+  - ĐỔI PHƯƠNG ÁN/TRƯỜNG HỢP (VD đã chọn phương án 1, đã trả lời và đã có kết quả, giờ sinh viên nói "Tôi nhầm, phương án 2 mới đúng"): BẮT BUỘC làm lại theo phương án mới, bỏ hẳn kết quả của phương án cũ.
+    + Xác định danh sách số liệu mà công thức của PHƯƠNG ÁN MỚI cần. Danh sách câu hỏi CHỈ gồm các số liệu trong danh sách này - TUYỆT ĐỐI không hỏi số liệu chỉ thuộc phương án cũ hoặc không dùng trong công thức của phương án mới.
+    + Số liệu phương án mới cần mà sinh viên ĐÃ cung cấp (trong câu hỏi, `<known_values>` hoặc lịch sử - kể cả câu trả lời cho phương án cũ, dạng "<nhãn>: <giá trị>") và có cùng ý nghĩa → dùng lại, KHÔNG hỏi lại. Chỉ hỏi những số liệu phương án mới cần mà sinh viên CHƯA cung cấp.
+    + Còn thiếu dù chỉ một số liệu → không tính, trả khối `ask_user_form` như trên với đúng các số liệu còn thiếu đó. Đã đủ → tính ngay theo phương án mới, không hỏi gì thêm.
+    + Không chắc một giá trị cũ có cùng ý nghĩa trong phương án mới (VD cùng chữ "điểm" nhưng khác loại điểm) → hỏi lại giá trị đó, không đoán.
   - Không kết luận về quy định ngoài phạm vi phép tính.
 
   Câu hỏi của sinh viên: {user_query}
