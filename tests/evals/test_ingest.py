@@ -12,6 +12,8 @@ from evals.ingest import (
     Run,
     UniSageClient,
     document_fields,
+    is_quota,
+    link_rows,
     pick_rows,
     target_for,
 )
@@ -44,7 +46,14 @@ def _ok(data: Any) -> httpx.Response:
 class FakeStack:
     """Gateway stand-in recording every call."""
 
-    def __init__(self, *, empty_text: bool = False, task_states: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        empty_text: bool = False,
+        task_states: list[str] | None = None,
+        failure_message: str = "boom",
+    ) -> None:
+        self.failure_message = failure_message
         self.calls: list[tuple[str, str]] = []
         self.empty_text = empty_text
         self.task_states = task_states or ["SUCCESS"]
@@ -71,18 +80,21 @@ class FakeStack:
         if path == "/api/v1/ai/ingestion/jobs/doc-1":
             state = self.task_states.pop(0) if len(self.task_states) > 1 else self.task_states[0]
             return _ok(
-                {"task_state": state, "task_message": "boom" if state == "FAILURE" else None}
+                {
+                    "task_state": state,
+                    "task_message": self.failure_message if state == "FAILURE" else None,
+                }
             )
         return httpx.Response(404, json={"code": 404, "message": path})
 
 
-def _run(tmp_path: Path, stack: FakeStack, rows: list[dict[str, str]]) -> DownloadState:
+def _run(tmp_path: Path, stack: FakeStack, rows: list[dict[str, str]], **run: Any) -> DownloadState:
     (tmp_path / "files" / "pdt").mkdir(parents=True)
     (tmp_path / "files" / "pdt" / "a1.pdf").write_bytes(b"%PDF")
     write_csv(tmp_path / "manifest.csv", list(rows[0]), rows)
     state = DownloadState(tmp_path)
     client = UniSageClient(httpx.Client(base_url="http://gw", transport=httpx.MockTransport(stack)))
-    Run(client, state, LABELS, poll_seconds=0).ingest(pick_rows(state, None, None))
+    Run(client, state, LABELS, poll_seconds=0, **run).ingest(pick_rows(state, None, None))
     return state
 
 
@@ -170,3 +182,75 @@ def test_api_error_names_the_call_and_keeps_a_spring_error_body() -> None:
     message = str(caught.value)
     assert message.startswith("POST /api/v1/master/documents -> 500")
     assert "Internal Server Error" in message
+
+
+def test_link_rows_matches_hand_ingested_documents_by_title() -> None:
+    documents = [
+        {"id": "doc-a", "title": "Quy chế học vụ"},
+        {"id": "doc-b", "title": "Hai bản"},
+        {"id": "doc-c", "title": "Hai bản"},
+        {"id": "doc-d", "title": "Chưa embedding"},
+    ]
+    jobs = {"doc-a": {"task_state": "SUCCESS"}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/v1/master/documents":
+            return _ok({"data": documents, "totalPages": 1})
+        document_id = path.rsplit("/", 1)[-1]
+        if document_id in jobs:
+            return _ok(jobs[document_id])
+        return httpx.Response(404, json={"code": 4040, "message": "no job"})
+
+    client = UniSageClient(
+        httpx.Client(base_url="http://gw", transport=httpx.MockTransport(handler))
+    )
+    rows = [
+        _row(file_id="a1", title="Quy chế học vụ"),
+        _row(file_id="b2", title="Hai bản"),
+        _row(file_id="c3", title="Chưa embedding"),
+        _row(file_id="d4", title="Không có trên web"),
+    ]
+
+    unmatched = link_rows(client, rows)
+
+    assert (rows[0]["document_id"], rows[0]["ingest_status"]) == ("doc-a", "done")
+    assert rows[1]["document_id"] == ""
+    assert (rows[2]["document_id"], rows[2]["ingest_status"]) == ("doc-d", "uploaded")
+    assert unmatched == ["Hai bản (2 matches)", "Không có trên web (0 matches)"]
+
+
+QUOTA_MESSAGE = "1/1 đoạn nạp liệu thất bại. Lỗi đầu tiên (đoạn #0): đã hết hạn mức/credit."
+
+
+def test_quota_stops_starting_new_rows_and_marks_the_row_for_later(tmp_path: Path) -> None:
+    stack = FakeStack(task_states=["FAILURE", "SUCCESS"], failure_message=QUOTA_MESSAGE)
+    state = _run(tmp_path, stack, [_row(), _row(file_id="b2", sha256="b2")], max_inflight=1)
+
+    statuses = {row["file_id"]: row["ingest_status"] for row in state.manifest}
+    assert statuses == {"a1": "quota", "b2": ""}
+    assert len(stack.uploads) == 1
+    assert pick_rows(state, None, None)[0]["file_id"] == "a1"
+
+
+def test_quota_waits_then_retries_and_finishes(tmp_path: Path) -> None:
+    stack = FakeStack(task_states=["FAILURE", "SUCCESS"], failure_message=QUOTA_MESSAGE)
+    slept: list[float] = []
+    state = _run(
+        tmp_path,
+        stack,
+        [_row(), _row(file_id="b2", sha256="b2")],
+        max_inflight=1,
+        quota_wait=60,
+        sleep=slept.append,
+    )
+
+    assert [row["ingest_status"] for row in state.manifest] == ["done", "done"]
+    assert 60 in slept
+    assert len(stack.uploads) == 2  # a1 is re-chunked from its existing document, not re-uploaded
+
+
+def test_is_quota_reads_the_code_or_the_message() -> None:
+    assert is_quota(5010, "")
+    assert is_quota(None, "Đã đạt giới hạn ngân sách sử dụng mô hình AI")
+    assert not is_quota(5008, "API key không hợp lệ")

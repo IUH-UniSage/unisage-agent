@@ -45,7 +45,7 @@ tasks:
         printf "{{.C}}{{.L}}{{.R}}  {{.Y}}MÔI TRƯỜNG (env){{.R}}  thêm env=eval|prod vào be:* / db:* (mặc định dev)\n"
         printf "{{.C}}{{.L}}{{.R}}    {{.G}}task be:dev env=eval{{.R}}        - Chạy với .env.eval (đè lên .env)\n"
         printf "{{.C}}{{.L}}{{.R}}    {{.G}}task env:show env=eval{{.R}}      - In DB/bucket/collection/Redis đang trỏ tới\n"
-        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task eval:ingest:demo env=eval{{.R}} - Nạp 106 tài liệu demo qua luồng upload thật\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task eval:ingest set=demo|official env=eval{{.R}} - Nạp tài liệu (eval:link = ghép tài liệu ingest tay)\n"
         printf "{{.C}}{{.L}}{{.R}}\n"
         printf "{{.C}}{{.BOX_BTM}}{{.R}}\n"
     silent: true
