@@ -42,7 +42,10 @@ from evals.dataset.titles import upload_name
 
 SUCCESS_CODE = 1000
 EMPTY_TEXT_CODE = 4221
-CHUNKING = {"strategy": "markdown_aware", "params": {"chunk_size": 800, "overlap": 120}}
+CHUNKING = {
+    "strategy": "semantic",
+    "params": {"target_tokens": 800, "overlap_ratio": 0.2, "similarity_threshold": 0.3},
+}
 FINISHED = {"done", "empty_text"}
 TERMINAL_TASK_STATES = {"SUCCESS", "FAILURE", "PARTIAL_FAILURE", "REVOKED"}
 # Agent error codes meaning "the model provider/budget refused for now" (app/core/errors):
@@ -132,7 +135,9 @@ class UniSageClient:
         return _data(self.http.get(f"/api/v1/master/documents/{document_id}"))
 
     def chunk(self, body: dict[str, Any]) -> list[dict[str, Any]]:
-        return list(_data(self.http.post("/api/v1/ai/ingestion/chunking", json=body))["chunks"])
+        # semantic chunking embeds every sentence: a long PDF runs for minutes
+        response = self.http.post("/api/v1/ai/ingestion/chunking", json=body, timeout=600)
+        return list(_data(response)["chunks"])
 
     def embed(self, body: dict[str, Any]) -> None:
         _data(self.http.post("/api/v1/ai/ingestion/embedding", json=body))
