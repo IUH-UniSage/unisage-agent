@@ -46,6 +46,7 @@ tasks:
         printf "{{.C}}{{.L}}{{.R}}    {{.G}}task be:dev env=eval{{.R}}        - Chạy với .env.eval (đè lên .env)\n"
         printf "{{.C}}{{.L}}{{.R}}    {{.G}}task env:show env=eval{{.R}}      - In DB/bucket/collection/Redis đang trỏ tới\n"
         printf "{{.C}}{{.L}}{{.R}}    {{.G}}task eval:ingest set=demo|official env=eval{{.R}} - Nạp tài liệu (eval:link = ghép tài liệu ingest tay)\n"
+        printf "{{.C}}{{.L}}{{.R}}    {{.G}}task eval:run env=eval{{.R}}      - Chạy bộ câu hỏi qua graph, ghi runs/<tên>/results.jsonl + summary\n"
         printf "{{.C}}{{.L}}{{.R}}\n"
         printf "{{.C}}{{.BOX_BTM}}{{.R}}\n"
     silent: true

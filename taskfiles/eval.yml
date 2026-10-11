@@ -49,3 +49,11 @@ tasks:
       - |
         {{.RESOLVE}}
         {{.UV_RUN}} evals.qdrant_titles --dataset "$dataset" $only {{.CLI_ARGS}}
+
+  run:
+    desc: "Chạy bộ câu hỏi qua graph (in-process) và chấm phần không cần LLM; set=demo|official. Vd task eval:run env=eval -- --limit 20 --variant both"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - |
+        {{.RESOLVE}}
+        {{.UV_RUN}} evals.run --dataset "$dataset" --set "{{.SET}}" {{.CLI_ARGS}}

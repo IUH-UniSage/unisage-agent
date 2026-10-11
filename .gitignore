@@ -54,3 +54,5 @@ htmlcov/
 
 # Celery Beat's local schedule state (shelve DB) - runtime artifact, not code
 celerybeat-schedule*
+# evals.run output (answers, retrieved chunks)
+runs/

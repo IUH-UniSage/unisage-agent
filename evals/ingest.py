@@ -26,6 +26,7 @@ Usage (from unisage-agent, eval stack running):
 
 import argparse
 import csv
+import json
 import os
 import sys
 import time
@@ -347,6 +348,17 @@ class Run:
             pending = self._pass(pending)
 
 
+DEPARTMENTS_FILE = "departments.json"
+
+
+def save_departments(dataset: Path, departments: dict[str, str]) -> None:
+    """Department code -> backend UUID of the environment just ingested into; `evals.run`
+    reads it to turn a persona's department codes into the UUIDs stored in Qdrant."""
+
+    path = dataset / DEPARTMENTS_FILE
+    path.write_text(json.dumps(departments, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
 def link_rows(client: UniSageClient, rows: list[dict[str, str]]) -> list[str]:
     """For documents created by hand in the web wizard: find each row's document by
     `title`, record its `document_id`, and set `ingest_status` from the agent's job
@@ -459,12 +471,14 @@ def main() -> None:
         client = UniSageClient(http)
         client.login(args.code, password)
         if args.link:
+            save_departments(args.dataset, client.department_ids())
             unmatched = link_rows(client, rows)
             state.save()
             for title in unmatched:
                 print(f"  ! no single document titled: {title}", file=sys.stderr)
         else:
             labels = Labels(client.department_ids(), client.access_level_ids())
+            save_departments(args.dataset, labels.departments)
             Run(
                 client,
                 state,
