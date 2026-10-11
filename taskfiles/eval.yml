@@ -41,3 +41,11 @@ tasks:
     cmds:
       - task: ingest
         vars: { set: demo, env: '{{.env}}', dataset: '{{.dataset}}', CLI_ARGS: '{{.CLI_ARGS}}' }
+
+  qdrant:titles:
+    desc: "Đặt tên citation (object_key = <tiêu đề>.pdf) cho chunk đã có trong Qdrant, không ingest lại; set=demo|official (thêm -- --dry-run)"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - |
+        {{.RESOLVE}}
+        {{.UV_RUN}} evals.qdrant_titles --dataset "$dataset" $only {{.CLI_ARGS}}
