@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import hmac
 import logging
@@ -75,9 +76,9 @@ async def preview_document(
     """Fetch the stored object and return its raw extracted text."""
 
     require_department_membership(request.department_id, context)
-    content = minio_client.get_object_bytes(request.object_key)
-    raw_text = parse_or_raise(
-        lambda: extract_raw_text(content, request.object_key), request.object_key
+    content = await asyncio.to_thread(minio_client.get_object_bytes, request.object_key)
+    raw_text = await asyncio.to_thread(
+        parse_or_raise, lambda: extract_raw_text(content, request.object_key), request.object_key
     )
     return ApiResponse.success(PreviewResponse(raw_text=raw_text))
 
@@ -92,7 +93,7 @@ async def chunk_document(
     """Fetch the stored object fresh and chunk it with the requested strategy."""
 
     require_department_membership(request.department_id, context)
-    content = minio_client.get_object_bytes(request.object_key)
+    content = await asyncio.to_thread(minio_client.get_object_bytes, request.object_key)
     chunks = await strategy.dispatch(
         request.strategy,
         request.params,
@@ -345,13 +346,29 @@ async def ingestion_events(
     allowed_departments = {entry.department_id for entry in context.department_access}
     forward_all = context.has_wildcard_department_access
 
-    await websocket.accept()
-    try:
+    async def relay() -> None:
         async for frame in ingestion_event_stream():
             if forward_all or frame.get("department_id") in allowed_departments:
                 await websocket.send_json(frame)
-    except WebSocketDisconnect:
-        return
+
+    async def wait_for_disconnect() -> None:
+        # The relay only ever writes, so on its own it would not notice a
+        # client that went away until the next frame - holding the Redis
+        # subscription open until then. Reading here catches it immediately.
+        while (await websocket.receive())["type"] != "websocket.disconnect":
+            pass
+
+    await websocket.accept()
+    relay_task = asyncio.create_task(relay())
+    disconnect_task = asyncio.create_task(wait_for_disconnect())
+    try:
+        await asyncio.wait({relay_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
+        if relay_task.done():
+            with contextlib.suppress(WebSocketDisconnect):
+                relay_task.result()
     finally:
+        for task in (relay_task, disconnect_task):
+            task.cancel()
+        await asyncio.gather(relay_task, disconnect_task, return_exceptions=True)
         with contextlib.suppress(RuntimeError):
             await websocket.close()

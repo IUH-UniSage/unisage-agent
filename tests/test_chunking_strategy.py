@@ -111,3 +111,34 @@ async def test_table_chunk_budget_defaults_to_the_setting_and_ignores_text_targe
     assert len(default) < len(await table_chunks({"table_max_tokens": 400}))
     # the text strategy's own knobs never touch table chunks
     assert len(await table_chunks({"chunk_size": 300, "overlap": 10})) == len(default)
+
+
+@pytest.mark.asyncio
+async def test_parsing_a_slow_document_does_not_stall_the_event_loop(monkeypatch) -> None:
+    import asyncio
+    import time
+
+    import app.rag.chunking.strategy as strategy_module
+
+    real_split = strategy_module.split_regions
+
+    def slow_split(*args, **kwargs):
+        time.sleep(0.5)  # a long PDF holds the parser for a minute
+        return real_split(*args, **kwargs)
+
+    monkeypatch.setattr(strategy_module, "split_regions", slow_split)
+    ticks = 0
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    beat = asyncio.create_task(heartbeat())
+    await dispatch(
+        ChunkingStrategyName.RECURSIVE, {}, make_pdf_bytes("x"), "doc.pdf", document_id=_DOC_ID
+    )
+    beat.cancel()
+
+    assert ticks >= 5
