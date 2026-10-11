@@ -16,7 +16,7 @@ template: |
   VÀ thông tin về chính Nhà trường: địa chỉ, cơ sở/phân hiệu (TP.HCM, Thanh Hóa, Quảng Ngãi...), số điện thoại, email, website, phòng ban, khoa.
 
   ## Nhãn (chọn ĐÚNG MỘT)
-  - `social_chat`: phản ứng xã giao, KHÔNG chứa câu hỏi. VD: "Cảm ơn bạn nhé", "Ok hiểu rồi", "Vâng ạ".
+  - `social_chat`: phản ứng xã giao, KHÔNG chứa câu hỏi học vụ - GỒM CẢ câu hỏi về chính trợ lý (bạn là ai, tên gì, làm được gì, giúp được gì, ai tạo ra). VD: "Cảm ơn bạn nhé", "Ok hiểu rồi", "Vâng ạ", "Bạn là ai vậy?", "Bạn giúp được gì cho mình?".
   - `academic_advisory`: mọi câu hỏi cần tra văn bản của Nhà trường: quy chế, điều kiện, chính sách, số liệu học vụ/tuyển sinh, thủ tục, mốc thời gian/lịch học vụ, giấy tờ — BAO GỒM CẢ câu hỏi SO SÁNH 2+ thực thể học vụ. VD: "Điều kiện nhận học bổng loại giỏi là gì?", "Tổ hợp Toán, Vật lý xét được ngành nào?", "Thủ tục bảo lưu?", "Khi nào đóng học phí học kỳ 2?", "Xin giấy xác nhận sinh viên ở đâu?", "Ngành CNTT và Kế toán học phí chênh bao nhiêu?".
   - `academic_calculation`: yêu cầu tính toán số học liên quan học vụ, KỂ CẢ hỏi ngược "cần đạt bao nhiêu điểm để được X". VD: "18 tín chỉ ngành CNTT tốn bao nhiêu tiền?", "Tính GPA giúp em", "Điểm cuối kì phải bao nhiêu thì mới được A+?", "Giữa kỳ với cuối kỳ cần mấy điểm để qua môn?".
   - `off_topic`: hoàn toàn ngoài phạm vi học vụ/tuyển sinh của Nhà trường — BAO GỒM CẢ câu hỏi kiến thức phổ thông không cần tra quy chế Nhà trường. VD: "Giá vàng hôm nay?", "Công thức nấu phở", "Python là gì?", "1+1 bằng mấy?".
@@ -28,7 +28,7 @@ template: |
   1c. NỐI TIẾP PHÉP TÍNH: nhãn của câu nối tiếp lấy theo VIỆC người dùng đang làm, không theo chữ trong tin nhắn đứng riêng. Nếu lượt trước người dùng nhờ TÍNH (lịch sử có yêu cầu tính, hoặc có `<previous_calculation_turn>`) và tin nhắn này chỉ bổ sung dữ kiện/trường hợp ("đại học chính quy á", "khóa 2024", "3 tín", "TX 8 9"), đổi một con số ("nếu giữa kỳ 8 thì sao?") hoặc hỏi ngược về chính phép tính đó ("thế cuối kỳ cần bao nhiêu để được A+?"), hoặc ĐỔI phương án/trường hợp đã chọn ("tôi nhầm, phương án 2 mới đúng") → `academic_calculation`, và `query` viết lại thành câu đầy đủ gộp yêu cầu tính ban đầu với dữ kiện mới (VD "Tính điểm xét tuyển đại học chính quy giúp tôi"; đổi phương án thì ghi rõ phương án mới và bỏ phương án cũ, VD "Tính học phí theo phương án 2 (<tên phương án 2>) giúp tôi, không phải phương án 1"). Chỉ chuyển sang `academic_advisory` khi tin nhắn hỏi rõ một quy định/thông tin mới (VD "điều kiện tốt nghiệp là gì?"), dù có `<previous_calculation_turn>`.
   2. Ưu tiên `academic_*` nếu tin nhắn có BẤT KỲ liên quan nào tới học vụ, tuyển sinh, ngành học, môn học của Nhà trường.
   3. Chỉ trả `off_topic` khi CHẮC CHẮN nội dung không liên quan gì đến Nhà trường, kể cả khi xét cùng lịch sử hội thoại - dù đó là câu hỏi kiến thức phổ thông (VD: "Python là gì?") hay một chủ đề bất kỳ khác.
-  4. Tin nhắn ngắn, mơ hồ nhưng thiên về học vụ → `academic_advisory`.
+  4. Tin nhắn ngắn, mơ hồ nhưng thiên về học vụ → `academic_advisory`. Riêng câu hỏi về CHÍNH TRỢ LÝ ("bạn là ai", "bạn làm được gì") luôn là `social_chat`, dù ngắn - không phải câu hỏi về Nhà trường.
   5. Câu chào ở lượt thứ 2 trở đi không kèm câu hỏi → `social_chat`; nếu kèm câu hỏi học vụ → phân loại theo câu hỏi.
   6. Câu hỏi so sánh 2+ thực thể học vụ (2 ngành, 2 hệ đào tạo...), và tin nhắn có 2+ câu hỏi CÙNG nhãn `academic_advisory` (dù không liên quan nhau), đều KHÔNG tách task - luôn gộp vào một task `academic_advisory` duy nhất.
   7. PHÂN BIỆT `academic_advisory` vs `academic_calculation`: hỏi một ĐƠN GIÁ/MỨC THU đã có sẵn trong văn bản (giá 1 tín chỉ, học phí 1 năm, mức học bổng...) là TRA CỨU → `academic_advisory`, dù câu hỏi có chữ số hay đơn vị tính. Chỉ là `academic_calculation` khi người dùng đưa SỐ LIỆU CỤ THỂ và yêu cầu TÍNH RA một con số mới bằng phép toán (nhân/cộng/trừ/chia) trên số liệu đó, VD "18 tín chỉ thì tốn bao nhiêu" (phải nhân số tín chỉ với đơn giá), "tính GPA giúp em" (phải tính trung bình có trọng số). Hỏi lại/làm rõ về ĐƠN GIÁ 1 tín chỉ sau khi đã hỏi về học phí vẫn là `academic_advisory`, không phải `academic_calculation`. Câu hỏi "cần/phải đạt bao nhiêu (điểm cuối kỳ, giữa kỳ...) để được <điểm chữ/điểm số>" hoặc "thi bao nhiêu thì qua môn" luôn là `academic_calculation` (hệ thống tự tính ngược từ công thức), kể cả khi người dùng chưa đưa số liệu nào hoặc đang nối tiếp một phép tính ở lượt trước.
@@ -51,6 +51,9 @@ template: |
   ## Examples
   User: "Cảm ơn bạn nhé"
   Output: {"tasks": [{"intent": "social_chat", "query": "Cảm ơn bạn nhé", "routing_mode": null}], "confidence": 0.98}
+
+  User: "Bạn là ai vậy?"
+  Output: {"tasks": [{"intent": "social_chat", "query": "Bạn là ai vậy?", "routing_mode": null}], "confidence": 0.97}
 
   User: "Điều kiện nhận học bổng loại giỏi là gì?"
   Output: {"tasks": [{"intent": "academic_advisory", "query": "Điều kiện nhận học bổng loại giỏi là gì?", "routing_mode": "SINGLE"}], "confidence": 0.95}
