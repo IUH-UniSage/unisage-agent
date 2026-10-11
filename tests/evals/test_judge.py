@@ -55,7 +55,7 @@ def test_a_row_with_an_expected_answer_gets_every_answer_metric_and_refusal() ->
         "retrieved_context_ids": ["doc-a"],
         "reference_context_ids": ["doc-a", "doc-b"],
     }
-    assert tasks["factual_correctness"].inputs == {
+    assert tasks["answer_coverage"].inputs == {
         "response": "Học phí là 15 triệu đồng mỗi học kỳ.",
         "reference": "15 triệu đồng mỗi học kỳ.",
     }
@@ -82,7 +82,7 @@ def test_an_answer_from_the_web_is_judged_against_the_fetched_pages() -> None:
 
     tasks = {task.metric: task for task in judge.tasks_for(row)}
 
-    assert set(tasks) == {"web_faithfulness", "factual_correctness", "refusal"}
+    assert set(tasks) == {"web_faithfulness", "answer_coverage", "refusal"}
     assert tasks["web_faithfulness"].inputs["retrieved_contexts"] == ["trang web"]
 
 
@@ -387,3 +387,28 @@ def test_an_embedding_call_is_not_counted_as_the_fallback_model() -> None:
     records[("q0:original", "refusal")] = {"value": 1.0, "models": {"fallback": 1}}
     records[("q1:original", "refusal")] = {"value": 1.0, "models": {"fallback": 1}}
     assert judge.fallback_rows(records, "fallback") == {"q0:original", "q1:original"}
+
+
+def test_answer_coverage_keeps_precision_and_f1_as_extra_values(tmp_path: Path) -> None:
+    rows = [_row(id="q1")]
+    out = _results(tmp_path, rows)
+
+    class Coverage(FakeScorer):
+        async def score(self, task: Task) -> Score:
+            score = await super().score(task)
+            score.extra = {"answer_precision": 0.0, "factual_correctness_f1": math.nan}
+            return score
+
+    run, _ = _run(out, [Coverage(values={"answer_coverage": 1.0})])
+    asyncio.run(run.run(judge.tasks_of(rows, ["answer_coverage"])))
+    records = judge.load_records(out / "judge.jsonl")
+
+    judge.merge_into_results(out, records)
+    ragas = judge.load_rows(out)[0]["ragas"]
+    assert ragas["answer_coverage"]["value"] == 1.0
+    assert ragas["answer_precision"]["value"] == 0.0
+    assert ragas["factual_correctness_f1"]["value"] is None
+    summary = judge.summarize_scores(rows, records)["metrics"]
+    assert summary["answer_coverage"]["mean"] == 1.0
+    assert summary["answer_precision"]["mean"] == 0.0
+    assert summary["factual_correctness_f1"] == {"n": 0, "nan": 1, "by_category": {}}

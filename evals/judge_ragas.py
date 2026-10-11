@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
@@ -38,6 +39,7 @@ from ragas.metrics.collections import (
     FactualCorrectness,
     Faithfulness,
 )
+from ragas.metrics.utils import fbeta_score
 from ragas.prompt.metrics.base_prompt import BasePrompt
 
 from evals.gemini_pool import (
@@ -192,6 +194,26 @@ class GeminiEmbeddings(BaseRagasEmbedding):
         return [list(embedding.values) for embedding in response.embeddings]
 
 
+class AnswerCorrectness(FactualCorrectness):
+    """RAGAS FactualCorrectness, keeping both directions of its claim checks.
+
+    RAGAS returns one number, and its recall reuses the true positives of the answer-side
+    check, so a correct answer with extra detail (`... đề tài ZABBIX, HK2 2024-2025 là ThS. X`
+    against `Do ThS. X hướng dẫn.`) scores 0 in every mode. The same two checks give coverage
+    (expected claims the answer holds), precision (answer claims the expected answer backs)
+    and the F1 RAGAS would report."""
+
+    async def parts(self, response: str, reference: str) -> tuple[float, float, float]:
+        answer_claims = await self._decompose_and_verify_claims(response, reference)
+        expected_claims = await self._decompose_and_verify_claims(reference, response)
+        coverage = float(np.mean(expected_claims)) if expected_claims.size else math.nan
+        precision = float(np.mean(answer_claims)) if answer_claims.size else math.nan
+        tp = int(np.sum(answer_claims))
+        fp = int(np.sum(~answer_claims))
+        fn = int(np.sum(~expected_claims))
+        return coverage, precision, float(fbeta_score(tp, fp, fn, self.beta))
+
+
 # --- prompts in Vietnamese ------------------------------------------------------------------
 
 
@@ -257,40 +279,42 @@ class RagasScorer:
         ledger = Ledger(fallback_model=self.fallback_model, embedding_model=self.embedding_model)
         token = _ledger.set(ledger)
         try:
-            value, reason = await self._run(task)
+            value, reason, extra = await self._run(task)
         except QuotaExhausted:
             raise
         except (ModelUnavailable, CallFailed) as error:
-            value, reason = math.nan, str(error)[:300]
+            value, reason, extra = math.nan, str(error)[:300], {}
         except Exception as error:  # a metric that cannot score this row: NaN + why
-            value, reason = math.nan, f"{type(error).__name__}: {str(error)[:300]}"
+            value, reason, extra = math.nan, f"{type(error).__name__}: {str(error)[:300]}", {}
         finally:
             _ledger.reset(token)
-        return Score(value=value, reason=reason, usage=ledger.as_usage())
+        return Score(value=value, reason=reason, usage=ledger.as_usage(), extra=extra)
 
-    async def _run(self, task: Task) -> tuple[float, str | None]:
+    async def _run(self, task: Task) -> tuple[float, str | None, dict[str, float]]:
         inputs = task.inputs
         name = task.metric
         if name in ("faithfulness", "web_faithfulness") and not inputs["retrieved_contexts"]:
-            return math.nan, "no retrieved context"
+            return math.nan, "no retrieved context", {}
         if name == "context_recall" and not inputs["retrieved_contexts"]:
-            return 0.0, "no retrieved context"
+            return 0.0, "no retrieved context", {}
         if name in ("id_context_precision", "id_context_recall"):
             if not inputs["reference_context_ids"]:
-                return math.nan, "no expected document"
+                return math.nan, "no expected document", {}
             if not inputs["retrieved_context_ids"]:
-                return (0.0, "nothing retrieved") if name == "id_context_recall" else (
-                    math.nan,
-                    "nothing retrieved",
-                )
+                empty = 0.0 if name == "id_context_recall" else math.nan
+                return empty, "nothing retrieved", {}
             value = await self.metrics[name].single_turn_ascore(SingleTurnSample(**inputs))
-            return float(value), None
+            return float(value), None, {}
         if name == "refusal":
             result = await self.metrics[name].ascore(llm=self.llm, **inputs)
-            return (1.0 if result.value == "refused" else 0.0), getattr(result, "reason", None)
+            verdict = 1.0 if result.value == "refused" else 0.0
+            return verdict, getattr(result, "reason", None), {}
+        if name == "answer_coverage":
+            coverage, precision, f1 = await self.metrics[name].parts(**inputs)
+            return coverage, None, {"answer_precision": precision, "factual_correctness_f1": f1}
         metric = self.metrics["faithfulness" if name == "web_faithfulness" else name]
         result = await metric.ascore(**inputs)
-        return float(result.value), getattr(result, "reason", None)
+        return float(result.value), getattr(result, "reason", None), {}
 
     def stats(self) -> dict[str, Any]:
         return self.caller.stats()
@@ -324,7 +348,7 @@ class RagasScorerFactory:
         embeddings = GeminiEmbeddings(caller, self.embedding_model)
         metrics: dict[str, Any] = {
             "faithfulness": Faithfulness(llm=llm),
-            "factual_correctness": FactualCorrectness(llm=llm, mode="f1"),
+            "answer_coverage": AnswerCorrectness(llm=llm, mode="f1"),
             "context_recall": ContextRecall(llm=llm),
             "answer_relevancy": AnswerRelevancy(llm=llm, embeddings=embeddings, strictness=1),
             "id_context_precision": IDBasedContextPrecision(),

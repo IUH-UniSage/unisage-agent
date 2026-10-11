@@ -9,11 +9,17 @@ after rerank, `retrieved_context_ids` = their `document_id`, `reference` = `expe
 `reference_context_ids` = `expected_document_ids`):
 
 - rows with an expected answer (`normal`, `calculation`, `access` the persona may see):
-  faithfulness, factual_correctness, context_recall, answer_relevancy, id_context_precision,
+  faithfulness, answer_coverage, context_recall, answer_relevancy, id_context_precision,
   id_context_recall;
 - every answered row: refusal ("did the answer refuse or hand over to a ticket?", #4);
 - rows answered from the web: web_faithfulness against the fetched pages (#14), plus
-  factual_correctness when the question has an expected answer.
+  answer_coverage when the question has an expected answer.
+
+`answer_coverage` runs RAGAS FactualCorrectness (claims of both texts, checked both ways) and
+keeps both directions instead of RAGAS' single F1: coverage = share of the expected answer's
+claims the answer holds (the pass/fail score of criterion #3), precision = share of the
+answer's claims the expected answer backs (informative only: expected answers are terse, so
+correct extra detail counts against it), and the F1 RAGAS would report. Same four calls.
 
 Each score is appended to `<out>/judge.jsonl` the moment it is known, with the model and the
 (masked) key that produced it; a rerun only scores what is missing or `NaN`. Before any call
@@ -47,19 +53,21 @@ from evals.metrics import outcome_of
 
 ANSWER_METRICS = (
     "faithfulness",
-    "factual_correctness",
+    "answer_coverage",
     "context_recall",
     "answer_relevancy",
     "id_context_precision",
     "id_context_recall",
 )
 METRICS = (*ANSWER_METRICS, "refusal", "web_faithfulness")
+# Extra values one metric's calls also produce (recorded, summarised, never selected alone).
+EXTRA_METRICS = ("answer_precision", "factual_correctness_f1")
 NO_LLM = frozenset({"id_context_precision", "id_context_recall"})
-# LLM calls per metric (faithfulness: statements + NLI; factual_correctness in f1 mode:
+# LLM calls per metric (faithfulness: statements + NLI; answer_coverage:
 # claims of both texts + NLI both ways; answer_relevancy with strictness 1 also embeds).
 CALLS = {
     "faithfulness": 2,
-    "factual_correctness": 4,
+    "answer_coverage": 4,
     "context_recall": 1,
     "answer_relevancy": 1,
     "refusal": 1,
@@ -100,6 +108,7 @@ class Score:
     value: float
     reason: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, float] = field(default_factory=dict)
 
 
 class Scorer(Protocol):
@@ -157,11 +166,11 @@ def tasks_for(row: dict[str, Any], selected: Sequence[str] = METRICS) -> list[Ta
             retrieved_contexts=_contexts(row.get("web_results") or []),
         )
         if reference:
-            add("factual_correctness", response=response, reference=reference)
+            add("answer_coverage", response=response, reference=reference)
     elif has_reference(row):
         contexts = _contexts(row.get("context") or [])
         add("faithfulness", user_input=question, response=response, retrieved_contexts=contexts)
-        add("factual_correctness", response=response, reference=reference)
+        add("answer_coverage", response=response, reference=reference)
         add(
             "context_recall",
             user_input=question,
@@ -208,7 +217,7 @@ def estimate_task(task: Task, prices: tuple[float, float]) -> tuple[int, int, in
         text_in = _tokens(inputs["user_input"], inputs["response"]) * 2 + _tokens(
             inputs["retrieved_contexts"]
         )
-    elif task.metric == "factual_correctness":
+    elif task.metric == "answer_coverage":
         text_in = (_tokens(inputs["response"]) + _tokens(inputs["reference"])) * 2
     elif task.metric == "context_recall":
         text_in = _tokens(inputs["user_input"], inputs["retrieved_contexts"], inputs["reference"])
@@ -282,6 +291,10 @@ def _record(task: Task, score: Score) -> dict[str, Any]:
         "metric": task.metric,
         "value": None if math.isnan(value) else round(float(value), 4),
         "reason": score.reason,
+        "extra": {
+            name: None if extra is None or math.isnan(extra) else round(float(extra), 4)
+            for name, extra in score.extra.items()
+        },
         **score.usage,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -413,6 +426,8 @@ def merge_into_results(out: Path, records: dict[tuple[str, str], dict[str, Any]]
             "reason": record.get("reason"),
             "model": record.get("model"),
         }
+        for name, extra in (record.get("extra") or {}).items():
+            by_row[key][name] = {"value": extra, "model": record.get("model")}
     rows = []
     for line in lines:
         row = json.loads(line)
@@ -441,11 +456,13 @@ def summarize_scores(
     usage = Counter[str]()
     models: Counter[str] = Counter()
     for (key, metric), record in records.items():
-        if is_scored(record):
-            values[metric].append(float(record["value"]))
-            per_category[metric][category.get(key) or "?"].append(float(record["value"]))
-        else:
-            nan[metric] += 1
+        scored = [(metric, record.get("value")), *(record.get("extra") or {}).items()]
+        for name, value in scored:
+            if isinstance(value, (int, float)) and not math.isnan(value):
+                values[name].append(float(value))
+                per_category[name][category.get(key) or "?"].append(float(value))
+            else:
+                nan[name] += 1
         for name in ("calls", "input_tokens", "output_tokens"):
             usage[name] += int(record.get(name) or 0)
         usage["usd_micros"] += int(round(float(record.get("usd") or 0) * 1_000_000))
@@ -468,7 +485,7 @@ def summarize_scores(
                 "nan": nan[metric],
                 "by_category": {cat: stats(v) for cat, v in sorted(per_category[metric].items())},
             }
-            for metric in METRICS
+            for metric in (*METRICS, *EXTRA_METRICS)
             if values[metric] or nan[metric]
         },
         "usage": {

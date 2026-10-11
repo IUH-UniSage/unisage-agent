@@ -183,3 +183,21 @@ def test_prompts_are_translated_once_and_loaded_from_the_cache(tmp_path: Path, f
     asyncio.run(scorer.score(task))
     assert scorer.metrics["context_recall"].prompt.language == "vietnamese"
     assert len(fake_gemini.models) - calls_before == 1  # the metric call only, no translation
+
+
+def test_a_correct_answer_with_extra_detail_covers_the_expected_answer(monkeypatch) -> None:
+    # d0008: the answer's one claim carries the topic and term the terse expected answer lacks
+    # (not backed by it), while the expected answer's one claim is in the answer
+    import numpy as np
+
+    metric = judge_ragas.AnswerCorrectness(llm=judge_ragas.GeminiJudgeLLM(None, "m", None, ""))
+    checks = {"answer": np.array([False]), "expected": np.array([True])}
+
+    async def verify(text: str, against: str) -> np.ndarray:
+        return checks["answer"] if text == "A" else checks["expected"]
+
+    monkeypatch.setattr(metric, "_decompose_and_verify_claims", verify)
+
+    coverage, precision, f1 = asyncio.run(metric.parts(response="A", reference="R"))
+
+    assert (coverage, precision, f1) == (1.0, 0.0, 0.0)
