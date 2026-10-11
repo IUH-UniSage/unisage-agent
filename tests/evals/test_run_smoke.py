@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.schemas.retrieval import RetrievedChunk
 from evals.run.recording import RecordingRetrieval
-from evals.run.runner import Job, Runner, access_of, select_jobs, spread
+from evals.run.runner import Job, Runner, access_of, rescore, select_jobs, spread
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 CHUNK = RetrievedChunk(
@@ -118,3 +118,15 @@ async def test_runner_records_a_rag_turn_and_resumes(
 def test_spread_takes_every_category_first() -> None:
     jobs = select_jobs(QUESTIONS, subset="official", variant="exact")
     assert [job.question["category"] for job in spread(jobs, 2)] == ["normal", "off_topic"]
+
+
+def test_rescore_rereads_expected_document_ids_from_the_manifest(tmp_path: Path) -> None:
+    row = {"id": "d1", "category": "normal", "expected_doc_ids": ["f1"], "expected_document_ids": ["f1"],
+           "context": [{"document_id": "uuid-1"}], "expect_visible": True}
+    (tmp_path / "results.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    rescore(tmp_path, {"f1": {"file_id": "f1", "document_id": "uuid-1", "title": "T"}})
+
+    rescored = json.loads((tmp_path / "results.jsonl").read_text(encoding="utf-8"))
+    assert rescored["expected_document_ids"] == ["uuid-1"]
+    assert rescored["checks"]["recall_at_5"] is True

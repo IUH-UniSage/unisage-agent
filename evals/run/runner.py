@@ -340,13 +340,15 @@ class Runner:
 
 def rescore(out: Path, manifest: dict[str, dict[str, str]]) -> None:
     """Recompute `checks` of every row in `results.jsonl` with the current `evals.run.metrics`
-    (after a scoring fix) - no graph run, no model call. Fields added to the rows since the
-    run (expected document titles) are filled from the manifest. The old file is kept as .bak."""
+    (after a scoring fix) - no graph run, no model call. Expected document ids and titles are
+    re-read from the manifest, so a run made while it lacked `document_id`s scores correctly
+    once it is relinked. The old file is kept as .bak."""
 
     results = out / "results.jsonl"
     lines = [line for line in results.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows = [json.loads(line) for line in lines]
     for row in rows:
+        row["expected_document_ids"] = document_ids(row, manifest)
         if not row.get("expected_titles"):
             row["expected_titles"] = document_titles(row, manifest)
         row["checks"] = score_row(row)
