@@ -28,9 +28,11 @@ from app.rag.ingestion.table_evidence import TableEvidence, collect_table_eviden
 from app.rag.ingestion.table_hierarchy import infer_hierarchy
 from app.rag.ingestion.table_merger import (
     MergeCandidate,
+    column_edges,
     decide_merge,
     furniture_key,
     merge_page_tables,
+    reproject_columns,
 )
 from app.rag.ingestion.table_normalizer import build_page_table
 from app.rag.ingestion.table_normalizer import (
@@ -132,17 +134,30 @@ def _with_hierarchy(regions: list["ParsedRegion"]) -> list["ParsedRegion"]:
 
 
 _MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+_EMPHASIS_MARKS = re.compile(r"[*_`]")
+_DIGIT_RUN = re.compile(r"\d+")
+# A page-number line is short (`Trang 12/120`); a sentence that merely holds a
+# number is not one.
+_PAGE_NUMBER_MAX_CHARS = 20
 # An ordinal line candidate for heading promotion: Roman numeral (I./II./III.)
 # or Arabic numeral (1./2./3.), optionally wrapped in `**` (pymupdf4llm
 # renders a fully-bold line as `**...**`, which would otherwise hide the
 # ordinal from a regex anchored at the true start of the line).
 _ORDINAL_LINE = re.compile(r"^\*{0,2}(?:[IVXLCDM]+|\d+)\.\s+\S.*$")
 _ROMAN_ORDINAL_TITLE = re.compile(r"^[IVXLCDM]+\.\s")
-_ARABIC_ORDINAL_TITLE = re.compile(r"^\d+\.\s")
+# `6.`, `5.2`, `2.1.2`, `2.2.4.` - a single number needs its dot, so a title
+# that merely starts with a year (`2026 ...`) is not read as numbered.
+_ARABIC_ORDINAL_TITLE = re.compile(r"^(?:(\d+(?:\.\d+)+)\.?|(\d+)\.)(?=[\s_*]|$)")
+# `a.` / `a)` - a lettered item sits under the numbered heading it follows.
+_LETTER_ORDINAL_TITLE = re.compile(r"^[a-z][.)](?=[\s_*]|$)")
+_LETTER_HEADING_LEVEL = 9
+_TITLE_LEAD_MARKS = re.compile(r"^[\s_*]+")
 _ORDINAL_PREFIX = re.compile(r"^\*{0,2}(?:[IVXLCDM]+|\d+)\.\s+")
 _UNDERLINE_TAG = re.compile(r"<u>", re.IGNORECASE)
 _HTML_TAG = re.compile(r"<[^>]+>")
-_MARKDOWN_EMPHASIS = re.compile(r"\*\*|__")
+# `**bold**`, `__bold__`, and `_italic_` (a lone `_` at a word edge; `snake_case`
+# keeps its underscore)
+_MARKDOWN_EMPHASIS = re.compile(r"\*\*|__|(?<!\w)_|_(?!\w)")
 _PDF_PROMOTED_HEADING_FALLBACK_LEVEL = 2
 # Share of characters a geometric table must have in common with a markdown table
 # to be taken for the same table.
@@ -158,6 +173,64 @@ def _match_score(markdown_chars: Counter[str], rows: list[Counter[str]]) -> floa
         candidate += chars
     larger = max(sum(markdown_chars.values()), sum(candidate.values()), 1)
     return sum((markdown_chars & candidate).values()) / larger
+
+
+def _heading_number(title: str) -> str | None:
+    """The Arabic number a heading title opens with (`5.2`, `6`), or None."""
+
+    arabic = _ARABIC_ORDINAL_TITLE.match(_TITLE_LEAD_MARKS.sub("", title))
+    return (arabic.group(1) or arabic.group(2)) if arabic else None
+
+
+def _continues(above: str, number: str) -> bool:
+    """`number` is a child of `above` (`7.1` under `7`) or the sibling right
+    after it (`8` after `7`, `2.3` after `2.2`)."""
+
+    if number.startswith(f"{above}."):
+        return True
+    a, n = above.split("."), number.split(".")
+    return len(a) == len(n) and a[:-1] == n[:-1] and int(n[-1]) == int(a[-1]) + 1
+
+
+def _push_heading(
+    stack: list[tuple[int, str]],
+    interrupted: list[tuple[int, str]] | None,
+    level: int,
+    title: str,
+) -> list[tuple[int, str]] | None:
+    """Put a heading on `stack`; return the numbered context an unnumbered
+    heading interrupted, if any.
+
+    An unnumbered heading (`Trình độ Ngoại ngữ:`, a table caption) gets the
+    extractor's raw level and can close a numbered section it actually sits
+    inside. When a later numbered heading continues that numbering (`2.` after
+    `1.`, `8.` after `7.1`), the interrupted context is put back; a numbering
+    that starts over (`1.` in an appendix) is a new context and is left alone."""
+
+    number = _heading_number(title)
+    if number and interrupted and not any(_heading_number(t) for _l, t in stack):
+        for index, (_level, above_title) in enumerate(interrupted):
+            above = _heading_number(above_title)
+            if above and _continues(above, number):
+                child = number.startswith(f"{above}.")
+                stack[:] = interrupted[: index + 1 if child else index]
+                interrupted = None
+                break
+    before = list(stack)
+    while stack and stack[-1][0] >= level:
+        stack.pop()
+    # `4.1.4` belongs under `4.` / `4.1`, never under `3.1` - even when
+    # the extractor missed the `4.` and `4.1` headings in between
+    while number and stack:
+        above = _heading_number(stack[-1][1])
+        if above is None or number.startswith(f"{above}."):
+            break
+        stack.pop()
+    if not number and any(_heading_number(t) for _l, t in before[len(stack) :]):
+        interrupted = before
+    if title:
+        stack.append((level, title))
+    return interrupted
 
 
 def _heading_level_for_title(title: str, fallback_level: int) -> int:
@@ -176,12 +249,22 @@ def _heading_level_for_title(title: str, fallback_level: int) -> int:
     PDF, `BAS.pdf`, where this happened). Forcing Roman-numbered titles to
     a shallower level than Arabic-numbered ones - independent of the raw
     markdown level - keeps the Roman section on the stack while Arabic
-    subsections correctly nest under it."""
+    subsections correctly nest under it.
 
-    if _ROMAN_ORDINAL_TITLE.match(title):
+    Arabic numbering is ranked by its depth (`6.` < `5.2` < `2.1.2`): the
+    extractor gives `# 5.2 ...` and a bold `6. ...` unrelated raw levels, and
+    only the number says that `6.` closes `5.2` rather than nesting in it.
+    A lowercase lettered title (`a.`, `b)`) nests under the numbered heading
+    before it."""
+
+    bare = _TITLE_LEAD_MARKS.sub("", title)
+    if _ROMAN_ORDINAL_TITLE.match(bare):
         return 2
-    if _ARABIC_ORDINAL_TITLE.match(title):
-        return 3
+    number = _heading_number(title)
+    if number:
+        return 3 + number.count(".")
+    if _LETTER_ORDINAL_TITLE.match(bare):
+        return _LETTER_HEADING_LEVEL
     return fallback_level
 
 
@@ -237,6 +320,20 @@ def _find_pdf_page_boilerplate(pages: list[dict[str, object]]) -> set[str]:
                 line_pages.setdefault(stripped, set()).add(page_number)
                 seen_on_this_page.add(stripped)
     return {line for line, page_numbers in line_pages.items() if len(page_numbers) >= 2}
+
+
+def _plain_text(text: str) -> str:
+    return " ".join(_MARKDOWN_EMPHASIS.sub("", _HTML_TAG.sub("", text)).split())
+
+
+def _only_boilerplate_cells(row: str, boilerplate_text: set[str]) -> bool:
+    """A table row whose only text is a running header/footer the extractor
+    pulled into the table (`|||...|KL7.0a|` under a page that prints `KL7.0a`
+    at the top of every page)."""
+
+    cells = [_plain_text(cell) for cell in _markdown_row_cells(row)]
+    filled = [cell for cell in cells if cell]
+    return bool(filled) and all(cell in boilerplate_text for cell in filled)
 
 
 def _looks_like_pdf_heading(
@@ -302,6 +399,7 @@ def _regions_from_pdf_pages(
 
     regions: list[ParsedRegion] = []
     heading_stack: list[tuple[int, str]] = []
+    interrupted: list[tuple[int, str]] | None = None
     buffer: list[str] = []
     current_type: RegionType | None = None
     block_index = 0
@@ -409,11 +507,16 @@ def _regions_from_pdf_pages(
         page_text: str = page["text"]  # type: ignore[assignment]
         flat_lines.extend((page_number, line) for line in page_text.splitlines())
 
+    page_number_lines = _find_pdf_page_number_lines(flat_lines, boilerplate)
+    boilerplate_text = {_plain_text(line) for line in boilerplate}
+
     last_page_number = 0
     for index, (page_number, line) in enumerate(flat_lines):
         stripped = line.strip()
         last_page_number = page_number
-        if stripped in boilerplate:
+        if stripped in boilerplate or index in page_number_lines:
+            continue
+        if stripped.startswith("|") and _only_boilerplate_cells(stripped, boilerplate_text):
             continue
 
         heading_match = _MARKDOWN_HEADING.match(stripped)
@@ -435,10 +538,7 @@ def _regions_from_pdf_pages(
                 else _PDF_PROMOTED_HEADING_FALLBACK_LEVEL
             )
             level = _heading_level_for_title(title, raw_level)
-            while heading_stack and heading_stack[-1][0] >= level:
-                heading_stack.pop()
-            if title:
-                heading_stack.append((level, title))
+            interrupted = _push_heading(heading_stack, interrupted, level, title)
             continue
 
         line_type = RegionType.TABLE if stripped.startswith("|") else RegionType.TEXT
@@ -470,6 +570,37 @@ def _regions_from_pdf_pages(
     return _finalize_pdf_tables(regions, evidence_by_block, _find_pdf_furniture(pages))
 
 
+def _find_pdf_page_number_lines(
+    flat_lines: list[tuple[int, str]], boilerplate: set[str]
+) -> set[int]:
+    """Indexes of the page-number lines left in the text (`10`, `Trang 2`,
+    `2/24`): a short line on the first or last content line of its page whose
+    number runs with the page - number minus page is the same on 2+ pages for
+    lines of the same shape. A code or year that happens to end a page (`7340301`)
+    does not run with the page and stays."""
+
+    content: dict[int, list[int]] = {}
+    for index, (page_number, line) in enumerate(flat_lines):
+        if line.strip() and line.strip() not in boilerplate:
+            content.setdefault(page_number, []).append(index)
+    candidates: list[tuple[int, tuple[str, int], int]] = []
+    for page_number, indices in content.items():
+        for index in {indices[0], indices[-1]}:
+            stripped = flat_lines[index][1].strip()
+            if stripped.startswith("|") or _MARKDOWN_HEADING.match(stripped):
+                continue
+            plain = _EMPHASIS_MARKS.sub("", stripped).strip()
+            number = _DIGIT_RUN.search(plain)
+            if number is None or len(plain) > _PAGE_NUMBER_MAX_CHARS:
+                continue
+            shape = (furniture_key(plain), int(number.group()) - page_number)
+            candidates.append((index, shape, page_number))
+    pages_by_shape: dict[tuple[str, int], set[int]] = {}
+    for _index, shape, page_number in candidates:
+        pages_by_shape.setdefault(shape, set()).add(page_number)
+    return {index for index, shape, _page in candidates if len(pages_by_shape[shape]) >= 2}
+
+
 def _find_pdf_furniture(pages: list[dict[str, object]]) -> set[str]:
     """Shapes of plain-text lines that recur across 2+ pages once digits are
     masked (`Trang 2/4`, `Trang 3/4` -> `Trang #/#`): running page furniture.
@@ -494,6 +625,19 @@ def _only_furniture(regions: list[ParsedRegion], furniture: set[str]) -> bool:
     return True
 
 
+def _layout_of(
+    table: TableBlock | None, evidence: TableEvidence | None, current: list[float] | None
+) -> list[float] | None:
+    """The column edges a table chain is compared against: the latest page whose
+    geometry has as many columns as the table, else the ones already held."""
+
+    if table is not None and evidence is not None:
+        edges = column_edges(evidence)
+        if len(edges) - 1 == len(table.header_row or []):
+            return edges
+    return current
+
+
 def _finalize_pdf_tables(
     regions: list[ParsedRegion],
     evidence_by_block: dict[int, TableEvidence | None],
@@ -504,10 +648,16 @@ def _finalize_pdf_tables(
     `block_index` so it stays contiguous after merging.
 
     Page furniture (a page number line) between the two tables is kept in the
-    output - nothing is dropped - it just no longer blocks the merge."""
+    output - nothing is dropped - it just no longer blocks the merge.
+
+    When the next page was read with a different number of columns (a rule the
+    extractor missed or added), it is first re-read against the columns of the
+    table it may continue, by geometry, so the two can be compared at all."""
 
     output: list[ParsedRegion] = []
     chain_evidence: dict[int, TableEvidence | None] = {}
+    # column edges of the page that set each chain's columns
+    chain_layout: dict[int, list[float] | None] = {}
     last_table: int | None = None
     between: list[ParsedRegion] = []
 
@@ -522,6 +672,19 @@ def _finalize_pdf_tables(
         )
         if last_table is not None:
             previous = output[last_table]
+            candidate = region.table
+            layout = chain_layout.get(last_table)
+            previous_columns = len(previous.table.header_row or [])  # type: ignore[union-attr]
+            if (
+                layout is not None
+                and evidence is not None
+                and len(layout) - 1 == previous_columns
+                and len(region.table.header_row or []) != previous_columns
+            ):
+                candidate = (
+                    reproject_columns(region.table, column_edges(evidence), layout)
+                    or region.table
+                )
             decision = decide_merge(
                 MergeCandidate(
                     previous.table,  # type: ignore[arg-type]
@@ -531,7 +694,7 @@ def _finalize_pdf_tables(
                     chain_evidence.get(last_table),
                 ),
                 MergeCandidate(
-                    region.table,
+                    candidate,
                     region.page_start or 0,
                     region.page_end or 0,
                     region.heading_path,
@@ -546,11 +709,14 @@ def _finalize_pdf_tables(
                     page_end=region.page_end,
                     table=merge_page_tables(
                         previous.table,  # type: ignore[arg-type]
-                        region.table,
+                        candidate,
                         header_present=decision.header_present,
                     ),
                 )
                 chain_evidence[last_table] = evidence
+                chain_layout[last_table] = _layout_of(
+                    output[last_table].table, evidence, layout
+                )
                 between = []
                 continue
             if decision.borderline:
@@ -563,6 +729,7 @@ def _finalize_pdf_tables(
         output.append(region)
         last_table = len(output) - 1
         chain_evidence[last_table] = evidence
+        chain_layout[last_table] = _layout_of(region.table, evidence, None)
         between = []
 
     table_number = 0
