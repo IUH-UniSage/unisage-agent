@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     INGEST_SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800
     INGEST_CHUNKING_VERSION: str = "2026-09-structural-v2"
+    # Tesseract language(s) for scanned PDF pages (pymupdf4llm OCRs pages with no text layer).
+    # Vietnamese needs the `vie` traineddata; a language whose data is missing is dropped (with a
+    # warning) rather than failing the ingest, so "vie+eng" falls back to "eng" on such a machine.
+    INGEST_OCR_LANGUAGE: str = "vie+eng"
     # Minimum seconds between the START of two consecutive extraction calls in one embed job.
     # Free-tier keys allow ~15 requests/minute, but a sequential job easily goes faster than
     # that; 0 disables the pause. A call that already took longer than this adds no extra wait.
