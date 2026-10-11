@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pymupdf
 
-from evals.titles import (
+from evals.dataset.titles import (
     apply_titles,
     clean_title,
     page_inputs,

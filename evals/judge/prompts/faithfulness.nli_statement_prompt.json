@@ -1,0 +1,41 @@
+{
+ "language": "vietnamese",
+ "instruction": "Your task is to judge the faithfulness of a series of statements based on a given context. For each statement you must return verdict as 1 if the statement can be directly inferred based on the context or 0 if the statement can not be directly inferred based on the context.",
+ "examples": [
+  [
+   {
+    "context": "John là sinh viên tại Đại học XYZ. Anh ấy đang theo học bằng Cử nhân ngành Khoa học máy tính. Anh ấy đã đăng ký một số môn học trong học kỳ này, bao gồm Cấu trúc dữ liệu, Thuật toán và Quản trị cơ sở dữ liệu. John là một sinh viên chăm chỉ và dành một lượng thời gian đáng kể để học tập và hoàn thành các bài tập. Anh ấy thường ở lại thư viện muộn để làm các dự án của mình.",
+    "statements": [
+     "John đang theo học chuyên ngành Sinh học.",
+     "John đang tham gia một khóa học về Trí tuệ nhân tạo.",
+     "John là một sinh viên tận tụy.",
+     "John có một công việc bán thời gian."
+    ]
+   },
+   {
+    "statements": [
+     {
+      "statement": "John đang theo học chuyên ngành Sinh học.",
+      "reason": "Chuyên ngành của John được nêu rõ là Khoa học máy tính, không phải Sinh học.",
+      "verdict": 0
+     },
+     {
+      "statement": "John đang tham gia một khóa học về Trí tuệ nhân tạo.",
+      "reason": "Ngữ cảnh đề cập đến các khóa học về Cấu trúc dữ liệu, Thuật toán và Quản trị cơ sở dữ liệu, nhưng không đề cập đến Trí tuệ nhân tạo.",
+      "verdict": 0
+     },
+     {
+      "statement": "John là một sinh viên tận tụy.",
+      "reason": "Ngữ cảnh nêu rằng John là một sinh viên chăm chỉ, người dành một lượng thời gian đáng kể để học tập và hoàn thành các bài tập.",
+      "verdict": 1
+     },
+     {
+      "statement": "John có một công việc bán thời gian.",
+      "reason": "Không có thông tin nào trong ngữ cảnh về việc John có một công việc bán thời gian.",
+      "verdict": 0
+     }
+    ]
+   }
+  ]
+ ]
+}

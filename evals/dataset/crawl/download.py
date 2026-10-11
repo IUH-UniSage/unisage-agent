@@ -9,7 +9,7 @@ Failures (HTTP errors, non-PDF bodies, oversize files, duplicates) go to
 `download_errors.csv` instead of the manifest.
 
 Usage:
-    python -m evals.crawl.download --dataset ../unisage-gateway/dataset/official
+    python -m evals.dataset.crawl.download --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse
@@ -28,8 +28,8 @@ from urllib.parse import unquote, urlsplit
 import httpx
 import pymupdf
 
-from evals.crawl.discover import slugify
-from evals.crawl.http import DisallowedUrlError, PoliteClient
+from evals.dataset.crawl.discover import slugify
+from evals.dataset.crawl.http import DisallowedUrlError, PoliteClient
 
 logger = logging.getLogger(__name__)
 

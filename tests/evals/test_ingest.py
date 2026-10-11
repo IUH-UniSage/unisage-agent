@@ -5,8 +5,8 @@ from typing import Any
 import httpx
 import pytest
 
-from evals.crawl.download import DownloadState, write_csv
-from evals.ingest import (
+from evals.dataset.crawl.download import DownloadState, write_csv
+from evals.dataset.ingest import (
     ApiError,
     Labels,
     Run,

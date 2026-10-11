@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from evals import judge
-from evals.gemini_pool import (
+from evals.judge import cli as judge
+from evals.judge.gemini_pool import (
     CallFailed,
     GeminiCaller,
     KeyPool,
@@ -18,7 +18,7 @@ from evals.gemini_pool import (
     QuotaExhausted,
     classify,
 )
-from evals.judge import JudgeRun, Score, Task
+from evals.judge.cli import JudgeRun, Score, Task
 
 
 def _row(**overrides: Any) -> dict[str, Any]:

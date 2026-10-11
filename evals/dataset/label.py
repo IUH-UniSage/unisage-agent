@@ -11,7 +11,7 @@ documents among the ones the evaluation actually ingests. Rows marked
 `label_source=manual` are never touched, so hand corrections survive re-runs.
 
 Usage:
-    python -m evals.label --dataset ../unisage-gateway/dataset/official
+    python -m evals.dataset.label --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse
@@ -24,7 +24,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-from evals.crawl.download import DownloadState
+from evals.dataset.crawl.download import DownloadState
 
 DEFAULT_MAP = Path(__file__).with_name("label_map.yaml")
 

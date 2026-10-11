@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from evals.label import (
+from evals.dataset.label import (
     DEFAULT_MAP,
     LabelMap,
     LabelMapError,

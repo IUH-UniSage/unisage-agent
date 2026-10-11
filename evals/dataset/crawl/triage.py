@@ -18,7 +18,7 @@ Idempotent, and re-checks every non-scan row on each run: a file wrongly set asi
 by an older heuristic moves back to `files/`.
 
 Usage:
-    python -m evals.crawl.triage --dataset ../unisage-gateway/dataset/official
+    python -m evals.dataset.crawl.triage --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pymupdf
 
-from evals.crawl.download import DownloadState, is_probably_scanned
+from evals.dataset.crawl.download import DownloadState, is_probably_scanned
 
 FILES_DIR = "files"
 SCANNED_DIR = "scanned_pdf"

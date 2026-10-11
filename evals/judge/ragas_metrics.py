@@ -1,15 +1,15 @@
 """RAGAS metrics on Gemini, for `evals.judge` (Task 11). Needs the judge environment
-(`evals/requirements-judge.txt`): RAGAS 0.4 and `google-genai`.
+(`evals/judge/requirements.txt`): RAGAS 0.4 and `google-genai`.
 
 The metrics are RAGAS' own (`ragas.metrics.collections`: Faithfulness, FactualCorrectness,
 ContextRecall, AnswerRelevancy; ID-based context precision/recall; a `DiscreteMetric` for
 refusal, the 0.4 form of AspectCritic). Only the model they talk to is ours: `GeminiJudgeLLM`
-sends every structured-output request through the key pool of `evals.gemini_pool`, switches to
+sends every structured-output request through the key pool of `evals.judge.gemini_pool`, switches to
 the fallback model when the main one stays overloaded, and books tokens, cost, model and key
 per score.
 
 The example parts of the RAGAS prompts are translated to Vietnamese once
-(`--adapt-prompts`, RAGAS `BasePrompt.adapt`) and cached in `evals/ragas_prompts/`; later runs
+(`--adapt-prompts`, RAGAS `BasePrompt.adapt`) and cached in `evals/judge/prompts/`; later runs
 load the cache, so the judge reads Vietnamese examples next to Vietnamese answers.
 """
 
@@ -42,7 +42,7 @@ from ragas.metrics.collections import (
 from ragas.metrics.utils import fbeta_score
 from ragas.prompt.metrics.base_prompt import BasePrompt
 
-from evals.gemini_pool import (
+from evals.judge.gemini_pool import (
     CallFailed,
     GeminiCaller,
     KeyPool,
@@ -50,7 +50,7 @@ from evals.gemini_pool import (
     ModelUnavailable,
     QuotaExhausted,
 )
-from evals.judge import PRICES, Score, Task
+from evals.judge.cli import PRICES, Score, Task
 
 LANGUAGE = "vietnamese"
 REFUSAL_PROMPT = (

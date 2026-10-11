@@ -4,7 +4,7 @@ For every selected question (and variant: the exact `question`, the user-style
 `question_user`, or both) the graph runs once as the row's persona, against the environment
 chosen with `task ... env=` (its Qdrant collection, its backend for the model registry). Each
 result is appended to `runs/<name>/results.jsonl` as soon as it is known, with the
-deterministic checks of `evals.metrics`; re-running with the same `--out` skips what is
+deterministic checks of `evals.run.metrics`; re-running with the same `--out` skips what is
 already there, so an interrupted run (Ctrl+C, quota) continues where it stopped.
 
 Needs: Postgres/Redis/Qdrant of the env, and backend-java (model registry). No agent API,
@@ -30,9 +30,9 @@ from typing import Any
 from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
-from evals.ingest import DEPARTMENTS_FILE, is_quota
-from evals.metrics import WILDCARD, score_row, summarize
-from evals.recording import RecordingRetrieval, TurnResult, chunk_summary, run_question
+from evals.dataset.ingest import DEPARTMENTS_FILE, is_quota
+from evals.run.metrics import WILDCARD, score_row, summarize
+from evals.run.recording import RecordingRetrieval, TurnResult, chunk_summary, run_question
 
 VARIANTS = ("exact", "user")
 
@@ -339,7 +339,7 @@ class Runner:
 
 
 def rescore(out: Path, manifest: dict[str, dict[str, str]]) -> None:
-    """Recompute `checks` of every row in `results.jsonl` with the current `evals.metrics`
+    """Recompute `checks` of every row in `results.jsonl` with the current `evals.run.metrics`
     (after a scoring fix) - no graph run, no model call. Fields added to the rows since the
     run (expected document titles) are filled from the manifest. The old file is kept as .bak."""
 

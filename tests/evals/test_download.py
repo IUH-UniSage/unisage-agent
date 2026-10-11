@@ -5,15 +5,15 @@ import httpx
 import pymupdf
 import pytest
 
-from evals.crawl.discover import DISCOVERED_FIELDS, SOURCES_FIELDS
-from evals.crawl.download import (
+from evals.dataset.crawl.discover import DISCOVERED_FIELDS, SOURCES_FIELDS
+from evals.dataset.crawl.download import (
     MANIFEST_FIELDS,
     interleave_by_host,
     is_probably_scanned,
     read_csv,
     run,
 )
-from evals.crawl.http import PoliteClient
+from evals.dataset.crawl.http import PoliteClient
 
 
 def _pdf(text: str) -> bytes:

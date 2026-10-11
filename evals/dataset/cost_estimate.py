@@ -11,7 +11,7 @@ Prices come from the same LiteLLM price table the project syncs into
 `model_prices` (see changes/29-09-2026-Model-Pricing-Sync), per 1M tokens.
 
 Usage:
-    python -m evals.cost_estimate --prices litellm.json \
+    python -m evals.dataset.cost_estimate --prices litellm.json \
         --dataset ../unisage-gateway/dataset/official
 """
 
@@ -27,9 +27,9 @@ import tiktoken
 
 from app.rag.chunking.strategy import dispatch
 from app.schemas.ingestion import ChunkingStrategyName
-from evals.crawl.download import is_probably_scanned, read_csv
+from evals.dataset.crawl.download import is_probably_scanned, read_csv
 
-AGENT_ROOT = Path(__file__).resolve().parent.parent
+AGENT_ROOT = Path(__file__).resolve().parents[2]
 PROMPTS = AGENT_ROOT / "app/rag/prompting/prompt_templates"
 ADVISORY_PROMPT_SNAPSHOT = AGENT_ROOT / "tests/fixtures/advisory_prompt_snapshot.txt"
 

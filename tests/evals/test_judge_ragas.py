@@ -2,7 +2,7 @@
 that answers every structured-output request with JSON built from the requested schema.
 
 Runs in the judge environment only (RAGAS cannot share the service's dependencies):
-    uv run --isolated --no-project --with-requirements evals/requirements-judge.txt \\
+    uv run --isolated --no-project --with-requirements evals/judge/requirements.txt \\
         python -m pytest tests/evals/test_judge_ragas.py
 """
 
@@ -19,8 +19,8 @@ import pytest
 pytest.importorskip("ragas.metrics.collections")
 pytest.importorskip("google.genai")
 
-from evals import judge, judge_ragas  # noqa: E402
-from evals.judge import Task  # noqa: E402
+from evals.judge import cli as judge, ragas_metrics as judge_ragas  # noqa: E402
+from evals.judge.cli import Task  # noqa: E402
 
 
 def fake_instance(schema: dict[str, Any], node: dict[str, Any] | None = None) -> Any:

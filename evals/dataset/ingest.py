@@ -19,7 +19,7 @@ Runs only against an eval environment (`APP_ENV=eval`, see `task env:show`).
 
 Usage (from unisage-agent, eval stack running):
     task env:show env=eval
-    APP_ENV=eval UNISAGE_ADMIN_PASSWORD=... python -m evals.ingest \\
+    APP_ENV=eval UNISAGE_ADMIN_PASSWORD=... python -m evals.dataset.ingest \\
         --dataset ../unisage-gateway/dataset/official \\
         --only ../unisage-gateway/dataset/demo/demo_manifest.csv --limit 1
 """
@@ -37,8 +37,8 @@ from typing import Any
 
 import httpx
 
-from evals.crawl.download import DownloadState
-from evals.titles import upload_name
+from evals.dataset.crawl.download import DownloadState
+from evals.dataset.titles import upload_name
 
 SUCCESS_CODE = 1000
 EMPTY_TEXT_CODE = 4221
@@ -456,7 +456,7 @@ def main() -> None:
         rows = [row for row in rows if row.get("ingest_status") != "done"]
     missing = [row["file_id"] for row in rows if not row.get("title")]
     if missing:
-        sys.exit(f"rows without a title (run evals.titles first): {missing[:10]}")
+        sys.exit(f"rows without a title (run evals.dataset.titles first): {missing[:10]}")
     no_pdf = [row["local_path"] for row in rows if not (args.dataset / row["local_path"]).is_file()]
     if no_pdf:
         sys.exit(

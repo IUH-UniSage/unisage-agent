@@ -27,7 +27,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from evals.label import DEFAULT_MAP, load_label_map
+from evals.dataset.label import DEFAULT_MAP, load_label_map
 
 GENERATOR = "claude-opus-5-5 (subagents), reviewed=false until a human checks it"
 MAX_LEVEL = 5

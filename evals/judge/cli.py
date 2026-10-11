@@ -1,6 +1,6 @@
 """Score recorded turns with RAGAS (Task 11, `spec.md` §4-§5, §12.6).
 
-    uv run --isolated --no-project --with-requirements evals/requirements-judge.txt \\
+    uv run --isolated --no-project --with-requirements evals/judge/requirements.txt \\
         python -m evals.judge --out <run folder> [--limit 20] [--metrics refusal,...]
 
 Reads `<out>/results.jsonl` (written by `evals.run`) and turns each row into RAGAS inputs
@@ -30,7 +30,7 @@ again with the main model only. At the end the scores are merged into `results.j
 (`row["ragas"]`, old file kept as `.bak`) and summarised in `<out>/judge_summary.json`.
 
 RAGAS needs an older OpenAI client than the service, so it runs in its own environment
-(`evals/requirements-judge.txt`); this module imports RAGAS only in `evals.judge_ragas`, which
+(`evals/judge/requirements.txt`); this module imports RAGAS only in `evals.judge.ragas_metrics`, which
 `main()` loads lazily - the selection, budget and checkpoint logic here are tested without it.
 """
 
@@ -48,8 +48,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from evals.gemini_pool import QuotaExhausted
-from evals.metrics import outcome_of
+from evals.judge.gemini_pool import QuotaExhausted
+from evals.run.metrics import outcome_of
 
 ANSWER_METRICS = (
     "faithfulness",
@@ -542,7 +542,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-quota-waits", type=int, default=48)
     parser.add_argument("--env-file", type=Path, default=Path(".env.eval"))
-    parser.add_argument("--prompts-dir", type=Path, default=Path(__file__).parent / "ragas_prompts")
+    parser.add_argument("--prompts-dir", type=Path, default=Path(__file__).parent / "prompts")
     parser.add_argument(
         "--adapt-prompts",
         action="store_true",
@@ -582,7 +582,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("GEMINI_API_KEYS is not set (environment or --env-file)", file=sys.stderr)
         return 2
 
-    from evals.judge_ragas import RagasScorerFactory  # needs the judge environment
+    from evals.judge.ragas_metrics import RagasScorerFactory  # needs the judge environment
 
     factory = RagasScorerFactory(
         keys=keys,

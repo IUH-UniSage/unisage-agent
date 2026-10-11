@@ -11,8 +11,8 @@ from pydantic_ai.models.function import FunctionModel
 from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.schemas.retrieval import RetrievedChunk
-from evals.recording import RecordingRetrieval
-from evals.run import Job, Runner, access_of, select_jobs, spread
+from evals.run.recording import RecordingRetrieval
+from evals.run.runner import Job, Runner, access_of, select_jobs, spread
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
 CHUNK = RetrievedChunk(

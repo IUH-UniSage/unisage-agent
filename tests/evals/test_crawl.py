@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from evals.crawl.discover import (
+from evals.dataset.crawl.discover import (
     CrawlResult,
     Site,
     campus_for,
@@ -11,7 +11,7 @@ from evals.crawl.discover import (
     parse_links,
     slugify,
 )
-from evals.crawl.http import DisallowedUrlError, PoliteClient, is_allowed_host, parse_robots
+from evals.dataset.crawl.http import DisallowedUrlError, PoliteClient, is_allowed_host, parse_robots
 
 
 def test_allowed_hosts_are_iuh_only():

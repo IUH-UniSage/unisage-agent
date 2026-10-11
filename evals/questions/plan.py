@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pymupdf
 
-from evals.crawl.download import DownloadState
+from evals.dataset.crawl.download import DownloadState
 
 SLOT_COUNTS = {
     "normal": 150,

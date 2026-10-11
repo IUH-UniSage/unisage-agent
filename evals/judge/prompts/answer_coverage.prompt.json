@@ -1,0 +1,31 @@
+{
+ "language": "vietnamese",
+ "instruction": "Decompose and break down each of the input sentences into one or more standalone statements. Each statement should be a standalone claim that can be independently verified.\nFollow the level of atomicity and coverage as shown in the examples.",
+ "examples": [
+  [
+   {
+    "response": "Charles Babbage là một nhà toán học, triết gia và nhà phê bình ẩm thực người Pháp.",
+    "atomicity": "thấp",
+    "coverage": "thấp"
+   },
+   {
+    "claims": [
+     "Charles Babbage là một nhà toán học và triết gia."
+    ]
+   }
+  ],
+  [
+   {
+    "response": "Albert Einstein là một nhà vật lý lý thuyết người Đức. Ông đã phát triển thuyết tương đối và cũng đóng góp vào sự phát triển của cơ học lượng tử.",
+    "atomicity": "thấp",
+    "coverage": "thấp"
+   },
+   {
+    "claims": [
+     "Albert Einstein là một nhà vật lý người Đức.",
+     "Albert Einstein đã phát triển thuyết tương đối và đóng góp vào cơ học lượng tử."
+    ]
+   }
+  ]
+ ]
+}

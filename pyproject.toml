@@ -100,10 +100,10 @@ module = [
     "app.rag.ingestion.parser",
     "app.rag.ingestion.table_aware_parser",
     "tests.fixtures.documents",
-    "evals.crawl.download",
-    "evals.crawl.triage",
+    "evals.dataset.crawl.download",
+    "evals.dataset.crawl.triage",
     "evals.questions.plan",
-    "evals.titles",
+    "evals.dataset.titles",
     "tests.evals.test_titles",
 ]
 disallow_untyped_calls = false

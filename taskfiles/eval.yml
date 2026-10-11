@@ -26,7 +26,7 @@ tasks:
     cmds:
       - |
         {{.RESOLVE}}
-        {{.UV_RUN}} evals.ingest --dataset "$dataset" $only {{.CLI_ARGS}}
+        {{.UV_RUN}} evals.dataset.ingest --dataset "$dataset" $only {{.CLI_ARGS}}
 
   link:
     desc: "Sau khi ingest tay trên web: ghép tài liệu theo tiêu đề, ghi document_id/ingest_status vào manifest; set=demo|official"
@@ -34,7 +34,7 @@ tasks:
     cmds:
       - |
         {{.RESOLVE}}
-        {{.UV_RUN}} evals.ingest --dataset "$dataset" $only --link {{.CLI_ARGS}}
+        {{.UV_RUN}} evals.dataset.ingest --dataset "$dataset" $only --link {{.CLI_ARGS}}
 
   ingest:demo:
     desc: "(cũ) = task eval:ingest set=demo"
@@ -48,7 +48,7 @@ tasks:
     cmds:
       - |
         {{.RESOLVE}}
-        {{.UV_RUN}} evals.qdrant_titles --dataset "$dataset" $only {{.CLI_ARGS}}
+        {{.UV_RUN}} evals.dataset.qdrant_titles --dataset "$dataset" $only {{.CLI_ARGS}}
 
   run:
     desc: "Chạy bộ câu hỏi qua graph (in-process) và chấm phần không cần LLM; set=demo|official. Vd task eval:run env=eval -- --limit 20 --variant both"
@@ -57,3 +57,8 @@ tasks:
       - |
         {{.RESOLVE}}
         {{.UV_RUN}} evals.run --dataset "$dataset" --set "{{.SET}}" {{.CLI_ARGS}}
+
+  judge:
+    desc: "Chấm RAGAS các lượt đã chạy (môi trường riêng, key GEMINI_API_KEYS trong .env.eval). Vd task eval:judge -- --out runs/<run> --limit 20 (thêm --dry-run để chỉ ước tính chi phí)"
+    cmds:
+      - uv run --isolated --no-project --with-requirements evals/judge/requirements.txt python -m evals.judge --env-file .env.eval {{.CLI_ARGS}}

@@ -12,7 +12,7 @@ Writes two files into the dataset directory:
 - `discovered.csv`- one row per distinct PDF URL, with the page it came from.
 
 Usage:
-    python -m evals.crawl.discover --dataset ../unisage-gateway/dataset/official
+    python -m evals.dataset.crawl.discover --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse
@@ -30,7 +30,7 @@ from urllib.parse import unquote, urldefrag, urljoin, urlsplit
 import httpx
 from bs4 import BeautifulSoup
 
-from evals.crawl.http import DisallowedUrlError, PoliteClient, is_allowed_host
+from evals.dataset.crawl.http import DisallowedUrlError, PoliteClient, is_allowed_host
 
 logger = logging.getLogger(__name__)
 

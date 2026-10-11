@@ -4,8 +4,8 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from evals.crawl.download import ERROR_FIELDS, MANIFEST_FIELDS, read_csv
-from evals.crawl.triage import text_quality, triage
+from evals.dataset.crawl.download import ERROR_FIELDS, MANIFEST_FIELDS, read_csv
+from evals.dataset.crawl.triage import text_quality, triage
 
 
 def _row(file_id: str, pages: int, text_chars: int) -> dict[str, str]:

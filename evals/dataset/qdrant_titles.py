@@ -6,12 +6,12 @@ pipeline, whose `document_id` is the manifest `file_id`). This sets
 `object_key = <title>.pdf` on every point of each manifest row, matching the row
 by `document_id` (backend UUID) or `file_id`. Only the chip label changes: opening
 the file still needs a `documents` row in the backend, which only the upload flow
-(`evals.ingest`) creates.
+(`evals.dataset.ingest`) creates.
 
 Reads QDRANT_HOST / QDRANT_PORT / QDRANT_COLLECTION like the agent (`task ... env=`).
 
 Usage:
-    python -m evals.qdrant_titles --dataset ../unisage-gateway/dataset/official --dry-run
+    python -m evals.dataset.qdrant_titles --dataset ../unisage-gateway/dataset/official --dry-run
 """
 
 import argparse
@@ -21,8 +21,8 @@ from pathlib import Path
 from qdrant_client import QdrantClient, models
 
 from app.core.config import settings
-from evals.crawl.download import DownloadState
-from evals.titles import upload_name
+from evals.dataset.crawl.download import DownloadState
+from evals.dataset.titles import upload_name
 
 
 def ids_of(row: dict[str, str]) -> list[str]:

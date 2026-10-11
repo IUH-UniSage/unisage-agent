@@ -16,9 +16,9 @@ document itself:
    updates `local_path`; `file_id` stays the key everything else joins on.
 
 Usage:
-    python -m evals.titles extract --dataset ../unisage-gateway/dataset/official --out inputs.jsonl
-    python -m evals.titles apply --dataset ../unisage-gateway/dataset/official titles.jsonl
-    python -m evals.titles rename --dataset ../unisage-gateway/dataset/official
+    python -m evals.dataset.titles extract --dataset ../unisage-gateway/dataset/official --out inputs.jsonl
+    python -m evals.dataset.titles apply --dataset ../unisage-gateway/dataset/official titles.jsonl
+    python -m evals.dataset.titles rename --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse
@@ -31,7 +31,7 @@ from typing import Any
 
 import pymupdf
 
-from evals.crawl.download import DownloadState, read_csv, write_csv
+from evals.dataset.crawl.download import DownloadState, read_csv, write_csv
 
 EXCERPT_CHARS = 1500
 HEADING_LINES = 6
