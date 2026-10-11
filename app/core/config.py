@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     INGEST_MULTI_REP_QUESTION_COUNT: int = 3
     INGEST_SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800
+    # A PDF heading candidate longer than this stays body text - it is prefixed into every
+    # chunk under it, so an over-long one (a form's fill-in line) would overflow chunk_size.
+    INGEST_MAX_HEADING_CHARS: int = 200
     INGEST_CHUNKING_VERSION: str = "2026-09-structural-v2"
     # Tesseract language(s) for scanned PDF pages (pymupdf4llm OCRs pages with no text layer).
     # Vietnamese needs the `vie` traineddata; a language whose data is missing is dropped (with a

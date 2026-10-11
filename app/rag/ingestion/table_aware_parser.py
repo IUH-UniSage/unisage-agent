@@ -420,6 +420,13 @@ def _regions_from_pdf_pages(
         is_promoted_heading = bool(_ORDINAL_LINE.match(stripped)) and _looks_like_pdf_heading(
             stripped, flat_lines, index, boilerplate
         )
+        raw_title = heading_match.group(2) if heading_match else stripped
+        title = _clean_heading_title(raw_title)
+        if (heading_match or is_promoted_heading) and len(title) > settings.INGEST_MAX_HEADING_CHARS:
+            # No real section title is this long (a form's fill-in line, a bold paragraph):
+            # as a heading it would be prefixed into every chunk below it. Keep it as text.
+            heading_match, is_promoted_heading = None, False
+            line = raw_title
         if heading_match or is_promoted_heading:
             flush(page_number)
             raw_level = (
@@ -427,8 +434,6 @@ def _regions_from_pdf_pages(
                 if heading_match
                 else _PDF_PROMOTED_HEADING_FALLBACK_LEVEL
             )
-            raw_title = heading_match.group(2) if heading_match else stripped
-            title = _clean_heading_title(raw_title)
             level = _heading_level_for_title(title, raw_level)
             while heading_stack and heading_stack[-1][0] >= level:
                 heading_stack.pop()

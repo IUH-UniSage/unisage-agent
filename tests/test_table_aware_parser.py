@@ -343,6 +343,26 @@ def test_pdf_numbered_line_before_a_table_is_promoted_without_underline() -> Non
     assert table_regions[0].heading_path == ["Tieu de", "5. Gioi thieu bang"]
 
 
+def test_pdf_overlong_heading_candidate_stays_body_text() -> None:
+    """A form's fill-in line ("1. Ngành: ....... Mã ngành: ....") right before a table
+    passes the promotion signals, but no real section title is hundreds of characters
+    long - as a heading it would be prefixed into every chunk below it and overflow
+    `chunk_size`. Same for an over-long `#` line."""
+
+    fill_in = "1. Nganh: " + "." * 300 + " Ma nganh: " + "." * 100
+    long_hash = "## " + "Noi dung in dam rat dai " * 20
+    pages = _pages(f"# Tieu de\n\n{fill_in}\n\n|A|B|\n|---|---|\n|1|2|\n\n{long_hash}\n\nKet thuc.\n")
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "form.pdf", "pdf")
+
+    assert all(region.heading_path == ["Tieu de"] for region in regions)
+    text = "\n".join(r.content for r in regions if r.region_type == RegionType.TEXT)
+    assert "Ma nganh:" in text
+    assert "Noi dung in dam rat dai" in text
+    assert "##" not in text
+
+
 def test_pdf_plain_numbered_clause_is_not_promoted_to_heading() -> None:
     """A numbered line with neither `<u>` nor a table/list right after it
     (just another paragraph) stays ordinary text - promoting every
