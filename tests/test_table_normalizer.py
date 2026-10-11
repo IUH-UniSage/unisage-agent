@@ -7,8 +7,13 @@ from app.rag.ingestion.canonical_table import (
     check_table_invariants,
 )
 from app.rag.ingestion.table_aware_parser import split_regions
-from app.rag.ingestion.table_evidence import collect_table_evidence
-from app.rag.ingestion.table_normalizer import build_page_table
+from app.rag.ingestion.table_evidence import (
+    EvidenceCell,
+    EvidenceRow,
+    TableEvidence,
+    collect_table_evidence,
+)
+from app.rag.ingestion.table_normalizer import _align_rows_fuzzy, build_page_table
 from app.schemas.ingestion import RegionType
 from tests.test_table_evidence import SAMPLE, draw_table
 
@@ -158,3 +163,55 @@ def test_evidence_that_does_not_align_falls_back_to_markdown_with_a_warning() ->
 
     assert "evidence_unaligned" in table.warnings
     assert check_table_invariants(table) == []
+
+
+def _cell(x0: float, y0: float, x1: float, y1: float, text: str) -> EvidenceCell:
+    return EvidenceCell(bbox=(x0, y0, x1, y1), text=text)
+
+
+def test_fuzzy_alignment_keeps_a_garbled_header_off_a_label_merged_down_several_rows() -> None:
+    # The label cell is merged down over three geometry rows and holds nearly all
+    # the text; the markdown adds a garbled caption row the geometry never saw.
+    # Its letters also occur in the label, but pairing it with the label's rows
+    # would leave the header's own text unmatched.
+    label = " ".join(["Phat trien nguon nhan luc ke toan kiem toan du ve so luong"] * 6)
+    rows = [
+        EvidenceRow([None, _cell(200, 0, 220, 10, "1"), _cell(220, 0, 240, 10, "2")], 0, 10),
+        EvidenceRow(
+            [
+                _cell(50, 10, 200, 40, label),
+                _cell(200, 10, 220, 20, ""),
+                _cell(220, 10, 240, 20, ""),
+            ],
+            10,
+            20,
+        ),
+        EvidenceRow(
+            [None, _cell(200, 20, 220, 30, "x"), _cell(220, 20, 240, 30, "")],
+            20,
+            30,
+            [(1, 0), None, None],
+        ),
+        EvidenceRow(
+            [None, _cell(200, 30, 220, 40, ""), _cell(220, 30, 240, 40, "x")],
+            30,
+            40,
+            [(1, 0), None, None],
+        ),
+    ]
+    evidence = TableEvidence(
+        page_number=1,
+        bbox=(50, 0, 240, 40),
+        page_height=800,
+        rows=rows,
+        column_bounds=[50, 200, 220],
+    )
+    md = [["Chien luoc chinh sach", "Ch", "uan dau ra"], ["", "1", "2"], [label, "x", "x"]]
+
+    assert _align_rows_fuzzy(md, evidence) == [[0, 1], [2], [2], [2]]
+
+
+def test_line_break_inside_a_header_cell_is_not_part_of_the_column_name() -> None:
+    table = build_page_table(["|**Học**<br>**kỳ**|Tên<br>môn|", "|---|---|", "|1|a|"], 1, None)
+
+    assert table.header_row == ["Học kỳ", "Tên môn"]

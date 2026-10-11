@@ -85,6 +85,7 @@ def markdown_row_cells(line: str) -> list[str]:
 
 
 _MARKUP_TAG = re.compile(r"</?(?:sup|sub|b|i|u|em|strong)>", re.IGNORECASE)
+_LINE_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _WHOLE_EMPHASIS = re.compile(r"^\s*(?:_+|\*+)(.+?)(?:_+|\*+)\s*$", re.DOTALL)
 
 
@@ -202,7 +203,8 @@ def _flatten_header(filled_tiers: list[list[str]]) -> list[str]:
     for column in range(column_count):
         parts: list[str] = []
         for tier in filled_tiers:
-            value = tier[column].strip()
+            # a line break inside a header cell is layout, not part of the name
+            value = " ".join(_LINE_BREAK.sub(" ", tier[column]).split())
             if value and (not parts or parts[-1] != value):
                 parts.append(value)
         names.append(" > ".join(parts) if parts else f"col_{column + 1}")
@@ -232,25 +234,37 @@ def _vertical_origin(evidence: TableEvidence, position: int, column: int) -> int
     return origin[0]
 
 
+def _row_cells_by_kind(
+    evidence: TableEvidence, position: int
+) -> tuple[list[str], dict[tuple[int, int], str]]:
+    """(own texts, spanning texts keyed by the merged cell's origin) of a
+    geometry row. The key lets several rows of one span share its text once."""
+
+    row = evidence.rows[position]
+    own: list[str] = []
+    spanning: dict[tuple[int, int], str] = {}
+    for column, cell in enumerate(row.cells):
+        if cell is not None:
+            if cell.bbox[3] > row.y1 + _SPAN_EPSILON:
+                spanning[(position, column)] = cell.text
+            else:
+                own.append(cell.text)
+            continue
+        origin = _vertical_origin(evidence, position, column)
+        if origin is not None:
+            above = evidence.rows[origin].cells[column]
+            spanning[(origin, column)] = above.text if above is not None else ""
+    return own, spanning
+
+
 def _row_texts(evidence: TableEvidence, position: int) -> tuple[list[str], list[str]]:
     """(own, spanning) cell texts of a geometry row. A cell merged down over
     several rows - starting on this row or covering it from above - is
     "spanning": the markdown puts its text (or shards of its glyphs) on
     whichever row of the span it happens to be centred on."""
 
-    row = evidence.rows[position]
-    own: list[str] = []
-    spanning: list[str] = []
-    for column, cell in enumerate(row.cells):
-        if cell is not None:
-            reaches_below = cell.bbox[3] > row.y1 + _SPAN_EPSILON
-            (spanning if reaches_below else own).append(cell.text)
-            continue
-        origin = _vertical_origin(evidence, position, column)
-        if origin is not None:
-            above = evidence.rows[origin].cells[column]
-            spanning.append(above.text if above is not None else "")
-    return own, spanning
+    own, spanning = _row_cells_by_kind(evidence, position)
+    return own, list(spanning.values())
 
 
 def _geometry_matches(md_text: str, evidence: TableEvidence, positions: list[int]) -> bool:
@@ -284,23 +298,25 @@ class _RowText:
     def __init__(self, md_cells: list[list[str]], evidence: TableEvidence) -> None:
         self.md = [_char_multiset(" ".join(cells)) for cells in md_cells]
         self.own: list[Counter[str]] = []
-        self.pool: list[Counter[str]] = []
+        self.spanning: list[dict[tuple[int, int], str]] = []
         for position in range(len(evidence.rows)):
-            own, spanning = _row_texts(evidence, position)
+            own, spanning = _row_cells_by_kind(evidence, position)
             self.own.append(_char_multiset(" ".join(own)))
-            self.pool.append(self.own[-1] + _char_multiset(" ".join(spanning)))
+            self.spanning.append(spanning)
 
     def block(self, md: range, geometry: range) -> tuple[int, int, int]:
-        """(matched, extra, missing) characters of one block."""
+        """(matched, extra, missing) characters of one block. A cell merged over
+        several rows of the block is available to it once, not once per row."""
 
         chars: Counter[str] = Counter()
-        pool: Counter[str] = Counter()
         own: Counter[str] = Counter()
+        spanning: dict[tuple[int, int], str] = {}
         for index in md:
             chars += self.md[index]
         for position in geometry:
-            pool += self.pool[position]
             own += self.own[position]
+            spanning.update(self.spanning[position])
+        pool = own + _char_multiset(" ".join(spanning.values()))
         return (
             sum((chars & pool).values()),
             sum((chars - pool).values()),
@@ -360,6 +376,13 @@ def _align_rows_fuzzy(md_cells: list[list[str]], evidence: TableEvidence) -> lis
     if rows == 0 or count == 0:
         return None
     text = _RowText(md_cells, evidence)
+    # Score each loss as `_alignment_ok` judges it: missing geometry text against
+    # the geometry's own text, extra markdown text against the markdown. When
+    # most text sits in merged cells the own text is small, and a block that
+    # drops a little of it fails the check however much it matches otherwise.
+    total_md = max(sum(sum(chars.values()) for chars in text.md), 1)
+    total_own = max(sum(sum(own.values()) for own in text.own), 1)
+    missing_weight = max(1.0, total_md / total_own)
     minus_infinity = float("-inf")
     # best[i][k]: best score for markdown rows [0, i) against geometry rows [0, k)
     best = [[minus_infinity] * (rows + 1) for _ in range(count + 1)]
@@ -374,7 +397,7 @@ def _align_rows_fuzzy(md_cells: list[list[str]], evidence: TableEvidence) -> lis
                     if min(a, b) != 1 or i + a > count or k + b > rows:
                         continue
                     matched, extra, missing = text.block(range(i, i + a), range(k, k + b))
-                    candidate = best[i][k] + matched - extra - missing
+                    candidate = best[i][k] + matched - extra - missing_weight * missing
                     if candidate > best[i + a][k + b]:
                         best[i + a][k + b] = candidate
                         back[i + a][k + b] = (i, k)
