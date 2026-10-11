@@ -7,8 +7,8 @@ its file in MinIO, and chunks in Qdrant that normal chat retrieves:
 1. backend `POST /documents` (multipart): title = manifest `title`, file name
    `<title>.pdf`, department UUID looked up from the department code, private
    documents get the `minAccessLevelId` of their `access_level`;
-2. agent `POST /ingestion/chunking` (markdown_aware, the wizard's defaults)
-   with `object_key = document.sourceUrl`;
+2. agent `POST /ingestion/chunking` (semantic: 800 tokens, 20% overlap, similarity
+   threshold 0.3) with `object_key = document.sourceUrl`;
 3. agent `POST /ingestion/embedding` - a Celery task;
 4. poll `GET /ingestion/jobs/{document_id}` until the task ends.
 
@@ -17,11 +17,18 @@ Progress is saved in the manifest after every step (`document_id`,
 so a re-run skips `done` rows and resumes the others without re-uploading.
 Runs only against an eval environment (`APP_ENV=eval`, see `task env:show`).
 
+A document chunked again (it already has a `document_id`) first loses every point it has in
+Qdrant: point ids are `document_id:chunk_index`, so new chunks would only overwrite the first
+ones and a document that now has fewer chunks would keep stale ones. `--rechunk` sends the
+`done` rows through chunking and embedding again with the current `CHUNKING` (same documents,
+same `document_id`s, so the questions still point at them).
+
 Usage (from unisage-agent, eval stack running):
     task env:show env=eval
     APP_ENV=eval UNISAGE_ADMIN_PASSWORD=... python -m evals.dataset.ingest \\
         --dataset ../unisage-gateway/dataset/official \\
         --only ../unisage-gateway/dataset/demo/demo_manifest.csv --limit 1
+    task eval:ingest env=eval set=official -- --rechunk
 """
 
 import argparse
@@ -200,12 +207,20 @@ def document_fields(target: Target, labels: Labels) -> dict[str, str]:
     return fields
 
 
-def start(client: UniSageClient, state: DownloadState, target: Target, labels: Labels) -> None:
+def start(
+    client: UniSageClient,
+    state: DownloadState,
+    target: Target,
+    labels: Labels,
+    purge: Callable[[str], None] | None = None,
+) -> None:
     """Upload (unless already uploaded), chunk and dispatch embedding for one row.
-    Leaves `ingest_status` at `embedding`, or `empty_text`."""
+    Leaves `ingest_status` at `embedding`, or `empty_text`. A row uploaded before has its
+    old points removed (`purge`) before the new chunks are embedded."""
 
     row = target.row
-    if row.get("document_id"):
+    uploaded_before = bool(row.get("document_id"))
+    if uploaded_before:
         document = client.get_document(row["document_id"])
     else:
         content = (state.dataset / row["local_path"]).read_bytes()
@@ -230,6 +245,8 @@ def start(client: UniSageClient, state: DownloadState, target: Target, labels: L
             row["ingest_status"] = "empty_text"
             return
         raise
+    if uploaded_before and purge is not None:
+        purge(row["document_id"])
     client.embed(
         {
             **common,
@@ -285,6 +302,7 @@ class Run:
     # A job-status call that fails with a 5xx/network error is retried on the next polls
     # before the row is marked as an error (e.g. the worker/result backend just started).
     poll_retries: int = 5
+    purge: Callable[[str], None] | None = None
     inflight: list[dict[str, str]] = field(default_factory=list)
     poll_failures: dict[str, int] = field(default_factory=dict)
 
@@ -330,7 +348,11 @@ class Run:
                 print(f"[{index + 1}/{len(rows)}] {row['title'][:80]}")
                 try:
                     start(
-                        self.client, self.state, target_for(row, self.labels), self.labels
+                        self.client,
+                        self.state,
+                        target_for(row, self.labels),
+                        self.labels,
+                        self.purge,
                     )
                 except (ApiError, httpx.HTTPError, ValueError, OSError) as error:
                     self._fail(row, error)
@@ -403,6 +425,56 @@ def link_rows(client: UniSageClient, rows: list[dict[str, str]]) -> list[str]:
     return unmatched
 
 
+def qdrant_purge() -> Callable[[str], None]:
+    """Deletes every point of a document from the eval collection (refuses any other)."""
+
+    from qdrant_client import QdrantClient, models
+
+    from app.core.config import settings
+
+    collection = settings.QDRANT_COLLECTION
+    if "eval" not in collection:
+        sys.exit(f"QDRANT_COLLECTION '{collection}' is not an eval collection: refusing to delete")
+    client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
+
+    def purge(document_id: str) -> None:
+        client.delete(
+            collection_name=collection,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="document_id", match=models.MatchValue(value=document_id)
+                        )
+                    ]
+                )
+            ),
+        )
+
+    return purge
+
+
+def mark_for_rechunk(state: DownloadState, only: Path | None) -> int:
+    """Send the `done` rows (in `only`, when given) back to `uploaded`, saved at once, so an
+    interrupted re-chunk resumes like any ingest."""
+
+    wanted: set[str] | None = None
+    if only is not None:
+        with only.open(newline="", encoding="utf-8-sig") as handle:
+            wanted = {row["file_id"] for row in csv.DictReader(handle)}
+    marked = 0
+    for row in state.manifest:
+        if (
+            row.get("ingest_status") == "done"
+            and row.get("document_id")
+            and (wanted is None or row["file_id"] in wanted)
+        ):
+            row["ingest_status"] = "uploaded"
+            marked += 1
+    state.save()
+    return marked
+
+
 def pick_rows(state: DownloadState, only: Path | None, limit: int | None) -> list[dict[str, str]]:
     wanted: set[str] | None = None
     if only is not None:
@@ -443,6 +515,11 @@ def main() -> None:
         action="store_true",
         help="documents were ingested by hand: match them by title and record document_id",
     )
+    parser.add_argument(
+        "--rechunk",
+        action="store_true",
+        help="chunk and embed the done rows again with the current settings (keeps documents)",
+    )
     args = parser.parse_args()
 
     if os.getenv("APP_ENV") != "eval":
@@ -456,6 +533,8 @@ def main() -> None:
     if args.only is not None and not args.only.is_file():
         sys.exit(f"--only list not found: {args.only}")
     state = DownloadState(args.dataset)
+    if args.rechunk and not args.dry_run:
+        print(f"{mark_for_rechunk(state, args.only)} done row(s) sent back for re-chunking")
     rows = pick_rows(state, args.only, args.limit)
     if args.link:
         rows = [row for row in rows if row.get("ingest_status") != "done"]
@@ -500,6 +579,7 @@ def main() -> None:
                 max_inflight=args.max_inflight,
                 quota_wait=args.quota_wait * 60,
                 max_quota_waits=args.max_quota_waits,
+                purge=qdrant_purge(),
             ).ingest(rows)
 
     done = [row for row in rows if row.get("ingest_status") == "done"]

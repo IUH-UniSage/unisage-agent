@@ -14,6 +14,7 @@ from evals.dataset.ingest import (
     document_fields,
     is_quota,
     link_rows,
+    mark_for_rechunk,
     pick_rows,
     target_for,
 )
@@ -298,3 +299,32 @@ def test_a_5xx_on_the_job_status_is_retried_before_failing(tmp_path: Path) -> No
     state = _run(tmp_path, flaky, [_row()])  # type: ignore[arg-type]
 
     assert state.manifest[0]["ingest_status"] == "done"
+
+
+def test_rechunk_sends_done_rows_back_and_drops_their_old_points_first(tmp_path: Path) -> None:
+    rows = [_row(document_id="doc-1", ingest_status="done"), _row(file_id="b2", ingest_status="done")]
+    (tmp_path / "files" / "pdt").mkdir(parents=True)
+    write_csv(tmp_path / "manifest.csv", list(rows[0]), rows)
+    state = DownloadState(tmp_path)
+
+    # only a row that has a document can be re-chunked; it is saved before any call
+    assert mark_for_rechunk(state, None) == 1
+    assert DownloadState(tmp_path).manifest[0]["ingest_status"] == "uploaded"
+
+    stack = FakeStack()
+    purged: list[str] = []
+    client = UniSageClient(httpx.Client(base_url="http://gw", transport=httpx.MockTransport(stack)))
+    Run(client, state, LABELS, poll_seconds=0, purge=purged.append).ingest(
+        pick_rows(state, None, None)
+    )
+
+    assert purged == ["doc-1"]
+    assert stack.uploads == []  # same document, same id: the questions still point at it
+    assert state.manifest[0]["ingest_status"] == "done"
+
+
+def test_a_first_upload_has_no_old_points_to_drop(tmp_path: Path) -> None:
+    purged: list[str] = []
+    _run(tmp_path, FakeStack(), [_row()], purge=purged.append)
+
+    assert purged == []
