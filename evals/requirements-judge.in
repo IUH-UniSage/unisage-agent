@@ -1,0 +1,12 @@
+# Environment of `python -m evals.judge` (RAGAS scoring), separate from the service:
+# ragas 0.4.3 pulls `instructor`, whose caps (jiter<0.15, rich<15) would pin the service to an
+# older openai / pydantic-ai. Recompile with:
+#   uv pip compile evals/requirements-judge.in -o evals/requirements-judge.txt --python-version 3.12
+ragas==0.4.3
+# ragas 0.4.3 imports langchain_community.chat_models.vertexai, removed in 0.4
+langchain-community>=0.3,<0.4
+google-genai==2.29.0
+# Pacific-time quota reset on Windows (no system tz database)
+tzdata
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
