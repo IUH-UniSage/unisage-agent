@@ -117,23 +117,36 @@ def _all_chunks(row: dict[str, Any]) -> Iterable[dict[str, Any]]:
 # --- retrieval and citations ----------------------------------------------------------------
 
 
+def top_documents(row: dict[str, Any], k: int = RECALL_K) -> set[str]:
+    """Documents of the first `k` context chunks (rerank order). A calculation turn retrieves
+    on its own and never reaches the generation step, so it falls back to the top `k` of
+    each retrieval query."""
+
+    context = row.get("context") or []
+    if context:
+        return {chunk["document_id"] for chunk in context[:k]}
+    return {
+        chunk["document_id"]
+        for retrieval in row.get("retrievals") or []
+        for chunk in retrieval["chunks"][:k]
+    }
+
+
 def recall_at_k(row: dict[str, Any], k: int = RECALL_K) -> bool | None:
-    """At least one expected document among the first `k` context chunks (rerank order).
-    None when the row has no expected document."""
+    """At least one expected document in `top_documents`. None when there is nothing to
+    find: no expected document, or a persona not allowed to see it."""
 
     expected = set(row.get("expected_document_ids") or [])
-    if not expected:
+    if not expected or row.get("expect_visible") is False:
         return None
-    top = [chunk["document_id"] for chunk in (row.get("context") or [])[:k]]
-    return bool(expected & set(top))
+    return bool(expected & top_documents(row, k))
 
 
 def recall_all_at_k(row: dict[str, Any], k: int = RECALL_K) -> bool | None:
     expected = set(row.get("expected_document_ids") or [])
-    if len(expected) < 2:
+    if len(expected) < 2 or row.get("expect_visible") is False:
         return None
-    top = {chunk["document_id"] for chunk in (row.get("context") or [])[:k]}
-    return expected <= top
+    return expected <= top_documents(row, k)
 
 
 def citation_accuracy(row: dict[str, Any]) -> float | None:
@@ -185,6 +198,43 @@ def numbers_match(expected: Sequence[float], text: str) -> bool:
     return all(round(float(n), 6) in found for n in expected)
 
 
+_RESULT_AFTER_EQUALS = re.compile(r"=\s*([0-9][0-9.,\s]*[0-9]|[0-9])")
+
+
+def numbers_from_answer(answer: str) -> list[float]:
+    """Fallback for a calculation row without `expected_numbers` (scoring-rules §2.2): the
+    number after the last `=` of the answer. Empty when the answer has no `=`."""
+
+    matches = _RESULT_AFTER_EQUALS.findall(answer or "")
+    if not matches:
+        return []
+    readings = _readings(matches[-1].replace(" ", ""))
+    return [readings[-1]] if readings else []
+
+
+def _norm_title(title: str) -> str:
+    """Compare titles the way the chip shows them: an uploaded `<title>.pdf` loses the
+    characters no file name allows (`/` -> `-`, ...) and its extension."""
+
+    text = re.sub(r'[\\/:*?"<>|]', "-", title or "")
+    return re.sub(r"\.pdf$", "", text.strip(), flags=re.IGNORECASE).casefold()
+
+
+def hidden_document_used(row: dict[str, Any]) -> bool:
+    """The expected (private) document reached the answer: its `document_id` or its title is
+    in the context chunks after rerank, or among the citations."""
+
+    ids = set(row.get("expected_document_ids") or [])
+    titles = {_norm_title(t) for t in row.get("expected_titles") or [] if t}
+    for chunk in row.get("context") or []:
+        if chunk.get("document_id") in ids or _norm_title(chunk.get("title") or "") in titles:
+            return True
+    for citation in row.get("citations") or []:
+        if citation.get("documentId") in ids or _norm_title(citation.get("title") or "") in titles:
+            return True
+    return False
+
+
 def looks_like_refusal(text: str) -> bool:
     lowered = text.lower()
     return any(hint in lowered for hint in REFUSAL_HINTS)
@@ -218,16 +268,28 @@ def score_row(row: dict[str, Any]) -> dict[str, Any]:
         passed = outcome == [category] and not row.get("retrievals")
     elif category == "web_search":
         passed = None if row.get("web") != "on" else "web" in outcome
-    elif category == "unanswerable" or (category == "access" and visible is False):
+    elif category == "access" and visible is False:
+        # The persona may still get an answer from other (public) documents; what must not
+        # happen is the hidden document - by id or by title - reaching the context.
+        checks["hidden_document_used"] = hidden_document_used(row)
+        passed = not checks["leaked"] and not checks["hidden_document_used"]
+    elif category == "unanswerable":
         refused = "ticket" in outcome or checks["refusal_hint"]
         passed = not checks["leaked"] and refused
     elif category == "calculation" or row.get("expected_intent") == "academic_calculation":
         numbers = row.get("expected_numbers")
+        checks["numbers_source"] = "expected_numbers" if numbers else None
+        if not numbers:
+            numbers = numbers_from_answer(row.get("expected_answer") or "")
+            checks["numbers_source"] = "answer" if numbers else None
         checks["numbers_match"] = numbers_match(numbers, answer) if numbers else None
-        if "calculation" not in outcome or checks["asked_back"]:
+        # A category=calculation question must take the calculation branch; one only labelled
+        # academic_calculation (e.g. "which courses, how many credits") may be answered by RAG.
+        allowed = {"calculation"} if category == "calculation" else {"calculation", "rag"}
+        if not allowed & set(outcome) or checks["asked_back"] or checks["leaked"]:
             passed = False
         elif checks["numbers_match"] is not None:
-            passed = checks["numbers_match"] and not checks["leaked"]
+            passed = checks["numbers_match"]
     else:  # normal, access visible
         if "rag" not in outcome or checks["recall_at_5"] is False or checks["leaked"]:
             passed = False

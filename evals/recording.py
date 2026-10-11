@@ -24,6 +24,7 @@ from app.core.usage.usage_recorder import UsageRecorder
 from app.graph import streaming_graph
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
+from app.rag.prompting.citations import source_title
 from app.rag.retrieval.service import RetrievalServiceProtocol
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
@@ -102,6 +103,7 @@ def chunk_summary(chunk: RetrievedChunk) -> dict[str, Any]:
     return {
         "chunk_id": chunk.chunk_id,
         "document_id": chunk.metadata.get("document_id"),
+        "title": source_title(chunk.source),
         "department": chunk.metadata.get("department"),
         "access_level": chunk.metadata.get("access_level"),
         "is_public": chunk.metadata.get("is_public"),

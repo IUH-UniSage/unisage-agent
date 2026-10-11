@@ -83,7 +83,7 @@ class FakeStack:
             if self.job_errors:
                 self.job_errors -= 1
                 return httpx.Response(500, text="Internal Server Error")
-            state =self.task_states.pop(0) if len(self.task_states) > 1 else self.task_states[0]
+            state = self.task_states.pop(0) if len(self.task_states) > 1 else self.task_states[0]
             return _ok(
                 {
                     "task_state": state,

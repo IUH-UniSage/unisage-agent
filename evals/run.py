@@ -144,6 +144,14 @@ def security_of(question: dict[str, Any], access: list[dict[str, Any]]) -> Acade
     )
 
 
+def document_titles(question: dict[str, Any], manifest: dict[str, dict[str, str]]) -> list[str]:
+    return [
+        (manifest.get(file_id) or {}).get("title") or ""
+        for file_id in question.get("expected_doc_ids") or []
+        if (manifest.get(file_id) or {}).get("title")
+    ]
+
+
 def document_ids(question: dict[str, Any], manifest: dict[str, dict[str, str]]) -> list[str]:
     """Expected `file_id`s as the `document_id` stored in Qdrant: the backend UUID once
     ingested through the upload flow, else the `file_id` itself (older direct ingests)."""
@@ -164,6 +172,7 @@ def result_row(
     access: list[dict[str, Any]],
     expected_document_ids: list[str],
     web: str,
+    expected_titles: list[str] | None = None,
 ) -> dict[str, Any]:
     question = job.question
     output = result.output
@@ -182,6 +191,7 @@ def result_row(
         "evidence": question.get("evidence"),
         "expected_doc_ids": question.get("expected_doc_ids") or [],
         "expected_document_ids": expected_document_ids,
+        "expected_titles": expected_titles or [],
         "expected_numbers": question.get("expected_numbers"),
         "access": access,
         "web": web,
@@ -301,6 +311,7 @@ class Runner:
                     result,
                     access=access,
                     expected_document_ids=document_ids(job.question, self.manifest),
+                    expected_titles=document_titles(job.question, self.manifest),
                     web=self.web,
                 )
                 if result.error and is_quota(result.error_code, result.error):
@@ -325,6 +336,26 @@ class Runner:
 
         await asyncio.gather(*(one(job) for job in jobs))
         return stop.is_set()
+
+
+def rescore(out: Path, manifest: dict[str, dict[str, str]]) -> None:
+    """Recompute `checks` of every row in `results.jsonl` with the current `evals.metrics`
+    (after a scoring fix) - no graph run, no model call. Fields added to the rows since the
+    run (expected document titles) are filled from the manifest. The old file is kept as .bak."""
+
+    results = out / "results.jsonl"
+    lines = [line for line in results.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [json.loads(line) for line in lines]
+    for row in rows:
+        if not row.get("expected_titles"):
+            row["expected_titles"] = document_titles(row, manifest)
+        row["checks"] = score_row(row)
+    results.with_suffix(".jsonl.bak").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    results.write_text(
+        "".join(json.dumps(row, ensure_ascii=False, default=str) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    print(f"rescored {len(rows)} rows in {results}")
 
 
 def write_summary(out: Path) -> dict[str, Any]:
@@ -454,7 +485,18 @@ def main() -> None:
     )
     parser.add_argument("--max-quota-waits", type=int, default=48)
     parser.add_argument("--dry-run", action="store_true", help="list the turns, run nothing")
+    parser.add_argument(
+        "--rescore",
+        action="store_true",
+        help="re-score the existing results of --out with the current metrics, run nothing",
+    )
     args = parser.parse_args()
+    if args.rescore:
+        if args.out is None or not (args.out / "results.jsonl").is_file():
+            sys.exit("--rescore needs --out <run folder with results.jsonl>")
+        rescore(args.out, read_manifest(args.dataset))
+        write_summary(args.out)
+        return
     if os.getenv("APP_ENV") != "eval":
         sys.exit("APP_ENV is not 'eval': run through `task eval:run env=eval`")
     jobs, out, departments = prepare(args)
