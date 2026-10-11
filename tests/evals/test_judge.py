@@ -143,6 +143,7 @@ class FakeScorer:
         value = self.values.get(task.metric, 0.9)
         return Score(value=value, reason=None if not math.isnan(value) else "failed",
                      usage={"model": "fallback" if self.fallback else "main",
+                            "models": {"fallback" if self.fallback else "main": 1},
                             "fallback": self.fallback, "calls": 1, "usd": 0.001})
 
     def stats(self) -> dict[str, Any]:
@@ -205,7 +206,8 @@ def test_out_of_quota_waits_for_the_reset_then_scores_the_rest(tmp_path: Path) -
 
 def test_rows_scored_by_the_fallback_are_scored_again_with_the_main_model(tmp_path: Path) -> None:
     tasks = judge.tasks_of([_row(id=f"q{i}") for i in range(4)], ["refusal", "id_context_recall"])
-    run, asked = _run(tmp_path, [FakeScorer(fallback=True), FakeScorer(fallback=False)])
+    run, asked = _run(tmp_path, [FakeScorer(fallback=True), FakeScorer(fallback=False)],
+                      fallback_model="fallback")
 
     assert asyncio.run(run.run(tasks))
     assert asked == [False, True]
@@ -369,3 +371,19 @@ def test_timeouts_are_retried_twice_and_a_bad_request_fails_at_once() -> None:
     outcomes = {"key-one-123456": [FakeError(400)]}
     with pytest.raises(CallFailed):
         _call(_caller(list(outcomes), clock, outcomes), outcomes)
+
+
+def test_an_embedding_call_is_not_counted_as_the_fallback_model() -> None:
+    records = {
+        (f"q{i}:original", "answer_relevancy"): {
+            "value": 0.9,
+            "fallback": True,  # written before the fix
+            "models": {"main": 1, "gemini-embedding-001": 2},
+        }
+        for i in range(10)
+    }
+
+    assert judge.fallback_rows(records, "fallback") == set()
+    records[("q0:original", "refusal")] = {"value": 1.0, "models": {"fallback": 1}}
+    records[("q1:original", "refusal")] = {"value": 1.0, "models": {"fallback": 1}}
+    assert judge.fallback_rows(records, "fallback") == {"q0:original", "q1:original"}

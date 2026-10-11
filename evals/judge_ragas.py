@@ -71,7 +71,8 @@ _ledger: contextvars.ContextVar["Ledger | None"] = contextvars.ContextVar(
 class Ledger:
     """What one score cost: calls, tokens, USD, and which models/keys produced it."""
 
-    main_model: str
+    fallback_model: str | None = None
+    embedding_model: str | None = None
     calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -89,11 +90,13 @@ class Ledger:
         self.keys.add(key.masked)
 
     def as_usage(self) -> dict[str, Any]:
+        # the judge model is the LLM that scored; embeddings (answer_relevancy) are not one
+        llm_models = Counter({m: n for m, n in self.models.items() if m != self.embedding_model})
         return {
-            "model": self.models.most_common(1)[0][0] if self.models else None,
+            "model": llm_models.most_common(1)[0][0] if llm_models else None,
             "models": dict(self.models),
             "keys": sorted(self.keys),
-            "fallback": any(model != self.main_model for model in self.models),
+            "fallback": bool(self.fallback_model and self.fallback_model in self.models),
             "calls": self.calls,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
@@ -243,13 +246,15 @@ class RagasScorer:
     llm: GeminiJudgeLLM
     metrics: dict[str, Any]
     caller: GeminiCaller
+    fallback_model: str | None = None
+    embedding_model: str | None = None
     ready: asyncio.Event = field(default_factory=asyncio.Event)
     setup: Any = None
 
     async def score(self, task: Task) -> Score:
         if self.setup is not None and not self.ready.is_set():
             await self.setup(self)
-        ledger = Ledger(main_model=self.llm.model)
+        ledger = Ledger(fallback_model=self.fallback_model, embedding_model=self.embedding_model)
         token = _ledger.set(ledger)
         try:
             value, reason = await self._run(task)
@@ -343,7 +348,14 @@ class RagasScorerFactory:
                     )
                 scorer.ready.set()
 
-        return RagasScorer(llm=llm, metrics=metrics, caller=caller, setup=setup)
+        return RagasScorer(
+            llm=llm,
+            metrics=metrics,
+            caller=caller,
+            fallback_model=self.fallback,
+            embedding_model=self.embedding_model,
+            setup=setup,
+        )
 
     def stats(self) -> dict[str, Any]:
         merged: dict[str, Any] = {}

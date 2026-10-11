@@ -294,6 +294,7 @@ def _record(task: Task, score: Score) -> dict[str, Any]:
 class JudgeRun:
     out: Path
     scorer_factory: Callable[[bool], Scorer]
+    fallback_model: str | None = None
     concurrency: int = 8
     quota_wait_s: float = 0.0
     max_quota_waits: int = 48
@@ -311,7 +312,7 @@ class JudgeRun:
         if not await self._until_done(scorer, tasks):
             return False
         records = load_records(self.checkpoint)
-        redo = fallback_rows(records)
+        redo = fallback_rows(records, self.fallback_model)
         if redo:
             print(f"{len(redo)} row(s) needed the fallback model (> 5%): scoring them again")
             again = [task for task in tasks if task.key in redo and task.metric not in NO_LLM]
@@ -378,11 +379,20 @@ class JudgeRun:
         return (min(stopped) if stopped else None), tried
 
 
-def fallback_rows(records: dict[tuple[str, str], dict[str, Any]]) -> set[str]:
+def used_fallback(record: dict[str, Any], fallback_model: str | None) -> bool:
+    """Read from the models a score used, so a record written before the embedding model
+    stopped counting as a fallback is read right too."""
+
+    return bool(fallback_model and fallback_model in (record.get("models") or {}))
+
+
+def fallback_rows(
+    records: dict[tuple[str, str], dict[str, Any]], fallback_model: str | None
+) -> set[str]:
     """Rows scored partly by the fallback model, when they are more than 5% of the rows."""
 
     rows = {key for key, _metric in records}
-    used = {key for (key, _metric), record in records.items() if record.get("fallback")}
+    used = {key for (key, _m), record in records.items() if used_fallback(record, fallback_model)}
     if not rows or len(used) / len(rows) <= FALLBACK_SHARE_MAX:
         return set()
     return used
@@ -418,7 +428,9 @@ def merge_into_results(out: Path, records: dict[tuple[str, str], dict[str, Any]]
 
 
 def summarize_scores(
-    rows: Sequence[dict[str, Any]], records: dict[tuple[str, str], dict[str, Any]]
+    rows: Sequence[dict[str, Any]],
+    records: dict[tuple[str, str], dict[str, Any]],
+    fallback_model: str | None = None,
 ) -> dict[str, Any]:
     """Mean and share ≥ 0.7 of every metric, overall and per category; cost and fallback use."""
 
@@ -466,7 +478,9 @@ def summarize_scores(
             "usd": round(usage["usd_micros"] / 1_000_000, 4),
         },
         "models": dict(models),
-        "fallback_rows": len({key for (key, _m), r in records.items() if r.get("fallback")}),
+        "fallback_rows": len(
+            {key for (key, _m), r in records.items() if used_fallback(r, fallback_model)}
+        ),
     }
 
 
@@ -567,6 +581,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = JudgeRun(
         out=args.out,
         scorer_factory=factory,
+        fallback_model=args.judge_fallback or None,
         concurrency=args.concurrency,
         quota_wait_s=args.quota_wait * 60,
         max_quota_waits=args.max_quota_waits,
@@ -574,7 +589,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     finished = asyncio.run(run.run(tasks))
     records = load_records(run.checkpoint)
     merged = merge_into_results(args.out, records)
-    summary = summarize_scores(load_rows(args.out), records)
+    summary = summarize_scores(load_rows(args.out), records, args.judge_fallback or None)
     summary["keys"] = factory.stats()
     (args.out / "judge_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8"
