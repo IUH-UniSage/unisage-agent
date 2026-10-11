@@ -1,7 +1,10 @@
+import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
+from functools import cache
 from io import BytesIO
+from pathlib import Path
 
 import pymupdf
 import pymupdf4llm
@@ -14,6 +17,7 @@ from docx.table import Table as DocxTable
 from docx.table import _Row as DocxRow
 from docx.text.paragraph import Paragraph as DocxParagraph
 
+from app.core.config import settings
 from app.core.errors.exceptions import UnsupportedFileTypeException
 from app.rag.ingestion.canonical_table import (
     TableBlock,
@@ -33,6 +37,8 @@ from app.rag.ingestion.table_normalizer import (
     markdown_row_cells as _markdown_row_cells,  # noqa: F401  (kept importable from here for existing callers/tests)
 )
 from app.schemas.ingestion import HeaderSource, RegionType, SourceType
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -87,13 +93,31 @@ def split_regions(content: bytes, filename: str, extension: str) -> list[ParsedR
 
     document = pymupdf.open(stream=content, filetype=extension)
     try:
-        pages: list[dict[str, object]] = pymupdf4llm.to_markdown(document, page_chunks=True)
+        pages: list[dict[str, object]] = pymupdf4llm.to_markdown(
+            document, page_chunks=True, ocr_language=ocr_language(settings.INGEST_OCR_LANGUAGE)
+        )
         # Geometric evidence must be read while the document is still open;
         # the parser only uses it for structure (see table_evidence).
         evidence = collect_table_evidence(document)
     finally:
         document.close()
     return _with_hierarchy(_regions_from_pdf_pages(pages, evidence))
+
+
+@cache
+def ocr_language(wanted: str) -> str:
+    """`wanted` ("vie+eng") minus the languages whose Tesseract data is not installed, so a
+    machine without `vie.traineddata` still OCRs in English instead of failing the ingest."""
+
+    try:
+        tessdata = Path(pymupdf.get_tessdata())
+    except RuntimeError:
+        return wanted  # no Tesseract at all: pymupdf4llm skips OCR anyway
+    languages = [lang for lang in wanted.split("+") if lang]
+    installed = [lang for lang in languages if (tessdata / f"{lang}.traineddata").is_file()]
+    for missing in sorted(set(languages) - set(installed)):
+        logger.warning("OCR language %r has no traineddata in %s; skipping it", missing, tessdata)
+    return "+".join(installed) or "eng"
 
 
 def _with_hierarchy(regions: list["ParsedRegion"]) -> list["ParsedRegion"]:

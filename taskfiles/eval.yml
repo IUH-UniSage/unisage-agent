@@ -1,27 +1,43 @@
 version: '3'
 
 vars:
+  # Which evaluation set: demo (106 documents, default) or official (every `selected` document).
+  # `task eval:ingest set=official env=eval`
+  SET: '{{.set | default "demo"}}'
   # Folder holding manifest.csv (the gateway repo's dataset/official). Priority:
   # `task ... dataset=<path>` > EVAL_DATASET_DIR in .env.<env>/.env (paste a full path, Windows
   # backslashes are fine) > first of ../unisage-gateway or ../api-gateway that exists.
   DATASET_GUESS:
     sh: 'for d in ../unisage-gateway ../api-gateway; do if [ -f "$d/dataset/official/manifest.csv" ]; then echo "$d/dataset/official"; exit 0; fi; done; echo ../unisage-gateway/dataset/official'
+  # Shell prelude shared by the tasks: resolves $dataset and $only (the demo list, or none).
+  RESOLVE: |
+    dataset="{{.dataset}}"; dataset="${dataset:-${EVAL_DATASET_DIR:-{{.DATASET_GUESS}}}}"
+    case "{{.SET}}" in
+      demo) only="--only=$dataset/../demo/demo_manifest.csv" ;;
+      official) only="" ;;
+      *) echo "set must be demo or official, got '{{.SET}}'"; exit 1 ;;
+    esac
+    echo "set: {{.SET}}  dataset: $dataset"
 
 tasks:
   ingest:
-    desc: "Nạp tài liệu selected của manifest qua luồng upload thật (vd task eval:ingest env=eval -- --limit 1)"
+    desc: "Nạp tài liệu qua luồng upload thật; set=demo|official (mặc định demo). Vd task eval:ingest env=eval -- --limit 1"
     dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - |
-        dataset="{{.dataset}}"; dataset="${dataset:-${EVAL_DATASET_DIR:-{{.DATASET_GUESS}}}}"
-        echo "dataset: $dataset"
-        {{.UV_RUN}} evals.ingest --dataset "$dataset" {{.CLI_ARGS}}
+        {{.RESOLVE}}
+        {{.UV_RUN}} evals.ingest --dataset "$dataset" $only {{.CLI_ARGS}}
+
+  link:
+    desc: "Sau khi ingest tay trên web: ghép tài liệu theo tiêu đề, ghi document_id/ingest_status vào manifest; set=demo|official"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - |
+        {{.RESOLVE}}
+        {{.UV_RUN}} evals.ingest --dataset "$dataset" $only --link {{.CLI_ARGS}}
 
   ingest:demo:
-    desc: "Nạp 106 tài liệu của bộ demo (vd task eval:ingest:demo env=eval -- --dry-run)"
-    dotenv: ['.env.{{.env}}', '.env']
+    desc: "(cũ) = task eval:ingest set=demo"
     cmds:
-      - |
-        dataset="{{.dataset}}"; dataset="${dataset:-${EVAL_DATASET_DIR:-{{.DATASET_GUESS}}}}"
-        echo "dataset: $dataset"
-        {{.UV_RUN}} evals.ingest --dataset "$dataset" --only "$dataset/../demo/demo_manifest.csv" {{.CLI_ARGS}}
+      - task: ingest
+        vars: { set: demo, env: '{{.env}}', dataset: '{{.dataset}}', CLI_ARGS: '{{.CLI_ARGS}}' }

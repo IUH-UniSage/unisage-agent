@@ -11,7 +11,7 @@ documents among the ones the evaluation actually ingests. Rows marked
 `label_source=manual` are never touched, so hand corrections survive re-runs.
 
 Usage:
-    python -m evals.label --dataset ../unisage-gateway/dataset
+    python -m evals.label --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse

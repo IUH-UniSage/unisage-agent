@@ -13,7 +13,8 @@ Each `access` slot becomes four rows, one per persona in PERSONAS, with
 asker that can see the source (a guest for public documents).
 
 Usage:
-    python -m evals.questions.build --dataset ../unisage-gateway/dataset --work-dir /tmp/qwork
+    python -m evals.questions.build --work-dir /tmp/qwork \
+        --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse

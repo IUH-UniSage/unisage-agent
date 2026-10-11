@@ -19,7 +19,8 @@ question author works only from that excerpt so the reference answer is grounded
 in text the pipeline also sees.
 
 Usage:
-    python -m evals.questions.plan --dataset ../unisage-gateway/dataset --work-dir /tmp/qwork
+    python -m evals.questions.plan --work-dir /tmp/qwork \
+        --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse

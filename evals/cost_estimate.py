@@ -11,7 +11,8 @@ Prices come from the same LiteLLM price table the project syncs into
 `model_prices` (see changes/29-09-2026-Model-Pricing-Sync), per 1M tokens.
 
 Usage:
-    python -m evals.cost_estimate --dataset ../unisage-gateway/dataset --prices litellm.json
+    python -m evals.cost_estimate --prices litellm.json \
+        --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse
