@@ -52,8 +52,10 @@ class FakeStack:
         empty_text: bool = False,
         task_states: list[str] | None = None,
         failure_message: str = "boom",
+        job_errors: int = 0,
     ) -> None:
         self.failure_message = failure_message
+        self.job_errors = job_errors
         self.calls: list[tuple[str, str]] = []
         self.empty_text = empty_text
         self.task_states = task_states or ["SUCCESS"]
@@ -78,7 +80,10 @@ class FakeStack:
                 202, json={"code": 1000, "message": "ok", "data": {"task_id": "t"}}
             )
         if path == "/api/v1/ai/ingestion/jobs/doc-1":
-            state = self.task_states.pop(0) if len(self.task_states) > 1 else self.task_states[0]
+            if self.job_errors:
+                self.job_errors -= 1
+                return httpx.Response(500, text="Internal Server Error")
+            state =self.task_states.pop(0) if len(self.task_states) > 1 else self.task_states[0]
             return _ok(
                 {
                     "task_state": state,
@@ -138,6 +143,29 @@ def test_ingest_waits_for_the_task_and_records_failure(tmp_path: Path) -> None:
     assert state.manifest[0]["ingest_status"] == "error:FAILURE boom"
     polls = [call for call in stack.calls if call[1].endswith("/jobs/doc-1")]
     assert len(polls) == 3
+
+
+def test_upload_is_saved_before_chunking_so_a_stopped_run_never_uploads_twice(
+    tmp_path: Path,
+) -> None:
+    class StoppedDuringChunking(FakeStack):
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/v1/ai/ingestion/chunking":
+                raise KeyboardInterrupt
+            return super().__call__(request)
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(tmp_path, StoppedDuringChunking(), [_row()])
+
+    assert DownloadState(tmp_path).manifest[0]["document_id"] == "doc-1"
+
+
+def test_ingest_keeps_polling_through_a_transient_job_500(tmp_path: Path) -> None:
+    stack = FakeStack(task_states=["PROGRESS", "SUCCESS"], job_errors=2)
+    state = _run(tmp_path, stack, [_row()])
+
+    assert state.manifest[0]["ingest_status"] == "done"
+    assert len(stack.embed_bodies) == 1
 
 
 def test_public_row_has_no_access_level_field() -> None:

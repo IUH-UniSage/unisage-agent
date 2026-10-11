@@ -195,7 +195,7 @@ def document_fields(target: Target, labels: Labels) -> dict[str, str]:
     return fields
 
 
-def start(client: UniSageClient, dataset: Path, target: Target, labels: Labels) -> None:
+def start(client: UniSageClient, state: DownloadState, target: Target, labels: Labels) -> None:
     """Upload (unless already uploaded), chunk and dispatch embedding for one row.
     Leaves `ingest_status` at `embedding`, or `empty_text`."""
 
@@ -203,12 +203,14 @@ def start(client: UniSageClient, dataset: Path, target: Target, labels: Labels) 
     if row.get("document_id"):
         document = client.get_document(row["document_id"])
     else:
-        content = (dataset / row["local_path"]).read_bytes()
+        content = (state.dataset / row["local_path"]).read_bytes()
         document = client.create_document(
             document_fields(target, labels), upload_name(row["title"]), content
         )
         row["document_id"] = document["id"]
         row["ingest_status"] = "uploaded"
+        # Persist the id right away: a run stopped before the next save would upload it again.
+        state.save()
     target.object_key = document["sourceUrl"]
 
     common = {
@@ -237,7 +239,14 @@ def start(client: UniSageClient, dataset: Path, target: Target, labels: Labels) 
 def poll(client: UniSageClient, row: dict[str, str]) -> bool:
     """True once the row's embedding task has ended (status set accordingly)."""
 
-    job = client.job(row["document_id"])
+    try:
+        job = client.job(row["document_id"])
+    except ApiError as error:
+        if error.status < 500:
+            raise
+        # A 5xx here doesn't stop the task: ask again next round instead of re-embedding later.
+        print(f"  ~ {row['file_id']}: {error}", file=sys.stderr)
+        return False
     state = job.get("task_state")
     if state not in TERMINAL_TASK_STATES:
         return False
@@ -316,7 +325,7 @@ class Run:
                 print(f"[{index + 1}/{len(rows)}] {row['title'][:80]}")
                 try:
                     start(
-                        self.client, self.state.dataset, target_for(row, self.labels), self.labels
+                        self.client, self.state, target_for(row, self.labels), self.labels
                     )
                 except (ApiError, httpx.HTTPError, ValueError, OSError) as error:
                     self._fail(row, error)
