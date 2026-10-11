@@ -12,7 +12,7 @@ Writes two files into the dataset directory:
 - `discovered.csv`- one row per distinct PDF URL, with the page it came from.
 
 Usage:
-    python -m evals.crawl.discover --dataset ../unisage-gateway/dataset
+    python -m evals.crawl.discover --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse

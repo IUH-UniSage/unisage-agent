@@ -18,7 +18,7 @@ Idempotent, and re-checks every non-scan row on each run: a file wrongly set asi
 by an older heuristic moves back to `files/`.
 
 Usage:
-    python -m evals.crawl.triage --dataset ../unisage-gateway/dataset
+    python -m evals.crawl.triage --dataset ../unisage-gateway/dataset/official
 """
 
 import argparse
