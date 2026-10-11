@@ -254,3 +254,19 @@ def test_is_quota_reads_the_code_or_the_message() -> None:
     assert is_quota(5010, "")
     assert is_quota(None, "Đã đạt giới hạn ngân sách sử dụng mô hình AI")
     assert not is_quota(5008, "API key không hợp lệ")
+
+
+def test_a_5xx_on_the_job_status_is_retried_before_failing(tmp_path: Path) -> None:
+    stack = FakeStack()
+    calls = {"n": 0}
+    real = stack.__call__
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/jobs/doc-1") and calls["n"] < 2:
+            calls["n"] += 1
+            return httpx.Response(500, text="Internal Server Error")
+        return real(request)
+
+    state = _run(tmp_path, flaky, [_row()])  # type: ignore[arg-type]
+
+    assert state.manifest[0]["ingest_status"] == "done"

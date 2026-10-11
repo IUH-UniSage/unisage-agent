@@ -267,7 +267,11 @@ class Run:
     quota_wait: float = 0.0
     max_quota_waits: int = 48
     sleep: Callable[[float], None] = time.sleep
+    # A job-status call that fails with a 5xx/network error is retried on the next polls
+    # before the row is marked as an error (e.g. the worker/result backend just started).
+    poll_retries: int = 5
     inflight: list[dict[str, str]] = field(default_factory=list)
+    poll_failures: dict[str, int] = field(default_factory=dict)
 
     def _fail(self, row: dict[str, str], error: Exception) -> None:
         if isinstance(error, ApiError) and is_quota(error.code, error):
@@ -282,6 +286,12 @@ class Run:
                 try:
                     finished = poll(self.client, row)
                 except (ApiError, httpx.HTTPError) as error:
+                    transient = not isinstance(error, ApiError) or error.status >= 500
+                    failures = self.poll_failures.get(row["file_id"], 0) + 1
+                    self.poll_failures[row["file_id"]] = failures
+                    if transient and failures <= self.poll_retries:
+                        print(f"  {row['file_id']}: job status failed ({failures}), retrying")
+                        continue
                     self._fail(row, error)
                     finished = True
                 if finished:
