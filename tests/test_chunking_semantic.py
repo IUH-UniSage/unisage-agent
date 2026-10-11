@@ -166,3 +166,55 @@ def test_lone_list_marker_is_not_split_into_its_own_sentence() -> None:
     assert chunks
     joined = " ".join(chunk.content for chunk in chunks)
     assert "a. Den ngay co so y te." in joined
+
+
+def test_semantic_break_does_not_carry_the_previous_sentence_over() -> None:
+    chunker = SemanticChunker(
+        target_tokens=400,
+        min_tokens=1,
+        similarity_threshold=2.0,  # every adjacent pair is a semantic break
+        embedder=_DeterministicEmbedder(),
+    )
+    sentences = [f"Cau so {i} noi ve mot chu de khac." for i in range(4)]
+
+    chunks = chunker.split([ParsedRegion(RegionType.TEXT, " ".join(sentences))])
+
+    assert [chunk.content for chunk in chunks] == sentences
+
+
+def test_merging_a_small_chunk_does_not_repeat_its_carried_overlap() -> None:
+    chunker = SemanticChunker(
+        target_tokens=100,
+        min_tokens=48,
+        similarity_threshold=-1.0,
+        embedder=_DeterministicEmbedder(),
+    )
+    first, short = "Cau mo dau.", "Mo dau ngan gon."
+    long = " ".join(f"tu{j}" for j in range(48)) + "."
+
+    chunks = chunker.split([ParsedRegion(RegionType.TEXT, f"{first} {short} {long}")])
+
+    assert len(chunks) == 1
+    assert chunks[0].content.count(short) == 1
+
+
+def test_overlap_never_carries_a_sentence_longer_than_the_overlap_or_the_whole_chunk() -> None:
+    chunker = SemanticChunker(
+        target_tokens=100,
+        overlap_ratio=0.2,
+        min_tokens=1,
+        similarity_threshold=-1.0,
+        embedder=_DeterministicEmbedder(),
+    )
+    lead = "Mot cau ngan."
+    long = " ".join(f"dai{j}" for j in range(30)) + "."
+    tail = " ".join(f"sau{j}" for j in range(30)) + "."
+
+    chunks = chunker.split([ParsedRegion(RegionType.TEXT, f"{lead} {long} {tail}")])
+
+    contents = [chunk.content for chunk in chunks]
+    assert len(contents) == 2
+    # the long sentence (> 20 overlap tokens) is not carried, and chunk 0 is
+    # not repeated whole inside chunk 1
+    assert sum(content.count(long) for content in contents) == 1
+    assert contents[0] not in contents[1]
