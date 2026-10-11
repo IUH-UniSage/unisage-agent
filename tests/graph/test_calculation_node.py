@@ -655,7 +655,9 @@ async def test_llm_asks_missing_numbers_on_the_panel_and_resume_skips_the_classi
         _usage_recorder(),
     )
     assert first.response_text == "Mình cần đơn giá một tín chỉ."
-    assert retrieval.queries == ["công thức học phí"]
+    # Before asking the user, Qdrant is searched with the question itself as well; it found
+    # nothing new here, so the form is shown without a second LLM call.
+    assert retrieval.queries == ["công thức học phí", query]
     assert first.pending_round is not None
     [question] = first.pending_round.panel.questions
     assert (question.kind, question.field) == ("number", "don_gia")
@@ -777,3 +779,45 @@ def test_llm_citations_are_numbered_after_the_advisory_sources() -> None:
         "C [6]",
     ]
     assert [(c["index"], c["title"]) for c in citations] == [(4, "t"), (5, "s"), (6, "s")]
+
+
+@pytest.mark.asyncio
+async def test_qdrant_is_searched_with_the_question_before_asking_the_user() -> None:
+    query = "Ngành Logistics, 4 môn đó cộng lại mấy tín?"
+    ask = (
+        "Mình cần số tín chỉ của từng môn.\n\n```json\n"
+        + json.dumps(
+            {
+                "type": "ask_user_form",
+                "fields": [{"field": "tin_chi", "label": "Số tín chỉ", "kind": "number"}],
+            },
+            ensure_ascii=False,
+        )
+        + "\n```"
+    )
+    credits = RetrievedChunk(
+        chunk_id="ctdt:3", content="Thủ tục hải quan 3 tín chỉ...", source="CTĐT.pdf", score=0.8
+    )
+    generation, prompts = _recording_model(ask, "Tổng là 3 + 4 + 2 + 3 = **12 tín chỉ** [1].")
+    retrieval = _RecordingRetrieval([credits])
+    result = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "llm", "params": {}, "retrieval_query": None},
+            ),
+            query_transformation=_echo_model(),
+            generation=generation,
+            retrieval=retrieval,
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert retrieval.queries == [query]  # no retrieval_query: searched with the question
+    assert len(prompts) == 2 and "Thủ tục hải quan 3 tín chỉ" in prompts[1]
+    assert "<academic_context>" in prompts[1]
+    assert result.pending_round is None  # answered from the document, no form
+    assert "12 tín chỉ" in result.response_text

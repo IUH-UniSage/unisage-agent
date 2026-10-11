@@ -372,24 +372,30 @@ def _cited(text: str, chunks: Sequence[RetrievedChunk]) -> list[tuple[int, Retri
     return [(index, chunks[index - 1]) for index in cited_indexes(text, len(chunks))]
 
 
-async def llm_outcome(
+async def _search(
+    queries: Sequence[str], deps: CalculationDeps, *, also: Sequence[RetrievedChunk] = ()
+) -> list[RetrievedChunk]:
+    """Best `LLM_CHUNKS_LIMIT` chunks over `queries` plus `also` (chunks already found), by
+    score; a chunk found twice counts once."""
+
+    per_query = await retrieve_chunks(list(queries), deps.models.retrieval, deps.security)
+    best: dict[str, RetrievedChunk] = {}
+    for chunks in [list(also), *per_query]:
+        for chunk in chunks:
+            kept = best.get(chunk.chunk_id)
+            if kept is None or chunk.score > kept.score:
+                best[chunk.chunk_id] = chunk
+    return sorted(best.values(), key=lambda chunk: chunk.score, reverse=True)[:LLM_CHUNKS_LIMIT]
+
+
+async def _ask_llm(
     task_id: str,
     query: str,
     plan: CalculationPlan,
     known: Mapping[str, JsonValue],
+    chunks: list[RetrievedChunk],
     deps: CalculationDeps,
 ) -> LlmAnswered | NeedsInput | Unresolved:
-    """One non-streamed LLM call over the built-in rules, the retrieved documents, the
-    known values and the recent chat. Shared by the first turn and every resume."""
-
-    if not settings.CHAT_CALC_LLM_ENABLED:
-        return Unresolved(task_id, "llm_disabled")
-    chunks: list[RetrievedChunk] = []
-    if plan.retrieval_query:
-        per_query = await retrieve_chunks(
-            [plan.retrieval_query], deps.models.retrieval, deps.security
-        )
-        chunks = (per_query[0] if per_query else [])[:LLM_CHUNKS_LIMIT]
     prompt = build_calculation_llm_prompt(
         user_query=query,
         builtin_rules=describe_builtin_rules(),
@@ -421,6 +427,33 @@ async def llm_outcome(
     if not text:
         return Unresolved(task_id, "llm_failed")
     return LlmAnswered(task_id, query, text, plan, dict(known), _cited(text, chunks))
+
+
+async def llm_outcome(
+    task_id: str,
+    query: str,
+    plan: CalculationPlan,
+    known: Mapping[str, JsonValue],
+    deps: CalculationDeps,
+) -> LlmAnswered | NeedsInput | Unresolved:
+    """Non-streamed LLM call(s) over the built-in rules, the retrieved documents, the known
+    values and the recent chat. Shared by the first turn and every resume.
+
+    Documents before the user's form: when the LLM would ask for missing numbers and Qdrant
+    has not been searched with the question itself yet (a short chat-style question often
+    gets no `retrieval_query`, so the LLM saw no document), search with it and ask again. Only
+    if numbers are still missing does the panel go to the user."""
+
+    if not settings.CHAT_CALC_LLM_ENABLED:
+        return Unresolved(task_id, "llm_disabled")
+    chunks = await _search([plan.retrieval_query], deps) if plan.retrieval_query else []
+    outcome = await _ask_llm(task_id, query, plan, known, chunks, deps)
+    if not isinstance(outcome, NeedsInput) or plan.retrieval_query == query:
+        return outcome
+    more = await _search([query], deps, also=chunks)
+    if {chunk.chunk_id for chunk in more} <= {chunk.chunk_id for chunk in chunks}:
+        return outcome  # nothing new to show the LLM
+    return await _ask_llm(task_id, query, plan, known, more, deps)
 
 
 # ---------------------------------------------------------------------------
