@@ -35,6 +35,9 @@ celery_app.conf.result_expires = 60 * 60 * 24 * 7
 _default_queue = f"{settings.CELERY_QUEUE_PREFIX}-default"
 celery_app.conf.task_default_queue = _default_queue
 celery_app.conf.task_queues = (Queue(_default_queue, routing_key=_default_queue),)
+# Embedding tasks run for minutes: a worker takes one task at a time so the
+# others pick up the rest instead of idling while it holds a prefetched batch.
+celery_app.conf.worker_prefetch_multiplier = 1
 
 celery_app.conf.beat_schedule = {
     "model-registry-beat-heartbeat": {
