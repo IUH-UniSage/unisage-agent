@@ -120,17 +120,17 @@ def unisage_agent_client() -> Iterator[httpx.Client]:
 
 
 def _purge_harness_queue() -> None:
-    """`celery purge -Q <this run's queue>` - never a broker-wide purge/flush.
+    """`celery purge -Q <this run's queues>` - never a broker-wide purge/flush.
 
-    Uses kombu's low-level `queue_purge` (rather than
-    `celery_app.control.purge()`, which purges every queue this app knows
-    about) so a purge here can never reach another run's or another
-    service's queue, even if they happen to share the same Redis broker DB.
+    Uses kombu's low-level `queue_purge` on the queues this app declares (all
+    named `<CELERY_QUEUE_PREFIX>-<queue>`) so a purge here can never reach
+    another run's or another service's queue, even if they happen to share
+    the same Redis broker DB.
     """
 
-    queue_name = celery_app.conf.task_default_queue
     with celery_app.connection_for_write() as conn:
-        conn.default_channel.queue_purge(queue_name)
+        for queue in celery_app.conf.task_queues:
+            conn.default_channel.queue_purge(queue.name)
 
 
 def _wait_for_no_active_tasks(timeout_s: float = REGISTRY_RESET_TIMEOUT_S) -> None:

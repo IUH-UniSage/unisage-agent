@@ -42,6 +42,16 @@ task be:worker
 task be:beat
 ```
 
+`be:worker` consumes both queues. Embedding (`embed_chunks`) runs in its own
+`<CELERY_QUEUE_PREFIX>-ingestion` queue, so for a long ingest run split the
+workers and credential verification never waits behind embeddings:
+
+```powershell
+task be:worker:default env=eval -- --pool=solo -n default@%h
+task be:worker:ingest env=eval -- --pool=solo -n ingest1@%h
+task be:worker:ingest env=eval -- --pool=solo -n ingest2@%h
+```
+
 Replay usage-log payloads that landed in the dead-letter queue (after fixing
 whatever made backend-java reject them):
 
