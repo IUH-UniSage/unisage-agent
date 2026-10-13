@@ -1,7 +1,6 @@
 from datetime import date
 
 from app.calculation.formulas import FORMULAS
-from app.graph.clarification_round import slug
 from app.graph.metadata_fields import (
     apply_updates,
     canonical_field,
@@ -11,6 +10,7 @@ from app.graph.metadata_fields import (
     is_profile_field,
     normalize_value,
     registered_name,
+    slug,
 )
 from app.rag.prompting.loader import get_known_metadata_fields
 

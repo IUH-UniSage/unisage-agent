@@ -22,7 +22,6 @@ from pydantic import JsonValue
 from pydantic_ai.models import Model
 
 from app.calculation.formulas import FORMULAS
-from app.core.academic_calendar import INTAKE_FIELD, parse_intake_year
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
@@ -33,6 +32,7 @@ from app.graph.calculation_turn import (
     CalculationTask,
     Review,
     calculation_titles,
+    known_fields,
     needs_input_parts,
     number_citations,
     redo_with_llm,
@@ -46,7 +46,13 @@ from app.graph.clarification_round import (
     advisory_task,
     build_round,
 )
-from app.graph.metadata_fields import registered_name
+from app.graph.metadata_fields import (
+    Scope,
+    canonical_field,
+    field_scope,
+    normalize_value,
+    registered_name,
+)
 from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
@@ -252,16 +258,20 @@ async def _run_resume(
     budget: BudgetContext | None,
 ) -> GraphOutput:
     """A panel-submit turn: run only the tasks the panel was asked for, with the
-    answers already validated against the stored panel. Advisory answers become
-    confirmed_metadata and the original question is re-answered; calculation answers
-    complete the stored parameters - no extractor call, no retrieval."""
+    answers already validated against the stored panel. Every answer goes under its
+    registry name; one for a profile field (or an advisory field the registry does not
+    know) also goes into the profile, normalised. Calculation answers complete the
+    stored parameters - no extractor call, no retrieval - and the original advisory
+    question is re-answered."""
 
     trace.node("02_ClarificationResume")
     pending = resume.pending_round
     confirmed_metadata = dict(graph_input.confirmed_metadata)
     answers_by_task: dict[str, dict[str, JsonValue]] = {}
+    today = now_ict().date()
     for answer in resume.answers.values():
         question = answer.question
+        name = canonical_field(question.field)
         # A calculation's choice goes on as its label: the LLM never saw the "o1".."o12"
         # ids the panel gave its options, so an id alone would make it ask again.
         value = (
@@ -269,15 +279,13 @@ async def _run_resume(
             if question.origin == "calculation" and question.kind == "choice"
             else answer.value
         )
-        answers_by_task.setdefault(question.task_id, {})[question.field] = value
-        if question.field == INTAKE_FIELD:
-            # Kept as the intake year from either flow: "kỳ 9" would be wrong next term.
-            intake = parse_intake_year(value, now_ict().date())
-            if intake is not None:
-                confirmed_metadata[INTAKE_FIELD] = str(intake)
-                continue
-        if question.origin == "advisory" and isinstance(answer.value, str):
-            confirmed_metadata[question.field] = answer.value
+        answers_by_task.setdefault(question.task_id, {})[name] = value
+        default_scope: Scope = "profile" if question.origin == "advisory" else "calculation"
+        if field_scope(name, default_scope) == "profile":
+            # The intake is kept as a year: "kỳ 9" would be wrong next term.
+            normalized = normalize_value(name, value, today)
+            if normalized is not None:
+                confirmed_metadata[name] = normalized
 
     outcomes: list[TaskOutcome] = []
     queries: dict[str, str] = {}
@@ -346,6 +354,7 @@ def _calculation_deps(
         budget=budget,
         previous=graph_input.last_calculation,
         history=graph_input.history,
+        recent_calculations=graph_input.recent_calculations,
         confirmed_metadata=(
             confirmed_metadata if confirmed_metadata is not None else graph_input.confirmed_metadata
         ),
@@ -514,7 +523,9 @@ async def _turn_with_calculations(
             TaskQuestions(
                 task=advisory_task(advisory.task_id, [task for task, _mode in advisory.tasks]),
                 questions=advisory_questions(
-                    output.ask_forms, confirmed_metadata=output.confirmed_metadata
+                    output.ask_forms,
+                    confirmed_metadata=output.confirmed_metadata,
+                    known_fields=known_fields(outcomes),
                 ),
             )
         )

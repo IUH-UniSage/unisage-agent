@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 
@@ -13,6 +14,7 @@ from app.core.academic_calendar import (
 )
 from app.core.timezone import now_ict
 from app.schemas.chat_history import HistoryMessage
+from app.schemas.clarification import LastCalculation
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
@@ -69,17 +71,19 @@ def build_metadata_section(
     )
 
 
-def build_known_metadata_fields_section() -> str:
+def build_known_metadata_fields_section(*, every_scope: bool = False) -> str:
     """Render `known_metadata_fields.json` as the markdown table
     `ask_user_form_guide.yaml` embeds via `{known_metadata_fields}` - see
     that file for the field-name-reuse rule this backs. Static data (doesn't
     vary per conversation), but kept as a JSON file rather than hardcoded in
-    the YAML prose so it stays easy to extend/audit as its own artifact."""
+    the YAML prose so it stays easy to extend/audit as its own artifact.
+    Node 10 only asks profile fields; the LLM calculation (`every_scope`) also
+    names a calculation's numbers."""
 
     rows = "\n".join(
         f"    | {entry['concept']} | `{entry['field']}` | {entry['description']} |"
         for entry in get_known_metadata_fields()
-        if entry.get("scope", "profile") == "profile"
+        if every_scope or entry.get("scope", "profile") == "profile"
     )
     return (
         "| Khái niệm (mọi cách diễn đạt tương đương) | Tên field bắt buộc dùng lại | Ghi chú |\n"
@@ -293,6 +297,19 @@ def build_task_2_section() -> str:
     `confirmed_metadata`, so the model never re-reads a pending form."""
 
     return get_templates().task_2.format(ask_user_form_guide=build_ask_user_form_guide())
+
+
+def build_recent_calculations_section(recent: Sequence[LastCalculation]) -> str:
+    """`{recent_calculations}`: the conversation's latest calculations, newest last,
+    each with its own values under registry names - for the LLM calculation only
+    (node 10 never sees a number)."""
+
+    if not recent:
+        return NOTHING
+    return "\n".join(
+        f"- {item.title or item.plan.formula_id}: {json.dumps(item.params, ensure_ascii=False)}"
+        for item in recent
+    )
 
 
 def build_calculation_results_section(titles: Sequence[str]) -> str:

@@ -41,8 +41,8 @@ from app.calculation.formulas import (
 from app.calculation.result import CalculationInputError, CalculationResult
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
-from app.graph.clarification_round import slug
 from app.graph.fence_redactor import FenceRedactor, take_bare_blocks
+from app.graph.metadata_fields import canonical_field, canonical_params, is_profile_field
 from app.graph.nodes.llm_rerank import (
     LLM_RERANK_SKIPPED,
     build_llm_rerank_agent,
@@ -135,6 +135,8 @@ class CalculationDeps:
     previous: LastCalculation | None = None
     # Recent chat, so the LLM can pick up the numbers of an earlier calculation.
     history: Sequence[HistoryMessage] = ()
+    # The conversation's latest calculations with their own values (LLM calculation).
+    recent_calculations: Sequence[LastCalculation] = ()
     # Self-declared attributes, shown apart from the verified identity.
     confirmed_metadata: Mapping[str, str] = field(default_factory=dict)
     # What the student typed this turn (None on a panel answer): the task query is the
@@ -352,13 +354,16 @@ def _number(value: object) -> str | None:
 
 
 def llm_questions(
-    forms: Sequence[Mapping[str, Any]], known: Mapping[str, JsonValue]
+    forms: Sequence[Mapping[str, Any]],
+    known: Mapping[str, JsonValue],
+    profile: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Panel questions from the LLM's ask_user_form blocks. A field already answered,
-    asked twice, or malformed is dropped - that is what stops asking in circles."""
+    """Panel questions from the LLM's ask_user_form blocks, under registry names. A
+    field already known (under any of its names) or in the profile, asked twice, or
+    malformed is dropped - that is what stops asking in circles."""
 
     questions: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[str] = set(canonical_params(known)) | set(profile or {})
     for form in forms:
         fields = form.get("fields")
         if form.get("type") != "ask_user_form" or not isinstance(fields, list):
@@ -366,10 +371,10 @@ def llm_questions(
         for item in fields:
             if not isinstance(item, Mapping):
                 continue
-            name = slug(str(item.get("field") or ""))
+            name = canonical_field(str(item.get("field") or ""))
             label = str(item.get("label") or "").strip()
             kind = item.get("kind")
-            if not name or not label or name in seen or name in known:
+            if not name or not label or name in seen:
                 continue
             draft: dict[str, Any] = {
                 "tab_label": label[:24],
@@ -483,6 +488,7 @@ async def _ask_llm(
         security=deps.security,
         confirmed_metadata=dict(deps.confirmed_metadata),
         original_message=deps.user_message,
+        recent_calculations=deps.recent_calculations,
     )
     try:
         raw = await run_agent_text_with_failover(
@@ -502,7 +508,7 @@ async def _ask_llm(
         return Unresolved(task_id, "llm_failed")
     redactor = FenceRedactor()
     text, bare = take_bare_blocks((redactor.feed(raw) + redactor.finish()).strip())
-    questions = llm_questions([*redactor.captured, *bare], known)
+    questions = llm_questions([*redactor.captured, *bare], known, deps.confirmed_metadata)
     if questions:
         return NeedsInput(task_id, plan, dict(known), questions, lead=text or None)
     if not text:
@@ -774,17 +780,40 @@ async def builtin_task(
 # ---------------------------------------------------------------------------
 
 
+def profile_params(formula_id: FormulaId, profile: Mapping[str, str]) -> dict[str, JsonValue]:
+    """The formula's profile-scoped parameters (the intake, the faculty group...) that
+    the student already declared - never asked again."""
+
+    return {
+        spec.name: profile[spec.name]
+        for spec in FORMULAS[formula_id].params
+        if is_profile_field(spec.name) and profile.get(spec.name)
+    }
+
+
 async def run_calculation_task(task_id: str, query: str, deps: CalculationDeps) -> TaskOutcome:
+    """A value typed this turn wins over the profile, and the profile over the
+    numbers of the previous calculation (a corrected intake replaces the old one)."""
+
     extraction = await extract_request(query, deps)
     if extraction.formula_id == "previous":
         previous = deps.previous
         assert previous is not None and previous.plan.formula_id != "llm"
-        params = {**previous.params, **extraction.params}
-        return await builtin_task(task_id, previous.plan.formula_id, query, params, deps)
+        formula_id = previous.plan.formula_id
+        params = {
+            **previous.params,
+            **profile_params(formula_id, deps.confirmed_metadata),
+            **extraction.params,
+        }
+        return await builtin_task(task_id, formula_id, query, params, deps)
     if extraction.formula_id == "llm":
         plan = CalculationPlan(formula_id="llm", retrieval_query=extraction.retrieval_query)
         return await llm_outcome(task_id, query, plan, extraction.params, deps)
-    return await builtin_task(task_id, extraction.formula_id, query, extraction.params, deps)
+    params = {
+        **profile_params(extraction.formula_id, deps.confirmed_metadata),
+        **extraction.params,
+    }
+    return await builtin_task(task_id, extraction.formula_id, query, params, deps)
 
 
 async def resume_calculation_task(
@@ -799,9 +828,13 @@ async def resume_calculation_task(
     (looking its values up again when an answer told which fee schedule row applies);
     an LLM calculation is asked again with the answers as known values."""
 
-    values = {**known_params, **answers}
     if plan.formula_id == "llm":
-        return await llm_outcome(task_id, query, plan, values, deps)
+        return await llm_outcome(task_id, query, plan, {**known_params, **answers}, deps)
+    values = {
+        **profile_params(plan.formula_id, deps.confirmed_metadata),
+        **known_params,
+        **answers,
+    }
     return await builtin_task(task_id, plan.formula_id, query, values, deps)
 
 

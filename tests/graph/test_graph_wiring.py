@@ -715,7 +715,7 @@ async def test_advisory_answer_asking_for_more_raises_a_panel(
     assert (question.id, question.kind, question.field, question.task_id) == (
         "q1",
         "choice",
-        "training_type",
+        "he_dao_tao",  # the form's "training_type", under its registry name
         "T1",
     )
     assert result.pending_round.original_query == "học phí của ngành tôi học"
@@ -753,7 +753,7 @@ async def test_resume_skips_classification_and_retrieves_on_the_original_questio
     result = await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
 
     assert result.response_text == "Câu trả lời cuối cùng [1]."
-    assert result.confirmed_metadata == {"training_type": "chinh_quy"}
+    assert result.confirmed_metadata == {"he_dao_tao": "chinh_quy"}
     assert len(retrieval.queries) == 1
     assert retrieval.queries[0].startswith("học phí của ngành tôi học")
     assert "Hệ đào tạo: Chính quy" not in retrieval.queries[0]
@@ -826,11 +826,11 @@ async def test_resume_keeps_asking_new_fields_but_never_an_answered_one(
         run(new_field, 5), models(new_field), _sink([]), _TRACE, _usage_recorder()
     )
     assert later.pending_round is not None and later.pending_round.chain_depth == 6
-    assert [q.field for q in later.pending_round.panel.questions] == ["cohort"]
+    assert [q.field for q in later.pending_round.panel.questions] == ["khoa_nhap_hoc"]
 
-    # Asking again for the field just answered (training_type) never opens a panel.
+    # Asking again for the field just answered (training_type = he_dao_tao) never opens a panel.
     again = await run_graph(
         run(_FORM_JSON, 1), models(_FORM_JSON), _sink([]), _TRACE, _usage_recorder()
     )
     assert again.pending_round is None
-    assert again.confirmed_metadata == {"training_type": "chinh_quy"}
+    assert again.confirmed_metadata == {"he_dao_tao": "chinh_quy"}

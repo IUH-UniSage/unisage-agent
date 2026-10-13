@@ -623,7 +623,7 @@ async def test_mixed_turn_asks_both_parts_on_one_panel(
     questions = result.pending_round.panel.questions
     assert [(q.id, q.field, q.origin, q.task_id) for q in questions] == [
         ("q1", "courses", "calculation", "T1"),
-        ("q2", "training_type", "advisory", "T2"),
+        ("q2", "he_dao_tao", "advisory", "T2"),  # "training_type" under its registry name
     ]
     # Resume must retrieve on the advisory question, not the GPA part.
     assert result.pending_round.original_query == _ADVISORY_QUERY
@@ -712,7 +712,7 @@ async def test_resume_mixed_round_computes_then_answers_the_advisory_question(
     )
     assert "ĐTKHP **7.5**" in tokens[0]  # calculation block first
     assert result.response_text.endswith("Thủ tục hệ chính quy gồm 3 bước [1].")
-    assert result.confirmed_metadata == {"training_type": "chinh_quy"}
+    assert result.confirmed_metadata == {"he_dao_tao": "chinh_quy"}
     (query,) = retrieval.queries
     assert query.startswith(_ADVISORY_QUERY)
     assert result.pending_round is None

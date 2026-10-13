@@ -612,3 +612,38 @@ def test_calculation_llm_prompt_carries_the_security_rules_and_verified_identity
     assert "Quy Tắc Bảo Mật & Phân Quyền Thông Tin" in prompt
     assert "<academic_user_context>" in prompt and "sv-1" in prompt
     assert "bac_dao_tao: Đại học chính quy" in prompt
+
+
+def test_calculation_llm_prompt_shows_recent_calculations_and_every_registry_name() -> None:
+    from app.rag.prompting import build_calculation_llm_prompt
+    from app.schemas.clarification import CalculationPlan, LastCalculation
+
+    recent = [
+        LastCalculation(
+            plan=CalculationPlan(formula_id="tuition_semester"),
+            params={"tc_lt": 15, "khoa_nhap_hoc": "2022"},
+            title="Học phí học kỳ",
+        )
+    ]
+    prompt = build_calculation_llm_prompt(
+        user_query="q",
+        builtin_rules="R",
+        documents="",
+        known_values="{}",
+        history=[],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={"nganh_hoc": "CNTT"},
+        recent_calculations=recent,
+    )
+    block = prompt.split("<recent_calculations>")[1].split("</recent_calculations>")[0]
+    assert '- Học phí học kỳ: {"tc_lt": 15, "khoa_nhap_hoc": "2022"}' in block
+    # The LLM names a calculation's numbers too, unlike node 10's profile-only table.
+    assert "| `tc_lt` |" in prompt and "| `khoa_nhap_hoc` |" in prompt
+    assert "ĐỌC TRƯỚC KHI HỎI" in prompt
+
+
+def test_node_10_field_table_lists_profile_fields_only() -> None:
+    from app.rag.prompting import build_known_metadata_fields_section
+
+    table = build_known_metadata_fields_section()
+    assert "`khoa_nhap_hoc`" in table and "`tc_lt`" not in table

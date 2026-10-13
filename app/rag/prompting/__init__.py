@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from app.schemas.chat_history import HistoryMessage
+from app.schemas.clarification import LastCalculation
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
@@ -29,6 +30,7 @@ from .builder import (
     build_known_metadata_fields_section,
     build_metadata_section,
     build_prepared_context_section,
+    build_recent_calculations_section,
     build_task_2_section,
     render_resolved_user_query,
 )
@@ -193,11 +195,14 @@ def build_calculation_llm_prompt(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     original_message: str | None = None,
+    recent_calculations: Sequence[LastCalculation] = (),
 ) -> str:
     """`main/chat_calculation_llm.yaml`: a calculation the LLM does itself (target
     questions, formulas from documents, follow-ups) - everything but the forward
     calculation of the built-in formulas. `original_message`: what the student typed
-    this turn, shown under the classifier's normalised question when they differ."""
+    this turn, shown under the classifier's normalised question when they differ.
+    It reads the profile and the recent calculations before asking anything, and asks
+    under the registry's field names."""
 
     templates = get_templates()
     return templates.chat_calculation_llm.format(
@@ -210,6 +215,8 @@ def build_calculation_llm_prompt(
         builtin_rules=builtin_rules,
         documents=documents or "(không có tài liệu)",
         known_values=known_values,
+        recent_calculations=build_recent_calculations_section(recent_calculations),
+        metadata_fields=build_known_metadata_fields_section(every_scope=True),
         history=build_history_section(history),
         current_time=build_current_time_section(confirmed_metadata),
         user_query=user_query,

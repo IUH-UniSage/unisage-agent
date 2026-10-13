@@ -11,14 +11,13 @@ docs/specs/SPEC-clarification-panel.md §1, SPEC-calculation-node.md §4.
 """
 
 import logging
-import re
-import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from app.graph.metadata_fields import canonical_field, slug
 from app.schemas.clarification import (
     PANEL_QUESTIONS_MAX,
     ChoiceOption,
@@ -43,23 +42,15 @@ class TaskQuestions:
     questions: list[dict[str, Any]]
 
 
-def slug(text: str) -> str:
-    """ASCII id from Vietnamese text: "Đơn giá" -> "don_gia"."""
-
-    ascii_text = (
-        unicodedata.normalize("NFKD", text.replace("đ", "d").replace("Đ", "D"))
-        .encode("ascii", "ignore")
-        .decode()
-        .lower()
-    )
-    return re.sub(r"[^a-z0-9_-]+", "_", ascii_text).strip("_")[:64]
-
-
 def advisory_questions(
-    ask_forms: Sequence[Mapping[str, Any]], *, confirmed_metadata: Mapping[str, str]
+    ask_forms: Sequence[Mapping[str, Any]],
+    *,
+    confirmed_metadata: Mapping[str, str],
+    known_fields: Collection[str] = (),
 ) -> list[dict[str, Any]]:
-    """Choice questions from the model's ask_user_form blocks. A field already
-    confirmed, asked twice, or with fewer than 2 usable options is dropped."""
+    """Choice questions from the model's ask_user_form blocks, under registry names. A
+    field in the profile or already known to this turn's calculations, asked twice, or
+    with fewer than 2 usable options is dropped."""
 
     questions: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -70,8 +61,8 @@ def advisory_questions(
         for item in fields:
             if not isinstance(item, Mapping):
                 continue
-            field = str(item.get("field") or "").strip()[:64]
-            if not field or field in seen or field in confirmed_metadata:
+            field = canonical_field(str(item.get("field") or ""))
+            if not field or field in seen or field in confirmed_metadata or field in known_fields:
                 continue
             options: list[ChoiceOption] = []
             for raw in item.get("options") or []:

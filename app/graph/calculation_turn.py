@@ -26,6 +26,7 @@ from app.calculation.render import render_markdown
 from app.calculation.result import CalculationResult
 from app.core.config import settings
 from app.graph.clarification_round import TaskQuestions
+from app.graph.metadata_fields import canonical_field
 from app.graph.nodes.calculation import (
     UNRESOLVED_MESSAGES,
     CalculationDeps,
@@ -124,15 +125,37 @@ def render_outcomes(outcomes: Sequence[TaskOutcome]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
+def known_fields(outcomes: Sequence[TaskOutcome]) -> set[str]:
+    """Registry names of every value this turn's calculations already have - node 10
+    must not ask for them again."""
+
+    names: set[str] = set()
+    for outcome in outcomes:
+        if isinstance(outcome, Computed):
+            values: Mapping[str, JsonValue] = outcome.params
+        elif isinstance(outcome, LlmAnswered | NeedsInput):
+            values = outcome.known_params
+        else:
+            continue
+        names.update(canonical_field(name) for name, value in values.items() if value is not None)
+    names.discard(canonical_field(REVIEW_ISSUE_KEY))
+    return names
+
+
 def calculation_titles(outcomes: Sequence[TaskOutcome]) -> list[str]:
-    """What node 10 is told was already shown - titles only, never a number."""
+    """What node 10 is told was already shown - titles and the names of the values
+    used, never a number."""
 
     titles: list[str] = []
     for outcome in outcomes:
         if isinstance(outcome, Computed):
-            titles.append(outcome.result.title)
+            title = outcome.result.title
         elif isinstance(outcome, LlmAnswered):
-            titles.append(f"Phép tính theo yêu cầu: {outcome.query[:80]}")
+            title = f"Phép tính theo yêu cầu: {outcome.query[:80]}"
+        else:
+            continue
+        names = sorted(known_fields([outcome]))
+        titles.append(f"{title} [đã có: {', '.join(names)}]" if names else title)
     return titles
 
 

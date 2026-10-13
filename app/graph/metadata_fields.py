@@ -8,17 +8,30 @@ question, an answer, a correction from the classifier - goes through
 two values for the same thing.
 """
 
+import re
+import unicodedata
 from collections.abc import Mapping
 from datetime import date
 from functools import cache
 from typing import Literal
 
 from app.core.academic_calendar import INTAKE_FIELD, parse_intake_year
-from app.graph.clarification_round import slug
 from app.rag.prompting.loader import get_known_metadata_fields
 
 Scope = Literal["profile", "calculation"]
 VALUE_MAX_LENGTH = 200
+
+
+def slug(text: str) -> str:
+    """ASCII id from Vietnamese text: "Đơn giá" -> "don_gia"."""
+
+    ascii_text = (
+        unicodedata.normalize("NFKD", text.replace("đ", "d").replace("Đ", "D"))
+        .encode("ascii", "ignore")
+        .decode()
+        .lower()
+    )
+    return re.sub(r"[^a-z0-9_-]+", "_", ascii_text).strip("_")[:64]
 
 
 def canonical_field(name: str) -> str:
