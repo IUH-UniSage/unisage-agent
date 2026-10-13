@@ -52,7 +52,11 @@ from app.graph.nodes.calculation import (
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
 from app.graph.nodes.intent_routing import plan_route
-from app.graph.nodes.llm_rerank import build_llm_rerank_agent, llm_rerank
+from app.graph.nodes.llm_rerank import (
+    LLM_RERANK_SKIPPED,
+    build_llm_rerank_agent,
+    llm_rerank,
+)
 from app.graph.nodes.message_classification import (
     build_classification_agent,
     classify_intent,
@@ -84,7 +88,6 @@ from app.schemas.intent import ClassifiedTask, RoutingMode
 from app.schemas.web_search import WebSearchResult
 
 # Prefixes of the AI-admin warnings (`event: warning`) this module raises.
-_LLM_RERANK_SKIPPED = "Bỏ qua bước lọc độ liên quan của tài liệu (mô hình Extraction): "
 _WEB_SEARCH_FAILED = (
     "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
 )
@@ -208,7 +211,7 @@ async def _run_graph(
         CalculationTask(task_id=f"T{index}", query=task.query)
         for index, task in enumerate(route_plan.calculation_tasks, start=1)
     ]
-    deps = _calculation_deps(graph_input, models, usage_recorder, budget)
+    deps = _calculation_deps(graph_input, models, usage_recorder, budget, trace)
     advisory: AdvisoryPart | None = None
     if route_plan.advisory_tasks:
         advisory = AdvisoryPart(
@@ -267,7 +270,7 @@ async def _run_resume(
     outcomes: list[TaskOutcome] = []
     queries: dict[str, str] = {}
     advisory: AdvisoryPart | None = None
-    deps = _calculation_deps(graph_input, models, usage_recorder, budget)
+    deps = _calculation_deps(graph_input, models, usage_recorder, budget, trace)
     for task in pending.tasks:
         if isinstance(task, PendingCalculationTask):
             queries[task.task_id] = task.query
@@ -317,6 +320,7 @@ def _calculation_deps(
     models: GraphModels,
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None,
+    trace: GraphTrace,
 ) -> CalculationDeps:
     return CalculationDeps(
         models=models,
@@ -327,6 +331,7 @@ def _calculation_deps(
         previous=graph_input.last_calculation,
         history=graph_input.history,
         confirmed_metadata=graph_input.confirmed_metadata,
+        trace=trace,
     )
 
 
@@ -454,6 +459,15 @@ async def _turn_with_calculations(
         if calculations is not None and not calculations.done():
             calculations.cancel()
 
+    if deps.warnings:
+        known = {warning.code for warning in output.admin_warnings}
+        output = replace(
+            output,
+            admin_warnings=[
+                *output.admin_warnings,
+                *(warning for warning in deps.warnings if warning.code not in known),
+            ],
+        )
     parts = needs_input_parts(outcomes, queries)
     if advisory is not None:
         parts.append(
@@ -587,14 +601,14 @@ async def _run_advisory_flow(
                 admin_warnings.append(
                     AdminWarning(
                         code="LLM_RERANK_FAILED",
-                        message=f"{_LLM_RERANK_SKIPPED}{llm_rerank_outcome.failure}",
+                        message=f"{LLM_RERANK_SKIPPED}{llm_rerank_outcome.failure}",
                     )
                 )
         elif models.rerank_unavailable is not None:
             admin_warnings.append(
                 AdminWarning(
                     code="LLM_RERANK_UNAVAILABLE",
-                    message=f"{_LLM_RERANK_SKIPPED}{models.rerank_unavailable}",
+                    message=f"{LLM_RERANK_SKIPPED}{models.rerank_unavailable}",
                 )
             )
 

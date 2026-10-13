@@ -24,7 +24,7 @@ from app.graph.clarification_round import (
 from app.graph.nodes.calculation import LlmAnswered, TaskOutcome, question_for
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
-from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
+from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput, ResumeInput
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import (
     Answer,
@@ -878,3 +878,50 @@ async def test_calculation_documents_are_filtered_like_the_advisory_flow(
     assert "850.000 đồng/tín chỉ" in prompt and "mục: Đại học chính quy" in prompt
     assert "Học phí thạc sĩ" not in prompt
     assert "PHÂN BIỆT BẬC/HỆ ĐÀO TẠO" in prompt
+
+
+async def _fee_turn(models: dict[str, object]) -> GraphOutput:
+    query = "Tính học phí cho ngành Công nghệ thông tin"
+    fee = RetrievedChunk(chunk_id="hp:1", content="850.000 đồng/tín chỉ", source="HP", score=0.9)
+    return await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "llm", "params": {}, "retrieval_query": "học phí CNTT"},
+            ),
+            query_transformation=_echo_model(),
+            generation=_note_model("Đơn giá 850.000 đồng/tín chỉ [1]."),
+            retrieval=_RecordingRetrieval([fee]),
+            **models,  # type: ignore[arg-type]
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_calculation_rerank_is_traced_and_warns_the_ai_admin(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", True)
+    caplog.set_level("INFO", logger="unisage.graph")
+    result = await _fee_turn({"rerank": _note_model("không phải JSON")})
+
+    assert "09a_LLMRerankNode" in _traced_nodes(caplog)
+    assert any("parent=07_CalculationNode" in record.getMessage() for record in caplog.records)
+    assert [warning.code for warning in result.admin_warnings] == ["LLM_RERANK_FAILED"]
+    assert "850.000" in result.response_text
+
+
+@pytest.mark.asyncio
+async def test_a_missing_rerank_model_warns_the_ai_admin_on_a_calculation_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", True)
+    result = await _fee_turn({"rerank_unavailable": "chưa có credential RERANK"})
+
+    [warning] = result.admin_warnings
+    assert warning.code == "LLM_RERANK_UNAVAILABLE"
+    assert warning.message.endswith("chưa có credential RERANK")

@@ -36,9 +36,14 @@ from app.calculation.formulas import (
 )
 from app.calculation.result import CalculationInputError, CalculationResult
 from app.core.config import settings
+from app.core.observability.graph_trace import GraphTrace
 from app.graph.clarification_round import slug
 from app.graph.fence_redactor import FenceRedactor
-from app.graph.nodes.llm_rerank import build_llm_rerank_agent, llm_rerank
+from app.graph.nodes.llm_rerank import (
+    LLM_RERANK_SKIPPED,
+    build_llm_rerank_agent,
+    llm_rerank,
+)
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.graph.streaming import (
@@ -49,7 +54,7 @@ from app.graph.streaming import (
     generation_model_settings,
     run_agent_text_with_failover,
 )
-from app.graph.streaming_state import GraphModels
+from app.graph.streaming_state import AdminWarning, GraphModels
 from app.rag.prompting import build_calculation_llm_prompt, get_templates
 from app.rag.prompting.citations import cited_indexes, source_title
 from app.schemas.chat_history import HistoryMessage
@@ -124,6 +129,13 @@ class CalculationDeps:
     history: Sequence[HistoryMessage] = ()
     # Self-declared attributes, shown apart from the verified identity.
     confirmed_metadata: Mapping[str, str] = field(default_factory=dict)
+    trace: GraphTrace | None = None
+    # AI-admin warnings raised while calculating, one per code.
+    warnings: list[AdminWarning] = field(default_factory=list)
+
+    def warn(self, code: str, message: str) -> None:
+        if all(warning.code != code for warning in self.warnings):
+            self.warnings.append(AdminWarning(code=code, message=message))
 
 
 # ---------------------------------------------------------------------------
@@ -399,18 +411,31 @@ async def _search(
                 best[chunk.chunk_id] = chunk
     result = rerank_chunks([list(best.values())])
     models = deps.models
-    if settings.CHAT_LLM_RERANK_ENABLED and result.has_valid_context and models.rerank is not None:
-        outcome = await llm_rerank(
-            build_llm_rerank_agent(models.rerank),
-            [question],
-            result,
-            credential=models.rerank_credential,
-            purpose=models.rerank_purpose,
-            snapshot_version=models.snapshot_version,
-            on_attempt=deps.on_attempt,
-            budget=deps.budget,
-        )
-        result = outcome.result
+    if settings.CHAT_LLM_RERANK_ENABLED and result.has_valid_context:
+        if models.rerank is not None:
+            agent = build_llm_rerank_agent(models.rerank)
+            if deps.trace is not None:
+                deps.trace.step(
+                    "09a_LLMRerankNode",
+                    parent="07_CalculationNode",
+                    agent=agent,
+                    credential=models.rerank_credential,
+                )
+            outcome = await llm_rerank(
+                agent,
+                [question],
+                result,
+                credential=models.rerank_credential,
+                purpose=models.rerank_purpose,
+                snapshot_version=models.snapshot_version,
+                on_attempt=deps.on_attempt,
+                budget=deps.budget,
+            )
+            result = outcome.result
+            if outcome.failure is not None:
+                deps.warn("LLM_RERANK_FAILED", f"{LLM_RERANK_SKIPPED}{outcome.failure}")
+        elif models.rerank_unavailable is not None:
+            deps.warn("LLM_RERANK_UNAVAILABLE", f"{LLM_RERANK_SKIPPED}{models.rerank_unavailable}")
     chunks = result.chunks[:LLM_CHUNKS_LIMIT]
     logger.info(
         "calculation.retrieval queries=%r found=%d kept=[%s]",

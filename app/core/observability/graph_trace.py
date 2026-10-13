@@ -132,6 +132,31 @@ class GraphTrace:
             self._client_ip,
         )
 
+    def step(
+        self,
+        name: str,
+        *,
+        parent: str,
+        agent: Agent[None, str] | None = None,
+        credential: CredentialConfig | None = None,
+    ) -> None:
+        """A `node=` line for a node run inside `parent`, which may run alongside other
+        nodes: it neither ends nor replaces the node being timed."""
+
+        logger.info(
+            "node=%s model=%s thinking=%s credential=%s conversation_id=%s message_id=%s "
+            "user_id=%s ip=%s parent=%s",
+            name,
+            _model_name(agent.model if agent is not None else None),
+            _thinking_label(agent),
+            _credential_label(credential),
+            self._conversation_id,
+            self._message_id,
+            self._user_id,
+            self._client_ip,
+            parent,
+        )
+
     def model_switch(
         self,
         agent: Agent[None, str],

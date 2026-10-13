@@ -40,6 +40,8 @@ from app.schemas.retrieval import RetrievedChunk
 logger = logging.getLogger(__name__)
 
 DEFAULT_PURPOSE = "RERANK"
+# Prefix of the AI-admin warning raised when this node is skipped or fails.
+LLM_RERANK_SKIPPED = "Bỏ qua bước lọc độ liên quan của tài liệu (mô hình Extraction): "
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _SUB_QUERY_KEY = re.compile(r"^SQ(\d+)$")
 _CHUNK_KEY = re.compile(r"^\[?C?(\d+)\]?$")
