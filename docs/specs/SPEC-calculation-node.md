@@ -61,6 +61,11 @@ TaskOutcome = (
   phép tính trong `<previous_calculation>` với số mới. `llm`: mọi trường hợp khác, kèm `retrieval_query`
   (câu tìm tài liệu chứa công thức) hoặc `null` khi chỉ cần công thức cài sẵn (VD hỏi ngược điểm cuối kỳ).
 - Chỉ trích những số **người dùng đã nói**. Prompt liệt kê các công thức cài sẵn từ `ParamSpec`. Câu học phí (kỳ / năm / cả khoá) đi vào `tuition_*`, không còn qua `llm`; câu hỏi ngược về học phí vẫn là `llm`.
+- Học phí: `pham_vi` = cụm phạm vi nguyên văn trong câu ("2 năm đầu", "học kỳ 1 năm 2"); bỏ khi người
+  dùng không nói hoặc chỉ nói đúng phạm vi mặc định. Nhiều năm nhưng chưa phải cả khoá ("2 năm đầu") →
+  `tuition_year` kèm `pham_vi`; form hỏi "Số tín chỉ lý thuyết của 2 năm đầu" và kết quả có tiêu đề
+  "Học phí 2 năm đầu" (SPEC-calc-engine, mục học phí). Lý do (13-10-2026): trước đó câu "2 năm đầu" ra
+  form và kết quả "một năm học", lệch với câu hỏi.
 - `parse_extraction`: `llm` luôn thắng; còn lại một công thức cài sẵn duy nhất do router luật khớp sẽ
   thắng (kể cả khi output hỏng); output hỏng/không rõ mà router không khớp → `llm` (LLM vẫn hỏi lại được).
   `previous` chỉ nhận khi có `last_calculation` cài sẵn.
@@ -72,7 +77,8 @@ TaskOutcome = (
 khi có). Test: `tests/calculation/test_builtin_triggers.py`.
 
 Câu hỏi cho công thức cài sẵn được dựng từ `ParamSpec` (`number`, `number_list`, `number_or_list`,
-`course_table`, `text`); số Python từ chối được hỏi lại kèm lý do, ví dụ "Điểm cuối kỳ (bạn nhập 11, ...)".
+`course_table`, `text`) bằng `question_for(spec, known)`, nhãn lấy từ `label_for` theo các param đã biết;
+số Python từ chối được hỏi lại kèm lý do, ví dụ "Điểm cuối kỳ (bạn nhập 11, ...)".
 
 ### 1.2 Tra tài liệu trước khi hỏi (`builtin_task`, thêm 13-10-2026)
 
@@ -127,8 +133,10 @@ plan_route
      1. stream khối tính cho mỗi Computed (Python render) / LlmAnswered (nhãn AI), theo thứ tự T1..T3
      2. stream câu cố định cho mỗi Unresolved
      3. node 10 generation (qua FenceRedactor) → token ra client
-     4. lượt chỉ có calculation: nhận xét đã kiểm tra số (mục 3.2)
-     5. build_round → panel (theo thứ tự SPEC-clarification-panel §2.6)
+     4. build_round → panel (theo thứ tự SPEC-clarification-panel §2.6)
+
+  Lượt chỉ có calculation: không có node 10; bước kiểm tra và trả lời (mục 3.2) chạy trước, phần AI
+  viết đứng đầu tin nhắn, rồi mới đến khối tính (1, 2).
 ```
 
 - Node 10 là bước **duy nhất** sinh token của luồng advisory, và nó chỉ bắt đầu sau barrier. Vì vậy thứ
@@ -142,20 +150,39 @@ plan_route
 - Nếu **mọi** task calculation đều `NeedsInput` và không có advisory, lượt chỉ gửi một câu dẫn cố định
   ("Mình cần thêm vài thông tin để tính giúp bạn:") rồi đến panel. Không gọi LLM.
 
-### 3.2 Nhận xét (`main/chat_calculation.yaml`): không bao giờ hiện số chưa kiểm tra
+### 3.2 Kiểm tra và trả lời (`main/chat_calculation_review.yaml`, thay nhận xét 13-10-2026)
 
-Chỉ dùng cho lượt **chỉ có** calculation và có ít nhất một `Computed` (công thức cài sẵn). Kết quả LLM tự tính đã có lời giải thích của chính nó nên không có nhận xét riêng.
+Chỉ dùng cho lượt **chỉ có** calculation và có ít nhất một `Computed` (công thức cài sẵn). Kết quả LLM
+tự tính đã có lời giải thích của chính nó; lượt có cả câu hỏi tra cứu thì node 10 viết phần chữ, không
+gọi bước này. **Số do Python tính, AI chỉ kiểm tra và viết lời**: AI không tính lại, không đổi số.
 
-1. Gọi LLM **không stream** (`run_agent_text_with_failover`). Nhận xét ngắn (tối đa 2 câu, `max_tokens` thấp),
-   nên chờ trọn vẹn rồi mới gửi không ảnh hưởng trải nghiệm.
-2. Trích mọi số trong text bằng regex `\d+(?:[.,]\d+)?`, chuẩn hoá `,` thành `.`, bỏ số 0 thừa.
-3. Whitelist gồm: các số sinh viên đã nhập (`inputs`) cùng các hằng `{0, 4, 10}` (tên thang điểm).
-   **Số của kết quả (`outputs`) bị loại khỏi whitelist** - kết quả đã nằm ở dòng "Kết quả" ngay phía
-   trên, nhận xét chỉ nói ý nghĩa của nó (đã chốt 09-10-2026, sau phản hồi về thông tin bị lặp).
-4. Có số **ngoài whitelist** (số bịa hoặc nhắc lại kết quả) → **bỏ hẳn nhận xét**, không có câu thay thế
-   (câu thay thế cũng chỉ lặp lại kết quả), ghi log `calculation.commentary_rejected`. LLM lỗi hoặc
-   timeout cũng bỏ nhận xét.
-5. Text gửi ra luôn là text đã qua bước 4. **Không có số nào chưa qua kiểm tra tới được client.**
+1. `review(computed, question, deps)` gọi LLM **không stream** (`run_agent_text_with_failover`,
+   `CHAT_AUX_CALL_TIMEOUT_SECONDS`) với câu hỏi gốc (lượt submit: `original_query` của round), lịch sử gần
+   đây và mỗi kết quả Python (tiêu đề, đầu vào, các bước đã thế số, kết quả). Một lần gọi cho mọi kết quả
+   của lượt; thay đúng chỗ lần gọi nhận xét cũ, không thêm lần gọi LLM.
+2. Đầu ra JSON `{"fits": bool, "issue": str | null, "answer": str}` (`Review`):
+   - `fits`: phép tính có trả lời đúng điều được hỏi (đại lượng, phạm vi, đối tượng). Prompt chỉ cho báo
+     `false` khi khác hẳn câu hỏi, để tránh cảnh báo thừa.
+   - `issue`: một câu nói chỗ lệch khi `fits = false` (thiếu thì coi như output hỏng).
+   - `answer`: 1-3 câu trả lời thẳng câu hỏi bằng con số Python đã tính; khi lệch thì nói rõ kết quả là
+     cho cái gì và gợi ý hỏi lại.
+3. Kiểm tra số: trích số trong `issue` và `answer` (`_NUMBER`: số có dấu chấm phân cách hàng nghìn đọc
+   là một số, "165.200.000" → 165200000; còn lại `\d+(?:[.,]\d+)?`, `,` → `.`). Tập được phép gồm **mọi
+   số Python đã hiển thị** cho các kết quả đó (tiêu đề, công thức, các bước, dòng kết quả, ghi chú số liệu
+   từ tài liệu), **số trong câu hỏi** (để nói được "bạn hỏi 2 năm đầu") và `{0, 4, 10}`. Có số ngoài tập
+   → `rejected`, bỏ toàn bộ phần AI viết, log `calculation.review_rejected`.
+4. JSON hỏng, lỗi gọi model, timeout → bỏ phần AI viết (log `calculation.review_failed` /
+   `calculation.review_unreadable`). Không bao giờ chặn câu trả lời: khối Python vẫn hiện.
+5. Thứ tự hiển thị (`Review.lead`):
+   - `fits = false` → `**Lưu ý:** {issue}`, rồi `answer`, rồi khối Python (kết quả vẫn hiện, không hỏi
+     lại, không vòng lặp).
+   - `fits = true` → `answer`, rồi khối Python.
+   - Không có phần AI viết → chỉ khối Python.
+6. Vì phần AI viết đứng trước, khối Python chỉ được stream sau khi bước kiểm tra xong: token đầu tiên đến
+   muộn hơn khoảng một lần gọi LLM, tổng thời gian không đổi. **Không có số nào chưa qua kiểm tra tới
+   được client.**
+7. Trace staff (7.2) của mỗi item `builtin`: `review: {fits, issue, rejected}` và
+   `prompt_versions.chat_calculation_review`.
 
 ## 4. Gộp câu hỏi thành một panel
 
@@ -188,7 +215,7 @@ Còn thiếu thì tạo panel mới với `chain_depth + 1` (không giới hạn
 |---|---|
 | `agents/calculation_extractor.yaml` | mục 1: cài sẵn (xuôi) / previous / llm |
 | `main/chat_calculation_llm.yaml` | mục 2: LLM tự tính, `ask_user_form` khi thiếu số |
-| `main/chat_calculation.yaml` | nhận xét sau khối tính cài sẵn (mục 3.2) |
+| `main/chat_calculation_review.yaml` | kiểm tra kết quả cài sẵn có khớp câu hỏi và viết câu trả lời mở đầu (mục 3.2) |
 | `agents/message_classification.yaml` | quy tắc 1c nối tiếp phép tính, `<previous_calculation_turn>` (mục 9) |
 | `common/response_style.yaml` | phép nhân viết `×` |
 | `main/chat_academic_advisory.yaml`, `main/chat_multi_intent_synthesis.yaml` | `{calculation_results}`: chỉ tiêu đề phép tính đã hiện |
@@ -243,7 +270,8 @@ giờ đi qua `GET /messages/...` hay SSE.
    "prompt_versions": {"agent_calculation_extractor": "sha256:<12>", "chat_calculation_llm": "sha256:<12>"}}
   ```
 
-  Với `mode = "builtin"`: `formula_id`, `formula_hash`, `inputs`, `outputs`.
+  Với `mode = "builtin"`: `formula_id`, `formula_hash`, `inputs`, `outputs`, và khi lượt chỉ có
+  calculation đã qua bước kiểm tra (mục 3.2): `review: {"fits", "issue", "rejected"}`.
 
 - Không có API public nào đọc bảng này. Staff xem trace **thông qua ticket** (7.3), không đọc thẳng
   bảng. Dữ liệu tự xoá theo message nhờ cascade; chính sách lưu trữ riêng (nếu cần) để ticket sau.
@@ -362,7 +390,8 @@ Nguyên tắc: **câu trả lời cho câu hỏi của bot không bao giờ đư
 
 ## Decisions (09-10-2026)
 
-- Giữ bước nhận xét LLM (`chat_calculation.yaml`) cho lượt chỉ có calculation.
+- Giữ bước nhận xét LLM (`chat_calculation.yaml`) cho lượt chỉ có calculation. (13-10-2026: thay bằng
+  bước kiểm tra và trả lời `chat_calculation_review.yaml`, mục 3.2.)
 - (Review lần 2) Barrier trước node 10 thay cho buffer token; nhận xét không stream, không nhắc lại kết quả
   và bị bỏ hẳn nếu có số ngoài whitelist; node 10 chỉ nhận tiêu đề phép tính; extractor fail closed; công
   thức cài sẵn được định tuyến bằng luật trước LLM.

@@ -134,6 +134,13 @@ Học phí = tc_lt × don_gia_lt + tc_th × don_gia_th
   lại thay vì đọc sai (`parse_money`).
 - `khoa_tuyen_sinh`, `khoi_nganh`: kiểu `text`, **không tham gia phép tính**, không bao giờ bị
   `missing_params` hỏi. Chỉ dùng để chọn đúng dòng biểu phí khi tra tài liệu.
+- `pham_vi` (thêm 13-10-2026): kiểu `text`, không bắt buộc, không `lookup`, không tham gia phép tính,
+  không bao giờ bị hỏi. Là cụm phạm vi **nguyên văn** người dùng nói ("2 năm đầu", "học kỳ 1 năm 2"),
+  extractor chép khi có. `tuition_period` dùng nó cho tiêu đề kết quả ("Học phí 2 năm đầu") và nhãn
+  tín chỉ trên form ("Số tín chỉ lý thuyết của 2 năm đầu"); không có (hoặc rỗng) thì giữ phạm vi mặc
+  định "một học kỳ" / "một năm học" / "cả khoá học". Không có công thức riêng cho "N năm": câu "2 năm
+  đầu" đi vào `tuition_year` kèm `pham_vi`, và người dùng nhập tín chỉ của cả quãng đó. Bỏ `*`, tối đa
+  60 ký tự (tiêu đề hiển thị in đậm).
 - Không gồm QPAN (đơn giá riêng); kết quả luôn kèm cảnh báo này. Tiền hiển thị `38.350.000 đồng`
   (`money`).
 - `ParamSpec.lookup`: câu tìm Qdrant cho tham số tra được trong tài liệu (đơn giá; tín chỉ của
@@ -153,6 +160,8 @@ class ParamSpec:
     max: Decimal | None
     step: Decimal | None      # 0.01 cho điểm, 1 cho tín chỉ
     required: Callable[[Mapping[str, object]], bool]  # VD "th" bắt buộc khi tcth > 0
+    lookup: str | None        # câu tìm Qdrant trước khi hỏi; None = số của riêng sinh viên
+    label_from: Callable[[Mapping[str, object]], str] | None  # nhãn theo param đã biết (pham_vi)
 
 @dataclass(frozen=True)
 class Step:
@@ -183,6 +192,8 @@ Hai hàm public của `formulas.py`:
   thứ tự hiển thị. `calculation-node` dùng nó để dựng câu hỏi cho panel một cách deterministic, không
   để LLM tự nghĩ ra câu hỏi.
 - `calculate(formula_id, params) -> CalculationResult`: raise `CalculationInputError` khi input sai.
+- `label_for(spec, known) -> str`: nhãn câu hỏi của một param theo các param đã biết (`label_from`), mặc
+  định `label`. `calculation-node` dùng cho câu hỏi panel và dòng "Số liệu lấy từ tài liệu".
 
 `render.py`: `render_markdown(result) -> str`. Output cố định cho cùng một input, có snapshot test.
 **Mỗi giá trị chỉ xuất hiện một lần** (đã chốt 09-10-2026 sau phản hồi về thông tin bị lặp): không có
