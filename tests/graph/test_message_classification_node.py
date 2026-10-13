@@ -398,7 +398,7 @@ async def test_classifier_is_told_the_previous_calculation() -> None:
 
     assert (
         "<previous_calculation_turn>Điểm tổng kết học phần (lý thuyết + thực hành)"
-        "</previous_calculation_turn>\n\n<current_time>"
+        "</previous_calculation_turn>\n\n<student_profile>"
     ) in prompts[0]
     assert "<previous_calculation_turn>" not in prompts[1]
 

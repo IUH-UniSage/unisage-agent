@@ -14,6 +14,7 @@ mocks.
 """
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -48,10 +49,12 @@ from app.graph.clarification_round import (
 )
 from app.graph.metadata_fields import (
     Scope,
+    apply_updates,
     canonical_field,
     field_scope,
     normalize_value,
     registered_name,
+    update_notice,
 )
 from app.graph.nodes.calculation import (
     CalculationDeps,
@@ -96,8 +99,10 @@ from app.graph.streaming_state import (
 )
 from app.rag.prompting.citations import build_citations
 from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
-from app.schemas.intent import ClassifiedTask, RoutingMode
+from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
 from app.schemas.web_search import WebSearchResult
+
+logger = logging.getLogger(__name__)
 
 # Prefixes of the AI-admin warnings (`event: warning`) this module raises.
 _WEB_SEARCH_FAILED = (
@@ -124,6 +129,11 @@ def _make_failover_applier(models: GraphModels) -> FailoverCallback:
     return _apply
 
 
+# Saves the student's profile the moment the turn changes it (the graph never calls
+# the database itself), so a correction is kept even if the rest of the turn fails.
+ProfileSaver = Callable[[dict[str, str]], Awaitable[None]]
+
+
 async def run_graph(
     graph_input: GraphInput,
     models: GraphModels,
@@ -131,13 +141,20 @@ async def run_graph(
     trace: GraphTrace,
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None = None,
+    on_profile_change: ProfileSaver | None = None,
 ) -> GraphOutput:
     # Bound for the whole run so a failover deep inside an LLM helper can log which
     # model/credential the node moved to (see `GraphTrace.model_switch`).
     token = bind_trace(trace)
     try:
         return await _run_graph(
-            graph_input, models, token_sink, trace, usage_recorder, budget=budget
+            graph_input,
+            models,
+            token_sink,
+            trace,
+            usage_recorder,
+            budget=budget,
+            on_profile_change=on_profile_change,
         )
     finally:
         unbind_trace(token)
@@ -150,6 +167,7 @@ async def _run_graph(
     trace: GraphTrace,
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None = None,
+    on_profile_change: ProfileSaver | None = None,
 ) -> GraphOutput:
     # A panel-submit turn resumes the claimed round - never a greeting or a new question.
     if graph_input.resume is not None:
@@ -187,8 +205,45 @@ async def _run_graph(
         on_attempt=usage_recorder.bind("MessageClassificationNode"),
         budget=budget,
         previous_calculation=calculation_title(graph_input.last_calculation),
+        profile=confirmed_metadata,
     )
     trace.prompt("03_MessageClassificationNode", describe_classification(classification))
+
+    # A correction of the profile applies at once: saved now, used by every later step.
+    confirmed_metadata, changed = apply_updates(
+        confirmed_metadata, classification.metadata_updates, now_ict().date()
+    )
+    notice = ""
+    if changed:
+        logger.info("profile.updated fields=%s", sorted(changed))
+        if on_profile_change is not None:
+            await on_profile_change(dict(confirmed_metadata))
+        notice = f"{update_notice(changed)}\n\n"
+        await token_sink(notice)
+    output = await _classified_turn(
+        graph_input,
+        models,
+        token_sink,
+        trace,
+        usage_recorder,
+        budget,
+        classification=classification,
+        confirmed_metadata=confirmed_metadata,
+    )
+    return replace(output, response_text=notice + output.response_text) if notice else output
+
+
+async def _classified_turn(
+    graph_input: GraphInput,
+    models: GraphModels,
+    token_sink: TokenSink,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    budget: BudgetContext | None,
+    *,
+    classification: IntentClassification,
+    confirmed_metadata: dict[str, str],
+) -> GraphOutput:
 
     # IntentRoutingNode (deterministic).
     trace.node("04_IntentRoutingNode")
@@ -223,7 +278,9 @@ async def _run_graph(
         CalculationTask(task_id=f"T{index}", query=task.query)
         for index, task in enumerate(route_plan.calculation_tasks, start=1)
     ]
-    deps = _calculation_deps(graph_input, models, usage_recorder, budget, trace)
+    deps = _calculation_deps(
+        graph_input, models, usage_recorder, budget, trace, confirmed_metadata=confirmed_metadata
+    )
     advisory: AdvisoryPart | None = None
     if route_plan.advisory_tasks:
         advisory = AdvisoryPart(

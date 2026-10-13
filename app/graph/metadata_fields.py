@@ -108,6 +108,23 @@ def apply_updates(
     return merged, changed
 
 
+def update_notice(changed: Mapping[str, str | None]) -> str:
+    """The fixed line a reply opens with when the turn changed the profile, so the
+    student sees what was saved (and can correct it)."""
+
+    parts = [
+        f"{_lower_first(concept(name))}: {value}"
+        if value is not None
+        else f"bỏ {_lower_first(concept(name))}"
+        for name, value in changed.items()
+    ]
+    return f"Mình đã cập nhật thông tin của bạn - {'; '.join(parts)}."
+
+
+def _lower_first(text: str) -> str:
+    return text[:1].lower() + text[1:]
+
+
 def canonical_profile(profile: Mapping[str, str], today: date) -> dict[str, str]:
     """A stored profile under registry names with normalised values - rows written
     before the registry (or under an alias) read back the same as new ones."""

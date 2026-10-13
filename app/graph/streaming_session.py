@@ -164,6 +164,25 @@ class ClaimContext:
     deadline: float | None = None
 
 
+def _profile_saver(
+    session_factory: async_sessionmaker[AsyncSession],
+    owner: ProfileOwner,
+) -> Callable[[dict[str, str]], Awaitable[None]]:
+    """Writes a profile correction the moment node 03 makes it - kept even if the rest
+    of the turn fails. A failed write is only logged: the end-of-turn write (same
+    values) runs again when the turn completes."""
+
+    async def save(attributes: dict[str, str]) -> None:
+        try:
+            async with session_factory() as session:
+                await StudentProfileRepository(session).save(owner, attributes)
+                await session.commit()
+        except Exception:
+            logger.exception("profile.save_failed")
+
+    return save
+
+
 async def _store_round_state(
     session_factory: async_sessionmaker[AsyncSession],
     conversation_id: str,
@@ -294,7 +313,15 @@ async def run_and_persist(
                         raise RequestBudgetRejectedError(usage_recorder.purpose, reserve_result)
                 try:
                     graph_output = await run_graph(
-                        graph_input, models, sink, trace, usage_recorder, budget=budget
+                        graph_input,
+                        models,
+                        sink,
+                        trace,
+                        usage_recorder,
+                        budget=budget,
+                        on_profile_change=_profile_saver(
+                            session_factory, ProfileOwner.of(graph_input.security, conversation_id)
+                        ),
                     )
                 finally:
                     trace.finish()

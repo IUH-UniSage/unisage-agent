@@ -25,3 +25,6 @@ class ClassifiedTask(BaseModel):
 class IntentClassification(BaseModel):
     tasks: list[ClassifiedTask] = Field(min_length=1)
     confidence: float | None = None
+    # What the student said about themselves this turn ("tôi nhầm, khoá 2023 mới đúng"):
+    # field -> new value, None = remove. Only registry profile fields are applied.
+    metadata_updates: dict[str, str | None] = Field(default_factory=dict)

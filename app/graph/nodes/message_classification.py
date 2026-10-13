@@ -4,7 +4,7 @@ question), each with an intent and a routing_mode."""
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic_ai import Agent
@@ -21,7 +21,12 @@ from app.graph.streaming import (
     auxiliary_model_settings,
     run_agent_text_with_failover,
 )
-from app.rag.prompting import append_current_time, append_recent_history, get_templates
+from app.rag.prompting import (
+    append_current_time,
+    append_recent_history,
+    build_known_metadata_fields_section,
+    get_templates,
+)
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
 
@@ -50,7 +55,10 @@ _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 def build_classification_agent(model: Model | str) -> Agent[None, str]:
     templates = get_templates()
-    system_prompt = templates.agent_message_classification
+    # `.replace`, not `.format`: the template is full of literal JSON braces.
+    system_prompt = templates.agent_message_classification.replace(
+        "{profile_fields}", build_known_metadata_fields_section()
+    )
     if settings.CHAT_CLASSIFY_WITH_RETRIEVAL:
         system_prompt = f"{system_prompt}\n\n{templates.agent_message_classification_retrieval}"
     return Agent(
@@ -139,6 +147,21 @@ def _sub_queries(raw_task: dict[str, Any]) -> list[str] | None:
     return queries[: settings.CHAT_MAX_SUB_QUERIES] if len(queries) >= 2 else None
 
 
+def _metadata_updates(raw: object) -> dict[str, str | None]:
+    """`{field: value | null}`; a number is kept as text, anything else is dropped.
+    Which fields may change is decided later (`metadata_fields.apply_updates`)."""
+
+    updates: dict[str, str | None] = {}
+    for name, value in raw.items() if isinstance(raw, dict) else []:
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if value is None or isinstance(value, str):
+            updates[name.strip()] = value
+        elif isinstance(value, int | float) and not isinstance(value, bool):
+            updates[name.strip()] = str(value)
+    return updates
+
+
 def describe_classification(classification: IntentClassification) -> str:
     """JSON of what the graph acts on, including the retrieval text `model_dump` leaves out."""
 
@@ -153,7 +176,13 @@ def describe_classification(classification: IntentClassification) -> str:
         for task in classification.tasks
     ]
     return json.dumps(
-        {"tasks": tasks, "confidence": classification.confidence}, ensure_ascii=False, indent=2
+        {
+            "tasks": tasks,
+            "confidence": classification.confidence,
+            "metadata_updates": classification.metadata_updates,
+        },
+        ensure_ascii=False,
+        indent=2,
     )
 
 
@@ -182,7 +211,11 @@ def parse_classification(raw_output: str, message: str) -> IntentClassification:
         if isinstance(raw_confidence, int | float) and not isinstance(raw_confidence, bool)
         else None
     )
-    return IntentClassification(tasks=tasks, confidence=confidence)
+    return IntentClassification(
+        tasks=tasks,
+        confidence=confidence,
+        metadata_updates=_metadata_updates(parsed.get("metadata_updates")),
+    )
 
 
 async def classify_intent(
@@ -199,11 +232,13 @@ async def classify_intent(
     on_attempt: AttemptRecorder | None = None,
     budget: BudgetContext | None = None,
     previous_calculation: str | None = None,
+    profile: Mapping[str, str] | None = None,
 ) -> IntentClassification:
     """`history` lets a short follow-up be classified in context. `previous_calculation`
     names the conversation's latest computed calculation, so a free-typed follow-up on
     it ("thế cuối kỳ cần bao nhiêu") stays a calculation instead of being guessed from
-    the chat text alone.
+    the chat text alone. `profile` is what the student declared so far, so a correction
+    ("tôi nhầm, khoá 2023 mới đúng") comes back as `metadata_updates`.
 
     `purpose`/`credential`/`snapshot_version`/`agent_factory`/`router`/
     `on_failover`/`on_attempt`/`budget` are the same opt-in failover/usage/budget
@@ -216,6 +251,11 @@ async def classify_intent(
         prompt += (
             f"\n\n<previous_calculation_turn>{previous_calculation}</previous_calculation_turn>"
         )
+    prompt += (
+        "\n\n<student_profile>\n"
+        + ("\n".join(f"- {name}: {value}" for name, value in (profile or {}).items()) or "(trống)")
+        + "\n</student_profile>"
+    )
     prompt = append_current_time(prompt)
     output = await run_agent_text_with_failover(
         agent,
