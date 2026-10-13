@@ -31,6 +31,7 @@ from app.calculation.formulas import (
     calculate,
     describe_builtin_formulas,
     describe_builtin_rules,
+    label_for,
     missing_params,
     money,
     param_spec,
@@ -263,8 +264,11 @@ async def extract_request(query: str, deps: CalculationDeps) -> Extraction:
 # ---------------------------------------------------------------------------
 
 
-def question_for(spec: ParamSpec, reason: str | None = None) -> dict[str, Any]:
-    prompt = spec.label if reason is None else f"{spec.label} ({reason})"
+def question_for(
+    spec: ParamSpec, known: Mapping[str, JsonValue], reason: str | None = None
+) -> dict[str, Any]:
+    label = label_for(spec, known)
+    prompt = label if reason is None else f"{label} ({reason})"
     draft: dict[str, Any] = {
         "tab_label": spec.tab_label,
         "prompt": prompt[:200],
@@ -305,10 +309,10 @@ def builtin_outcome(
             for name, reason in reasons.items():
                 spec = param_spec(formula_id, name)
                 if spec is not None:
-                    questions.append(question_for(spec, reason))
+                    questions.append(question_for(spec, known, reason))
                     known.pop(name, None)
             return NeedsInput(task_id, plan, known, questions)
-    return NeedsInput(task_id, plan, known, [question_for(spec) for spec in missing])
+    return NeedsInput(task_id, plan, known, [question_for(spec, known) for spec in missing])
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +574,9 @@ def _amounts(text: str) -> set[int]:
     return {int(re.sub(r"\D", "", match)) for match in _AMOUNT.findall(text)}
 
 
-def _context_question(spec: ParamSpec, options: object) -> dict[str, Any]:
+def _context_question(
+    spec: ParamSpec, options: object, known: Mapping[str, JsonValue]
+) -> dict[str, Any]:
     labels = list(
         dict.fromkeys(
             str(option).strip()[:120]
@@ -579,7 +585,7 @@ def _context_question(spec: ParamSpec, options: object) -> dict[str, Any]:
         )
     )[:_OPTIONS_MAX]
     if len(labels) < 2:
-        return question_for(spec)
+        return question_for(spec, known)
     return {
         "tab_label": spec.tab_label,
         "prompt": spec.label,
@@ -682,7 +688,7 @@ async def fill_from_documents(
             if spec is None or spec.kind != "text" or known.get(spec.name) is not None:
                 continue
             if all(question["field"] != spec.name for question in questions):
-                questions.append(_context_question(spec, item.get("options")))
+                questions.append(_context_question(spec, item.get("options"), known))
     logger.info(
         "calculation.document_values formula=%s found=%s rejected=%s ask=%s",
         formula_id,
@@ -720,8 +726,9 @@ def _with_document_notes(
         if chunk.chunk_id not in markers:
             markers[chunk.chunk_id] = len(markers) + 1
             sources.append((markers[chunk.chunk_id], chunk))
+        label = label_for(spec, outcome.params)
         notes.append(
-            f"{spec.label}: {_value_text(spec, found.values[name])} [{markers[chunk.chunk_id]}]"
+            f"{label}: {_value_text(spec, found.values[name])} [{markers[chunk.chunk_id]}]"
         )
         prices = prices or spec.unit == "đồng"
     if prices:
@@ -745,7 +752,7 @@ async def builtin_task(
     found = await fill_from_documents(formula_id, query, known, deps)
     if found.questions:
         own = [spec for spec in missing_params(formula_id, known) if not spec.lookup]
-        questions = [*found.questions, *(question_for(spec) for spec in own)]
+        questions = [*found.questions, *(question_for(spec, known) for spec in own)]
         return NeedsInput(task_id, CalculationPlan(formula_id=formula_id), known, questions)
     outcome = builtin_outcome(task_id, formula_id, {**known, **found.values})
     if isinstance(outcome, Computed) and found.sources:

@@ -459,7 +459,7 @@ def _resume_round(*, chain_depth: int = 1, with_advisory: bool = False) -> Resum
     parts = [
         TaskQuestions(
             task=calc_task,
-            questions=[question_for(param_spec("course_score", "th"))],  # type: ignore[arg-type]
+            questions=[question_for(param_spec("course_score", "th"), {})],  # type: ignore[arg-type]
         )
     ]
     if with_advisory:
@@ -1093,3 +1093,48 @@ async def test_without_documents_tuition_asks_theory_and_practice_credits_separa
         "don_gia_lt",
         "don_gia_th",
     ]
+
+
+@pytest.mark.asyncio
+async def test_tuition_for_two_years_asks_and_titles_the_period_the_student_named() -> None:
+    query = "tính giúp tôi học phí ngành công nghệ thông tin 2 năm đầu"
+    first = await run_graph(
+        _input(query),
+        _tuition_models(
+            {"tasks": [{"intent": "academic_calculation", "query": query}]},
+            {"formula_id": "tuition_year", "params": {"pham_vi": "2 năm đầu"}},
+            _PRICES_FOUND,
+            chunks=[_FEE_TABLE],
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert first.pending_round is not None
+    questions = {q.field: q for q in first.pending_round.panel.questions}
+    assert questions["tc_lt"].prompt == "Số tín chỉ lý thuyết của 2 năm đầu"
+    assert questions["tc_th"].prompt == "Số tín chỉ thực hành của 2 năm đầu"
+    submit = ClarificationSubmit(
+        action="submit",
+        panel_id=first.pending_round.panel.panel_id,
+        answers=[
+            Answer(question_id=questions["tc_lt"].id, number=Decimal(100)),
+            Answer(question_id=questions["tc_th"].id, number=Decimal(42)),
+        ],
+    )
+    resume = ResumeInput(
+        pending_round=first.pending_round,
+        answers=validate_answers(first.pending_round.panel, submit),
+    )
+    second = await run_graph(
+        _input("đã trả lời", resume=resume),
+        _tuition_models(_PRICES_FOUND, chunks=[_FEE_TABLE]),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert second.pending_round is None
+    assert "Học phí 2 năm đầu **165.200.000 đồng**" in second.response_text
+    assert "một năm học" not in second.response_text

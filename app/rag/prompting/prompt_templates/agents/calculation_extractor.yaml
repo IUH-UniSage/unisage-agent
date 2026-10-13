@@ -13,6 +13,7 @@ template: |
   ## Chọn `formula_id`
   - Formula_id cài sẵn: CHỈ khi người dùng muốn TÍNH XUÔI đúng công thức đó (cho điểm/tín chỉ, hỏi ra kết quả: điểm tổng kết, GPA, điểm chữ, học phí), kể cả khi chưa đưa đủ số (hệ thống tự tra tài liệu rồi hỏi phần còn thiếu).
   - Học phí: `tuition_semester` (một học kỳ, "kỳ này"), `tuition_year` (một năm học), `tuition_program` (cả khoá, cả ngành, toàn chương trình, đến khi ra trường). Không nêu phạm vi → `tuition_semester`.
+  - Học phí cho NHIỀU năm nhưng chưa phải cả khoá ("2 năm đầu", "3 năm cuối") → `tuition_year` kèm `pham_vi`: người dùng sẽ nhập số tín chỉ của cả quãng đó.
   - `previous`: câu NỐI TIẾP tính xuôi phép tính trong `<previous_calculation>` với số mới/thay đổi (VD "nếu giữa kỳ 8 thì sao"). `params` CHỈ gồm số mới hoặc thay đổi.
   - `llm`: MỌI trường hợp khác - hỏi NGƯỢC ("cuối kỳ cần bao nhiêu để được A+", "đăng ký tối đa mấy tín để học phí không quá 8 triệu"), công thức không có ở trên (điểm xét tuyển, điểm rèn luyện, công thức trong môn học/bài học...), hoặc câu cần lịch sử hội thoại để hiểu (VD "quay lại môn A").
   - Nếu tin nhắn có `<allowed_formula_ids>`, công thức cài sẵn CHỈ được chọn trong danh sách đó (luôn được chọn `llm`).
@@ -26,6 +27,7 @@ template: |
   - CHỈ ghi những con số người dùng ĐÃ NÓI RÕ ở tin nhắn này. Không suy đoán, không điền mặc định, không tự tính giá trị trung gian. Chưa nói thì BỎ khỏi `params`.
   - Với công thức cài sẵn: đúng tên tham số ở trên. Điểm giữ nguyên như người dùng viết (8.5, "B+"); dấu phẩy thập phân đổi thành dấu chấm. `tbtx`: một SỐ nếu người dùng nói sẵn điểm trung bình thường xuyên, hoặc MẢNG các cột (VD "TX 8, 7, 9" → `[8, 7, 9]`). `th` là MẢNG các cột thực hành. `courses` là MẢNG `{"name": "<tên môn hoặc null>", "credits": <số tín chỉ>, "score": <điểm số hoặc điểm chữ>}`.
   - Học phí: `tc_lt` / `tc_th` chỉ khi người dùng TÁCH RÕ số tín chỉ lý thuyết và thực hành; chỉ nói tổng số tín ("20 tín") thì KHÔNG ghi (hệ thống sẽ hỏi riêng từng loại). `don_gia_lt` / `don_gia_th` là số nguyên đồng, viết đủ số (VD "980 nghìn" → 980000). `khoa_tuyen_sinh` là chuỗi khoá người dùng nêu (VD "2025-2026"), `khoi_nganh` chỉ khi người dùng nói rõ khối (VD "Khối Công nghệ").
+  - `pham_vi` (học phí): cụm phạm vi NGUYÊN VĂN người dùng nói ("2 năm đầu", "học kỳ 1 năm 2", "năm cuối"). Không nói phạm vi cụ thể, hoặc chỉ nói đúng phạm vi mặc định ("kỳ này", "một năm", "cả khoá") thì BỎ.
   - Với `llm`: tên ngắn không dấu tự đặt (VD `so_tin_chi`, `diem_ck_mong_muon`).
 
   ## Ví dụ
@@ -53,6 +55,9 @@ template: |
 
   User: "Học kỳ này em đăng ký 20 tín thì học phí bao nhiêu?"
   {"formula_id": "tuition_semester", "params": {}, "retrieval_query": null}
+
+  User: "tính giúp tôi học phí ngành công nghệ thông tin 2 năm đầu"
+  {"formula_id": "tuition_year", "params": {"pham_vi": "2 năm đầu"}, "retrieval_query": null}
 
   User: "tính giúp tôi học phí cả ngành công nghệ thông tin"
   {"formula_id": "tuition_program", "params": {}, "retrieval_query": null}

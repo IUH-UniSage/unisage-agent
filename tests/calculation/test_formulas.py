@@ -347,6 +347,32 @@ def test_tuition_is_theory_and_practice_credits_times_their_unit_price() -> None
     ]
 
 
+def test_tuition_title_and_credit_labels_name_the_period_the_student_asked_for() -> None:
+    params = {**_TUITION, "pham_vi": "2 năm đầu"}
+    result = formulas.calculate("tuition_year", params)
+    assert result.title == "Học phí 2 năm đầu"
+    assert result.outputs == (("Học phí 2 năm đầu", "165.200.000 đồng"),)
+
+    spec = formulas.param_spec("tuition_year", "tc_lt")
+    assert spec is not None
+    assert (
+        formulas.label_for(spec, {"pham_vi": "2 năm đầu"}) == "Số tín chỉ lý thuyết của 2 năm đầu"
+    )
+    assert formulas.label_for(spec, {}) == "Số tín chỉ lý thuyết của một năm học"
+    assert formulas.calculate("tuition_year", _TUITION).title == "Học phí một năm học"
+
+
+@pytest.mark.parametrize("period", [None, "", "   ", 3])
+def test_tuition_without_a_usable_period_keeps_the_default_title(period: object) -> None:
+    result = formulas.calculate("tuition_semester", {**_TUITION, "pham_vi": period})
+    assert result.title == "Học phí một học kỳ"
+
+
+def test_the_period_is_never_asked() -> None:
+    names = {spec.name for spec in formulas.missing_params("tuition_year", {})}
+    assert "pham_vi" not in names
+
+
 def test_tuition_needs_theory_and_practice_credits_separately() -> None:
     missing = formulas.missing_params("tuition_semester", {"don_gia_lt": 1, "don_gia_th": 1})
     assert [spec.name for spec in missing] == ["tc_lt", "tc_th"]

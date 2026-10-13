@@ -637,6 +637,7 @@ TUITION_FORMULA_TEXT = (
     "Đơn giá theo khoá tuyển sinh và giữ nguyên suốt khoá học; chỉ khoá mới có đơn giá khác",
 )
 TUITION_WARNINGS = ("Chưa gồm học phần Giáo dục quốc phòng - an ninh (đơn giá riêng), nếu có.",)
+TUITION_PERIOD_MAX = 60
 
 
 def money(value: Decimal) -> str:
@@ -665,6 +666,19 @@ def parse_money(value: object, field: str, errors: list[FieldError]) -> Decimal 
         errors.append(FieldError(field, f"số tiền phải từ 0 đến {money(TUITION_PRICE_MAX)}"))
         return None
     return number
+
+
+def tuition_period(scope: TuitionScope, params: Mapping[str, object]) -> str:
+    """The period in the student's own words ("2 năm đầu") when the extractor copied
+    one, else the formula's default ("một năm học"). No formula covers "N năm", so the
+    student enters the credits of the whole period and the title has to say so."""
+
+    raw = params.get("pham_vi")
+    if not isinstance(raw, str):
+        return TUITION_SCOPES[scope]
+    # `*` would break the bold title it is rendered into.
+    text = " ".join(raw.replace("*", "").split())[:TUITION_PERIOD_MAX]
+    return text or TUITION_SCOPES[scope]
 
 
 def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], CalculationResult]:
@@ -698,7 +712,7 @@ def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], Calculatio
         theory = lt * price_lt
         practice = th * price_th
         total = theory + practice
-        title = f"Học phí {TUITION_SCOPES[scope]}"
+        title = f"Học phí {tuition_period(scope, params)}"
         return CalculationResult(
             formula_id=scope,
             title=title,
@@ -788,6 +802,8 @@ class ParamSpec:
     # What to search the documents for before the student is asked; None = the
     # student's own value (their scores, the credits they registered).
     lookup: str | None = None
+    # The label once other params are known (see `label_for`); None = always `label`.
+    label_from: Callable[[Mapping[str, object]], str] | None = None
 
 
 def _score_spec(name: str, label: str, tab_label: str, credit_field: str) -> ParamSpec:
@@ -821,18 +837,24 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
     programme come from its curriculum document; those of a semester or a year are the
     student's own. The unit prices come from the fee schedule. `khoa_tuyen_sinh` and
     `khoi_nganh` are not computed with: they pick the fee schedule row, and are asked
-    only when the documents hold several rows."""
+    only when the documents hold several rows. `pham_vi` is never asked nor computed
+    with: it only names the period in the labels and the title."""
 
     credit_lookup = (
         "tổng số tín chỉ lý thuyết, thực hành của chương trình đào tạo"
         if scope == "tuition_program"
         else None
     )
+
+    def credit_label(kind: str) -> Callable[[Mapping[str, object]], str]:
+        return lambda known: f"Số tín chỉ {kind} của {tuition_period(scope, known)}"
+
     period = TUITION_SCOPES[scope]
     credits = [
         ParamSpec(
             name=name,
             label=f"Số tín chỉ {kind} của {period}",
+            label_from=credit_label(kind),
             tab_label=f"TC {kind}",
             kind="number",
             min=Decimal(0),
@@ -872,6 +894,13 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             name="khoi_nganh",
             label="Ngành của bạn thuộc khối nào (VD Khối Công nghệ)",
             tab_label="Khối ngành",
+            kind="text",
+            required=_never,
+        ),
+        ParamSpec(
+            name="pham_vi",
+            label="Phạm vi học phí đúng như người dùng nói (VD 2 năm đầu)",
+            tab_label="Phạm vi",
             kind="text",
             required=_never,
         ),
@@ -972,6 +1001,12 @@ FORMULAS: dict[FormulaId, Formula] = {
 
 def param_spec(formula_id: FormulaId, name: str) -> ParamSpec | None:
     return next((spec for spec in FORMULAS[formula_id].params if spec.name == name), None)
+
+
+def label_for(spec: ParamSpec, known: Mapping[str, object]) -> str:
+    """What the student is asked, worded for the params already known."""
+
+    return spec.label_from(known) if spec.label_from is not None else spec.label
 
 
 def missing_params(formula_id: FormulaId, params: Mapping[str, object]) -> list[ParamSpec]:
