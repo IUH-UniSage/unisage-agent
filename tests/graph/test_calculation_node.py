@@ -3,6 +3,7 @@
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
@@ -1452,3 +1453,77 @@ async def test_a_query_equal_to_the_message_is_not_repeated() -> None:
 
     assert "<original_message>" not in classification[1]
     assert "Tin nhắn gốc sinh viên gõ" not in generation[0]
+
+
+@pytest.mark.asyncio
+async def test_an_intake_answered_on_the_form_is_kept_as_a_year_and_names_the_student_term(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    today = datetime(2026, 10, 13, 9, 0)
+    monkeypatch.setattr("app.rag.prompting.builder.now_ict", lambda: today)
+    monkeypatch.setattr("app.graph.streaming_graph.now_ict", lambda: today)
+    query = "học phí kỳ này của tôi bao nhiêu"
+    ask = json.dumps(
+        {
+            "type": "ask_user_form",
+            "fields": [
+                {
+                    "field": "khoa_nhap_hoc",
+                    "label": "Bạn nhập học năm nào (hoặc đang học kỳ thứ mấy)?",
+                    "kind": "choice",
+                    "options": [
+                        {"id": "2022", "label": "Nhập học 2022 (đang học kỳ 9)"},
+                        {"id": "2023", "label": "Nhập học 2023 (đang học kỳ 7)"},
+                    ],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    first_prompts: list[str] = []
+    first = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "llm", "params": {}},
+            ),
+            query_transformation=_echo_model(),
+            generation=_recording(first_prompts, ask),
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert "Học kỳ của sinh viên trong khoá học: CHƯA BIẾT" in first_prompts[0]
+    assert first.pending_round is not None
+    [question] = first.pending_round.panel.questions
+    submit = ClarificationSubmit(
+        action="submit",
+        panel_id=first.pending_round.panel.panel_id,
+        answers=[Answer(question_id=question.id, option_id=question.options[0].id)],
+    )
+    resume = ResumeInput(
+        pending_round=first.pending_round,
+        answers=validate_answers(first.pending_round.panel, submit),
+    )
+    second_prompts: list[str] = []
+    second = await run_graph(
+        _input("Nhập học 2022 (đang học kỳ 9)", resume=resume),
+        GraphModels(
+            classification=_scripted(),
+            query_transformation=_echo_model(),
+            generation=_recording(second_prompts, "Học kỳ 9 của bạn ..."),
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert second.confirmed_metadata["khoa_nhap_hoc"] == "2022"
+    assert (
+        "Học kỳ của sinh viên trong khoá học: học kỳ 9 của khoá học (nhập học 2022, khóa 18)"
+        in second_prompts[0]
+    )

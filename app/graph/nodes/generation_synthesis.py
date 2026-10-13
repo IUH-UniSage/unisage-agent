@@ -221,7 +221,7 @@ async def run_generation_synthesis(
     trace.prompt(
         "10_GenerationSynthesisNode",
         f"{build_metadata_section(security, confirmed_metadata)}\n"
-        f"{build_prepared_context_section(chunks, web_results)}",
+        f"{build_prepared_context_section(chunks, web_results, confirmed_metadata)}",
     )
     redactor = FenceRedactor()
     visible: list[str] = []

@@ -11,7 +11,7 @@ former may ever be used to make an authorization decision.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.retrieval import RetrievedChunk
@@ -75,7 +75,7 @@ def _base_params(
         "academic_domain_rules": templates.academic_domain_rules,
         "response_style": templates.response_style,
         "citation_rules": templates.citation_rules,
-        "prepared_context": build_prepared_context_section(chunks, web_results),
+        "prepared_context": build_prepared_context_section(chunks, web_results, confirmed_metadata),
         "task_1": templates.task_1,
         "task_2": build_task_2_section(),
     }
@@ -154,7 +154,7 @@ def build_ticket_fallback_prompt(
         security_access_control=templates.security_access_control,
         response_style=templates.response_style,
         ticket_fallback=templates.ticket_fallback,
-        current_time=build_current_time_section(),
+        current_time=build_current_time_section(confirmed_metadata),
         user_query=user_query,
     )
 
@@ -164,7 +164,11 @@ def render_sub_queries_list(sub_queries: Sequence[str]) -> str:
 
 
 def build_calculation_review_prompt(
-    *, user_query: str, calculation_payload: str, history: Sequence[HistoryMessage]
+    *,
+    user_query: str,
+    calculation_payload: str,
+    history: Sequence[HistoryMessage],
+    confirmed_metadata: Mapping[str, str] | None = None,
 ) -> str:
     """`main/chat_calculation_review.yaml`: after a calculation-only turn, check the
     built-in results answer what was asked and write the opening answer."""
@@ -174,7 +178,7 @@ def build_calculation_review_prompt(
         header=templates.header,
         calculation_payload=calculation_payload,
         history_message=build_history_section(history),
-        current_time=build_current_time_section(),
+        current_time=build_current_time_section(confirmed_metadata),
         user_query=user_query,
     )
 
@@ -207,7 +211,7 @@ def build_calculation_llm_prompt(
         documents=documents or "(không có tài liệu)",
         known_values=known_values,
         history=build_history_section(history),
-        current_time=build_current_time_section(),
+        current_time=build_current_time_section(confirmed_metadata),
         user_query=user_query,
         original_message=_original_message_line(original_message, user_query),
     )

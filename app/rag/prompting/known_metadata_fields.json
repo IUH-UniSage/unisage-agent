@@ -29,9 +29,9 @@
       "field": "khoa_nhap_hoc",
       "concept": "Khóa nhập học / khóa tuyển sinh / năm nhập học",
       "aliases": ["khóa nhập học", "khóa tuyển sinh", "năm nhập học", "academic_year", "khóa"],
-      "example_options": ["K21", "K22", "K23"],
+      "example_options": ["2022", "2023", "2024"],
       "priority": "high",
-      "description": "Khóa tuyển sinh (K21...) - KHÁC nam_thu_may."
+      "description": "Lưu NĂM nhập học 4 chữ số (option id = năm, VD 2022); khóa N của IUH = năm 2004+N (K20 = 2024). Hỏi theo hướng dẫn trong <current_time> (một câu, option kèm học kỳ thứ mấy). KHÁC nam_thu_may."
     },
     {
       "field": "dieu_kien_hoc_bong",

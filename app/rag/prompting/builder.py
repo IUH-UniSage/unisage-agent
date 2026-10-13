@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
-from app.core.academic_calendar import describe_current_term
+from app.core.academic_calendar import (
+    INTAKE_FIELD,
+    describe_current_term,
+    describe_student_term,
+    parse_intake_year,
+)
 from app.core.timezone import now_ict
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.retrieval import RetrievedChunk
@@ -166,7 +171,9 @@ def _page_suffix(chunk: RetrievedChunk) -> str:
 
 
 def build_prepared_context_section(
-    chunks: Sequence[RetrievedChunk], web_results: Sequence[WebSearchResult] = ()
+    chunks: Sequence[RetrievedChunk],
+    web_results: Sequence[WebSearchResult] = (),
+    confirmed_metadata: Mapping[str, str] | None = None,
 ) -> str:
     """Build `{prepared_context}` - the `<academic_context>` block, chunks numbered
     to match the `[1][2]` citation indices the generation prompt asks the model to use,
@@ -191,25 +198,28 @@ def build_prepared_context_section(
     return get_templates().prepared_context.format(
         context_chunks=context_chunks,
         web_search_context=_build_web_search_context(web_results, first_index=len(chunks) + 1),
-        current_time=build_current_time_section(),
+        current_time=build_current_time_section(confirmed_metadata),
     )
 
 
-def build_current_time_section() -> str:
-    """`<current_time>`: today (ICT) and the current term of the provisional school
-    calendar - one block, given to every chat flow."""
+def build_current_time_section(confirmed_metadata: Mapping[str, str] | None = None) -> str:
+    """`<current_time>`: today (ICT), the current term of the provisional school
+    calendar and the student's own term number (from `khoa_nhap_hoc`) - one block,
+    given to every chat flow."""
 
-    today = now_ict()
+    today = now_ict().date()
+    intake = parse_intake_year((confirmed_metadata or {}).get(INTAKE_FIELD), today)
     return get_templates().current_time.format(
         current_date=today.strftime("%d/%m/%Y"),
-        current_term=describe_current_term(today.date()),
+        current_term=describe_current_term(today),
+        student_term=describe_student_term(today, intake),
     )
 
 
-def append_current_time(prompt: str) -> str:
+def append_current_time(prompt: str, confirmed_metadata: Mapping[str, str] | None = None) -> str:
     """For agents whose system prompt is static: the block goes into the message."""
 
-    return f"{prompt}\n\n{build_current_time_section()}"
+    return f"{prompt}\n\n{build_current_time_section(confirmed_metadata)}"
 
 
 def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_index: int) -> str:
@@ -251,7 +261,7 @@ def build_json_repair_prompt(
     templates = get_templates()
     return templates.json_repair.format(
         previous_response=previous_response,
-        academic_context=build_prepared_context_section(chunks, web_results),
+        academic_context=build_prepared_context_section(chunks, web_results, confirmed_metadata),
         academic_metadata=build_metadata_section(security, confirmed_metadata),
         ask_user_form_guide=build_ask_user_form_guide(),
     )

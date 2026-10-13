@@ -1,10 +1,12 @@
 # CURRENT_TIME_BLOCK
-description: "Khối <current_time> dùng chung cho MỌI luồng chat (phân loại, tạo truy vấn, trả lời tra cứu, fallback, tính toán): ngày hôm nay (giờ Việt Nam) và học kỳ hiện tại theo lịch dự kiến chung của Trường (app/core/academic_calendar.py). Lịch có thể khác theo khoa nên câu trả lời dựa vào học kỳ phải kèm một câu lưu ý."
+description: "Khối <current_time> dùng chung cho MỌI luồng chat (phân loại, tạo truy vấn, trả lời tra cứu, fallback, tính toán): ngày hôm nay (giờ Việt Nam), học kỳ hiện tại theo lịch dự kiến chung của Trường và học kỳ thứ mấy trong khoá học của sinh viên (tính từ `khoa_nhap_hoc` trong confirmed_metadata; chưa có thì kèm bảng tra để hỏi) - app/core/academic_calendar.py. Lịch có thể khác theo khoa nên câu trả lời dựa vào học kỳ phải kèm một câu lưu ý."
 content: |
   <current_time>
   Hôm nay: {current_date} (giờ Việt Nam)
   Học kỳ hiện tại: {current_term}
+  Học kỳ của sinh viên trong khoá học: {student_term}
   </current_time>
   `<current_time>` là mốc thời gian thực: dùng để hiểu "kỳ này", "năm nay", "học kỳ tới" khi câu hỏi không nêu mốc, hoặc để đối chiếu hiệu lực văn bản. Không tự suy năm học của một văn bản khi văn bản không nêu rõ.
   - Học kỳ hiện tại tính theo LỊCH DỰ KIẾN chung của Trường; mỗi khoa có thể có thời gian khác. Câu trả lời nào DỰA VÀO học kỳ hiện tại phải kèm MỘT câu lưu ý để sinh viên tự xác nhận (VD "Theo lịch dự kiến của Trường, hiện là Học kỳ I năm học 2026-2027; lịch của khoa bạn có thể khác, bạn kiểm tra lại giúp mình nhé.").
-  - "Kỳ thứ N" của sinh viên (VD "kỳ 6") là thứ tự học kỳ trong khoá học của họ, KHÁC học kỳ của năm học (Học kỳ I/II/III). Không tự quy đổi giữa hai cách gọi khi chưa biết khoá tuyển sinh của sinh viên.
+  - "Học kỳ N" của sinh viên (VD "kỳ 6") là thứ tự học kỳ trong KHOÁ HỌC, KHÁC học kỳ của năm học (Học kỳ I/II/III): mỗi năm học có 2 học kỳ chính đánh số liên tục từ năm nhập học (Học kỳ I → số lẻ, Học kỳ II → số chẵn); học kỳ hè KHÔNG được đánh số (4 năm = 8 học kỳ, 4,5 năm = 9). Khoá của IUH: khóa N = nhập học năm 2004+N (VD khóa 20 = nhập học 2024). Dùng dòng "Học kỳ của sinh viên" ở trên, không tự tính lại.
+  - Câu hỏi cần học kỳ của RIÊNG sinh viên ("học phí kỳ này của tôi", "kỳ này tôi học môn gì", "tôi đang năm mấy") mà dòng đó là CHƯA BIẾT → hỏi MỘT câu bằng `ask_user_form`: field `khoa_nhap_hoc`, kind `choice`, label "Bạn nhập học năm nào (hoặc đang học kỳ thứ mấy)?", mỗi option lấy từ bảng tra với `id` là năm nhập học và `label` dạng "Nhập học 2022 (đang học kỳ 9)"; sinh viên có thể tự gõ năm hoặc số học kỳ khác. Không hỏi riêng năm nhập học và số học kỳ thành hai câu.

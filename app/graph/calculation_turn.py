@@ -264,6 +264,7 @@ async def review(
         user_query=question,
         calculation_payload=_payload([outcome.result for outcome in outcomes]),
         history=list(deps.history),
+        confirmed_metadata=deps.confirmed_metadata,
     )
     try:
         raw = await run_agent_text_with_failover(

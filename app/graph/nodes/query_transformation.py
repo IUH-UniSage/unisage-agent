@@ -92,7 +92,7 @@ async def transform_query(
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
     return await run_agent_text_with_failover(
         agent,
-        append_current_time(append_recent_history(enriched_query, history)),
+        append_current_time(append_recent_history(enriched_query, history), confirmed_metadata),
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,
@@ -151,7 +151,7 @@ async def decompose_query(
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
     output = await run_agent_text_with_failover(
         agent,
-        append_current_time(append_recent_history(enriched_query, history)),
+        append_current_time(append_recent_history(enriched_query, history), confirmed_metadata),
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,

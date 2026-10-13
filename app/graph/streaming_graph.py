@@ -22,9 +22,11 @@ from pydantic import JsonValue
 from pydantic_ai.models import Model
 
 from app.calculation.formulas import FORMULAS
+from app.core.academic_calendar import INTAKE_FIELD, parse_intake_year
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
+from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.calculation_turn import (
     CalculationTask,
@@ -266,13 +268,21 @@ async def _run_resume(
             else answer.value
         )
         answers_by_task.setdefault(question.task_id, {})[question.field] = value
+        if question.field == INTAKE_FIELD:
+            # Kept as the intake year from either flow: "kỳ 9" would be wrong next term.
+            intake = parse_intake_year(value, now_ict().date())
+            if intake is not None:
+                confirmed_metadata[INTAKE_FIELD] = str(intake)
+                continue
         if question.origin == "advisory" and isinstance(answer.value, str):
             confirmed_metadata[question.field] = answer.value
 
     outcomes: list[TaskOutcome] = []
     queries: dict[str, str] = {}
     advisory: AdvisoryPart | None = None
-    deps = _calculation_deps(graph_input, models, usage_recorder, budget, trace)
+    deps = _calculation_deps(
+        graph_input, models, usage_recorder, budget, trace, confirmed_metadata=confirmed_metadata
+    )
     for task in pending.tasks:
         if isinstance(task, PendingCalculationTask):
             queries[task.task_id] = task.query
@@ -323,6 +333,8 @@ def _calculation_deps(
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None,
     trace: GraphTrace,
+    *,
+    confirmed_metadata: dict[str, str] | None = None,
 ) -> CalculationDeps:
     return CalculationDeps(
         models=models,
@@ -332,7 +344,9 @@ def _calculation_deps(
         budget=budget,
         previous=graph_input.last_calculation,
         history=graph_input.history,
-        confirmed_metadata=graph_input.confirmed_metadata,
+        confirmed_metadata=(
+            confirmed_metadata if confirmed_metadata is not None else graph_input.confirmed_metadata
+        ),
         trace=trace,
         user_message=graph_input.user_message if graph_input.resume is None else None,
     )

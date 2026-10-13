@@ -246,7 +246,7 @@ async def extract_request(query: str, deps: CalculationDeps) -> Extraction:
     original = (deps.user_message or "").strip()
     if original and original != query.strip():
         prompt += f"\n\n<original_message>{original}</original_message>"
-    prompt = append_current_time(prompt)
+    prompt = append_current_time(prompt, deps.confirmed_metadata)
     try:
         raw = await run_agent_text_with_failover(
             build_calculation_extractor_agent(deps.models.classification),
@@ -620,7 +620,8 @@ def _value_prompt(
     wanted_lines = "; ".join(f"{spec.name}: {spec.label}" for spec in wanted)
     return append_current_time(
         f"<question>{query}</question>\n<known>{known_lines or '(trống)'}</known>\n"
-        f"<wanted>{wanted_lines}</wanted>\n<documents>\n{_documents(chunks)}\n</documents>"
+        f"<wanted>{wanted_lines}</wanted>\n<documents>\n{_documents(chunks)}\n</documents>",
+        deps.confirmed_metadata,
     )
 
 
