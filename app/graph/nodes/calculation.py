@@ -490,9 +490,17 @@ async def _ask_llm(
         original_message=deps.user_message,
         recent_calculations=deps.recent_calculations,
     )
+    agent = build_calculation_llm_agent(deps.models.generation)
+    if deps.trace is not None:
+        deps.trace.step(
+            "07a_CalculationLLMNode",
+            parent="07_CalculationNode",
+            agent=agent,
+            credential=deps.models.generation_credential,
+        )
     try:
         raw = await run_agent_text_with_failover(
-            build_calculation_llm_agent(deps.models.generation),
+            agent,
             prompt,
             purpose="CHAT",
             credential=deps.models.generation_credential,
@@ -506,9 +514,19 @@ async def _ask_llm(
     except Exception:
         logger.warning("calculation.llm_failed", exc_info=True)
         return Unresolved(task_id, "llm_failed")
+    if deps.trace is not None:
+        deps.trace.prompt("07a_CalculationLLMNode", raw)
     redactor = FenceRedactor()
     text, bare = take_bare_blocks((redactor.feed(raw) + redactor.finish()).strip())
-    questions = llm_questions([*redactor.captured, *bare], known, deps.confirmed_metadata)
+    forms = [*redactor.captured, *bare]
+    questions = llm_questions(forms, known, deps.confirmed_metadata)
+    if forms and not questions:
+        # Every field was malformed or already known - the turn ends as an answer, no panel.
+        logger.warning(
+            "calculation.form_dropped known=%s forms=%s",
+            json.dumps(dict(known), ensure_ascii=False),
+            json.dumps(forms, ensure_ascii=False, default=str),
+        )
     if questions:
         return NeedsInput(task_id, plan, dict(known), questions, lead=text or None)
     if not text:
