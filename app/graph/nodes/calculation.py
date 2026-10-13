@@ -137,6 +137,9 @@ class CalculationDeps:
     history: Sequence[HistoryMessage] = ()
     # Self-declared attributes, shown apart from the verified identity.
     confirmed_metadata: Mapping[str, str] = field(default_factory=dict)
+    # What the student typed this turn (None on a panel answer): the task query is the
+    # classifier's normalised rewrite, and a rewrite can lose a word like "không".
+    user_message: str | None = None
     trace: GraphTrace | None = None
     # AI-admin warnings raised while calculating, one per code.
     warnings: list[AdminWarning] = field(default_factory=list)
@@ -240,6 +243,9 @@ async def extract_request(query: str, deps: CalculationDeps) -> Extraction:
             allowed = [*allowed, "previous"]
     if len(allowed) > 1:
         prompt += "\n\n<allowed_formula_ids>" + ", ".join(allowed) + "</allowed_formula_ids>"
+    original = (deps.user_message or "").strip()
+    if original and original != query.strip():
+        prompt += f"\n\n<original_message>{original}</original_message>"
     prompt = append_current_time(prompt)
     try:
         raw = await run_agent_text_with_failover(
@@ -476,6 +482,7 @@ async def _ask_llm(
         history=list(deps.history),
         security=deps.security,
         confirmed_metadata=dict(deps.confirmed_metadata),
+        original_message=deps.user_message,
     )
     try:
         raw = await run_agent_text_with_failover(

@@ -334,6 +334,7 @@ def _calculation_deps(
         history=graph_input.history,
         confirmed_metadata=graph_input.confirmed_metadata,
         trace=trace,
+        user_message=graph_input.user_message if graph_input.resume is None else None,
     )
 
 

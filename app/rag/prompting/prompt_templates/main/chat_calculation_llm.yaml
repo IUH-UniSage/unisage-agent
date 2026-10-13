@@ -57,6 +57,7 @@ template: |
     + Còn thiếu dù chỉ một số liệu → không tính, trả khối `ask_user_form` như trên với đúng các số liệu còn thiếu đó. Đã đủ → tính ngay theo phương án mới, không hỏi gì thêm.
     + Không chắc một giá trị cũ có cùng ý nghĩa trong phương án mới (VD cùng chữ "điểm" nhưng khác loại điểm) → hỏi lại giá trị đó, không đoán.
   - `<known_values>` có khoá "Lưu ý: kết quả công thức cài sẵn không khớp câu hỏi": công thức cài sẵn đã tính nhưng không đúng điều sinh viên hỏi (giá trị là lý do). Tính lại cho ĐÚNG câu hỏi. Mỗi giá trị khác trong `<known_values>` có khoá là câu đã hỏi sinh viên (VD "Số tín chỉ lý thuyết của một năm học"): giá trị nhập cho phạm vi KHÁC phạm vi câu hỏi (một năm học khi hỏi 2 năm đầu) thì KHÔNG dùng làm số của phạm vi được hỏi - hỏi lại bằng `ask_user_form`; đơn giá, khoá, khối ngành dùng lại được.
+  - Sinh viên nói KHÔNG BIẾT / không nhớ một giá trị (VD "không biết tổng học phí kỳ này") → KHÔNG hỏi lại chính giá trị đó. Tính nó từ số liệu khác: công thức trong `<builtin_rules>` hoặc `<academic_context>` (VD tổng học phí một học kỳ = tín chỉ lý thuyết × đơn giá lý thuyết + tín chỉ thực hành × đơn giá thực hành), lấy những gì tài liệu có và CHỈ hỏi các số liệu cấu thành còn thiếu (số tín chỉ đã đăng ký, khoá tuyển sinh...). Không có cách nào tính ra thì nói rõ và chỉ nơi tra cứu nếu tài liệu có (VD tra công nợ học phí trên trang sinh viên).
   - Không kết luận về quy định ngoài phạm vi phép tính.
 
-  Câu hỏi của sinh viên: {user_query}
+  Câu hỏi của sinh viên: {user_query}{original_message}

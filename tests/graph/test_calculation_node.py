@@ -1394,3 +1394,61 @@ async def test_every_llm_call_of_an_advisory_turn_gets_the_current_time(
 
     assert hyde and generation
     assert all("<current_time>" in prompt for prompt in hyde + generation)
+
+
+@pytest.mark.asyncio
+async def test_the_extractor_and_the_llm_see_what_the_student_typed_next_to_the_rewrite() -> None:
+    typed = "tôi khogn biết kì nay tổng bao nhiêu nhưng tôi đã nộp 6 triệu rồi"
+    rewrite = "Tính học phí còn lại phải nộp của học kỳ này, biết tổng học phí và đã nộp 6 triệu"
+    classification: list[str] = []
+    generation: list[str] = []
+    await run_graph(
+        _input(typed),
+        GraphModels(
+            classification=_recording(
+                classification,
+                json.dumps({"tasks": [{"intent": "academic_calculation", "query": rewrite}]}),
+                json.dumps({"formula_id": "llm", "params": {"da_nop": 6000000}}),
+            ),
+            query_transformation=_echo_model(),
+            generation=_recording(generation, "Học phí còn lại cần tính từ số tín chỉ."),
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    _classifier, extractor = classification
+    assert extractor.startswith(rewrite)
+    assert f"<original_message>{typed}</original_message>" in extractor
+    [llm] = generation
+    assert f"Câu hỏi của sinh viên: {rewrite}\nTin nhắn gốc sinh viên gõ" in llm
+    assert llm.rstrip().endswith(typed)
+    assert "KHÔNG hỏi lại chính giá trị đó" in llm
+
+
+@pytest.mark.asyncio
+async def test_a_query_equal_to_the_message_is_not_repeated() -> None:
+    generation: list[str] = []
+    classification: list[str] = []
+    query = "Cuối kỳ cần bao nhiêu để được A+?"
+    await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_recording(
+                classification,
+                json.dumps({"tasks": [{"intent": "academic_calculation", "query": query}]}),
+                json.dumps({"formula_id": "llm", "params": {}}),
+            ),
+            query_transformation=_echo_model(),
+            generation=_recording(generation, "ok"),
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert "<original_message>" not in classification[1]
+    assert "Tin nhắn gốc sinh viên gõ" not in generation[0]

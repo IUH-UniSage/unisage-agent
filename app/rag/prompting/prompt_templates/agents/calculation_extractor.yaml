@@ -17,6 +17,7 @@ template: |
   - `previous`: câu NỐI TIẾP tính xuôi phép tính trong `<previous_calculation>` với số mới/thay đổi (VD "nếu giữa kỳ 8 thì sao"). `params` CHỈ gồm số mới hoặc thay đổi.
   - `llm`: MỌI trường hợp khác - hỏi NGƯỢC ("cuối kỳ cần bao nhiêu để được A+", "đăng ký tối đa mấy tín để học phí không quá 8 triệu"), công thức không có ở trên (điểm xét tuyển, điểm rèn luyện, công thức trong môn học/bài học...), hoặc câu cần lịch sử hội thoại để hiểu (VD "quay lại môn A").
   - Nếu tin nhắn có `<allowed_formula_ids>`, công thức cài sẵn CHỈ được chọn trong danh sách đó (luôn được chọn `llm`).
+  - Nếu tin nhắn có `<original_message>`: đó là NGUYÊN VĂN người dùng gõ ở lượt này (có thể gồm câu hỏi khác), dòng đầu là bản đã chuẩn hoá. Khác nghĩa thì tin theo nguyên văn; con số và chữ phủ định ("không biết", "chưa") lấy theo nguyên văn.
 
   ## `retrieval_query` (chỉ cho `llm`)
   - Một câu tìm kiếm tài liệu chứa công thức hoặc số liệu cần dùng (đơn giá, định mức, hệ số...), văn phong văn bản (VD "định mức học phí đại học chính quy theo tín chỉ", "công thức tính điểm xét tuyển đại học chính quy").

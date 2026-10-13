@@ -188,10 +188,12 @@ def build_calculation_llm_prompt(
     history: Sequence[HistoryMessage],
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
+    original_message: str | None = None,
 ) -> str:
     """`main/chat_calculation_llm.yaml`: a calculation the LLM does itself (target
     questions, formulas from documents, follow-ups) - everything but the forward
-    calculation of the built-in formulas."""
+    calculation of the built-in formulas. `original_message`: what the student typed
+    this turn, shown under the classifier's normalised question when they differ."""
 
     templates = get_templates()
     return templates.chat_calculation_llm.format(
@@ -207,4 +209,15 @@ def build_calculation_llm_prompt(
         history=build_history_section(history),
         current_time=build_current_time_section(),
         user_query=user_query,
+        original_message=_original_message_line(original_message, user_query),
+    )
+
+
+def _original_message_line(original: str | None, query: str) -> str:
+    if not original or original.strip() == query.strip():
+        return ""
+    return (
+        "\nTin nhắn gốc sinh viên gõ ở lượt này (nguyên văn, có thể gồm cả câu hỏi khác; câu "
+        "hỏi ở trên là bản đã chuẩn hoá - khác nghĩa thì tin theo tin nhắn gốc): "
+        f"{original.strip()}"
     )
