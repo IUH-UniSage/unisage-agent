@@ -79,6 +79,7 @@ def build_known_metadata_fields_section() -> str:
     rows = "\n".join(
         f"    | {entry['concept']} | `{entry['field']}` | {entry['description']} |"
         for entry in get_known_metadata_fields()
+        if entry.get("scope", "profile") == "profile"
     )
     return (
         "| Khái niệm (mọi cách diễn đạt tương đương) | Tên field bắt buộc dùng lại | Ghi chú |\n"

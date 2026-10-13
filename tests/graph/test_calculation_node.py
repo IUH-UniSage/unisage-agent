@@ -1202,7 +1202,7 @@ async def test_tuition_prices_come_from_the_fee_schedule_with_a_citation() -> No
             {"tasks": [{"intent": "academic_calculation", "query": query}]},
             {
                 "formula_id": "tuition_semester",
-                "params": {"tc_lt": 15, "tc_th": 4, "khoa_tuyen_sinh": "2025-2026"},
+                "params": {"tc_lt": 15, "tc_th": 4, "khoa_nhap_hoc": "2025-2026"},
                 "retrieval_query": None,
             },
             _PRICES_FOUND,
@@ -1229,7 +1229,7 @@ async def test_tuition_asks_the_intake_first_then_reads_the_prices() -> None:
     extraction = {"formula_id": "tuition_semester", "params": {}, "retrieval_query": None}
     ask_intake = {
         "values": {},
-        "ask": [{"field": "khoa_tuyen_sinh", "options": ["2025-2026", "2024-2025"]}],
+        "ask": [{"field": "khoa_nhap_hoc", "options": ["2025-2026", "2024-2025"]}],
     }
     first = await run_graph(
         _input(query),
@@ -1241,8 +1241,8 @@ async def test_tuition_asks_the_intake_first_then_reads_the_prices() -> None:
 
     assert first.pending_round is not None
     questions = {q.field: q for q in first.pending_round.panel.questions}
-    assert list(questions) == ["khoa_tuyen_sinh", "tc_lt", "tc_th"]
-    intake = questions["khoa_tuyen_sinh"]
+    assert list(questions) == ["khoa_nhap_hoc", "tc_lt", "tc_th"]
+    intake = questions["khoa_nhap_hoc"]
     submit = ClarificationSubmit(
         action="submit",
         panel_id=first.pending_round.panel.panel_id,

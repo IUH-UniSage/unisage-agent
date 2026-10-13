@@ -73,14 +73,14 @@ async def test_unit_prices_are_read_from_the_fee_schedule() -> None:
         "ask": [],
     }
     deps, prompts = _deps(answer, [_FEES])
-    known = {"tc_lt": 15, "tc_th": 4, "khoa_tuyen_sinh": "2025-2026"}
+    known = {"tc_lt": 15, "tc_th": 4, "khoa_nhap_hoc": "2025-2026"}
 
     found = await fill_from_documents("tuition_semester", "học phí kỳ này", known, deps)
 
     assert found.values == {"don_gia_lt": 980000, "don_gia_th": 1600000}
     assert found.sources["don_gia_th"] is _FEES
     assert found.questions == []
-    assert "khoa_tuyen_sinh: 2025-2026" in prompts[0]
+    assert "khoa_nhap_hoc: 2025-2026" in prompts[0]
     assert "don_gia_lt: Đơn giá 1 tín chỉ lý thuyết" in prompts[0]
     assert "tc_lt" not in prompts[0].split("<wanted>")[1].split("</wanted>")[0]
 
@@ -105,7 +105,7 @@ async def test_several_intakes_ask_which_one_first() -> None:
     answer = {
         "values": {},
         "ask": [
-            {"field": "khoa_tuyen_sinh", "options": ["2025-2026", "2024-2025", "2025-2026"]},
+            {"field": "khoa_nhap_hoc", "options": ["2025-2026", "2024-2025", "2025-2026"]},
             {"field": "khoi_nganh", "options": ["Khối Công nghệ"]},
             {"field": "don_gia_lt", "options": ["1", "2"]},
         ],
@@ -115,7 +115,7 @@ async def test_several_intakes_ask_which_one_first() -> None:
     found = await fill_from_documents("tuition_program", "học phí cả khoá", {}, deps)
 
     choice, text = found.questions
-    assert choice["field"] == "khoa_tuyen_sinh" and choice["kind"] == "choice"
+    assert choice["field"] == "khoa_nhap_hoc" and choice["kind"] == "choice"
     assert [option["label"] for option in choice["options"]] == ["2025-2026", "2024-2025"]
     assert text["field"] == "khoi_nganh" and text["kind"] == "text"
 

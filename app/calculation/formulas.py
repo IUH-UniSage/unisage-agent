@@ -835,7 +835,7 @@ def _credit_spec(name: str, label: str, tab_label: str) -> ParamSpec:
 def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
     """Theory and practice credits are always two separate questions. Credits of a whole
     programme come from its curriculum document; those of a semester or a year are the
-    student's own. The unit prices come from the fee schedule. `khoa_tuyen_sinh` and
+    student's own. The unit prices come from the fee schedule. `khoa_nhap_hoc` and
     `khoi_nganh` are not computed with: they pick the fee schedule row, and are asked
     only when the documents hold several rows. `pham_vi` is never asked nor computed
     with: it only names the period in the labels and the title."""
@@ -884,9 +884,9 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
     ]
     context = [
         ParamSpec(
-            name="khoa_tuyen_sinh",
-            label="Khoá tuyển sinh của bạn (VD 2025-2026)",
-            tab_label="Khoá tuyển sinh",
+            name="khoa_nhap_hoc",
+            label="Bạn nhập học năm nào (VD 2025)",
+            tab_label="Năm nhập học",
             kind="text",
             required=_never,
         ),

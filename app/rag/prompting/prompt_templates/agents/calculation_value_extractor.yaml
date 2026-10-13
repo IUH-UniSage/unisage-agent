@@ -6,12 +6,12 @@ template: |
 
   ## Đầu vào
   - `<question>`: câu hỏi của sinh viên.
-  - `<known>`: những gì đã biết về sinh viên (khoá tuyển sinh, khối ngành, ngành, hệ...). Có thể trống.
+  - `<known>`: những gì đã biết về sinh viên (khoá nhập học, khối ngành, ngành, hệ...). Có thể trống. `khoa_nhap_hoc` là NĂM nhập học: `khoa_nhap_hoc: 2025` = khoá tuyển sinh năm học 2025-2026.
   - `<wanted>`: các số liệu cần tìm, mỗi dòng `tên: mô tả`.
   - `<documents>`: các đoạn tài liệu, mỗi đoạn mở đầu bằng `[n]`.
 
   ## Đầu ra (chỉ JSON, không giải thích)
-  {"values": {"<tên>": {"value": <số nguyên>, "chunk": <n>}}, "ask": [{"field": "<khoa_tuyen_sinh hoặc khoi_nganh>", "options": ["<lựa chọn>", "..."]}]}
+  {"values": {"<tên>": {"value": <số nguyên>, "chunk": <n>}}, "ask": [{"field": "<khoa_nhap_hoc hoặc khoi_nganh>", "options": ["<lựa chọn>", "..."]}]}
 
   ## Quy tắc
   - CHỈ ghi một số liệu khi đoạn `[n]` ghi rõ con số đó cho ĐÚNG trường hợp của sinh viên: đúng bậc/hệ (mặc định đại học chính quy), đúng cơ sở (mặc định trụ sở chính), đúng khoá tuyển sinh, đúng khối/ngành. `value` là số nguyên, chép đúng con số trong đoạn (VD "980.000" → 980000). `chunk` là số `n` của đoạn chứa con số đó.
@@ -26,8 +26,8 @@ template: |
   <known>(trống)</known>
   <wanted>don_gia_lt: Đơn giá 1 tín chỉ lý thuyết (đồng); don_gia_th: Đơn giá 1 tín chỉ thực hành (đồng)</wanted>
   Đoạn [1] có biểu phí đại học chính quy khoá 2025-2026, 2024-2025, 2023-2024, mỗi khoá tách Khối Kinh tế / Khối Công nghệ.
-  {"values": {}, "ask": [{"field": "khoa_tuyen_sinh", "options": ["2025-2026", "2024-2025", "2023-2024"]}, {"field": "khoi_nganh", "options": ["Khối Kinh tế", "Khối Công nghệ"]}]}
+  {"values": {}, "ask": [{"field": "khoa_nhap_hoc", "options": ["2025-2026", "2024-2025", "2023-2024"]}, {"field": "khoi_nganh", "options": ["Khối Kinh tế", "Khối Công nghệ"]}]}
 
-  <known>khoa_tuyen_sinh: 2025-2026; khoi_nganh: Khối Công nghệ</known>
+  <known>khoa_nhap_hoc: 2025; khoi_nganh: Khối Công nghệ</known>
   Đoạn [1] ghi "Khóa tuyển sinh năm học 2025-2026 ... Khối Công nghệ: Môn lý thuyết 980.000 | Môn thực hành 1.600.000".
   {"values": {"don_gia_lt": {"value": 980000, "chunk": 1}, "don_gia_th": {"value": 1600000, "chunk": 1}}, "ask": []}
