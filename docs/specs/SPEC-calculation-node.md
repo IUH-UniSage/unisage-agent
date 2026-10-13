@@ -384,7 +384,16 @@ extractor, LLM tự tính, review) nhận cùng khối `common/current_time.yaml
 hiện tại từ `app/core/academic_calendar.py` (lịch dự kiến chung 2026-2027: HK I 07/09 - nửa đầu 01,
 HK II nửa cuối 02 - cuối 05, HK III đầu 06 - giữa 07; ngày rơi vào kỳ nghỉ ghi "đang nghỉ, học kỳ tới").
 Lịch khác theo khoa nên câu trả lời dựa vào học kỳ phải kèm một câu lưu ý để sinh viên tự xác nhận;
-"kỳ thứ N" của khoá học không được quy đổi sang học kỳ năm học khi chưa biết khoá. Khối thay cho
+"kỳ thứ N" của khoá học không được quy đổi sang học kỳ năm học khi chưa biết khoá.
+
+Học kỳ của riêng sinh viên (dòng thứ ba của khối): mỗi năm học 2 học kỳ chính đánh số liên tục từ năm
+nhập học, học kỳ hè không đánh số (4 năm = 8, 4,5 năm = 9): HK I → `2 × (năm đầu của năm học − năm nhập
+học) + 1`, HK II → `+ 2`; kỳ hè ghi "học kỳ hè sau học kỳ N", kỳ nghỉ ghi học kỳ tới. Khoá IUH: khóa N =
+nhập học năm 2004+N. Nguồn là `confirmed_metadata["khoa_nhap_hoc"]` (năm 4 chữ số). Chưa có thì khối kèm
+bảng tra năm nhập học → học kỳ và dặn hỏi MỘT câu `choice` field `khoa_nhap_hoc` (`id` = năm, `label`
+"Nhập học 2022 (đang học kỳ 9)", cho tự gõ). Câu trả lời (form advisory hay calculation) được lưu vào
+`confirmed_metadata` dưới dạng năm (`parse_intake_year`: năm, "K20", "kỳ 9" quy đổi tại thời điểm trả lời)
+và lượt resume dùng ngay. Khối thay cho
 `<current_date>` cũ của node 10. Review không được viết số của khối này (kiểm tra số mục 3.2 vẫn chặt).
 
 ## Commands
