@@ -60,6 +60,10 @@ TaskOutcome = (
 - Công thức cài sẵn **chỉ khi tính xuôi** đúng công thức đó (kể cả chưa đủ số). `previous`: tính xuôi lại
   phép tính trong `<previous_calculation>` với số mới. `llm`: mọi trường hợp khác, kèm `retrieval_query`
   (câu tìm tài liệu chứa công thức) hoặc `null` khi chỉ cần công thức cài sẵn (VD hỏi ngược điểm cuối kỳ).
+- Tin nhắn gửi extractor: `query` (bản classifier đã chuẩn hoá), `<original_message>` (nguyên văn người
+  dùng gõ ở lượt này, chỉ khi khác `query`; lượt submit panel không có) và `<current_time>`. Hai bản khác
+  nghĩa thì tin nguyên văn; số và chữ phủ định lấy theo nguyên văn (13-10-2026: classifier từng viết
+  "không biết tổng" thành "biết tổng").
 - Chỉ trích những số **người dùng đã nói**. Prompt liệt kê các công thức cài sẵn từ `ParamSpec`. Câu học phí (kỳ / năm / cả khoá) đi vào `tuition_*`, không còn qua `llm`; câu hỏi ngược về học phí vẫn là `llm`.
 - Học phí: `pham_vi` = cụm phạm vi nguyên văn trong câu ("2 năm đầu", "học kỳ 1 năm 2"); bỏ khi người
   dùng không nói hoặc chỉ nói đúng phạm vi mặc định. Nhiều năm nhưng chưa phải cả khoá ("2 năm đầu") →
@@ -101,12 +105,15 @@ Không có tham số `lookup` nào còn thiếu thì không tìm Qdrant, không 
 
 - Input: `<builtin_rules>` (`describe_builtin_rules()`: trọng số, mọi bước làm tròn, bảng quy đổi - lấy từ
   hằng số trong `formulas.py`), `<academic_context>` (≤ 5 chunk đã qua `build_access_filter`, đánh số `[1]..`,
-  trích dẫn theo `common/citation_rules.yaml`),
+  trích dẫn theo `common/citation_rules.yaml`), `<current_time>` (ngày + học kỳ hiện tại theo lịch dự kiến,
+  `common/current_time.yaml`), và dưới câu hỏi một dòng tin nhắn gốc của sinh viên khi khác `query`,
   `<known_values>` (số đã biết + câu trả lời panel), lịch sử chat gần đây, câu hỏi.
 - Gọi **không stream** (`CHAT_CALC_LLM_TIMEOUT_SECONDS`, mặc định 60 s) để tách khối `ask_user_form` bằng
   `FenceRedactor` trước khi hiện. Trình bày: công thức (kèm `[n]` nếu từ tài liệu), thay số, kết quả;
   câu hỏi ngược phải kiểm tra bằng giá trị tìm được và giá trị liền kề.
 - Không có công thức trong tài liệu → LLM nói rõ, không tự nghĩ công thức.
+- Sinh viên nói **không biết** một giá trị → không hỏi lại giá trị đó; LLM tính nó từ số liệu khác (VD tổng
+  học phí kỳ = tín chỉ × đơn giá theo tài liệu) và chỉ hỏi các số liệu cấu thành còn thiếu.
 - Thiếu số / nhiều trường hợp → khối `ask_user_form` (`number`, `number_list`, `choice`, `text`) →
   `llm_questions` dựng câu hỏi panel (field bỏ dấu bằng `slug`; field đã có trong known hoặc trùng thì bỏ
   - chống hỏi vòng); câu dẫn của LLM hiện phía trên panel. Số liệu phụ thuộc một lựa chọn (phương thức,
@@ -363,8 +370,22 @@ Nguyên tắc: **câu trả lời cho câu hỏi của bot không bao giờ đư
 2. Câu gõ tự do sau một phép tính: classifier nhận `<previous_calculation_turn>` (tên phép tính trong
    `last_calculation`) - tín hiệu có cấu trúc thay vì đoán từ lịch sử chat.
 3. Quy tắc 1c trong `message_classification.yaml`: câu bổ sung dữ kiện/đổi số/hỏi ngược về phép tính
-   trước giữ `academic_calculation`, `query` viết lại thành câu đầy đủ (bước tính chỉ đọc `query`);
-   câu hỏi quy định mới vẫn là advisory. Test giữ quy tắc và ví dụ trong prompt.
+   trước giữ `academic_calculation`, `query` gộp yêu cầu tính ban đầu với dữ kiện mới; câu hỏi quy định
+   mới vẫn là advisory. Test giữ quy tắc và ví dụ trong prompt.
+4. Mục "Cách viết `query`" (13-10-2026) áp dụng cho mọi task: giữ nguyên từ ngữ, con số và mọi chữ phủ
+   định/điều kiện; sửa lỗi chính tả, viết tắt khi chắc nghĩa; chỉ thêm ngữ cảnh lịch sử khi tin nhắn
+   không đứng riêng được; chuyển ý định thì không kéo ngữ cảnh cũ; "kỳ này" giữ nguyên, không thay bằng
+   học kỳ tự suy.
+
+## Thời gian hiện tại (`<current_time>`, 13-10-2026)
+
+Mọi luồng chat (classifier, HyDE, decomposer, node 10 hai khung, ticket fallback, extractor, value
+extractor, LLM tự tính, review) nhận cùng khối `common/current_time.yaml`: ngày hôm nay (ICT) và học kỳ
+hiện tại từ `app/core/academic_calendar.py` (lịch dự kiến chung 2026-2027: HK I 07/09 - nửa đầu 01,
+HK II nửa cuối 02 - cuối 05, HK III đầu 06 - giữa 07; ngày rơi vào kỳ nghỉ ghi "đang nghỉ, học kỳ tới").
+Lịch khác theo khoa nên câu trả lời dựa vào học kỳ phải kèm một câu lưu ý để sinh viên tự xác nhận;
+"kỳ thứ N" của khoá học không được quy đổi sang học kỳ năm học khi chưa biết khoá. Khối thay cho
+`<current_date>` cũ của node 10. Review không được viết số của khối này (kiểm tra số mục 3.2 vẫn chặt).
 
 ## Commands
 
