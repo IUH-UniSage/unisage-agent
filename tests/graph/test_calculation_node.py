@@ -821,3 +821,60 @@ async def test_qdrant_is_searched_with_the_question_before_asking_the_user() -> 
     assert "<academic_context>" in prompts[1]
     assert result.pending_round is None  # answered from the document, no form
     assert "12 tín chỉ" in result.response_text
+
+
+@pytest.mark.asyncio
+async def test_calculation_documents_are_filtered_like_the_advisory_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A master's fee note shares keywords with an undergraduate fee question: the LLM
+    rerank drops it, the score threshold drops weak matches, and the prompt carries the
+    programme/level rules."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.70)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", True)
+    query = "Tính học phí cho ngành Công nghệ thông tin"
+    master = RetrievedChunk(
+        chunk_id="ths:52",
+        content="Học phí thạc sĩ đóng theo học kỳ, căn cứ số học phần đăng ký",
+        source="Thạc sĩ Tài chính ngân hàng.pdf",
+        score=0.85,
+    )
+    undergrad = RetrievedChunk(
+        chunk_id="hp:1",
+        content="Đại học chính quy khóa 2025, Khối Công nghệ: 850.000 đồng/tín chỉ",
+        source="Biểu học phí.pdf",
+        score=0.8,
+        heading_path=["Đại học chính quy"],
+    )
+    weak = RetrievedChunk(chunk_id="x:1", content="Lịch thi", source="Lịch.pdf", score=0.5)
+    rerank, rerank_prompts = _recording_model({"SQ1": {"C2": "học phí ĐHCQ Khối Công nghệ"}})
+    generation, prompts = _recording_model("Đơn giá 850.000 đồng/tín chỉ [1].")
+    retrieval = _RecordingRetrieval([weak, master, undergrad])
+    await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {
+                    "formula_id": "llm",
+                    "params": {},
+                    "retrieval_query": "định mức học phí ngành Công nghệ thông tin",
+                },
+            ),
+            query_transformation=_echo_model(),
+            generation=generation,
+            retrieval=retrieval,
+            rerank=rerank,
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert retrieval.queries == ["định mức học phí ngành Công nghệ thông tin"]
+    assert query in rerank_prompts[0] and "Lịch thi" not in rerank_prompts[0]
+    [prompt] = prompts
+    assert "850.000 đồng/tín chỉ" in prompt and "mục: Đại học chính quy" in prompt
+    assert "Học phí thạc sĩ" not in prompt
+    assert "PHÂN BIỆT BẬC/HỆ ĐÀO TẠO" in prompt

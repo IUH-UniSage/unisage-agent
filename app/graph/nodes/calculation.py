@@ -38,6 +38,8 @@ from app.calculation.result import CalculationInputError, CalculationResult
 from app.core.config import settings
 from app.graph.clarification_round import slug
 from app.graph.fence_redactor import FenceRedactor
+from app.graph.nodes.llm_rerank import build_llm_rerank_agent, llm_rerank
+from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.graph.streaming import (
     AttemptRecorder,
@@ -49,7 +51,7 @@ from app.graph.streaming import (
 )
 from app.graph.streaming_state import GraphModels
 from app.rag.prompting import build_calculation_llm_prompt, get_templates
-from app.rag.prompting.citations import cited_indexes
+from app.rag.prompting.citations import cited_indexes, source_title
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import CalculationPlan, LastCalculation
 from app.schemas.retrieval import RetrievedChunk
@@ -297,7 +299,9 @@ def build_calculation_llm_agent(model: Model | str) -> Agent[None, str]:
 
 def _documents(chunks: Sequence[RetrievedChunk]) -> str:
     return "\n\n".join(
-        f"[{index}] (nguồn: {chunk.source})\n{chunk.content}"
+        f"[{index}] (nguồn: {chunk.source}"
+        + (f"; mục: {' > '.join(chunk.heading_path)}" if chunk.heading_path else "")
+        + f")\n{chunk.content}"
         for index, chunk in enumerate(chunks, start=1)
     )
 
@@ -373,10 +377,16 @@ def _cited(text: str, chunks: Sequence[RetrievedChunk]) -> list[tuple[int, Retri
 
 
 async def _search(
-    queries: Sequence[str], deps: CalculationDeps, *, also: Sequence[RetrievedChunk] = ()
+    question: str,
+    queries: Sequence[str],
+    deps: CalculationDeps,
+    *,
+    also: Sequence[RetrievedChunk] = (),
 ) -> list[RetrievedChunk]:
-    """Best `LLM_CHUNKS_LIMIT` chunks over `queries` plus `also` (chunks already found), by
-    score; a chunk found twice counts once."""
+    """Best `LLM_CHUNKS_LIMIT` chunks over `queries` plus `also` (chunks already found),
+    filtered like the advisory flow: the score threshold, then the LLM rerank judged
+    against `question`, which drops a document of another programme or level that
+    only shares keywords (a master's fee note for an undergraduate question)."""
 
     per_query = await retrieve_chunks(list(queries), deps.models.retrieval, deps.security)
     best: dict[str, RetrievedChunk] = {}
@@ -385,7 +395,28 @@ async def _search(
             kept = best.get(chunk.chunk_id)
             if kept is None or chunk.score > kept.score:
                 best[chunk.chunk_id] = chunk
-    return sorted(best.values(), key=lambda chunk: chunk.score, reverse=True)[:LLM_CHUNKS_LIMIT]
+    result = rerank_chunks([list(best.values())])
+    models = deps.models
+    if settings.CHAT_LLM_RERANK_ENABLED and result.has_valid_context and models.rerank is not None:
+        outcome = await llm_rerank(
+            build_llm_rerank_agent(models.rerank),
+            [question],
+            result,
+            credential=models.rerank_credential,
+            purpose=models.rerank_purpose,
+            snapshot_version=models.snapshot_version,
+            on_attempt=deps.on_attempt,
+            budget=deps.budget,
+        )
+        result = outcome.result
+    chunks = result.chunks[:LLM_CHUNKS_LIMIT]
+    logger.info(
+        "calculation.retrieval queries=%r found=%d kept=[%s]",
+        list(queries),
+        len(best),
+        "; ".join(f"{source_title(chunk.source)} ({chunk.score:.2f})" for chunk in chunks),
+    )
+    return chunks
 
 
 async def _ask_llm(
@@ -446,11 +477,11 @@ async def llm_outcome(
 
     if not settings.CHAT_CALC_LLM_ENABLED:
         return Unresolved(task_id, "llm_disabled")
-    chunks = await _search([plan.retrieval_query], deps) if plan.retrieval_query else []
+    chunks = await _search(query, [plan.retrieval_query], deps) if plan.retrieval_query else []
     outcome = await _ask_llm(task_id, query, plan, known, chunks, deps)
     if not isinstance(outcome, NeedsInput) or plan.retrieval_query == query:
         return outcome
-    more = await _search([query], deps, also=chunks)
+    more = await _search(query, [query], deps, also=chunks)
     if {chunk.chunk_id for chunk in more} <= {chunk.chunk_id for chunk in chunks}:
         return outcome  # nothing new to show the LLM
     return await _ask_llm(task_id, query, plan, known, more, deps)
