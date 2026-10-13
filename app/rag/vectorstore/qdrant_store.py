@@ -1,6 +1,7 @@
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from qdrant_client import QdrantClient, models
 
@@ -14,6 +15,13 @@ _VECTOR_NAMES = ("content_vector", "summary_vector", "questions_vector")
 
 # Grants its access_level in every department (same meaning as in app/api/deps.py).
 WILDCARD_DEPARTMENT_ID = "*"
+
+
+def chunk_point_id(chunk_id: str) -> str:
+    """The Qdrant point id ingestion gives the chunk `chunk_id` (see `embed_chunks` in
+    app/worker/tasks/ingestion.py, which builds the same uuid5)."""
+
+    return str(uuid5(NAMESPACE_URL, chunk_id))
 
 
 def get_client() -> QdrantClient:
@@ -225,6 +233,36 @@ def search_chunks_batch(
         ranked = sorted(best_by_id.values(), key=lambda point: point.score, reverse=True)
         results.append(ranked[:limit])
     return results
+
+
+def fetch_chunks_by_ids(
+    client: QdrantClient,
+    chunk_ids: Sequence[str],
+    query_filter: models.Filter | None = None,
+) -> list[models.Record]:
+    """The points of `chunk_ids` (payload only), looked up by point id - no embedding
+    and no vector search - with `query_filter` (the caller's permissions) still applied.
+    In `chunk_ids` order; a chunk no longer indexed or no longer visible is missing."""
+
+    if not chunk_ids or not client.collection_exists(settings.QDRANT_COLLECTION):
+        return []
+    must: list[models.Condition] = [
+        models.HasIdCondition(has_id=[chunk_point_id(chunk_id) for chunk_id in chunk_ids])
+    ]
+    if query_filter is not None:
+        must.append(query_filter)
+    records, _ = client.scroll(
+        collection_name=settings.QDRANT_COLLECTION,
+        scroll_filter=models.Filter(must=must),
+        limit=len(chunk_ids),
+        with_payload=True,
+        with_vectors=False,
+    )
+    order = {chunk_id: index for index, chunk_id in enumerate(chunk_ids)}
+    return sorted(
+        records,
+        key=lambda record: order.get(str((record.payload or {}).get("chunk_id")), len(order)),
+    )
 
 
 def scroll_chunks_by_document(client: QdrantClient, document_id: str) -> list[models.Record]:

@@ -183,6 +183,19 @@ class RetrieveManyMixin:
         retrieve = self.retrieve  # type: ignore[attr-defined]
         return [retrieve(query, security=security, limit=limit) for query in queries]
 
+    def fetch(
+        self,
+        chunk_ids: list[str],
+        *,
+        security: AcademicSecurityContext,
+    ) -> list[RetrievedChunk]:
+        """The fake's own `chunks` with these ids, in `chunk_ids` order."""
+
+        del security
+        chunks: list[RetrievedChunk] = getattr(self, "chunks", [])
+        by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        return [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
+
 
 @dataclass(frozen=True)
 class FakeRetrievalService(RetrieveManyMixin):

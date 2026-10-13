@@ -144,6 +144,9 @@ class CalculationPlan(_Strict):
         "llm",
     ]
     retrieval_query: str | None = Field(default=None, max_length=500)
+    # `llm` only: the documents the LLM saw when it asked, reused on resume by id - no
+    # second search + rerank for the same question.
+    chunk_ids: list[str] | None = Field(default=None, max_length=20)
 
     @model_validator(mode="after")
     def _query_only_for_llm(self) -> "CalculationPlan":

@@ -12,6 +12,7 @@ Two ways to compute (docs/specs/SPEC-calculation-node.md):
   needs numbers it returns an ask_user_form block, asked on the panel.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -526,6 +527,26 @@ async def _search(
     return chunks
 
 
+async def _fetch(chunk_ids: Sequence[str], deps: CalculationDeps) -> list[RetrievedChunk]:
+    """The documents an earlier turn's LLM saw, by id (no search, no rerank); empty
+    when they are gone, no longer visible or Qdrant fails - the caller searches again."""
+
+    try:
+        chunks = await asyncio.to_thread(
+            deps.models.retrieval.fetch, list(chunk_ids), security=deps.security
+        )
+    except Exception:
+        logger.warning("calculation.fetch_failed chunk_ids=%s", list(chunk_ids), exc_info=True)
+        return []
+    logger.info(
+        "calculation.retrieval reused=%d/%d kept=[%s]",
+        len(chunks),
+        len(chunk_ids),
+        "; ".join(source_title(chunk.source) for chunk in chunks),
+    )
+    return chunks
+
+
 def _form_fields(forms: Sequence[Mapping[str, Any]]) -> set[str]:
     """Registry names of every field the LLM's ask_user_form blocks ask for."""
 
@@ -652,7 +673,9 @@ async def _ask_llm(
         if handed is not None:
             return handed
     if questions:
-        return NeedsInput(task_id, plan, dict(known), questions, lead=text or None)
+        # The documents behind this form are reused on resume instead of searched again.
+        asked = plan.model_copy(update={"chunk_ids": [c.chunk_id for c in chunks] or None})
+        return NeedsInput(task_id, asked, dict(known), questions, lead=text or None)
     if forms:
         # The LLM asked instead of computing, but every field was malformed or already
         # known: no panel, and its text is no result - never shown as "AI tự tính".
@@ -681,14 +704,18 @@ async def llm_outcome(
     having seen any document (a short chat-style question often gets no `retrieval_query`),
     search with the question itself and ask again. Only if numbers are still missing does
     the panel go to the user. A call that already had the `retrieval_query` documents is
-    not repeated - a second search + rerank + LLM call cost ~14 s for the same form."""
+    not repeated - a second search + rerank + LLM call cost ~14 s for the same form.
+
+    On resume the documents the LLM saw when it asked (`plan.chunk_ids`) are fetched by
+    id instead of searched and reranked again; only when none is left is it searched."""
 
     if not settings.CHAT_CALC_LLM_ENABLED:
         return Unresolved(task_id, "llm_disabled")
-    searched = bool(plan.retrieval_query)
-    chunks = await _search(query, [plan.retrieval_query], deps) if plan.retrieval_query else []
+    chunks = await _fetch(plan.chunk_ids, deps) if plan.chunk_ids else []
+    if not chunks and plan.retrieval_query:
+        chunks = await _search(query, [plan.retrieval_query], deps)
     outcome = await _ask_llm(task_id, query, plan, known, chunks, deps)
-    if searched or not isinstance(outcome, NeedsInput):
+    if plan.retrieval_query or plan.chunk_ids or not isinstance(outcome, NeedsInput):
         return outcome
     more = await _search(query, [query], deps, also=chunks)
     if {chunk.chunk_id for chunk in more} <= {chunk.chunk_id for chunk in chunks}:

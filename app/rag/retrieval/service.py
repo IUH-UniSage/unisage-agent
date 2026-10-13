@@ -2,12 +2,13 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import ScoredPoint
+from qdrant_client.http.models import Record, ScoredPoint
 
 from app.core.config import settings
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
 from app.rag.vectorstore.qdrant_store import (
     build_access_filter,
+    fetch_chunks_by_ids,
     get_client,
     search_chunks_batch,
 )
@@ -36,6 +37,13 @@ class RetrievalServiceProtocol(Protocol):
         security: AcademicSecurityContext,
         limit: int | None = None,
     ) -> list[list[RetrievedChunk]]: ...
+
+    def fetch(
+        self,
+        chunk_ids: list[str],
+        *,
+        security: AcademicSecurityContext,
+    ) -> list[RetrievedChunk]: ...
 
 
 @dataclass(frozen=True)
@@ -80,10 +88,27 @@ class RetrievalService:
             limits=[effective_limit] * len(queries),
             query_filter=build_access_filter(security),
         )
-        return [[_to_retrieved_chunk(point) for point in points] for points in per_query_points]
+        return [
+            [_to_retrieved_chunk(point, point.score) for point in points]
+            for points in per_query_points
+        ]
+
+    def fetch(
+        self,
+        chunk_ids: list[str],
+        *,
+        security: AcademicSecurityContext,
+    ) -> list[RetrievedChunk]:
+        """Chunks picked on an earlier turn, by id: no embedding, no search, no rerank.
+        Still filtered by the caller's permissions; ones gone or no longer visible are
+        missing. They were kept by that turn's rerank, so they score 1."""
+
+        client = self.client or get_client()
+        records = fetch_chunks_by_ids(client, chunk_ids, build_access_filter(security))
+        return [_to_retrieved_chunk(record, 1.0) for record in records]
 
 
-def _to_retrieved_chunk(point: ScoredPoint) -> RetrievedChunk:
+def _to_retrieved_chunk(point: ScoredPoint | Record, score: float) -> RetrievedChunk:
     payload: dict[str, Any] = point.payload or {}
     raw_locator = payload.get("source_locator")
     source_locator = SourceLocator.model_validate(raw_locator) if raw_locator else None
@@ -91,7 +116,7 @@ def _to_retrieved_chunk(point: ScoredPoint) -> RetrievedChunk:
         chunk_id=str(payload.get("chunk_id", point.id)),
         content=str(payload.get("content", "")),
         source=str(payload.get("object_key") or payload.get("document_id") or ""),
-        score=max(0.0, min(1.0, point.score)),
+        score=max(0.0, min(1.0, score)),
         heading_path=list(payload.get("heading_path") or []),
         page_start=payload.get("page_start"),
         page_end=payload.get("page_end"),

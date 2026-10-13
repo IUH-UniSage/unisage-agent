@@ -1287,6 +1287,85 @@ async def test_a_form_asking_only_known_values_is_unresolved_not_an_ai_result() 
     assert item["status"] == "unresolved"  # no Đúng/Sai buttons
 
 
+async def _asked_for_a_price(retrieval: _RecordingRetrieval) -> GraphOutput:
+    query = "học phí 20 tín bao nhiêu"
+    ask = (
+        "Mình cần đơn giá một tín chỉ.\n\n```json\n"
+        + json.dumps(
+            {
+                "type": "ask_user_form",
+                "fields": [{"field": "don_gia", "label": "Đơn giá (đồng)", "kind": "number"}],
+            },
+            ensure_ascii=False,
+        )
+        + "\n```"
+    )
+    return await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "llm", "params": {}, "retrieval_query": "công thức học phí"},
+            ),
+            query_transformation=_echo_model(),
+            generation=_note_model(ask),
+            retrieval=retrieval,
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+
+def _price_answer(first: GraphOutput) -> ResumeInput:
+    assert first.pending_round is not None
+    [question] = first.pending_round.panel.questions
+    submit = ClarificationSubmit(
+        action="submit",
+        panel_id=first.pending_round.panel.panel_id,
+        answers=[Answer(question_id=question.id, number=Decimal(420000))],
+    )
+    return ResumeInput(
+        pending_round=first.pending_round,
+        answers=validate_answers(first.pending_round.panel, submit),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("indexed", "searched"),
+    [
+        ([_CHUNK], []),  # still indexed: fetched by id, no search and no rerank
+        ([], ["công thức học phí"]),  # gone since: searched with the retrieval_query again
+    ],
+)
+async def test_resume_reuses_the_documents_the_llm_saw_when_it_asked(
+    indexed: list[RetrievedChunk], searched: list[str]
+) -> None:
+    first = await _asked_for_a_price(_RecordingRetrieval([_CHUNK]))
+    assert first.pending_round is not None
+    [task] = first.pending_round.tasks
+    assert isinstance(task, PendingCalculationTask)
+    assert task.plan.chunk_ids == [_CHUNK.chunk_id]
+
+    retrieval = _RecordingRetrieval(indexed)
+    generation, prompts = _recording_model(f"Học phí = 20 {TIMES} 420.000 = **8.400.000đ** [1]")
+    await run_graph(
+        _input("Đơn giá 420000", resume=_price_answer(first)),
+        GraphModels(
+            classification=_scripted(),
+            query_transformation=_echo_model(),
+            generation=generation,
+            retrieval=retrieval,
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert retrieval.queries == searched
+    assert (_CHUNK.content in prompts[0]) == bool(indexed)
+
+
 def test_llm_questions_accepts_the_models_small_format_slips() -> None:
     form = {
         "type": "ask_user_form",
