@@ -792,8 +792,8 @@ async def resume_calculation_task(
 # Fixed sentences for a task that cannot be calculated (rendered by Python, no LLM).
 UNRESOLVED_MESSAGES: dict[UnresolvedReason, str] = {
     "llm_disabled": (
-        "Hiện mình chỉ tự tính được GPA, điểm tổng kết học phần và quy đổi điểm. Bạn có thể "
-        "liên hệ Phòng Đào tạo hoặc giảng viên phụ trách để được hướng dẫn nhé."
+        "Hiện mình chỉ tự tính được GPA, điểm tổng kết học phần, quy đổi điểm và học phí. "
+        "Bạn có thể liên hệ Phòng Đào tạo hoặc giảng viên phụ trách để được hướng dẫn nhé."
     ),
     "llm_failed": "Mình chưa tính được câu này lúc này, bạn thử hỏi lại sau ít phút giúp mình nhé.",
 }
