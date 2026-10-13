@@ -169,7 +169,7 @@ class Extraction:
     retrieval_query: str | None
 
 
-def _load_json_object(raw: str) -> dict[str, Any] | None:
+def load_json_object(raw: str) -> dict[str, Any] | None:
     text = raw.strip().strip("`").strip()
     if text.lower().startswith("json"):
         text = text[4:]
@@ -197,7 +197,7 @@ def parse_extraction(
     built-in formula matched by the rule-based router wins (even over unreadable
     output), and unreadable output without one goes to the LLM."""
 
-    data = _load_json_object(raw) or {}
+    data = load_json_object(raw) or {}
     formula_id = data.get("formula_id")
     raw_params = data.get("params")
     params: dict[str, JsonValue] = dict(raw_params) if isinstance(raw_params, dict) else {}
@@ -656,7 +656,7 @@ async def fill_from_documents(
         logger.warning("calculation.value_extractor_failed", exc_info=True)
         return DocumentValues()
 
-    data = _load_json_object(raw) or {}
+    data = load_json_object(raw) or {}
     wanted_names = {spec.name for spec in wanted}
     values: dict[str, JsonValue] = {}
     sources: dict[str, RetrievedChunk] = {}

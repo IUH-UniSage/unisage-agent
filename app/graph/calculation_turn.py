@@ -1,7 +1,8 @@
 """The calculation part of a turn, between the node and the graph: what is shown
 (a built-in result rendered by Python, or the LLM's own calculation under the "AI
-tự tính" notice), the short note after a built-in calculation-only turn (checked
-against the numbers actually computed), and the trace.
+tự tính" notice), the review of a built-in calculation-only turn (does the result
+answer what was asked, and the opening answer - checked against the numbers Python
+showed), and the trace.
 
 Spec: docs/specs/SPEC-calculation-node.md §3 and §7.
 """
@@ -31,9 +32,10 @@ from app.graph.nodes.calculation import (
     NeedsInput,
     TaskOutcome,
     Unresolved,
+    load_json_object,
 )
 from app.graph.streaming import generation_model_settings, run_agent_text_with_failover
-from app.rag.prompting import build_calculation_commentary_prompt, get_templates
+from app.rag.prompting import build_calculation_review_prompt, get_templates
 from app.rag.prompting.citations import chunk_citation, renumber_markers
 from app.schemas.clarification import PendingCalculationTask
 from app.schemas.retrieval import RetrievedChunk
@@ -42,11 +44,13 @@ logger = logging.getLogger(__name__)
 
 LLM_NOTICE = "Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé"
 NEEDS_INPUT_LEAD = "Mình cần thêm vài thông tin để tính giúp bạn:"
-_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+# Dotted thousands first, so "165.200.000" is one number and not 165.2 and 0.
+_NUMBER = re.compile(r"\d{1,3}(?:\.\d{3})+(?!\d)|\d+(?:[.,]\d+)?")
 _HEADING_SEPARATOR = " \u203a "  # single right angle quote (RUF001 forbids the literal)
-# Scale names the note may mention without them being "new numbers".
+# Scale names the answer may mention without them being "new numbers".
 _ALWAYS_ALLOWED = frozenset({Decimal(0), Decimal(4), Decimal(10)})
 _EXTRACTOR_PROMPTS = ("agent_calculation_extractor",)
+_REVIEW_PROMPT = "chat_calculation_review"
 _LLM_PROMPTS = ("agent_calculation_extractor", "chat_calculation_llm")
 
 
@@ -147,11 +151,33 @@ def needs_input_parts(
 
 
 # ---------------------------------------------------------------------------
-# The note after a calculation-only turn (main/chat_calculation.yaml)
+# Review of a calculation-only turn (main/chat_calculation_review.yaml)
 # ---------------------------------------------------------------------------
 
 
-def build_commentary_agent(model: Model | str) -> Agent[None, str]:
+@dataclass(frozen=True)
+class Review:
+    """Whether the built-in results answer what was asked, and the sentences shown
+    above them. `rejected`: the model wrote a number Python never showed, so nothing
+    it wrote is shown (`fits`/`issue` are kept for the staff trace only)."""
+
+    fits: bool
+    issue: str | None
+    answer: str
+    rejected: bool = False
+
+    def lead(self) -> str:
+        """Markdown shown before the Python blocks; empty when nothing may be shown."""
+
+        if self.rejected:
+            return ""
+        parts = [] if self.fits or not self.issue else [f"**Lưu ý:** {self.issue}"]
+        if self.answer:
+            parts.append(self.answer)
+        return "\n\n".join(parts)
+
+
+def build_review_agent(model: Model | str) -> Agent[None, str]:
     return Agent(model=model, model_settings=generation_model_settings(model))
 
 
@@ -161,6 +187,7 @@ def _payload(results: Sequence[CalculationResult]) -> str:
             {
                 "title": result.title,
                 "inputs": dict(result.inputs),
+                "steps": [f"{step.label}: {step.substituted}" for step in result.steps],
                 "outputs": dict(result.outputs),
             }
             for result in results
@@ -170,28 +197,30 @@ def _payload(results: Sequence[CalculationResult]) -> str:
 
 
 def _as_number(text: str) -> Decimal | None:
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", text):
+        text = text.replace(".", "")
     try:
         return Decimal(text.replace(",", ".")).normalize()
     except InvalidOperation:
         return None
 
 
-def allowed_numbers(results: Sequence[CalculationResult]) -> set[Decimal]:
-    """Numbers the note may mention: the student's own inputs and the scale names.
-    Never a result - it is already shown right above, so repeating it is noise."""
+def _numbers(text: str) -> set[Decimal]:
+    return {
+        number
+        for match in _NUMBER.finditer(text)
+        if (number := _as_number(match.group(0))) is not None
+    }
 
-    allowed = set(_ALWAYS_ALLOWED)
-    for result in results:
-        for _, value in result.inputs:
-            for match in _NUMBER.finditer(value):
-                number = _as_number(match.group(0))
-                if number is not None:
-                    allowed.add(number)
-        for _, value in result.outputs:
-            for match in _NUMBER.finditer(value):
-                number = _as_number(match.group(0))
-                if number is not None:
-                    allowed.discard(number)
+
+def allowed_numbers(outcomes: Sequence[Computed], question: str) -> set[Decimal]:
+    """Numbers the answer may use: everything Python showed for these results (title,
+    formula, steps, result, document notes) and the student's own question - "2 năm
+    đầu" must be sayable when the result is for one year."""
+
+    allowed = set(_ALWAYS_ALLOWED) | _numbers(question)
+    for outcome in outcomes:
+        allowed |= _numbers(render_outcome(outcome))
     return allowed
 
 
@@ -203,41 +232,64 @@ def unknown_numbers(text: str, allowed: set[Decimal]) -> list[str]:
     ]
 
 
-async def commentary(
-    results: Sequence[CalculationResult], user_query: str, deps: CalculationDeps
-) -> str:
-    """Not streamed: the whole note is checked before anything is sent. A note that
-    fails the check (or a failed call) is simply left out - the result line above
-    already says everything; a fallback sentence would only repeat it."""
+def parse_review(raw: str) -> Review | None:
+    data = load_json_object(raw)
+    if data is None or not isinstance(data.get("fits"), bool):
+        return None
+    issue = data.get("issue")
+    answer = data.get("answer")
+    issue = issue.strip() if isinstance(issue, str) and issue.strip() else None
+    answer = answer.strip() if isinstance(answer, str) else ""
+    if not data["fits"] and issue is None:
+        return None  # a mismatch with nothing to say about it cannot be shown
+    return Review(fits=data["fits"], issue=None if data["fits"] else issue, answer=answer)
 
-    if not results:
-        return ""
-    prompt = build_calculation_commentary_prompt(
-        user_query=user_query, calculation_payload=_payload(results)
+
+async def review(
+    outcomes: Sequence[Computed],
+    question: str,
+    deps: CalculationDeps,
+) -> Review | None:
+    """Not streamed: the whole review is checked before anything is sent. A failed
+    call, unreadable JSON (None) or a number Python never showed (`rejected`) leaves
+    the Python blocks on their own - they never depend on this call."""
+
+    if not outcomes:
+        return None
+    prompt = build_calculation_review_prompt(
+        user_query=question,
+        calculation_payload=_payload([outcome.result for outcome in outcomes]),
+        history=list(deps.history),
     )
     try:
-        text = await run_agent_text_with_failover(
-            build_commentary_agent(deps.models.generation),
+        raw = await run_agent_text_with_failover(
+            build_review_agent(deps.models.generation),
             prompt,
             purpose="CHAT",
             credential=deps.models.generation_credential,
             snapshot_version=deps.models.snapshot_version,
-            agent_factory=build_commentary_agent,
+            agent_factory=build_review_agent,
             on_failover=deps.on_failover,
             on_attempt=deps.on_attempt,
             budget=deps.budget,
             timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
         )
     except Exception:
-        logger.warning("calculation.commentary_failed", exc_info=True)
-        return ""
-    text = text.strip()
-    unknown = unknown_numbers(text, allowed_numbers(results))
+        logger.warning("calculation.review_failed", exc_info=True)
+        return None
+    result = parse_review(raw)
+    if result is None:
+        logger.warning("calculation.review_unreadable")
+        return None
+    unknown = unknown_numbers(
+        f"{result.issue or ''} {result.answer}", allowed_numbers(outcomes, question)
+    )
     if unknown:
-        # A number that is not an input - an invented one, or the result repeated.
-        logger.warning("calculation.commentary_rejected numbers=%s", unknown)
-        return ""
-    return text
+        logger.warning("calculation.review_rejected numbers=%s", unknown)
+        return replace(result, rejected=True)
+    if not result.fits:
+        logger.info("calculation.review_mismatch")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -285,9 +337,11 @@ def trace_items(
     queries: Mapping[str, str],
     run_id: str,
     deps: CalculationDeps,
+    review: Review | None = None,
 ) -> tuple[list[dict[str, JsonValue]], list[dict[str, JsonValue]]]:
     """(public items for `metadata.calculation`, private traces for Java's staff table).
-    Đúng/Sai buttons go on the `llm` items that were computed."""
+    Đúng/Sai buttons go on the `llm` items that were computed. `review` covers every
+    built-in result of the turn, so each `builtin` item carries it."""
 
     versions = get_templates().versions
     credential = deps.models.generation_credential
@@ -318,15 +372,15 @@ def trace_items(
         }
         public.append(item)
 
+        prompts = _LLM_PROMPTS if mode == "llm" else _EXTRACTOR_PROMPTS
+        if isinstance(outcome, Computed) and review is not None:
+            prompts = (*prompts, _REVIEW_PROMPT)
         trace: dict[str, JsonValue] = {
             "question_raw": queries.get(outcome.task_id, ""),
             "status": item["status"],
             "mode": mode,
             "models": {"llm": model_name},
-            "prompt_versions": {
-                name: f"sha256:{versions.get(name, '')}"
-                for name in (_LLM_PROMPTS if mode == "llm" else _EXTRACTOR_PROMPTS)
-            },
+            "prompt_versions": {name: f"sha256:{versions.get(name, '')}" for name in prompts},
         }
         if isinstance(outcome, Computed):
             trace["formula_id"] = outcome.plan.formula_id
@@ -339,6 +393,12 @@ def trace_items(
             ]
             if sources:
                 trace["sources"] = [_chunk_trace(index, chunk) for index, chunk in sources]
+            if review is not None:
+                trace["review"] = {
+                    "fits": review.fits,
+                    "issue": review.issue,
+                    "rejected": review.rejected,
+                }
         if isinstance(outcome, LlmAnswered):
             trace["retrieval_query"] = outcome.plan.retrieval_query
             trace["known_params"] = dict(outcome.known_params)

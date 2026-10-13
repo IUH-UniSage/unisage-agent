@@ -286,15 +286,29 @@ _COURSE_PARAMS = {
 }
 
 
+def _review(fits: bool, answer: str, issue: str | None = None) -> str:
+    return json.dumps({"fits": fits, "issue": issue, "answer": answer}, ensure_ascii=False)
+
+
+def _failing_model() -> FunctionModel:
+    def respond(_messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        raise RuntimeError("model down")
+
+    return FunctionModel(function=respond)
+
+
+_COURSE_ANSWER = "Điểm tổng kết học phần của bạn là **7.5**, tương đương điểm chữ **B**."
+
+
 @pytest.mark.asyncio
-async def test_calculation_only_turn_with_every_number_shows_steps_and_a_checked_note(
+async def test_a_fitting_review_answers_first_then_shows_the_python_block(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     retrieval = _RecordingRetrieval([_CHUNK])
     models = GraphModels(
         classification=_scripted(_COURSE_TASK, _COURSE_PARAMS),
         query_transformation=_echo_model(),
-        generation=_note_model("Điểm chữ B nghĩa là bạn đã qua học phần."),
+        generation=_note_model(_review(True, _COURSE_ANSWER)),
         retrieval=retrieval,
     )
     tokens: list[str] = []
@@ -305,45 +319,140 @@ async def test_calculation_only_turn_with_every_number_shows_steps_and_a_checked
         )
 
     assert "".join(tokens) == result.response_text
-    assert (
-        "Kết quả: ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**"
-        in result.response_text
-    )
-    assert result.response_text.endswith("Điểm chữ B nghĩa là bạn đã qua học phần.")
+    assert result.response_text.startswith(f"{_COURSE_ANSWER}\n\n**Điểm tổng kết học phần")
+    assert result.response_text.endswith(NEW_RESULT_LINE)
+    assert "Lưu ý" not in result.response_text
     assert result.pending_round is None
     assert retrieval.queries == []
     assert result.calculation_items[0]["status"] == "computed"
     assert result.calculation_items[0]["result_summary"] == "ĐTKHP: 7.5; Điểm chữ: B; Thang 4: 3.0"
     assert "question_raw" not in result.calculation_items[0]
-    assert result.calculation_traces[0]["trace"]["question_raw"] == _COURSE_QUERY
+    trace = result.calculation_traces[0]["trace"]
+    assert trace["question_raw"] == _COURSE_QUERY
+    assert trace["review"] == {"fits": True, "issue": None, "rejected": False}
+    assert "chat_calculation_review" in trace["prompt_versions"]
     assert "06_QueryTransformationNode" not in _traced_nodes(caplog)
 
 
 @pytest.mark.asyncio
-async def test_note_with_an_invented_number_is_replaced() -> None:
+async def test_a_result_for_another_period_still_shows_with_the_warning_on_top() -> None:
+    query = "tính giúp tôi học phí ngành công nghệ thông tin 2 năm đầu"
+    issue = "Bạn hỏi học phí 2 năm đầu, nhưng phép tính dưới đây là học phí một năm học."
+    answer = "Kết quả bên dưới là học phí một năm học: **165.200.000 đồng**."
+    result = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {
+                    "formula_id": "tuition_year",
+                    "params": {"tc_lt": 100, "tc_th": 42},
+                },
+                _PRICES_FOUND,
+            ),
+            query_transformation=_echo_model(),
+            generation=_note_model(_review(False, answer, issue)),
+            retrieval=_RecordingRetrieval([_FEE_TABLE]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert result.response_text.startswith(f"**Lưu ý:** {issue}\n\n{answer}\n\n")
+    assert "Học phí một năm học **165.200.000 đồng**" in result.response_text
+    trace = result.calculation_traces[0]["trace"]
+    assert trace["review"] == {"fits": False, "issue": issue, "rejected": False}
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Bạn cần thêm 0.8 điểm để lên B+.",  # a number Python never showed
+        "Điểm tổng kết của bạn khoảng 7,47.",  # Python showed 7.5, not this rounding
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_review_with_a_number_python_never_showed_leaves_only_the_block(
+    answer: str,
+) -> None:
     models = GraphModels(
         classification=_scripted(_COURSE_TASK, _COURSE_PARAMS),
         query_transformation=_echo_model(),
-        generation=_note_model("Bạn cần thêm 0.8 điểm để lên B+."),
+        generation=_note_model(_review(True, answer)),
         retrieval=_RecordingRetrieval([]),
     )
     result = await run_graph(_input(_COURSE_QUERY), models, _sink([]), _TRACE, _usage_recorder())
-    assert "0.8" not in result.response_text
-    # A rejected note is simply left out - no fallback sentence repeating the result.
+
+    assert result.response_text.startswith("**Điểm tổng kết học phần")
+    assert answer not in result.response_text
+    assert result.calculation_traces[0]["trace"]["review"] == {
+        "fits": True,
+        "issue": None,
+        "rejected": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "generation",
+    [
+        _failing_model(),
+        _note_model("Điểm chữ B nghĩa là bạn đã qua học phần."),  # not JSON
+        _note_model('{"fits": false, "issue": null, "answer": "Sai rồi."}'),  # no issue
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_failed_or_unreadable_review_leaves_only_the_block(
+    generation: FunctionModel,
+) -> None:
+    models = GraphModels(
+        classification=_scripted(_COURSE_TASK, _COURSE_PARAMS),
+        query_transformation=_echo_model(),
+        generation=generation,
+        retrieval=_RecordingRetrieval([]),
+    )
+    result = await run_graph(_input(_COURSE_QUERY), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.response_text.startswith("**Điểm tổng kết học phần")
     assert result.response_text.endswith(NEW_RESULT_LINE)
+    assert "review" not in result.calculation_traces[0]["trace"]
 
 
 @pytest.mark.asyncio
-async def test_note_repeating_the_result_is_left_out() -> None:
+async def test_a_mixed_turn_never_calls_the_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    prompts: list[str] = []
+
+    def respond(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        prompts.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        return ModelResponse(parts=[TextPart(content=_review(True, "x"))])
+
+    async def stream(messages: list[ModelMessage], _agent_info: AgentInfo):  # type: ignore[no-untyped-def]
+        prompts.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        yield "Thủ tục gồm 3 bước [1]."
+
+    mixed = {
+        "tasks": [
+            {"intent": "academic_calculation", "query": _COURSE_QUERY, "routing_mode": None},
+            {"intent": "academic_advisory", "query": _ADVISORY_QUERY, "routing_mode": "SINGLE"},
+        ],
+        "confidence": 0.9,
+    }
     models = GraphModels(
-        classification=_scripted(_COURSE_TASK, _COURSE_PARAMS),
+        classification=_scripted(mixed, _COURSE_PARAMS),
         query_transformation=_echo_model(),
-        generation=_note_model("Điểm tổng kết của bạn là 7.5, tương đương 3.0 trên thang 4."),
-        retrieval=_RecordingRetrieval([]),
+        generation=FunctionModel(function=respond, stream_function=stream),
+        retrieval=_RecordingRetrieval([_CHUNK]),
     )
-    result = await run_graph(_input(_COURSE_QUERY), models, _sink([]), _TRACE, _usage_recorder())
-    assert result.response_text.endswith(NEW_RESULT_LINE)
-    assert "Điểm tổng kết của bạn" not in result.response_text
+
+    result = await run_graph(
+        _input(f"{_COURSE_QUERY} {_ADVISORY_QUERY}"), models, _sink([]), _TRACE, _usage_recorder()
+    )
+
+    assert result.response_text.startswith("**Điểm tổng kết học phần")
+    assert result.response_text.endswith("Thủ tục gồm 3 bước [1].")
+    assert prompts and not any("<calculation_payload>" in prompt for prompt in prompts)
+    assert "review" not in result.calculation_traces[0]["trace"]
 
 
 @pytest.mark.asyncio

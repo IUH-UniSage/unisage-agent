@@ -37,8 +37,8 @@ __all__ = [
     "PromptTemplates",
     "append_recent_history",
     "build_ask_user_form_guide",
-    "build_calculation_commentary_prompt",
     "build_calculation_llm_prompt",
+    "build_calculation_review_prompt",
     "build_history_section",
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
@@ -158,14 +158,17 @@ def render_sub_queries_list(sub_queries: Sequence[str]) -> str:
     return "\n".join(f"SQ{index}. {query}" for index, query in enumerate(sub_queries, 1))
 
 
-def build_calculation_commentary_prompt(*, user_query: str, calculation_payload: str) -> str:
-    """`main/chat_calculation.yaml`: the short note after a calculation-only turn."""
+def build_calculation_review_prompt(
+    *, user_query: str, calculation_payload: str, history: Sequence[HistoryMessage]
+) -> str:
+    """`main/chat_calculation_review.yaml`: after a calculation-only turn, check the
+    built-in results answer what was asked and write the opening answer."""
 
     templates = get_templates()
-    return templates.chat_calculation.format(
+    return templates.chat_calculation_review.format(
         header=templates.header,
-        response_style=templates.response_style,
         calculation_payload=calculation_payload,
+        history_message=build_history_section(history),
         user_query=user_query,
     )
 

@@ -28,11 +28,12 @@ from app.core.registry.model_registry import CredentialConfig
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.calculation_turn import (
     CalculationTask,
+    Review,
     calculation_titles,
-    commentary,
     needs_input_parts,
     number_citations,
     render_outcomes,
+    review,
     trace_items,
 )
 from app.graph.clarification_round import (
@@ -402,23 +403,30 @@ async def _turn_with_calculations(
     previous_round: PendingRound | None,
 ) -> GraphOutput:
     """Stream order: calculation blocks (Python) → advisory answer (node 10, which only
-    starts after the blocks were sent) or, for a calculation-only turn, the checked
-    note → one panel for everything still missing."""
+    starts after the blocks were sent) → one panel for everything still missing. A
+    calculation-only turn instead opens with the checked review ("Lưu ý" first when the
+    result does not answer what was asked), so its blocks wait for that call."""
 
     outcomes: list[TaskOutcome] = []
     shown: list[str] = []
     calculation_citations: list[dict[str, Any]] = []
+    checked: Review | None = None
 
-    async def show_calculations(first_citation: int = 1) -> list[str]:
+    async def collect(first_citation: int) -> None:
         if calculations is not None:
             numbered, cited = number_citations(await calculations, first_citation)
             outcomes.extend(numbered)
             calculation_citations.extend(cited)
-        text = render_outcomes(outcomes)
+
+    async def emit(text: str) -> None:
         if text:
-            text += "\n\n" if advisory is not None else ""
             shown.append(text)
             await token_sink(text)
+
+    async def show_calculations(first_citation: int = 1) -> list[str]:
+        await collect(first_citation)
+        text = render_outcomes(outcomes)
+        await emit(f"{text}\n\n" if text else "")
         return calculation_titles(outcomes)
 
     try:
@@ -441,17 +449,13 @@ async def _turn_with_calculations(
                 citations=output.citations + calculation_citations,
             )
         else:
-            await show_calculations()
-            text = "".join(shown)
-            results = [o.result for o in outcomes if isinstance(o, Computed)]
-            if results:
-                note = await commentary(results, graph_input.user_message, deps)
-                if note:
-                    note = f"\n\n{note}"
-                    await token_sink(note)
-                    text += note
+            await collect(1)
+            computed = [o for o in outcomes if isinstance(o, Computed)]
+            checked = await review(computed, original_query, deps)
+            lead = checked.lead() if checked is not None else ""
+            await emit("\n\n".join(text for text in (lead, render_outcomes(outcomes)) if text))
             output = GraphOutput(
-                response_text=text,
+                response_text="".join(shown),
                 confirmed_metadata=confirmed_metadata,
                 citations=calculation_citations,
             )
@@ -491,6 +495,7 @@ async def _turn_with_calculations(
             queries=queries,
             run_id=budget.request_id if budget is not None else usage_recorder.request_id,
             deps=deps,
+            review=checked,
         )
         output = replace(
             output,
