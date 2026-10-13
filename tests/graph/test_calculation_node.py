@@ -27,7 +27,13 @@ from app.graph.clarification_round import (
     advisory_task,
     build_round,
 )
-from app.graph.nodes.calculation import LlmAnswered, TaskOutcome, question_for
+from app.graph.nodes.calculation import (
+    UNRESOLVED_MESSAGES,
+    LlmAnswered,
+    TaskOutcome,
+    llm_questions,
+    question_for,
+)
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput, ResumeInput
@@ -856,9 +862,8 @@ async def test_llm_asks_missing_numbers_on_the_panel_and_resume_skips_the_classi
         _usage_recorder(),
     )
     assert first.response_text == "Mình cần đơn giá một tín chỉ."
-    # Before asking the user, Qdrant is searched with the question itself as well; it found
-    # nothing new here, so the form is shown without a second LLM call.
-    assert retrieval.queries == ["công thức học phí", query]
+    # The LLM already saw the retrieval_query documents: no second search before the form.
+    assert retrieval.queries == ["công thức học phí"]
     assert first.pending_round is not None
     [question] = first.pending_round.panel.questions
     assert (question.kind, question.field) == ("number", "don_gia")
@@ -1168,6 +1173,148 @@ async def test_an_unfenced_ask_form_becomes_a_panel_not_text() -> None:
     assert result.pending_round is not None
     [question] = result.pending_round.panel.questions
     assert question.prompt == "Bạn thuộc bậc/hệ đào tạo nào?"
+
+
+_COURSE_FORM = (
+    "Bạn vui lòng cung cấp các điểm thành phần nhé:\n\n```json\n"
+    + json.dumps(
+        {
+            "type": "ask_user_form",
+            "fields": [
+                {"field": "tclt", "label": "Số tín chỉ lý thuyết", "kind": "number", "min": 0},
+                {"field": "tcth", "label": "Số tín chỉ thực hành", "kind": "number", "min": 0},
+                {"field": "tbtx", "label": "Điểm thường xuyên", "kind": "number", "max": 10},
+                {"field": "gk", "label": "Điểm giữa kỳ", "kind": "number", "max": 10},
+                {"field": "ck", "label": "Điểm cuối kỳ", "kind": "number", "max": 10},
+                {"field": "th", "label": "Điểm thực hành", "kind": "number", "max": 10},
+            ],
+        },
+        ensure_ascii=False,
+    )
+    + "\n```"
+)
+
+
+@pytest.mark.asyncio
+async def test_an_llm_form_answered_with_a_builtin_formulas_numbers_is_computed_by_python() -> None:
+    query = "tính điểm"
+    generation, _ = _recording_model(_COURSE_FORM)
+    retrieval = _RecordingRetrieval([_CHUNK])
+    first = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "llm", "params": {}, "retrieval_query": "công thức tính điểm"},
+            ),
+            query_transformation=_echo_model(),
+            generation=generation,
+            retrieval=retrieval,
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    # The student's own numbers are missing: the LLM's form is asked, nothing is handed over.
+    assert first.pending_round is not None
+    questions = first.pending_round.panel.questions
+    assert [q.field for q in questions] == ["tclt", "tcth", "tbtx", "gk", "ck", "th"]
+    numbers = {"tclt": 3, "tcth": 1, "tbtx": 9, "gk": 8, "ck": 9, "th": 9}
+    submit = ClarificationSubmit(
+        action="submit",
+        panel_id=first.pending_round.panel.panel_id,
+        answers=[Answer(question_id=q.id, number=Decimal(numbers[q.field])) for q in questions],
+    )
+    resume = ResumeInput(
+        pending_round=first.pending_round,
+        answers=validate_answers(first.pending_round.panel, submit),
+    )
+    # The LLM ignores the answers and asks the same form again (gemini flash-lite did).
+    generation, prompts = _recording_model(_COURSE_FORM)
+    second = await run_graph(
+        _input("đã trả lời", resume=resume),
+        GraphModels(
+            classification=_scripted(),
+            query_transformation=_echo_model(),
+            generation=generation,
+            retrieval=_RecordingRetrieval([_CHUNK]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert len(prompts) == 1  # no review call, no second LLM call
+    assert second.pending_round is None
+    assert LLM_NOTICE not in second.response_text
+    assert "Điểm tổng kết học phần" in second.response_text
+    [item] = second.calculation_items
+    assert (item["mode"], item["status"]) == ("builtin", "computed")
+
+
+@pytest.mark.asyncio
+async def test_a_form_asking_only_known_values_is_unresolved_not_an_ai_result() -> None:
+    query = "4 môn đó cộng lại mấy tín?"
+    ask = (
+        "Mình cần số môn.\n\n```json\n"
+        + json.dumps(
+            {
+                "type": "ask_user_form",
+                "fields": [{"field": "so_mon", "label": "Số môn", "kind": "number"}],
+            },
+            ensure_ascii=False,
+        )
+        + "\n```"
+    )
+    result = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "llm", "params": {"so_mon": 4}, "retrieval_query": "tín chỉ"},
+            ),
+            query_transformation=_echo_model(),
+            generation=_note_model(ask),
+            retrieval=_RecordingRetrieval([_CHUNK]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert result.pending_round is None
+    assert LLM_NOTICE not in result.response_text
+    assert result.response_text.strip() == UNRESOLVED_MESSAGES["form_dropped"]
+    [item] = result.calculation_items
+    assert item["status"] == "unresolved"  # no Đúng/Sai buttons
+
+
+def test_llm_questions_accepts_the_models_small_format_slips() -> None:
+    form = {
+        "type": "ask_user_form",
+        "fields": [
+            {
+                "field": "phuong_thuc",
+                "label": "Phương thức",
+                "kind": "radio",
+                "options": ["XT1", "XT2", "XT3"],
+            },
+            {
+                "field": "loai_mon",
+                "question": "Khối ngành",
+                "kind": "single_choice",
+                "options": [{"id": "a", "text": "Công nghệ"}, {"id": "b", "value": "Kinh tế"}],
+            },
+            {"field": "diem", "label": "Điểm", "kind": "integer"},
+            {"field": "x", "label": "Lạ", "kind": "slider"},
+        ],
+    }
+    questions = llm_questions([form], {})
+    assert [(q["field"], q["kind"]) for q in questions] == [
+        ("phuong_thuc", "choice"),
+        ("loai_mon", "choice"),
+        ("diem", "number"),
+    ]
+    assert [o["label"] for o in questions[0]["options"]] == ["XT1", "XT2", "XT3"]
+    assert [o["label"] for o in questions[1]["options"]] == ["Công nghệ", "Kinh tế"]
 
 
 _FEE_TABLE = RetrievedChunk(

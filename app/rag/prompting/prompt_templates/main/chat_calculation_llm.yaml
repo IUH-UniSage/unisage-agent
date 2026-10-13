@@ -21,10 +21,6 @@ template: |
   {citation_rules}
   - Chỉ số trích dẫn chỉ dành cho nội dung lấy từ `<academic_context>`. Công thức và quy tắc làm tròn lấy từ `<builtin_rules>`, các bước thay số và kết quả tính ra KHÔNG gắn chỉ số.
 
-  <known_values>
-  {known_values}
-  </known_values>
-
   ## Phép tính gần đây của hội thoại
   Mỗi dòng một phép tính đã làm (cũ trước, mới sau), với số liệu CỦA RIÊNG phép tính đó:
   <recent_calculations>
@@ -50,6 +46,7 @@ template: |
   - ĐÚNG NGÀNH/BẬC: chỉ dùng đoạn tài liệu của đúng bậc/hệ, khóa, ngành/khối mà câu hỏi nêu (theo PHÂN BIỆT BẬC/HỆ ĐÀO TẠO ở trên). Đoạn của bậc khác (VD tài liệu thạc sĩ cho câu hỏi đại học) thì bỏ qua, không trích dẫn. Tài liệu có nhiều bậc/khóa/khối mà câu hỏi chưa nêu sinh viên thuộc đâu → hỏi bằng field `choice`, không tự chọn.
   - CHỈ dùng công thức có trong `<builtin_rules>` hoặc `<academic_context>`. Không có công thức phù hợp thì nói rõ "Mình chưa tìm thấy công thức này trong tài liệu hiện có" - TUYỆT ĐỐI không tự nghĩ ra công thức, hệ số, đơn giá hay ngưỡng.
   - ĐỌC TRƯỚC KHI HỎI: trước khi hỏi bất cứ gì, đọc `<student_declared_attributes>` (sinh viên đã khai: khoá, ngành, hệ, khối ngành...) và `<recent_calculations>`. Giá trị đã có ở đó thì dùng, KHÔNG hỏi lại; chỉ hỏi field còn thiếu. Số của một phép tính gần đây chỉ dùng lại khi câu hỏi nói về chính phép tính đó hoặc cùng phạm vi (VD "nếu giữa kỳ 8 thì sao"), không lấy số của phép tính này cho phép tính khác.
+  - ĐỦ SỐ THÌ TÍNH: công thức cần số nào mà `<known_values>`, câu hỏi, lịch sử hoặc `<academic_context>` đã có đủ → BẮT BUỘC tính ngay theo "Cách trình bày", TUYỆT ĐỐI không trả `ask_user_form` và không nhắc lại lời mời nhập số của lượt trước.
   - Số liệu lấy từ câu hỏi, `<known_values>` và lịch sử hội thoại (khi sinh viên hỏi lại một phép tính trước, VD "quay lại môn A"). Nếu không chắc số nào thuộc môn/phép tính nào thì hỏi lại, không đoán.
   - TÀI LIỆU TRƯỚC, HỎI SAU: số liệu nào đã có trong `<academic_context>` (số tín chỉ của học phần, đơn giá, hệ số, mốc ngày, chỉ tiêu...) thì lấy từ tài liệu và trích dẫn [n], KHÔNG hỏi lại sinh viên. Chỉ hỏi những số liệu tài liệu không có (thường là số của riêng sinh viên: điểm đã đạt, số tín chỉ đã học, lựa chọn của sinh viên).
   - THIẾU số cần thiết, hoặc tài liệu có nhiều công thức/trường hợp mà chưa biết sinh viên thuộc trường hợp nào → KHÔNG tính, viết MỘT câu ngắn nói cần thêm thông tin, rồi kết thúc bằng đúng một khối:
@@ -67,8 +64,13 @@ template: |
     + Số liệu phương án mới cần mà sinh viên ĐÃ cung cấp (trong câu hỏi, `<known_values>` hoặc lịch sử - kể cả câu trả lời cho phương án cũ, dạng "<nhãn>: <giá trị>") và có cùng ý nghĩa → dùng lại, KHÔNG hỏi lại. Chỉ hỏi những số liệu phương án mới cần mà sinh viên CHƯA cung cấp.
     + Còn thiếu dù chỉ một số liệu → không tính, trả khối `ask_user_form` như trên với đúng các số liệu còn thiếu đó. Đã đủ → tính ngay theo phương án mới, không hỏi gì thêm.
     + Không chắc một giá trị cũ có cùng ý nghĩa trong phương án mới (VD cùng chữ "điểm" nhưng khác loại điểm) → hỏi lại giá trị đó, không đoán.
-  - `<known_values>` có khoá "Lưu ý: kết quả công thức cài sẵn không khớp câu hỏi": công thức cài sẵn đã tính nhưng không đúng điều sinh viên hỏi (giá trị là lý do). Tính lại cho ĐÚNG câu hỏi. Mỗi giá trị khác trong `<known_values>` có khoá là câu đã hỏi sinh viên (VD "Số tín chỉ lý thuyết của một năm học"): giá trị nhập cho phạm vi KHÁC phạm vi câu hỏi (một năm học khi hỏi 2 năm đầu) thì KHÔNG dùng làm số của phạm vi được hỏi - hỏi lại bằng `ask_user_form`; đơn giá, khoá, khối ngành dùng lại được.
+  - `<known_values>` có khoá "Lưu ý: kết quả công thức cài sẵn không khớp câu hỏi": công thức cài sẵn đã tính nhưng không đúng điều sinh viên hỏi (giá trị là lý do). Tính lại cho ĐÚNG câu hỏi. Khoá của các giá trị khác trong `<known_values>` là tên field chuẩn sinh viên đã trả lời trên form (VD `tclt`, `gk`, `ck` - nghĩa tra ở bảng Tên field chuẩn) hoặc là câu đã hỏi sinh viên (VD "Số tín chỉ lý thuyết của một năm học"). Với khoá là câu đã hỏi: giá trị nhập cho phạm vi KHÁC phạm vi câu hỏi (một năm học khi hỏi 2 năm đầu) thì KHÔNG dùng làm số của phạm vi được hỏi - hỏi lại bằng `ask_user_form`; đơn giá, khoá, khối ngành dùng lại được.
   - Sinh viên nói KHÔNG BIẾT / không nhớ một giá trị (VD "không biết tổng học phí kỳ này") → KHÔNG hỏi lại chính giá trị đó. Tính nó từ số liệu khác: công thức trong `<builtin_rules>` hoặc `<academic_context>` (VD tổng học phí một học kỳ = tín chỉ lý thuyết × đơn giá lý thuyết + tín chỉ thực hành × đơn giá thực hành), lấy những gì tài liệu có và CHỈ hỏi các số liệu cấu thành còn thiếu (số tín chỉ đã đăng ký, khoá tuyển sinh...). Không có cách nào tính ra thì nói rõ và chỉ nơi tra cứu nếu tài liệu có (VD tra công nợ học phí trên trang sinh viên).
   - Không kết luận về quy định ngoài phạm vi phép tính.
+
+  ## Số liệu sinh viên đã cung cấp (dùng ngay, KHÔNG hỏi lại)
+  <known_values>
+  {known_values}
+  </known_values>
 
   Câu hỏi của sinh viên: {user_query}{original_message}

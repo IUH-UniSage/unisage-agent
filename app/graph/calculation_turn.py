@@ -352,7 +352,7 @@ async def redo_with_llm(
         return list(outcomes), {}
 
     async def redo(outcome: TaskOutcome) -> TaskOutcome:
-        if not isinstance(outcome, Computed):
+        if not isinstance(outcome, Computed) or outcome.chosen_by_llm:
             return outcome
         query = queries.get(outcome.task_id, "")
         plan = CalculationPlan(formula_id="llm", retrieval_query=query or None)
@@ -456,7 +456,8 @@ def trace_items(
         public.append(item)
 
         reviewed = review is not None and (
-            isinstance(outcome, Computed) or outcome.task_id in redone
+            (isinstance(outcome, Computed) and not outcome.chosen_by_llm)
+            or outcome.task_id in redone
         )
         prompts = _LLM_PROMPTS if mode == "llm" else _EXTRACTOR_PROMPTS
         if reviewed:

@@ -69,7 +69,7 @@ from app.schemas.security import AcademicSecurityContext
 logger = logging.getLogger(__name__)
 
 BUILTIN_IDS: frozenset[str] = frozenset(FORMULAS)
-UnresolvedReason = Literal["llm_disabled", "llm_failed"]
+UnresolvedReason = Literal["llm_disabled", "llm_failed", "form_dropped"]
 # Documents handed to the LLM for one calculation.
 LLM_CHUNKS_LIMIT = 5
 
@@ -86,6 +86,9 @@ class Computed:
     # chunk behind each marker; renumbered for the whole message before it is shown.
     notes: tuple[str, ...] = ()
     sources: list[tuple[int, RetrievedChunk]] = field(default_factory=list)
+    # Handed over by the LLM path (`_builtin_handoff`): the LLM itself asked for exactly
+    # this formula's params, so the "does it fit the question" review is skipped.
+    chosen_by_llm: bool = False
 
 
 @dataclass(frozen=True)
@@ -353,6 +356,42 @@ def _number(value: object) -> str | None:
     return text
 
 
+_CHOICE_KINDS = frozenset({"choice", "single_choice", "radio", "select", "enum", "options"})
+_NUMBER_KINDS = frozenset({"number", "integer", "int", "float", "decimal", "numeric"})
+_TEXT_KINDS = frozenset({"text", "string", "str"})
+
+
+def _first_text(item: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str | int | float) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _option_label(option: object) -> str:
+    """An option written as {"label"} or with "text"/"value"/"name" instead, or a bare string."""
+
+    if isinstance(option, Mapping):
+        return _first_text(option, "label", "text", "value", "name", "title")
+    if isinstance(option, str | int | float) and not isinstance(option, bool):
+        return str(option).strip()
+    return ""
+
+
+def _field_kind(item: Mapping[str, Any]) -> str:
+    raw = str(item.get("kind") or "").strip().lower()
+    if raw in _CHOICE_KINDS or (not raw and isinstance(item.get("options"), list)):
+        return "choice"
+    if raw in _NUMBER_KINDS:
+        return "number"
+    if raw in _TEXT_KINDS:
+        return "text"
+    return raw
+
+
 def llm_questions(
     forms: Sequence[Mapping[str, Any]],
     known: Mapping[str, JsonValue],
@@ -360,21 +399,33 @@ def llm_questions(
 ) -> list[dict[str, Any]]:
     """Panel questions from the LLM's ask_user_form blocks, under registry names. A
     field already known (under any of its names) or in the profile, asked twice, or
-    malformed is dropped - that is what stops asking in circles."""
+    malformed is dropped - that is what stops asking in circles. Small slips of the
+    model (bare-string options, `text` for `label`, `radio` for `choice`) are accepted;
+    every dropped field is logged with its reason."""
 
     questions: list[dict[str, Any]] = []
+    dropped: list[str] = []
     seen: set[str] = set(canonical_params(known)) | set(profile or {})
     for form in forms:
         fields = form.get("fields")
         if form.get("type") != "ask_user_form" or not isinstance(fields, list):
+            dropped.append(f"form: type={form.get('type')!r} không phải ask_user_form có fields")
             continue
         for item in fields:
             if not isinstance(item, Mapping):
+                dropped.append(f"?: field không phải object ({item!r:.60})")
                 continue
             name = canonical_field(str(item.get("field") or ""))
-            label = str(item.get("label") or "").strip()
-            kind = item.get("kind")
-            if not name or not label or name in seen:
+            label = _first_text(item, "label", "question", "prompt", "text")
+            kind = _field_kind(item)
+            if not name:
+                dropped.append(f"?: thiếu tên field (label={label!r:.60})")
+                continue
+            if not label:
+                dropped.append(f"{name}: thiếu label")
+                continue
+            if name in seen:
+                dropped.append(f"{name}: đã biết hoặc đã hỏi")
                 continue
             draft: dict[str, Any] = {
                 "tab_label": label[:24],
@@ -394,20 +445,24 @@ def llm_questions(
                 if kind == "number_list":
                     draft["max_items"] = 20
             elif kind == "choice":
+                labels = [_option_label(option) for option in item.get("options") or []]
                 options = [
-                    {"id": f"o{index}", "label": str(option.get("label") or "").strip()[:120]}
-                    for index, option in enumerate(item.get("options") or [], start=1)
-                    if isinstance(option, Mapping) and str(option.get("label") or "").strip()
+                    {"id": f"o{index}", "label": text[:120]}
+                    for index, text in enumerate((text for text in labels if text), start=1)
                 ][:12]
                 if len(options) < 2:
+                    dropped.append(f"{name}: choice chỉ có {len(options)} lựa chọn hợp lệ")
                     continue
                 draft.update(kind="choice", options=options, allow_other=True)
             elif kind == "text":
                 draft.update(kind="text", max_length=200)
             else:
+                dropped.append(f"{name}: kind={item.get('kind')!r} không hỗ trợ")
                 continue
             seen.add(name)
             questions.append(draft)
+    if dropped:
+        logger.warning("calculation.form_fields_dropped %s", "; ".join(dropped))
     return questions
 
 
@@ -471,6 +526,78 @@ async def _search(
     return chunks
 
 
+def _form_fields(forms: Sequence[Mapping[str, Any]]) -> set[str]:
+    """Registry names of every field the LLM's ask_user_form blocks ask for."""
+
+    names: set[str] = set()
+    for form in forms:
+        fields = form.get("fields")
+        for item in fields if isinstance(fields, list) else []:
+            if isinstance(item, Mapping) and str(item.get("field") or "").strip():
+                names.add(canonical_field(str(item["field"])))
+    return names
+
+
+def _builtin_for(names: set[str]) -> FormulaId | None:
+    """The one built-in formula every name is a param of, if exactly one."""
+
+    matches = [
+        formula_id
+        for formula_id, formula in FORMULAS.items()
+        if names <= {spec.name for spec in formula.params}
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _builtin_params(formula_id: FormulaId, known: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    """Panel answers under the formula's param names; a single number answered for a
+    list param (the practice columns) becomes a one-item list."""
+
+    params: dict[str, JsonValue] = {}
+    for name, value in known.items():
+        spec = param_spec(formula_id, canonical_field(name))
+        if spec is None:
+            continue
+        if spec.kind == "number_list" and not isinstance(value, list):
+            value = [value]
+        params[spec.name] = value
+    return params
+
+
+async def _builtin_handoff(
+    task_id: str,
+    query: str,
+    asked: set[str],
+    known: Mapping[str, JsonValue],
+    deps: CalculationDeps,
+) -> Computed | NeedsInput | None:
+    """When the LLM asks only for params of one built-in formula and the student has
+    already given every number of their own, Python computes it instead: values the
+    documents hold (prices...) are read from Qdrant first and only what they lack is
+    asked. No LLM call, and nothing runs while the student's own numbers are missing -
+    then the LLM's form asks them. A known value outside the formula (a choice label,
+    the review's mismatch note) keeps the task with the LLM."""
+
+    if not asked:
+        return None
+    formula_id = _builtin_for(asked | {canonical_field(name) for name in known})
+    if formula_id is None:
+        return None
+    params = {
+        **profile_params(formula_id, deps.confirmed_metadata),
+        **_builtin_params(formula_id, known),
+    }
+    if any(spec.lookup is None for spec in missing_params(formula_id, params)):
+        return None
+    outcome = await builtin_task(task_id, formula_id, query, params, deps)
+    if isinstance(outcome, Computed):
+        outcome = replace(outcome, chosen_by_llm=True)
+    logger.info(
+        "calculation.builtin_handoff formula=%s outcome=%s", formula_id, type(outcome).__name__
+    )
+    return outcome
+
+
 async def _ask_llm(
     task_id: str,
     query: str,
@@ -478,7 +605,7 @@ async def _ask_llm(
     known: Mapping[str, JsonValue],
     chunks: list[RetrievedChunk],
     deps: CalculationDeps,
-) -> LlmAnswered | NeedsInput | Unresolved:
+) -> TaskOutcome:
     prompt = build_calculation_llm_prompt(
         user_query=query,
         builtin_rules=describe_builtin_rules(),
@@ -520,15 +647,21 @@ async def _ask_llm(
     text, bare = take_bare_blocks((redactor.feed(raw) + redactor.finish()).strip())
     forms = [*redactor.captured, *bare]
     questions = llm_questions(forms, known, deps.confirmed_metadata)
-    if forms and not questions:
-        # Every field was malformed or already known - the turn ends as an answer, no panel.
+    if forms:
+        handed = await _builtin_handoff(task_id, query, _form_fields(forms), known, deps)
+        if handed is not None:
+            return handed
+    if questions:
+        return NeedsInput(task_id, plan, dict(known), questions, lead=text or None)
+    if forms:
+        # The LLM asked instead of computing, but every field was malformed or already
+        # known: no panel, and its text is no result - never shown as "AI tự tính".
         logger.warning(
             "calculation.form_dropped known=%s forms=%s",
             json.dumps(dict(known), ensure_ascii=False),
             json.dumps(forms, ensure_ascii=False, default=str),
         )
-    if questions:
-        return NeedsInput(task_id, plan, dict(known), questions, lead=text or None)
+        return Unresolved(task_id, "form_dropped")
     if not text:
         return Unresolved(task_id, "llm_failed")
     return LlmAnswered(task_id, query, text, plan, dict(known), _cited(text, chunks))
@@ -540,20 +673,22 @@ async def llm_outcome(
     plan: CalculationPlan,
     known: Mapping[str, JsonValue],
     deps: CalculationDeps,
-) -> LlmAnswered | NeedsInput | Unresolved:
+) -> TaskOutcome:
     """Non-streamed LLM call(s) over the built-in rules, the retrieved documents, the known
     values and the recent chat. Shared by the first turn and every resume.
 
-    Documents before the user's form: when the LLM would ask for missing numbers and Qdrant
-    has not been searched with the question itself yet (a short chat-style question often
-    gets no `retrieval_query`, so the LLM saw no document), search with it and ask again. Only
-    if numbers are still missing does the panel go to the user."""
+    Documents before the user's form: when the LLM would ask for missing numbers without
+    having seen any document (a short chat-style question often gets no `retrieval_query`),
+    search with the question itself and ask again. Only if numbers are still missing does
+    the panel go to the user. A call that already had the `retrieval_query` documents is
+    not repeated - a second search + rerank + LLM call cost ~14 s for the same form."""
 
     if not settings.CHAT_CALC_LLM_ENABLED:
         return Unresolved(task_id, "llm_disabled")
+    searched = bool(plan.retrieval_query)
     chunks = await _search(query, [plan.retrieval_query], deps) if plan.retrieval_query else []
     outcome = await _ask_llm(task_id, query, plan, known, chunks, deps)
-    if not isinstance(outcome, NeedsInput) or plan.retrieval_query == query:
+    if searched or not isinstance(outcome, NeedsInput):
         return outcome
     more = await _search(query, [query], deps, also=chunks)
     if {chunk.chunk_id for chunk in more} <= {chunk.chunk_id for chunk in chunks}:
@@ -863,4 +998,8 @@ UNRESOLVED_MESSAGES: dict[UnresolvedReason, str] = {
         "Bạn có thể liên hệ Phòng Đào tạo hoặc giảng viên phụ trách để được hướng dẫn nhé."
     ),
     "llm_failed": "Mình chưa tính được câu này lúc này, bạn thử hỏi lại sau ít phút giúp mình nhé.",
+    "form_dropped": (
+        "Mình chưa tính được với các số liệu bạn đã cung cấp. Bạn thử hỏi lại, ghi rõ phép "
+        "tính và đủ các số liệu trong cùng một câu giúp mình nhé."
+    ),
 }

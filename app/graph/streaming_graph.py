@@ -549,7 +549,7 @@ async def _turn_with_calculations(
             )
         else:
             done = await calculations if calculations is not None else []
-            computed = [o for o in done if isinstance(o, Computed)]
+            computed = [o for o in done if isinstance(o, Computed) and not o.chosen_by_llm]
             checked = await review(computed, original_query, deps)
             if checked is not None:
                 done, redone = await redo_with_llm(done, queries, checked, deps)
