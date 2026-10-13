@@ -173,16 +173,29 @@ gọi bước này. **Số do Python tính, AI chỉ kiểm tra và viết lời
    → `rejected`, bỏ toàn bộ phần AI viết, log `calculation.review_rejected`.
 4. JSON hỏng, lỗi gọi model, timeout → bỏ phần AI viết (log `calculation.review_failed` /
    `calculation.review_unreadable`). Không bao giờ chặn câu trả lời: khối Python vẫn hiện.
-5. Thứ tự hiển thị (`Review.lead`):
-   - `fits = false` → `**Lưu ý:** {issue}`, rồi `answer`, rồi khối Python (kết quả vẫn hiện, không hỏi
-     lại, không vòng lặp).
+5. `fits = false` → **LLM tự tính lại** (`redo_with_llm`, chốt 13-10-2026): mọi `Computed` của lượt đi
+   vào `llm_outcome` (mục 2) với `CalculationPlan(formula_id="llm", retrieval_query=<câu hỏi của task>)`.
+   `known_values` (`known_for_llm`) dùng khoá là **câu đã hỏi sinh viên** (`label_for`, VD "Số tín chỉ lý
+   thuyết của một năm học": 100) để LLM thấy giá trị nhập cho phạm vi khác, kèm khoá "Lưu ý: kết quả công
+   thức cài sẵn không khớp câu hỏi" = `issue`. `chat_calculation_llm.yaml` dặn: tính lại đúng câu hỏi;
+   giá trị của phạm vi khác thì hỏi lại bằng `ask_user_form`, đơn giá/khoá/khối dùng lại được.
+   - Kết quả: khối "AI tự tính, có thể sai" (nút Đúng/Sai) thay cho khối Python, không có phần review;
+     hoặc panel nếu LLM cần thêm số (task lưu `plan.formula_id = "llm"`, lượt submit đi thẳng đường LLM,
+     không review lại, nên không có vòng lặp).
+   - `CHAT_CALC_LLM_ENABLED = false` hoặc LLM lỗi (`Unresolved`) → giữ khối Python, hiện như mục 6.
+   - Một lần review cho cả lượt: khi lượt có nhiều kết quả cài sẵn mà review báo lệch, tất cả đều tính
+     lại bằng LLM.
+6. Thứ tự hiển thị khi giữ khối Python (`Review.lead`):
+   - `fits = false` (đường LLM tắt hoặc lỗi) → `**Lưu ý:** {issue}`, rồi `answer`, rồi khối Python.
    - `fits = true` → `answer`, rồi khối Python.
    - Không có phần AI viết → chỉ khối Python.
-6. Vì phần AI viết đứng trước, khối Python chỉ được stream sau khi bước kiểm tra xong: token đầu tiên đến
-   muộn hơn khoảng một lần gọi LLM, tổng thời gian không đổi. **Không có số nào chưa qua kiểm tra tới
-   được client.**
-7. Trace staff (7.2) của mỗi item `builtin`: `review: {fits, issue, rejected}` và
-   `prompt_versions.chat_calculation_review`.
+7. Vì phần AI viết đứng trước, khối Python chỉ được stream sau khi bước kiểm tra xong: token đầu tiên đến
+   muộn hơn khoảng một lần gọi LLM (khi tính lại bằng LLM: thêm lần tìm tài liệu, LLM rerank và lần gọi
+   `chat_calculation_llm`). Phần review hiện ra luôn qua kiểm tra số (bước 3); kết quả LLM tự tính luôn
+   mang nhãn "AI tự tính".
+8. Trace staff (7.2) của mỗi item `builtin`, và của item được LLM tính lại: `review: {fits, issue,
+   rejected}` và `prompt_versions.chat_calculation_review`; item tính lại có thêm `redone_from` =
+   `formula_id` cài sẵn bị thay.
 
 ## 4. Gộp câu hỏi thành một panel
 
@@ -271,7 +284,8 @@ giờ đi qua `GET /messages/...` hay SSE.
   ```
 
   Với `mode = "builtin"`: `formula_id`, `formula_hash`, `inputs`, `outputs`, và khi lượt chỉ có
-  calculation đã qua bước kiểm tra (mục 3.2): `review: {"fits", "issue", "rejected"}`.
+  calculation đã qua bước kiểm tra (mục 3.2): `review: {"fits", "issue", "rejected"}`. Item `llm` do
+  LLM tính lại sau review lệch: thêm `review` và `redone_from`.
 
 - Không có API public nào đọc bảng này. Staff xem trace **thông qua ticket** (7.3), không đọc thẳng
   bảng. Dữ liệu tự xoá theo message nhờ cascade; chính sách lưu trữ riêng (nếu cần) để ticket sau.
