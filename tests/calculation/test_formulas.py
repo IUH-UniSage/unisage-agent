@@ -328,3 +328,75 @@ def test_every_formula_param_spec_is_well_formed() -> None:
             assert formulas.param_spec(formula.formula_id, spec.name) is spec
             if spec.kind in {"number", "number_list"}:
                 assert spec.min is not None and spec.max is not None and spec.step is not None
+
+
+# --- tuition -----------------------------------------------------------------
+
+_TUITION = {"tc_lt": 100, "tc_th": 42, "don_gia_lt": 980000, "don_gia_th": "1.600.000 đ"}
+
+
+def test_tuition_is_theory_and_practice_credits_times_their_unit_price() -> None:
+    result = formulas.calculate("tuition_program", _TUITION)
+
+    assert result.title == "Học phí cả khoá học"
+    assert result.outputs == (("Học phí cả khoá học", "165.200.000 đồng"),)
+    assert [step.substituted for step in result.steps] == [
+        f"100 {X} 980.000 đồng = 98.000.000 đồng",
+        f"42 {X} 1.600.000 đồng = 67.200.000 đồng",
+        "98.000.000 đồng + 67.200.000 đồng = 165.200.000 đồng",
+    ]
+
+
+def test_tuition_needs_theory_and_practice_credits_separately() -> None:
+    missing = formulas.missing_params("tuition_semester", {"don_gia_lt": 1, "don_gia_th": 1})
+    assert [spec.name for spec in missing] == ["tc_lt", "tc_th"]
+
+
+def test_tuition_context_params_are_never_asked_on_their_own() -> None:
+    names = {spec.name for spec in formulas.missing_params("tuition_year", {})}
+    assert names == {"tc_lt", "tc_th", "don_gia_lt", "don_gia_th"}
+
+
+def test_tuition_sources() -> None:
+    def sources(formula_id: formulas.FormulaId) -> dict[str, str]:
+        return {spec.name: spec.source for spec in formulas.FORMULAS[formula_id].params}
+
+    assert sources("tuition_semester")["tc_lt"] == "user"
+    assert sources("tuition_program")["tc_th"] == "document"
+    assert sources("tuition_year")["don_gia_lt"] == "document"
+
+
+def test_tuition_rejects_bad_inputs_all_at_once() -> None:
+    with pytest.raises(CalculationInputError) as error:
+        formulas.calculate(
+            "tuition_semester", {"tc_lt": 2.5, "tc_th": 301, "don_gia_lt": -1, "don_gia_th": 1}
+        )
+    assert _fields(error.value) == {"tc_lt", "tc_th", "don_gia_lt"}
+
+
+def test_tuition_without_any_credit_is_rejected() -> None:
+    with pytest.raises(CalculationInputError) as error:
+        formulas.calculate(
+            "tuition_semester", {"tc_lt": 0, "tc_th": 0, "don_gia_lt": 1, "don_gia_th": 1}
+        )
+    assert _fields(error.value) == {"tc_lt"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (980000, Decimal(980000)),
+        ("980.000", Decimal(980000)),
+        ("1,600,000 đồng", Decimal(1600000)),
+        ("980000đ", Decimal(980000)),
+    ],
+)
+def test_parse_money_reads_amounts_written_out(raw: object, expected: Decimal) -> None:
+    assert formulas.parse_money(raw, "x", []) == expected
+
+
+@pytest.mark.parametrize("raw", ["1,6 triệu", "980k", "9.80", ""])
+def test_parse_money_refuses_shorthand_instead_of_misreading_it(raw: str) -> None:
+    errors: list[formulas.FieldError] = []
+    assert formulas.parse_money(raw, "x", errors) is None
+    assert [error.field for error in errors] == ["x"]

@@ -134,7 +134,15 @@ class CalculationPlan(_Strict):
     by Python (forward only), or `llm` - the LLM computes it (target questions, formulas
     from documents, follow-ups), retrieving with `retrieval_query` when set."""
 
-    formula_id: Literal["gpa", "course_score", "grade_conversion", "llm"]
+    formula_id: Literal[
+        "gpa",
+        "course_score",
+        "grade_conversion",
+        "tuition_semester",
+        "tuition_year",
+        "tuition_program",
+        "llm",
+    ]
     retrieval_query: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")

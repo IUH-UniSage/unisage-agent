@@ -18,6 +18,7 @@ CASES: dict[FormulaId, Mapping[str, object]] = {
         ]
     },
     "grade_conversion": {"score10": "8.45"},
+    "tuition_program": {"tc_lt": 100, "tc_th": 42, "don_gia_lt": 980000, "don_gia_th": 1600000},
 }
 
 

@@ -274,6 +274,8 @@ def question_for(spec: ParamSpec, reason: str | None = None) -> dict[str, Any]:
         }
     if spec.kind in ("number_list", "number_or_list", "course_table"):
         draft["max_items"] = spec.max_items
+    if spec.kind == "text":
+        draft["max_length"] = 200
     return draft
 
 

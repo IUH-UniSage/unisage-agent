@@ -620,15 +620,147 @@ def gpa(params: Mapping[str, object]) -> CalculationResult:
 
 
 # ---------------------------------------------------------------------------
+# Tuition (học phí theo tín chỉ)
+# ---------------------------------------------------------------------------
+
+TUITION_CREDITS_MAX = 300
+TUITION_PRICE_MAX = Decimal(100_000_000)
+TuitionScope = Literal["tuition_semester", "tuition_year", "tuition_program"]
+TUITION_SCOPES: dict[TuitionScope, str] = {
+    "tuition_semester": "một học kỳ",
+    "tuition_year": "một năm học",
+    "tuition_program": "cả khoá học",
+}
+TUITION_FORMULA_TEXT = (
+    f"Học phí = TC lý thuyết {TIMES} đơn giá 1 TC lý thuyết"
+    f" + TC thực hành {TIMES} đơn giá 1 TC thực hành",
+    "Đơn giá theo khoá tuyển sinh và giữ nguyên suốt khoá học; chỉ khoá mới có đơn giá khác",
+)
+TUITION_WARNINGS = ("Chưa gồm học phần Giáo dục quốc phòng - an ninh (đơn giá riêng), nếu có.",)
+
+
+def money(value: Decimal) -> str:
+    """Whole đồng with dot thousands: 38350000 -> "38.350.000 đồng"."""
+
+    whole = int(round_half_up(value, 0))
+    return f"{whole:,}".replace(",", ".") + " đồng"
+
+
+_MONEY_TEXT = re.compile(r"(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(đồng|đ|vnđ|vnd)?", re.IGNORECASE)
+
+
+def parse_money(value: object, field: str, errors: list[FieldError]) -> Decimal | None:
+    """An amount in whole đồng. Text must be written out ("980000", "980.000 đ"): a dot
+    or comma is a thousands separator, and "1,6 triệu" is refused rather than misread."""
+
+    if isinstance(value, str):
+        match = _MONEY_TEXT.fullmatch(value.strip())
+        number = Decimal(re.sub(r"\D", "", match.group(1))) if match else None
+    else:
+        number = to_decimal(value)
+    if number is None or number != number.to_integral_value():
+        errors.append(FieldError(field, "số tiền phải là số nguyên (đồng)"))
+        return None
+    if not Decimal(0) <= number <= TUITION_PRICE_MAX:
+        errors.append(FieldError(field, f"số tiền phải từ 0 đến {money(TUITION_PRICE_MAX)}"))
+        return None
+    return number
+
+
+def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], CalculationResult]:
+    def compute(params: Mapping[str, object]) -> CalculationResult:
+        errors: list[FieldError] = []
+        credits: dict[str, int | None] = {}
+        prices: dict[str, Decimal | None] = {}
+        for name in ("tc_lt", "tc_th"):
+            raw = params.get(name)
+            if raw is None:
+                _missing(name, errors)
+                credits[name] = None
+            else:
+                credits[name] = parse_credits(
+                    raw, name, errors, minimum=0, maximum=TUITION_CREDITS_MAX
+                )
+        for name in ("don_gia_lt", "don_gia_th"):
+            raw = params.get(name)
+            if raw is None:
+                _missing(name, errors)
+                prices[name] = None
+            else:
+                prices[name] = parse_money(raw, name, errors)
+        lt, th = credits["tc_lt"], credits["tc_th"]
+        price_lt, price_th = prices["don_gia_lt"], prices["don_gia_th"]
+        if not errors and lt == 0 and th == 0:
+            errors.append(FieldError("tc_lt", "tổng tín chỉ lý thuyết và thực hành phải lớn hơn 0"))
+        if errors or lt is None or th is None or price_lt is None or price_th is None:
+            raise CalculationInputError(errors)
+
+        theory = lt * price_lt
+        practice = th * price_th
+        total = theory + practice
+        title = f"Học phí {TUITION_SCOPES[scope]}"
+        return CalculationResult(
+            formula_id=scope,
+            title=title,
+            formula_text=TUITION_FORMULA_TEXT,
+            inputs=(
+                ("TC lý thuyết", str(lt)),
+                ("TC thực hành", str(th)),
+                ("Đơn giá 1 TC lý thuyết", money(price_lt)),
+                ("Đơn giá 1 TC thực hành", money(price_th)),
+            ),
+            steps=(
+                Step(
+                    label="Học phí lý thuyết",
+                    symbolic=f"TC lý thuyết {TIMES} đơn giá lý thuyết",
+                    substituted=f"{lt} {TIMES} {money(price_lt)} = {money(theory)}",
+                    value=theory,
+                    display=money(theory),
+                ),
+                Step(
+                    label="Học phí thực hành",
+                    symbolic=f"TC thực hành {TIMES} đơn giá thực hành",
+                    substituted=f"{th} {TIMES} {money(price_th)} = {money(practice)}",
+                    value=practice,
+                    display=money(practice),
+                ),
+                Step(
+                    label="Tổng",
+                    symbolic="Học phí lý thuyết + học phí thực hành",
+                    substituted=f"{money(theory)} + {money(practice)} = {money(total)}",
+                    value=total,
+                    display=money(total),
+                ),
+            ),
+            outputs=((title, money(total)),),
+            warnings=TUITION_WARNINGS,
+        )
+
+    return compute
+
+
+# ---------------------------------------------------------------------------
 # Parameters per formula, and dispatch
 # ---------------------------------------------------------------------------
 
-ParamKind = Literal["number", "number_list", "number_or_list", "course_table"]
-FormulaId = Literal["gpa", "course_score", "grade_conversion"]
+ParamKind = Literal["number", "number_list", "number_or_list", "course_table", "text"]
+ParamSource = Literal["user", "document"]
+FormulaId = Literal[
+    "gpa",
+    "course_score",
+    "grade_conversion",
+    "tuition_semester",
+    "tuition_year",
+    "tuition_program",
+]
 
 
 def _always(_: Mapping[str, object]) -> bool:
     return True
+
+
+def _never(_: Mapping[str, object]) -> bool:
+    return False
 
 
 def _unless_zero(credit_field: str) -> Callable[[Mapping[str, object]], bool]:
@@ -654,6 +786,8 @@ class ParamSpec:
     step: Decimal | None = None
     unit: str | None = None
     max_items: int | None = None
+    # "document": looked up in the retrieved documents before the student is asked.
+    source: ParamSource = "user"
 
 
 def _score_spec(name: str, label: str, tab_label: str, credit_field: str) -> ParamSpec:
@@ -680,6 +814,65 @@ def _credit_spec(name: str, label: str, tab_label: str) -> ParamSpec:
         step=Decimal(1),
         unit="TC",
     )
+
+
+def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
+    """Theory and practice credits are always two separate questions. Credits of a whole
+    programme come from its curriculum document; those of a semester or a year are the
+    student's own. The unit prices come from the fee schedule. `khoa_tuyen_sinh` and
+    `khoi_nganh` are not computed with: they pick the fee schedule row, and are asked
+    only when the documents hold several rows."""
+
+    credit_source: ParamSource = "document" if scope == "tuition_program" else "user"
+    period = TUITION_SCOPES[scope]
+    credits = [
+        ParamSpec(
+            name=name,
+            label=f"Số tín chỉ {kind} của {period}",
+            tab_label=f"TC {kind}",
+            kind="number",
+            min=Decimal(0),
+            max=Decimal(TUITION_CREDITS_MAX),
+            step=Decimal(1),
+            unit="TC",
+            source=credit_source,
+        )
+        for name, kind in (("tc_lt", "lý thuyết"), ("tc_th", "thực hành"))
+    ]
+    prices = [
+        ParamSpec(
+            name=name,
+            label=f"Đơn giá 1 tín chỉ {kind} (đồng)",
+            tab_label=f"Đơn giá {short_kind}",
+            kind="number",
+            min=Decimal(0),
+            max=TUITION_PRICE_MAX,
+            step=Decimal(1),
+            unit="đồng",
+            source="document",
+        )
+        for name, kind, short_kind in (
+            ("don_gia_lt", "lý thuyết", "LT"),
+            ("don_gia_th", "thực hành", "TH"),
+        )
+    ]
+    context = [
+        ParamSpec(
+            name="khoa_tuyen_sinh",
+            label="Khoá tuyển sinh của bạn (VD 2025-2026)",
+            tab_label="Khoá tuyển sinh",
+            kind="text",
+            required=_never,
+        ),
+        ParamSpec(
+            name="khoi_nganh",
+            label="Ngành của bạn thuộc khối nào (VD Khối Công nghệ)",
+            tab_label="Khối ngành",
+            kind="text",
+            required=_never,
+        ),
+    ]
+    return (*credits, *prices, *context)
 
 
 @dataclass(frozen=True)
@@ -758,6 +951,18 @@ FORMULAS: dict[FormulaId, Formula] = {
         ),
         compute=grade_conversion,
     ),
+    **{
+        scope: Formula(
+            formula_id=scope,
+            title=f"Học phí {period}",
+            description=(
+                f"Học phí {period} từ số tín chỉ lý thuyết, thực hành và đơn giá 1 tín chỉ"
+            ),
+            params=_tuition_params(scope),
+            compute=_tuition(scope),
+        )
+        for scope, period in TUITION_SCOPES.items()
+    },
 }
 
 
@@ -804,6 +1009,14 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
         re.compile(r"(là|được|ra) (điểm )?(chữ )?[abcdf]\+?(\s|$|\?|,|\.)"),
         re.compile(r"điểm chữ"),
     ),
+    "tuition_semester": (re.compile(r"học phí.{0,40}(học kỳ|học kì|\bkỳ\b|\bkì\b)"),),
+    "tuition_year": (re.compile(r"học phí.{0,40}(năm học|một năm|\b1 năm|mỗi năm)"),),
+    "tuition_program": (
+        re.compile(
+            r"học phí.{0,40}(cả|toàn|trọn) (khoá|khóa|ngành|chương trình)"
+            r"|học phí.{0,40}(đến khi|tới khi|cho tới lúc) (ra trường|tốt nghiệp)"
+        ),
+    ),
 }
 
 
@@ -847,5 +1060,9 @@ def describe_builtin_rules() -> str:
             "",
             "### Bảng quy đổi (điểm thang 10 đã làm tròn đến 0.1)",
             scale,
+            "",
+            "### Học phí (một học kỳ, một năm học hoặc cả khoá)",
+            *(f"- {line}" for line in TUITION_FORMULA_TEXT),
+            "- Đơn giá lấy theo đúng khoá tuyển sinh, khối/ngành, hệ và cơ sở trong biểu phí",
         ]
     )
