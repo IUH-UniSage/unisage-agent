@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.rag.prompting import (
+    build_calculation_review_prompt,
     build_json_repair_prompt,
     build_multi_intent_prompt,
     build_system_prompt,
@@ -44,6 +45,25 @@ def test_agent_templates_keep_literal_json_braces() -> None:
     assert '"sub_queries": [' in templates.agent_multi_query_decomposer
     assert '"formula_id": "course_score", "params": {' in templates.agent_calculation_extractor
     assert '"formula_id": "llm", "params": {' in templates.agent_calculation_extractor
+
+
+def test_rerank_lists_only_kept_chunks_and_reads_them_whole() -> None:
+    template = get_templates().agent_reranker_compressor
+
+    assert "Lý do phủ định = KHÔNG giữ" in template
+    assert "CHỈ liệt kê đoạn được giữ" in template
+    assert "bị cắt ngắn" not in template
+    assert "Mục có trong đoạn" not in template
+
+
+def test_calculation_review_prompt_renders_the_question_and_the_json_contract() -> None:
+    templates = get_templates()
+    assert not hasattr(templates, "chat_calculation")
+    prompt = build_calculation_review_prompt(
+        user_query="học phí 2 năm đầu", calculation_payload="[]", history=[]
+    )
+    assert "Câu hỏi của sinh viên: học phí 2 năm đầu" in prompt
+    assert '{"fits": true, "issue": null, "answer": ' in prompt
 
 
 def test_task_2_no_longer_mentions_the_pending_block_or_confirmed_metadata() -> None:
