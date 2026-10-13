@@ -8,9 +8,11 @@ Thuần Python: không gọi LLM, không I/O, không phụ thuộc graph. Graph 
 
 ## Objective
 
-Tính đúng và **giải thích được** phép tính XUÔI của 3 công thức cài sẵn (`formulas.py`):
-`course_score`, `grade_conversion`, `gpa`. Mỗi kết quả kèm công thức và từng bước đã thế số, để sinh
-viên tự đối chiếu; không trích nguồn.
+Tính đúng và **giải thích được** phép tính XUÔI của các công thức cài sẵn (`formulas.py`):
+`course_score`, `grade_conversion`, `gpa` và học phí `tuition_semester` / `tuition_year` /
+`tuition_program` (thêm 13-10-2026). Mỗi kết quả kèm công thức và từng bước đã thế số, để sinh viên tự
+đối chiếu. Module này không trích nguồn; số liệu học phí lấy từ tài liệu được `calculation-node` trích
+dẫn.
 
 Mọi phép tính khác (câu hỏi ngược, công thức trong tài liệu Qdrant) do LLM tự tính ở `calculation-node`
 (chốt 09-10-2026). Module này chỉ cung cấp cho LLM bản mô tả đầy đủ các quy tắc
@@ -114,6 +116,30 @@ GPA = round_half_up(Σ Q_i / Σ TC_i, 2)
 - Không loại trừ môn nào (GDTC, GDQP...): sinh viên tự chọn môn nào đưa vào bảng.
 - `Σ TC_i = 0` không xảy ra được, vì mỗi môn có tín chỉ ≥ 1. Danh sách rỗng thì báo thiếu `courses`.
 - Điểm chữ được chấp nhận: `A+ A B+ B C+ C D+ D F`, không phân biệt hoa thường.
+
+### Học phí: `tuition_semester`, `tuition_year`, `tuition_program` (chốt 13-10-2026)
+
+Một hàm `_tuition(scope)` dùng chung, ba phạm vi chỉ khác tiêu đề và nhãn số tín chỉ:
+
+```
+Học phí = tc_lt × don_gia_lt + tc_th × don_gia_th
+```
+
+- **Đơn giá theo khoá tuyển sinh, giữ nguyên suốt khoá học**; chỉ khoá mới có đơn giá khác. Vì vậy học
+  phí cả khoá là tổng tín chỉ của chương trình nhân đơn giá của khoá, không phải ước tính theo năm.
+- `tc_lt`, `tc_th`: **hai tham số bắt buộc riêng**, số nguyên `[0, 300]`, không được cùng bằng 0. Không
+  bao giờ hỏi gộp thành "tổng tín chỉ".
+- `don_gia_lt`, `don_gia_th`: số nguyên đồng `[0, 100.000.000]`. Chuỗi phải viết đủ số (`980000`,
+  `980.000`, `980.000 đ`): dấu chấm/phẩy là phân cách hàng nghìn; "1,6 triệu", "980k" bị từ chối và hỏi
+  lại thay vì đọc sai (`parse_money`).
+- `khoa_tuyen_sinh`, `khoi_nganh`: kiểu `text`, **không tham gia phép tính**, không bao giờ bị
+  `missing_params` hỏi. Chỉ dùng để chọn đúng dòng biểu phí khi tra tài liệu.
+- Không gồm QPAN (đơn giá riêng); kết quả luôn kèm cảnh báo này. Tiền hiển thị `38.350.000 đồng`
+  (`money`).
+- `ParamSpec.lookup`: câu tìm Qdrant cho tham số tra được trong tài liệu (đơn giá; tín chỉ của
+  `tuition_program`); `None` = số của riêng sinh viên (tín chỉ một học kỳ / một năm).
+- Router: câu có "học phí" chỉ được xét với ba công thức học phí (theo từ chỉ phạm vi kỳ / năm / cả khoá,
+  không phụ thuộc thứ tự), không bao giờ rơi vào `course_score` dù có "lý thuyết … thực hành".
 
 ## Contract chung cho mọi công thức
 

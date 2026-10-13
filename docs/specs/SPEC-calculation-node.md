@@ -60,7 +60,7 @@ TaskOutcome = (
 - Công thức cài sẵn **chỉ khi tính xuôi** đúng công thức đó (kể cả chưa đủ số). `previous`: tính xuôi lại
   phép tính trong `<previous_calculation>` với số mới. `llm`: mọi trường hợp khác, kèm `retrieval_query`
   (câu tìm tài liệu chứa công thức) hoặc `null` khi chỉ cần công thức cài sẵn (VD hỏi ngược điểm cuối kỳ).
-- Chỉ trích những số **người dùng đã nói**. Prompt liệt kê 3 công thức cài sẵn từ `ParamSpec`.
+- Chỉ trích những số **người dùng đã nói**. Prompt liệt kê các công thức cài sẵn từ `ParamSpec`. Câu học phí (kỳ / năm / cả khoá) đi vào `tuition_*`, không còn qua `llm`; câu hỏi ngược về học phí vẫn là `llm`.
 - `parse_extraction`: `llm` luôn thắng; còn lại một công thức cài sẵn duy nhất do router luật khớp sẽ
   thắng (kể cả khi output hỏng); output hỏng/không rõ mà router không khớp → `llm` (LLM vẫn hỏi lại được).
   `previous` chỉ nhận khi có `last_calculation` cài sẵn.
@@ -72,7 +72,24 @@ TaskOutcome = (
 khi có). Test: `tests/calculation/test_builtin_triggers.py`.
 
 Câu hỏi cho công thức cài sẵn được dựng từ `ParamSpec` (`number`, `number_list`, `number_or_list`,
-`course_table`); số Python từ chối được hỏi lại kèm lý do, ví dụ "Điểm cuối kỳ (bạn nhập 11, ...)".
+`course_table`, `text`); số Python từ chối được hỏi lại kèm lý do, ví dụ "Điểm cuối kỳ (bạn nhập 11, ...)".
+
+### 1.2 Tra tài liệu trước khi hỏi (`builtin_task`, thêm 13-10-2026)
+
+Mọi công thức cài sẵn, ở lượt hỏi lẫn lượt submit, đi qua `builtin_task`:
+
+1. `fill_from_documents`: các tham số còn thiếu có `ParamSpec.lookup` (VD đơn giá học phí) được tìm qua
+   `_search` (Qdrant + ngưỡng điểm + LLM rerank), rồi `agents/calculation_value_extractor.yaml` chép từng
+   con số kèm số đoạn `[n]`. **Python chỉ nhận số khi đoạn được dẫn thật sự chứa con số đó** (`_amounts`,
+   đọc dấu chấm/phẩy là phân cách hàng nghìn); sai thì bỏ, để panel hỏi.
+2. Biểu phí có nhiều dòng theo khoá tuyển sinh / khối ngành mà chưa biết sinh viên thuộc dòng nào → model
+   trả `ask`; hỏi tiêu chí đó trước (choice từ các giá trị tài liệu ghi, `allow_other`), **cùng lượt** với
+   các số của riêng sinh viên còn thiếu. Lượt submit tra lại với tiêu chí vừa trả lời.
+3. Còn thiếu → panel hỏi đúng các `ParamSpec` đó. Đủ → Python tính; `Computed.notes` liệt kê từng số lấy
+   từ tài liệu kèm `[n]` (đánh số chung với các nguồn khác của tin nhắn trong `number_citations`), thêm ghi
+   chú đơn giá áp dụng cho đại học chính quy tại trụ sở chính. Trace lưu các chunk nguồn.
+
+Không có tham số `lookup` nào còn thiếu thì không tìm Qdrant, không gọi model.
 
 ## 2. LLM tự tính: `main/chat_calculation_llm.yaml`
 
