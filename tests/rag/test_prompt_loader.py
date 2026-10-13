@@ -90,6 +90,16 @@ def test_ticket_fallback_and_calculation_prompts_carry_the_current_time() -> Non
         assert "lịch của khoa bạn có thể khác" in prompt
 
 
+def test_classifier_normalises_the_query_without_changing_its_meaning() -> None:
+    template = get_templates().agent_message_classification
+
+    assert "## Cách viết `query`" in template
+    assert "GIỮ NGUYÊN từ ngữ, con số, tên riêng và MỌI chữ phủ định" in template
+    assert "Sửa lỗi chính tả" in template
+    assert "CHUYỂN sang ý định/chủ đề khác" in template
+    assert "chép NGUYÊN VĂN tin nhắn" not in template
+
+
 def test_task_2_no_longer_mentions_the_pending_block_or_confirmed_metadata() -> None:
     task_2 = get_templates().task_2
     assert "missing_metadata_to_confirm" not in task_2

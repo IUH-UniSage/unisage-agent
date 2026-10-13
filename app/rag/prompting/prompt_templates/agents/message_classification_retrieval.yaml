@@ -19,7 +19,7 @@ template: |
 
   Lịch sử: "- Người dùng: Học phí đại học chính quy khóa 2024 ngành CNTT bao nhiêu?"
   User: "còn khóa 2025 thì sao?"
-  Output: {"tasks": [{"intent": "academic_advisory", "query": "còn khóa 2025 thì sao?", "routing_mode": "SINGLE", "standalone_question": "Học phí đại học chính quy khóa 2025 ngành CNTT là bao nhiêu?", "hyde_passage": "Mức thu học phí đại học chính quy khóa 2025 ngành CNTT là ... đồng/tín chỉ."}], "confidence": 0.9}
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "còn học phí đại học chính quy khóa 2025 ngành CNTT thì sao?", "routing_mode": "SINGLE", "standalone_question": "Học phí đại học chính quy khóa 2025 ngành CNTT là bao nhiêu?", "hyde_passage": "Mức thu học phí đại học chính quy khóa 2025 ngành CNTT là ... đồng/tín chỉ."}], "confidence": 0.9}
 
   User: "Học phí khóa 2024 hệ chính quy ngành CNTT và Kế toán chênh nhau bao nhiêu?"
   Output: {"tasks": [{"intent": "academic_advisory", "query": "Học phí khóa 2024 hệ chính quy ngành CNTT và Kế toán chênh nhau bao nhiêu?", "routing_mode": "MULTI", "sub_queries": ["Định mức học phí hệ chính quy khóa 2024 ngành Công nghệ thông tin", "Định mức học phí hệ chính quy khóa 2024 ngành Kế toán"]}], "confidence": 0.93}
