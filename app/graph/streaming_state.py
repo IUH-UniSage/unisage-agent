@@ -86,5 +86,10 @@ class GraphOutput:
     # metadata.calculation items (public) and the staff-only traces (SPEC-calculation-node §7.2).
     calculation_items: list[dict[str, Any]] = field(default_factory=list)
     calculation_traces: list[dict[str, Any]] = field(default_factory=list)
-    # This turn's latest computed calculation, stored for the next turn (None = keep).
-    last_calculation: LastCalculation | None = None
+    # This turn's computed calculations, oldest first, appended to the conversation's
+    # `recent_calculations` (empty = keep the list as it is).
+    calculations: list[LastCalculation] = field(default_factory=list)
+
+    @property
+    def last_calculation(self) -> LastCalculation | None:
+        return self.calculations[-1] if self.calculations else None

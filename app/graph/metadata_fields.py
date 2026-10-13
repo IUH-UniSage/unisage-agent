@@ -28,6 +28,13 @@ def canonical_field(name: str) -> str:
     return _alias_index().get(key, key)
 
 
+def registered_name(name: str) -> str:
+    """The registry name for a registered field or alias; `name` unchanged otherwise
+    (a label such as "Số tín chỉ lý thuyết của một năm học" stays readable)."""
+
+    return _alias_index().get(slug(name), name)
+
+
 def concept(name: str) -> str:
     """The human name of a field ("Khóa nhập học / ..."), for the update notice."""
 

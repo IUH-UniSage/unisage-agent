@@ -334,9 +334,7 @@ async def run_and_persist(
                 if confirmed != graph_input.confirmed_metadata
                 else None
             )
-            computed = (
-                graph_output.last_calculation if status == "COMPLETED" and graph_output else None
-            )
+            computed = graph_output.calculations if status == "COMPLETED" and graph_output else []
             # State first, projection second, event last: a client that receives
             # `event: clarification` can always reload and submit that panel.
             persisted = await _store_round_state(
@@ -344,7 +342,7 @@ async def run_and_persist(
                 conversation_id,
                 claim,
                 pending_round,
-                [*graph_input.recent_calculations, computed] if computed else None,
+                [*graph_input.recent_calculations, *computed] if computed else None,
                 profile,
             )
             if persisted is _LOST_CLAIM:

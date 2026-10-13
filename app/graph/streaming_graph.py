@@ -29,6 +29,7 @@ from app.core.registry.model_registry import CredentialConfig
 from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.calculation_turn import (
+    REVIEW_ISSUE_KEY,
     CalculationTask,
     Review,
     calculation_titles,
@@ -45,6 +46,7 @@ from app.graph.clarification_round import (
     advisory_task,
     build_round,
 )
+from app.graph.metadata_fields import registered_name
 from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
@@ -362,17 +364,31 @@ def calculation_title(last: LastCalculation | None) -> str | None:
     return FORMULAS[last.plan.formula_id].title if last.plan.formula_id != "llm" else None
 
 
-def _last_calculation(outcomes: Sequence[TaskOutcome]) -> LastCalculation | None:
-    """The turn's last computed calculation: a built-in one with its parameters (forward
-    follow-ups reuse them), an LLM one by name only (its numbers stay in the chat)."""
+def _computed_calculations(outcomes: Sequence[TaskOutcome]) -> list[LastCalculation]:
+    """The turn's computed calculations, each with its own numbers (a follow-up reuses
+    them instead of asking again): a built-in one's parameters, an LLM one's inputs."""
 
-    done = [outcome for outcome in outcomes if isinstance(outcome, Computed | LlmAnswered)]
-    if not done:
-        return None
-    last = done[-1]
-    if isinstance(last, Computed):
-        return LastCalculation(plan=last.plan, params=last.params, title=last.result.title)
-    return LastCalculation(plan=last.plan, title=last.query[:200])
+    calculations: list[LastCalculation] = []
+    for outcome in outcomes:
+        if isinstance(outcome, Computed):
+            calculations.append(
+                LastCalculation(
+                    plan=outcome.plan, params=outcome.params, title=outcome.result.title
+                )
+            )
+        elif isinstance(outcome, LlmAnswered):
+            calculations.append(
+                LastCalculation(
+                    plan=outcome.plan,
+                    params={
+                        registered_name(name): value
+                        for name, value in outcome.known_params.items()
+                        if name != REVIEW_ISSUE_KEY
+                    },
+                    title=outcome.query[:200],
+                )
+            )
+    return calculations
 
 
 def _start_calculations(
@@ -522,7 +538,7 @@ async def _turn_with_calculations(
             output,
             calculation_items=public,
             calculation_traces=private,
-            last_calculation=_last_calculation(outcomes),
+            calculations=_computed_calculations(outcomes),
         )
     return output
 

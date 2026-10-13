@@ -6,9 +6,11 @@ from app.graph.metadata_fields import (
     apply_updates,
     canonical_field,
     canonical_params,
+    canonical_profile,
     field_scope,
     is_profile_field,
     normalize_value,
+    registered_name,
 )
 from app.rag.prompting.loader import get_known_metadata_fields
 
@@ -81,3 +83,26 @@ def test_an_update_that_changes_nothing_is_not_reported() -> None:
 
 def test_canonical_params_keep_the_first_value_on_a_clash() -> None:
     assert canonical_params({"so_tc_lt": 10, "tc_lt": 12, "gk": 7}) == {"tc_lt": 10, "gk": 7}
+
+
+def test_a_stored_profile_reads_back_under_registry_names() -> None:
+    # A row migrated from the per-conversation `confirmed_metadata` (aliases, raw intake).
+    stored = {
+        "cohort": "K18",
+        "nganh": " CNTT ",
+        "khoa_nhap_hoc": "2020",
+        "ghi_chu": "",
+        "lop": "x",
+    }
+    assert canonical_profile(stored, _TODAY) == {
+        "khoa_nhap_hoc": "2022",
+        "nganh_hoc": "CNTT",
+        "lop": "x",
+    }
+
+
+def test_registered_name_keeps_an_unregistered_label_as_written() -> None:
+    assert registered_name("so_tc_lt") == "tc_lt"
+    label = "Số tín chỉ lý thuyết của một năm học"
+    assert registered_name(label) == label
+    assert registered_name("Số tín chỉ lý thuyết") == "tc_lt"

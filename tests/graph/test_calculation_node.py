@@ -402,6 +402,10 @@ async def test_a_result_that_does_not_fit_is_redone_by_the_llm() -> None:
     assert "chat_calculation_review" in trace["prompt_versions"]
     assert result.last_calculation is not None
     assert result.last_calculation.plan.formula_id == "llm"
+    # Its inputs are kept for a follow-up, like a built-in one's parameters.
+    params = result.last_calculation.params
+    assert params["Số tín chỉ lý thuyết của một năm học"] == 100
+    assert REVIEW_ISSUE_KEY not in params
 
 
 @pytest.mark.asyncio
