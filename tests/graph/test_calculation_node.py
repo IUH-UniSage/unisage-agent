@@ -42,6 +42,7 @@ from app.schemas.clarification import (
     Answer,
     CalculationPlan,
     ClarificationSubmit,
+    LastCalculation,
     PendingCalculationTask,
 )
 from app.schemas.intent import ClassifiedTask
@@ -1229,8 +1230,8 @@ async def test_an_llm_form_answered_with_a_builtin_formulas_numbers_is_computed_
         pending_round=first.pending_round,
         answers=validate_answers(first.pending_round.panel, submit),
     )
-    # The LLM ignores the answers and asks the same form again (gemini flash-lite did).
-    generation, prompts = _recording_model(_COURSE_FORM)
+    # The answers are the course score's numbers: Python computes, the LLM is not called.
+    generation, prompts = _recording_model()
     second = await run_graph(
         _input("đã trả lời", resume=resume),
         GraphModels(
@@ -1243,10 +1244,14 @@ async def test_an_llm_form_answered_with_a_builtin_formulas_numbers_is_computed_
         _TRACE,
         _usage_recorder(),
     )
-    assert len(prompts) == 1  # no review call, no second LLM call
+    assert prompts == []  # no calculation LLM call and no review call
     assert second.pending_round is None
     assert LLM_NOTICE not in second.response_text
     assert "Điểm tổng kết học phần" in second.response_text
+    assert "thang 4 **3.8**" in second.response_text
+    # A follow-up ("làm tròn thang 4") can reuse it as the previous built-in calculation.
+    assert second.last_calculation is not None
+    assert second.last_calculation.plan.formula_id == "course_score"
     [item] = second.calculation_items
     assert (item["mode"], item["status"]) == ("builtin", "computed")
 
@@ -1364,6 +1369,36 @@ async def test_resume_reuses_the_documents_the_llm_saw_when_it_asked(
     )
     assert retrieval.queries == searched
     assert (_CHUNK.content in prompts[0]) == bool(indexed)
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_reuses_the_numbers_of_a_calculation_the_llm_did() -> None:
+    # The student answered six numbers on an LLM form; the LLM computed the course score.
+    previous = LastCalculation(
+        plan=CalculationPlan(formula_id="llm"),
+        params={"tclt": "3", "tcth": "1", "tbtx": "9", "gk": "8", "ck": "8.5", "th": "9"},
+        title="tính điểm",
+    )
+    query = "Tính điểm làm tròn thang 4 dựa trên điểm tổng kết học phần đã cung cấp"
+    extractor, prompts = _recording_model(
+        {"tasks": [{"intent": "academic_calculation", "query": query}]},
+        {"formula_id": "grade_conversion", "params": {}, "retrieval_query": None},
+    )
+    result = await run_graph(
+        _input("làm tròn thang 4", recent_calculations=[previous]),
+        GraphModels(
+            classification=extractor,
+            query_transformation=_echo_model(),
+            generation=_note_model(_review(True, "Thang 4 của bạn là **3.8**.")),
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert '"ck": "8.5"' in prompts[1]  # the extractor sees the previous numbers
+    assert result.pending_round is None  # nothing asked again
+    assert result.calculation_items[0]["result_summary"] == "ĐTKHP: 8.6; Điểm chữ: A; Thang 4: 3.8"
 
 
 def test_llm_questions_accepts_the_models_small_format_slips() -> None:

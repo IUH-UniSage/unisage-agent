@@ -210,7 +210,7 @@ def parse_extraction(
     formula_id = data.get("formula_id")
     raw_params = data.get("params")
     params: dict[str, JsonValue] = dict(raw_params) if isinstance(raw_params, dict) else {}
-    if formula_id == "previous" and previous is not None and previous.plan.formula_id != "llm":
+    if formula_id == "previous" and previous_formula(previous) is not None:
         return Extraction("previous", params, None)
     routed = [formula for formula in allowed if formula in BUILTIN_IDS]
     if formula_id == "llm" or (formula_id not in BUILTIN_IDS and len(routed) != 1):
@@ -225,11 +225,27 @@ def parse_extraction(
     return Extraction(builtin, params, None)
 
 
+def previous_formula(previous: LastCalculation | None) -> FormulaId | None:
+    """The built-in formula the previous calculation can be redone with: its own, or -
+    for one the LLM computed - the one formula every number of it belongs to."""
+
+    if previous is None:
+        return None
+    if previous.plan.formula_id != "llm":
+        return previous.plan.formula_id
+    names = {canonical_field(name) for name in previous.params}
+    return _builtin_for(names) if names else None
+
+
 def _previous_block(previous: LastCalculation) -> str:
-    assert previous.plan.formula_id != "llm"
+    formula_id = previous.plan.formula_id
     described = {
         "formula_id": "previous",
-        "formula": FORMULAS[previous.plan.formula_id].title,
+        "formula": (
+            FORMULAS[formula_id].title
+            if formula_id != "llm"
+            else f"AI tự tính: {previous.title or 'phép tính trước'}"
+        ),
         "params": previous.params,
     }
     return (
@@ -243,9 +259,10 @@ async def extract_request(query: str, deps: CalculationDeps) -> Extraction:
     allowed: list[str] = list(route_builtin(query))
     prompt = query
     previous = deps.previous
-    if previous is not None and previous.plan.formula_id != "llm":
+    if previous is not None:
+        # Numbers the student gave for the previous calculation, the LLM's included.
         prompt += _previous_block(previous)
-        if allowed:
+        if allowed and previous_formula(previous) is not None:
             allowed = [*allowed, "previous"]
     if len(allowed) > 1:
         prompt += "\n\n<allowed_formula_ids>" + ", ".join(allowed) + "</allowed_formula_ids>"
@@ -976,24 +993,24 @@ async def run_calculation_task(task_id: str, query: str, deps: CalculationDeps) 
     numbers of the previous calculation (a corrected intake replaces the old one)."""
 
     extraction = await extract_request(query, deps)
+    previous = deps.previous
     if extraction.formula_id == "previous":
-        previous = deps.previous
-        assert previous is not None and previous.plan.formula_id != "llm"
-        formula_id = previous.plan.formula_id
-        params = {
-            **previous.params,
-            **profile_params(formula_id, deps.confirmed_metadata),
-            **extraction.params,
-        }
-        return await builtin_task(task_id, formula_id, query, params, deps)
-    if extraction.formula_id == "llm":
+        formula_id = previous_formula(previous)
+        assert previous is not None and formula_id is not None
+    elif extraction.formula_id == "llm":
         plan = CalculationPlan(formula_id="llm", retrieval_query=extraction.retrieval_query)
         return await llm_outcome(task_id, query, plan, extraction.params, deps)
+    else:
+        formula_id = extraction.formula_id
+    # The previous calculation's numbers are context for any built-in formula: a
+    # follow-up ("làm tròn thang 4") is not asked again for what the student already
+    # gave, even when the LLM computed it or the router picked another formula.
     params = {
-        **profile_params(extraction.formula_id, deps.confirmed_metadata),
+        **(_builtin_params(formula_id, previous.params) if previous is not None else {}),
+        **profile_params(formula_id, deps.confirmed_metadata),
         **extraction.params,
     }
-    return await builtin_task(task_id, extraction.formula_id, query, params, deps)
+    return await builtin_task(task_id, formula_id, query, params, deps)
 
 
 async def resume_calculation_task(
@@ -1006,10 +1023,20 @@ async def resume_calculation_task(
 ) -> TaskOutcome:
     """A panel answer: never calls the extractor again. A built-in formula computes
     (looking its values up again when an answer told which fee schedule row applies);
-    an LLM calculation is asked again with the answers as known values."""
+    an LLM calculation whose form asked a built-in formula's numbers is computed by
+    Python (`_builtin_handoff`), any other is asked again with the answers as known
+    values."""
 
     if plan.formula_id == "llm":
-        return await llm_outcome(task_id, query, plan, {**known_params, **answers}, deps)
+        known = {**known_params, **answers}
+        # The form the LLM asked was a built-in formula's: Python computes it now, with no
+        # LLM call, and the result is a built-in one a follow-up ("làm tròn thang 4",
+        # "nếu giữa kỳ 9 thì sao") can reuse as the previous calculation.
+        asked = {canonical_field(name) for name in answers}
+        handed = await _builtin_handoff(task_id, query, asked, known, deps)
+        if handed is not None:
+            return handed
+        return await llm_outcome(task_id, query, plan, known, deps)
     values = {
         **profile_params(plan.formula_id, deps.confirmed_metadata),
         **known_params,
