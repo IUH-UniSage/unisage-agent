@@ -215,11 +215,21 @@ def _build_prompt(questions: Sequence[str], chunks: Sequence[RetrievedChunk]) ->
         f"[C{index}] (Tài liệu: {chunk.source}"
         + (f"; Mục: {' > '.join(chunk.heading_path)}" if chunk.heading_path else "")
         + ")"
-        + _outline_line(chunk)
-        + f"\n{chunk.content[:max_chars]}"
+        + (f"\n{chunk.content}" if _is_table(chunk) else _snippet(chunk, max_chars))
         for index, chunk in enumerate(chunks, 1)
     )
     return f"Câu hỏi con:\n{question_lines}\n\nĐoạn văn bản:\n{chunk_lines}"
+
+
+def _is_table(chunk: RetrievedChunk) -> bool:
+    """A table chunk is shown whole: the row a question needs (Khối Công nghệ under a
+    fee heading that lists Khối Kinh tế first) is often past any cut."""
+
+    return chunk.metadata.get("region_type") == "table"
+
+
+def _snippet(chunk: RetrievedChunk, max_chars: int) -> str:
+    return _outline_line(chunk) + f"\n{chunk.content[:max_chars]}"
 
 
 def _outline_line(chunk: RetrievedChunk) -> str:

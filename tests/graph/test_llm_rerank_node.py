@@ -267,3 +267,37 @@ async def test_rescue_restores_every_confident_sub_query_when_all_were_emptied()
 
     assert outcome.result.failed_query_indexes == [1]
     assert [c.chunk_id for c in outcome.result.chunks] == ["don-chuyen-nganh"]
+
+
+@pytest.mark.asyncio
+async def test_a_table_chunk_is_shown_whole_and_a_text_chunk_is_cut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Section 3.1 of the fee decision lists Khối Kinh tế first: cut at the snippet
+    length, the Khối Công nghệ row the question needs was never seen."""
+
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_SNIPPET_CHARS", 100)
+    seen: list[str] = []
+
+    def judge(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        seen.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        return ModelResponse(parts=[TextPart(content='{"SQ1": {"C1": "có Khối Công nghệ"}}')])
+
+    fee_table = "\n".join(
+        [
+            "| 3.1 | - Khối Kinh tế (các ngành khác): | | 36.260.000 |",
+            *["| 3.1 | + Môn lý thuyết | 980.000 | |"] * 10,
+            "| 3.1 | - Khối Công nghệ: | | 38.350.000 |",
+        ]
+    )
+    table = _chunk("fees", 0.9, fee_table).model_copy(update={"metadata": {"region_type": "table"}})
+    text = _chunk("note", 0.8, "y" * 500)
+    await llm_rerank(
+        build_llm_rerank_agent(FunctionModel(function=judge)),
+        ["Học phí CNTT chính quy"],
+        rerank_chunks([[table, text]]),
+    )
+
+    (prompt,) = seen
+    assert "38.350.000" in prompt
+    assert "y" * 100 in prompt and "y" * 101 not in prompt

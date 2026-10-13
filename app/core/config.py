@@ -195,7 +195,8 @@ class Settings(BaseSettings):
     # LLMRerankNode: one call to the RERANK model (EXTRACTION if none) per turn checks
     # which reranked chunks actually answer which sub-query - the score threshold alone
     # lets a chunk through on shared keywords. A sub-query left with none goes to
-    # WebSearchNode. Each chunk is shown to the model cut to SNIPPET_CHARS.
+    # WebSearchNode. Each text chunk is shown to the model cut to SNIPPET_CHARS; a table
+    # chunk is shown whole.
     CHAT_LLM_RERANK_ENABLED: bool = True
     CHAT_LLM_RERANK_SNIPPET_CHARS: int = Field(default=800, ge=100)
     # When the LLM rerank keeps nothing for any sub-query, each sub-query whose best
