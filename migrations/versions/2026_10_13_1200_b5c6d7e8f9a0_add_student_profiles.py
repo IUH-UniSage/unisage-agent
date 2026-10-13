@@ -78,10 +78,46 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Conversation-owned profiles go back to their conversation's row and the latest
+    calculation back to `last_calculation`; user-owned profiles have no conversation
+    to go back to and are lost."""
+
     op.add_column(
         _STATES,
         sa.Column("confirmed_metadata", _JSON, nullable=False, server_default=sa.text("'{}'")),
     )
     op.add_column(_STATES, sa.Column("last_calculation", _JSON, nullable=True))
+    states = sa.table(
+        _STATES,
+        sa.column("conversation_id", sa.String()),
+        sa.column("confirmed_metadata", _JSON),
+        sa.column("last_calculation", _JSON),
+        sa.column("recent_calculations", _JSON),
+    )
+    profiles = sa.table(
+        _PROFILES, sa.column("conversation_id", sa.String()), sa.column("attributes", _JSON)
+    )
+    bind = op.get_bind()
+    for conversation_id, attributes in bind.execute(
+        sa.select(profiles.c.conversation_id, profiles.c.attributes).where(
+            profiles.c.conversation_id.is_not(None)
+        )
+    ).all():
+        bind.execute(
+            sa.update(states)
+            .where(states.c.conversation_id == conversation_id)
+            .values(confirmed_metadata=attributes)
+        )
+    for conversation_id, recent in bind.execute(
+        sa.select(states.c.conversation_id, states.c.recent_calculations).where(
+            states.c.recent_calculations.is_not(None)
+        )
+    ).all():
+        if recent:
+            bind.execute(
+                sa.update(states)
+                .where(states.c.conversation_id == conversation_id)
+                .values(last_calculation=recent[-1])
+            )
     op.drop_column(_STATES, "recent_calculations")
     op.drop_table(_PROFILES)
