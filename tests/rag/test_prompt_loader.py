@@ -531,7 +531,30 @@ def test_calculation_llm_prompt_keeps_its_ask_form_json_after_formatting() -> No
     from app.rag.prompting import build_calculation_llm_prompt
 
     prompt = build_calculation_llm_prompt(
-        user_query="q", builtin_rules="R", documents="", known_values="{}", history=[]
+        user_query="q",
+        builtin_rules="R",
+        documents="",
+        known_values="{}",
+        history=[],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
     )
     assert '{"type": "ask_user_form", "fields": [{"field":' in prompt
     assert "(không có tài liệu)" in prompt
+
+
+def test_calculation_llm_prompt_carries_the_security_rules_and_verified_identity() -> None:
+    from app.rag.prompting import build_calculation_llm_prompt
+
+    prompt = build_calculation_llm_prompt(
+        user_query="q",
+        builtin_rules="R",
+        documents="",
+        known_values="{}",
+        history=[],
+        security=AcademicSecurityContext(user_id="sv-1", role="SINH_VIEN"),
+        confirmed_metadata={"bac_dao_tao": "Đại học chính quy"},
+    )
+    assert "Quy Tắc Bảo Mật & Phân Quyền Thông Tin" in prompt
+    assert "<academic_user_context>" in prompt and "sv-1" in prompt
+    assert "bac_dao_tao: Đại học chính quy" in prompt

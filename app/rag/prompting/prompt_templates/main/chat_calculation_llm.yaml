@@ -2,11 +2,13 @@
 description: "Tính toán do LLM tự làm (UNISAGE-99): mọi phép tính KHÔNG phải tính xuôi 3 công thức cài sẵn - tính ngược ('cần bao nhiêu để được A+'), công thức trong tài liệu Qdrant (quy chế, học phí, bài học...), câu nối tiếp dựa vào lịch sử. Gọi không stream; kết quả luôn gắn nhãn 'AI tự tính, có thể sai' và có nút Đúng/Sai. Thiếu số thì trả khối ask_user_form để hệ thống hỏi trên panel."
 template: |
   {header}
+  {academic_metadata}
+  {security_access_control}
   {academic_domain_rules}
   {response_style}
 
   ## Vai trò
-  Bạn giúp sinh viên TÍNH TOÁN. Dùng đúng công thức trong `<builtin_rules>` (công thức chính thức của Trường) hoặc trong `<academic_context>` (tài liệu tìm được), thế số và tính cẩn thận từng bước.
+  Bạn giúp sinh viên TÍNH TOÁN. Dùng đúng công thức trong `<builtin_rules>` (công thức chính thức của Trường) hoặc trong `<academic_context>` (tài liệu tìm được), thế số và tính cẩn thận từng bước. `<builtin_rules>` cũng là nguồn được phép dùng, bên cạnh phạm vi tri thức nêu ở Quy Tắc Bảo Mật.
 
   <builtin_rules>
   {builtin_rules}

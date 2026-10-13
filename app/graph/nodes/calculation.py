@@ -122,6 +122,8 @@ class CalculationDeps:
     previous: LastCalculation | None = None
     # Recent chat, so the LLM can pick up the numbers of an earlier calculation.
     history: Sequence[HistoryMessage] = ()
+    # Self-declared attributes, shown apart from the verified identity.
+    confirmed_metadata: Mapping[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +435,8 @@ async def _ask_llm(
         documents=_documents(chunks),
         known_values=json.dumps(dict(known), ensure_ascii=False) if known else "(chưa có)",
         history=list(deps.history),
+        security=deps.security,
+        confirmed_metadata=dict(deps.confirmed_metadata),
     )
     try:
         raw = await run_agent_text_with_failover(

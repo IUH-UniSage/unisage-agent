@@ -177,6 +177,8 @@ def build_calculation_llm_prompt(
     documents: str,
     known_values: str,
     history: Sequence[HistoryMessage],
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
 ) -> str:
     """`main/chat_calculation_llm.yaml`: a calculation the LLM does itself (target
     questions, formulas from documents, follow-ups) - everything but the forward
@@ -185,6 +187,8 @@ def build_calculation_llm_prompt(
     templates = get_templates()
     return templates.chat_calculation_llm.format(
         header=templates.header,
+        academic_metadata=build_metadata_section(security, confirmed_metadata),
+        security_access_control=templates.security_access_control,
         academic_domain_rules=templates.academic_domain_rules,
         response_style=templates.response_style,
         citation_rules=templates.citation_rules,

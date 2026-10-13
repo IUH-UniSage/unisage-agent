@@ -326,6 +326,7 @@ def _calculation_deps(
         budget=budget,
         previous=graph_input.last_calculation,
         history=graph_input.history,
+        confirmed_metadata=graph_input.confirmed_metadata,
     )
 
 
