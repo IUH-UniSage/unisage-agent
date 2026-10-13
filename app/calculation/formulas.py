@@ -744,7 +744,6 @@ def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], Calculatio
 # ---------------------------------------------------------------------------
 
 ParamKind = Literal["number", "number_list", "number_or_list", "course_table", "text"]
-ParamSource = Literal["user", "document"]
 FormulaId = Literal[
     "gpa",
     "course_score",
@@ -786,8 +785,9 @@ class ParamSpec:
     step: Decimal | None = None
     unit: str | None = None
     max_items: int | None = None
-    # "document": looked up in the retrieved documents before the student is asked.
-    source: ParamSource = "user"
+    # What to search the documents for before the student is asked; None = the
+    # student's own value (their scores, the credits they registered).
+    lookup: str | None = None
 
 
 def _score_spec(name: str, label: str, tab_label: str, credit_field: str) -> ParamSpec:
@@ -823,7 +823,11 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
     `khoi_nganh` are not computed with: they pick the fee schedule row, and are asked
     only when the documents hold several rows."""
 
-    credit_source: ParamSource = "document" if scope == "tuition_program" else "user"
+    credit_lookup = (
+        "tổng số tín chỉ lý thuyết, thực hành của chương trình đào tạo"
+        if scope == "tuition_program"
+        else None
+    )
     period = TUITION_SCOPES[scope]
     credits = [
         ParamSpec(
@@ -835,7 +839,7 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             max=Decimal(TUITION_CREDITS_MAX),
             step=Decimal(1),
             unit="TC",
-            source=credit_source,
+            lookup=credit_lookup,
         )
         for name, kind in (("tc_lt", "lý thuyết"), ("tc_th", "thực hành"))
     ]
@@ -849,7 +853,7 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             max=TUITION_PRICE_MAX,
             step=Decimal(1),
             unit="đồng",
-            source="document",
+            lookup="mức thu học phí 01 tín chỉ môn lý thuyết, môn thực hành",
         )
         for name, kind, short_kind in (
             ("don_gia_lt", "lý thuyết", "LT"),

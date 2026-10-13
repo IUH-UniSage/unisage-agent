@@ -24,6 +24,7 @@ class PromptTemplates:
     agent_message_classification_retrieval: str
     agent_multi_query_decomposer: str
     agent_calculation_extractor: str
+    agent_calculation_value_extractor: str
     agent_reranker_compressor: str
     agent_multi_representation_enricher: str
 

@@ -14,6 +14,7 @@ Two ways to compute (docs/specs/SPEC-calculation-node.md):
 
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -516,6 +517,174 @@ async def llm_outcome(
     if {chunk.chunk_id for chunk in more} <= {chunk.chunk_id for chunk in chunks}:
         return outcome  # nothing new to show the LLM
     return await _ask_llm(task_id, query, plan, known, more, deps)
+
+
+# ---------------------------------------------------------------------------
+# Built-in formulas: values looked up in the documents (unit prices, credits)
+# ---------------------------------------------------------------------------
+
+_AMOUNT = re.compile(r"\d{1,3}(?:[.,]\d{3})+|\d+")
+_OPTIONS_MAX = 12
+
+
+@dataclass(frozen=True)
+class DocumentValues:
+    """Params read from the documents (each one checked against the chunk it cites),
+    that chunk per param, and the context questions (which intake, which faculty
+    group) to ask before the documents can be read for this student."""
+
+    values: dict[str, JsonValue] = field(default_factory=dict)
+    sources: dict[str, RetrievedChunk] = field(default_factory=dict)
+    questions: list[dict[str, Any]] = field(default_factory=list)
+
+
+def build_value_extractor_agent(model: Model | str) -> Agent[None, str]:
+    return Agent(
+        model=model,
+        system_prompt=get_templates().agent_calculation_value_extractor,
+        model_settings=auxiliary_model_settings(model),
+    )
+
+
+def _whole_number(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and _AMOUNT.fullmatch(value.strip()):
+        return int(re.sub(r"\D", "", value))
+    return None
+
+
+def _amounts(text: str) -> set[int]:
+    """Every whole number written in `text`, thousands separators read as such."""
+
+    return {int(re.sub(r"\D", "", match)) for match in _AMOUNT.findall(text)}
+
+
+def _context_question(spec: ParamSpec, options: object) -> dict[str, Any]:
+    labels = list(
+        dict.fromkeys(
+            str(option).strip()[:120]
+            for option in (options if isinstance(options, list) else [])
+            if str(option).strip()
+        )
+    )[:_OPTIONS_MAX]
+    if len(labels) < 2:
+        return question_for(spec)
+    return {
+        "tab_label": spec.tab_label,
+        "prompt": spec.label,
+        "kind": "choice",
+        "origin": "calculation",
+        "field": spec.name,
+        "options": [{"id": f"o{index}", "label": label} for index, label in enumerate(labels, 1)],
+        "allow_other": True,
+    }
+
+
+def _value_prompt(
+    query: str,
+    wanted: Sequence[ParamSpec],
+    known: Mapping[str, JsonValue],
+    chunks: Sequence[RetrievedChunk],
+    deps: CalculationDeps,
+) -> str:
+    context = {
+        **dict(deps.confirmed_metadata),
+        **{name: str(value) for name, value in known.items() if isinstance(value, str)},
+    }
+    known_lines = "; ".join(f"{name}: {value}" for name, value in context.items())
+    wanted_lines = "; ".join(f"{spec.name}: {spec.label}" for spec in wanted)
+    return (
+        f"<question>{query}</question>\n<known>{known_lines or '(trống)'}</known>\n"
+        f"<wanted>{wanted_lines}</wanted>\n<documents>\n{_documents(chunks)}\n</documents>"
+    )
+
+
+async def fill_from_documents(
+    formula_id: FormulaId,
+    query: str,
+    known: Mapping[str, JsonValue],
+    deps: CalculationDeps,
+) -> DocumentValues:
+    """Missing params that can be looked up: search Qdrant, have the model copy each
+    number with the chunk it is in, and keep a number only if that chunk really
+    contains it. Anything not found is left for the panel."""
+
+    wanted = [spec for spec in missing_params(formula_id, known) if spec.lookup]
+    if not wanted:
+        return DocumentValues()
+    context = " ".join(
+        str(value) for name, value in known.items() if isinstance(value, str) and value.strip()
+    )
+    queries = [
+        f"{lookup} {context} {query}".strip()
+        for lookup in dict.fromkeys(spec.lookup for spec in wanted if spec.lookup)
+    ]
+    chunks = await _search(query, queries, deps)
+    if not chunks:
+        return DocumentValues()
+    try:
+        raw = await run_agent_text_with_failover(
+            build_value_extractor_agent(deps.models.classification),
+            _value_prompt(query, wanted, known, chunks, deps),
+            purpose="CHAT",
+            credential=deps.models.generation_credential,
+            snapshot_version=deps.models.snapshot_version,
+            agent_factory=build_value_extractor_agent,
+            on_failover=deps.on_failover,
+            on_attempt=deps.on_attempt,
+            budget=deps.budget,
+            timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        logger.warning("calculation.value_extractor_failed", exc_info=True)
+        return DocumentValues()
+
+    data = _load_json_object(raw) or {}
+    wanted_names = {spec.name for spec in wanted}
+    values: dict[str, JsonValue] = {}
+    sources: dict[str, RetrievedChunk] = {}
+    rejected: list[str] = []
+    raw_values = data.get("values")
+    for name, item in raw_values.items() if isinstance(raw_values, dict) else []:
+        if name not in wanted_names or not isinstance(item, dict):
+            continue
+        number = _whole_number(item.get("value"))
+        index = item.get("chunk")
+        if (
+            number is None
+            or not isinstance(index, int)
+            or not 1 <= index <= len(chunks)
+            or number not in _amounts(chunks[index - 1].content)
+        ):
+            rejected.append(name)
+            continue
+        values[name] = number
+        sources[name] = chunks[index - 1]
+
+    questions: list[dict[str, Any]] = []
+    if wanted_names - set(values):
+        raw_ask = data.get("ask")
+        for item in raw_ask if isinstance(raw_ask, list) else []:
+            if not isinstance(item, dict):
+                continue
+            spec = param_spec(formula_id, str(item.get("field") or ""))
+            if spec is None or spec.kind != "text" or known.get(spec.name) is not None:
+                continue
+            if all(question["field"] != spec.name for question in questions):
+                questions.append(_context_question(spec, item.get("options")))
+    logger.info(
+        "calculation.document_values formula=%s found=%s rejected=%s ask=%s",
+        formula_id,
+        {name: f"{value} ({source_title(sources[name].source)})" for name, value in values.items()},
+        rejected,
+        [question["field"] for question in questions],
+    )
+    return DocumentValues(values, sources, questions)
 
 
 # ---------------------------------------------------------------------------

@@ -357,13 +357,13 @@ def test_tuition_context_params_are_never_asked_on_their_own() -> None:
     assert names == {"tc_lt", "tc_th", "don_gia_lt", "don_gia_th"}
 
 
-def test_tuition_sources() -> None:
-    def sources(formula_id: formulas.FormulaId) -> dict[str, str]:
-        return {spec.name: spec.source for spec in formulas.FORMULAS[formula_id].params}
+def test_only_prices_and_a_programme_s_credits_are_looked_up() -> None:
+    def looked_up(formula_id: formulas.FormulaId) -> set[str]:
+        return {spec.name for spec in formulas.FORMULAS[formula_id].params if spec.lookup}
 
-    assert sources("tuition_semester")["tc_lt"] == "user"
-    assert sources("tuition_program")["tc_th"] == "document"
-    assert sources("tuition_year")["don_gia_lt"] == "document"
+    assert looked_up("tuition_semester") == {"don_gia_lt", "don_gia_th"}
+    assert looked_up("tuition_year") == {"don_gia_lt", "don_gia_th"}
+    assert looked_up("tuition_program") == {"tc_lt", "tc_th", "don_gia_lt", "don_gia_th"}
 
 
 def test_tuition_rejects_bad_inputs_all_at_once() -> None:
