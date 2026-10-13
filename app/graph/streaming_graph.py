@@ -32,6 +32,7 @@ from app.graph.calculation_turn import (
     calculation_titles,
     needs_input_parts,
     number_citations,
+    redo_with_llm,
     render_outcomes,
     review,
     trace_items,
@@ -404,19 +405,20 @@ async def _turn_with_calculations(
 ) -> GraphOutput:
     """Stream order: calculation blocks (Python) → advisory answer (node 10, which only
     starts after the blocks were sent) → one panel for everything still missing. A
-    calculation-only turn instead opens with the checked review ("Lưu ý" first when the
-    result does not answer what was asked), so its blocks wait for that call."""
+    calculation-only turn instead opens with the checked review, so its blocks wait for
+    that call; a built-in result that does not answer what was asked is redone by the
+    LLM, or - LLM path off or failing - shown under "Lưu ý"."""
 
     outcomes: list[TaskOutcome] = []
     shown: list[str] = []
     calculation_citations: list[dict[str, Any]] = []
     checked: Review | None = None
+    redone: dict[str, str] = {}
 
-    async def collect(first_citation: int) -> None:
-        if calculations is not None:
-            numbered, cited = number_citations(await calculations, first_citation)
-            outcomes.extend(numbered)
-            calculation_citations.extend(cited)
+    def collect(done: Sequence[TaskOutcome], first_citation: int) -> None:
+        numbered, cited = number_citations(done, first_citation)
+        outcomes.extend(numbered)
+        calculation_citations.extend(cited)
 
     async def emit(text: str) -> None:
         if text:
@@ -424,7 +426,7 @@ async def _turn_with_calculations(
             await token_sink(text)
 
     async def show_calculations(first_citation: int = 1) -> list[str]:
-        await collect(first_citation)
+        collect(await calculations if calculations is not None else [], first_citation)
         text = render_outcomes(outcomes)
         await emit(f"{text}\n\n" if text else "")
         return calculation_titles(outcomes)
@@ -449,10 +451,13 @@ async def _turn_with_calculations(
                 citations=output.citations + calculation_citations,
             )
         else:
-            await collect(1)
-            computed = [o for o in outcomes if isinstance(o, Computed)]
+            done = await calculations if calculations is not None else []
+            computed = [o for o in done if isinstance(o, Computed)]
             checked = await review(computed, original_query, deps)
-            lead = checked.lead() if checked is not None else ""
+            if checked is not None:
+                done, redone = await redo_with_llm(done, queries, checked, deps)
+            collect(done, 1)
+            lead = checked.lead() if checked is not None and not redone else ""
             await emit("\n\n".join(text for text in (lead, render_outcomes(outcomes)) if text))
             output = GraphOutput(
                 response_text="".join(shown),
@@ -496,6 +501,7 @@ async def _turn_with_calculations(
             run_id=budget.request_id if budget is not None else usage_recorder.request_id,
             deps=deps,
             review=checked,
+            redone=redone,
         )
         output = replace(
             output,

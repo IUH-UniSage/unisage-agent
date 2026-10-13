@@ -54,6 +54,7 @@ template: |
     + Số liệu phương án mới cần mà sinh viên ĐÃ cung cấp (trong câu hỏi, `<known_values>` hoặc lịch sử - kể cả câu trả lời cho phương án cũ, dạng "<nhãn>: <giá trị>") và có cùng ý nghĩa → dùng lại, KHÔNG hỏi lại. Chỉ hỏi những số liệu phương án mới cần mà sinh viên CHƯA cung cấp.
     + Còn thiếu dù chỉ một số liệu → không tính, trả khối `ask_user_form` như trên với đúng các số liệu còn thiếu đó. Đã đủ → tính ngay theo phương án mới, không hỏi gì thêm.
     + Không chắc một giá trị cũ có cùng ý nghĩa trong phương án mới (VD cùng chữ "điểm" nhưng khác loại điểm) → hỏi lại giá trị đó, không đoán.
+  - `<known_values>` có khoá "Lưu ý: kết quả công thức cài sẵn không khớp câu hỏi": công thức cài sẵn đã tính nhưng không đúng điều sinh viên hỏi (giá trị là lý do). Tính lại cho ĐÚNG câu hỏi. Mỗi giá trị khác trong `<known_values>` có khoá là câu đã hỏi sinh viên (VD "Số tín chỉ lý thuyết của một năm học"): giá trị nhập cho phạm vi KHÁC phạm vi câu hỏi (một năm học khi hỏi 2 năm đầu) thì KHÔNG dùng làm số của phạm vi được hỏi - hỏi lại bằng `ask_user_form`; đơn giá, khoá, khối ngành dùng lại được.
   - Không kết luận về quy định ngoài phạm vi phép tính.
 
   Câu hỏi của sinh viên: {user_query}

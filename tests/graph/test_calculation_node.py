@@ -13,7 +13,12 @@ from app.calculation.formulas import TIMES, param_spec
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
-from app.graph.calculation_turn import LLM_NOTICE, NEEDS_INPUT_LEAD, number_citations
+from app.graph.calculation_turn import (
+    LLM_NOTICE,
+    NEEDS_INPUT_LEAD,
+    REVIEW_ISSUE_KEY,
+    number_citations,
+)
 from app.graph.clarification_answers import validate_answers
 from app.graph.clarification_round import (
     TaskQuestions,
@@ -334,24 +339,38 @@ async def test_a_fitting_review_answers_first_then_shows_the_python_block(
     assert "06_QueryTransformationNode" not in _traced_nodes(caplog)
 
 
-@pytest.mark.asyncio
-async def test_a_result_for_another_period_still_shows_with_the_warning_on_top() -> None:
-    query = "tính giúp tôi học phí ngành công nghệ thông tin 2 năm đầu"
-    issue = "Bạn hỏi học phí 2 năm đầu, nhưng phép tính dưới đây là học phí một năm học."
-    answer = "Kết quả bên dưới là học phí một năm học: **165.200.000 đồng**."
-    result = await run_graph(
-        _input(query),
+_TWO_YEARS = "tính giúp tôi học phí ngành công nghệ thông tin 2 năm đầu"
+_TWO_YEARS_ISSUE = "Bạn hỏi học phí 2 năm đầu, nhưng phép tính dưới đây là học phí một năm học."
+_TWO_YEARS_ANSWER = "Kết quả bên dưới là học phí một năm học: **165.200.000 đồng**."
+
+
+def _recording(prompts: list[str], *outputs: str) -> FunctionModel:
+    """Non-streamed calls answered in order, recording each prompt; raises once empty."""
+
+    remaining = list(outputs)
+
+    def respond(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        prompts.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        if not remaining:
+            raise RuntimeError("model down")
+        return ModelResponse(parts=[TextPart(content=remaining.pop(0))])
+
+    return FunctionModel(function=respond)
+
+
+async def _two_years_turn(generation: FunctionModel) -> GraphOutput:
+    """A one-year result for a two-year question: the review says it does not fit."""
+
+    return await run_graph(
+        _input(_TWO_YEARS),
         GraphModels(
             classification=_scripted(
-                {"tasks": [{"intent": "academic_calculation", "query": query}]},
-                {
-                    "formula_id": "tuition_year",
-                    "params": {"tc_lt": 100, "tc_th": 42},
-                },
+                {"tasks": [{"intent": "academic_calculation", "query": _TWO_YEARS}]},
+                {"formula_id": "tuition_year", "params": {"tc_lt": 100, "tc_th": 42}},
                 _PRICES_FOUND,
             ),
             query_transformation=_echo_model(),
-            generation=_note_model(_review(False, answer, issue)),
+            generation=generation,
             retrieval=_RecordingRetrieval([_FEE_TABLE]),
         ),
         _sink([]),
@@ -359,10 +378,78 @@ async def test_a_result_for_another_period_still_shows_with_the_warning_on_top()
         _usage_recorder(),
     )
 
-    assert result.response_text.startswith(f"**Lưu ý:** {issue}\n\n{answer}\n\n")
+
+@pytest.mark.asyncio
+async def test_a_result_that_does_not_fit_is_redone_by_the_llm() -> None:
+    prompts: list[str] = []
+    redone = "Học phí 2 năm đầu là **196.000.000 đồng** [1]."
+    result = await _two_years_turn(
+        _recording(prompts, _review(False, _TWO_YEARS_ANSWER, _TWO_YEARS_ISSUE), redone)
+    )
+
+    assert result.response_text == f"**{LLM_NOTICE}**\n\n{redone}"
+    assert result.pending_round is None
+    _review_prompt, llm_prompt = prompts
+    assert '"Số tín chỉ lý thuyết của một năm học": 100' in llm_prompt
+    assert f'"{REVIEW_ISSUE_KEY}": "{_TWO_YEARS_ISSUE}"' in llm_prompt
+    assert f"Câu hỏi của sinh viên: {_TWO_YEARS}" in llm_prompt
+    [item] = result.calculation_items
+    assert (item["mode"], item["status"]) == ("llm", "computed")
+    trace = result.calculation_traces[0]["trace"]
+    assert trace["redone_from"] == "tuition_year"
+    assert trace["review"] == {"fits": False, "issue": _TWO_YEARS_ISSUE, "rejected": False}
+    assert "chat_calculation_review" in trace["prompt_versions"]
+    assert result.last_calculation is not None
+    assert result.last_calculation.plan.formula_id == "llm"
+
+
+@pytest.mark.asyncio
+async def test_a_redo_that_needs_numbers_asks_on_the_panel_as_an_llm_task() -> None:
+    ask = (
+        "Mình cần số tín chỉ của cả 2 năm đầu.\n"
+        '{"type": "ask_user_form", "fields": [{"field": "tc_lt_2_nam", '
+        '"label": "Số tín chỉ lý thuyết của 2 năm đầu", "kind": "number", "min": 0, "max": 300}]}'
+    )
+    result = await _two_years_turn(
+        _recording([], _review(False, _TWO_YEARS_ANSWER, _TWO_YEARS_ISSUE), ask)
+    )
+
+    assert result.pending_round is not None
+    [question] = result.pending_round.panel.questions
+    assert question.prompt == "Số tín chỉ lý thuyết của 2 năm đầu"
+    [task] = result.pending_round.tasks
+    assert isinstance(task, PendingCalculationTask)
+    assert task.plan.formula_id == "llm"
+    assert task.known_params[REVIEW_ISSUE_KEY] == _TWO_YEARS_ISSUE
+    assert "165.200.000" not in result.response_text
+
+
+@pytest.mark.asyncio
+async def test_with_the_llm_path_off_a_mismatch_shows_the_warning_above_the_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_CALC_LLM_ENABLED", False)
+    result = await _two_years_turn(_note_model(_review(False, _TWO_YEARS_ANSWER, _TWO_YEARS_ISSUE)))
+
+    assert result.response_text.startswith(
+        f"**Lưu ý:** {_TWO_YEARS_ISSUE}\n\n{_TWO_YEARS_ANSWER}\n\n"
+    )
     assert "Học phí một năm học **165.200.000 đồng**" in result.response_text
     trace = result.calculation_traces[0]["trace"]
-    assert trace["review"] == {"fits": False, "issue": issue, "rejected": False}
+    assert trace["review"] == {"fits": False, "issue": _TWO_YEARS_ISSUE, "rejected": False}
+    assert "redone_from" not in trace
+
+
+@pytest.mark.asyncio
+async def test_when_the_redo_fails_the_block_stays_under_the_warning() -> None:
+    result = await _two_years_turn(
+        _recording([], _review(False, _TWO_YEARS_ANSWER, _TWO_YEARS_ISSUE))
+    )
+
+    assert result.response_text.startswith(f"**Lưu ý:** {_TWO_YEARS_ISSUE}")
+    assert "Học phí một năm học **165.200.000 đồng**" in result.response_text
+    assert LLM_NOTICE not in result.response_text
+    assert result.calculation_items[0]["mode"] == "builtin"
 
 
 @pytest.mark.parametrize(

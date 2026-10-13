@@ -1,5 +1,5 @@
 # MAIN_CHAT_CALCULATION_REVIEW_PROMPT
-description: "Lượt CHỈ có tính toán, sau khi Python tính xong công thức cài sẵn: kiểm tra phép tính có trả lời đúng điều sinh viên hỏi không, rồi viết 1-3 câu trả lời thẳng câu hỏi bằng chính con số Python đã tính. Gọi không stream, trả JSON; phần này hiện TRƯỚC khối tính của Python. Con số nào không có trong câu hỏi hay trong kết quả Python thì cả phần AI viết bị bỏ, chỉ còn khối Python."
+description: "Lượt CHỈ có tính toán, sau khi Python tính xong công thức cài sẵn: kiểm tra phép tính có trả lời đúng điều sinh viên hỏi không, rồi viết 1-3 câu trả lời thẳng câu hỏi bằng chính con số Python đã tính. Gọi không stream, trả JSON; phần này hiện TRƯỚC khối tính của Python. `fits = false` → task được LLM tự tính lại (chat_calculation_llm); chỉ khi đường LLM tắt hoặc lỗi thì `issue` + `answer` hiện trên khối Python. Con số nào không có trong câu hỏi hay trong kết quả Python thì cả phần AI viết bị bỏ, chỉ còn khối Python."
 template: |
   {header}
 
