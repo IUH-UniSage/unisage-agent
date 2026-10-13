@@ -1013,25 +1013,31 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
         re.compile(r"(là|được|ra) (điểm )?(chữ )?[abcdf]\+?(\s|$|\?|,|\.)"),
         re.compile(r"điểm chữ"),
     ),
-    "tuition_semester": (re.compile(r"học phí.{0,40}(học kỳ|học kì|\bkỳ\b|\bkì\b)"),),
-    "tuition_year": (re.compile(r"học phí.{0,40}(năm học|một năm|\b1 năm|mỗi năm)"),),
+    # Tuition triggers name only the period; route_builtin requires "học phí" too.
+    "tuition_semester": (re.compile(r"học kỳ|học kì|\bkỳ\b|\bkì\b"),),
+    "tuition_year": (re.compile(r"năm học|một năm|\b1 năm|mỗi năm|cả năm"),),
     "tuition_program": (
         re.compile(
-            r"học phí.{0,40}(cả|toàn|trọn) (khoá|khóa|ngành|chương trình)"
-            r"|học phí.{0,40}(đến khi|tới khi|cho tới lúc) (ra trường|tốt nghiệp)"
+            r"(cả|toàn|trọn) (khoá|khóa|ngành|chương trình)"
+            r"|(đến khi|tới khi|cho tới lúc) (ra trường|tốt nghiệp)"
         ),
     ),
 }
+_TUITION = re.compile(r"học phí")
 
 
 def route_builtin(question: str) -> list[FormulaId]:
-    """Built-in formulas whose trigger matches the (lower-cased, NFC) question."""
+    """Built-in formulas whose trigger matches the (lower-cased, NFC) question. A
+    question about tuition is only ever routed to a tuition formula: "15 tín lý thuyết
+    4 tín thực hành, học phí bao nhiêu" names credits, not a course score."""
 
     text = unicodedata.normalize("NFC", question).lower()
+    tuition = _TUITION.search(text) is not None
     return [
         formula_id
         for formula_id, patterns in BUILTIN_TRIGGERS.items()
-        if any(pattern.search(text) for pattern in patterns)
+        if (formula_id in TUITION_SCOPES) == tuition
+        and any(pattern.search(text) for pattern in patterns)
     ]
 
 

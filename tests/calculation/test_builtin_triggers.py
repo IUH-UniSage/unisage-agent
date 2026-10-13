@@ -48,8 +48,11 @@ TUITION = {
     "học phí toàn khoá học là bao nhiêu": "tuition_program",
     "học phí cả khóa ngành Kế toán": "tuition_program",
     "tổng học phí đến khi ra trường": "tuition_program",
+    "kỳ này em học 15 tín lý thuyết 4 tín thực hành, học phí bao nhiêu?": "tuition_semester",
+    "mỗi năm em đóng học phí bao nhiêu": "tuition_year",
 }
 NONE = [
+    "15 tín lý thuyết với 4 tín thực hành thì học phí bao nhiêu?",
     "Học phí khóa 2025 ngành CNTT là bao nhiêu?",
     "Điều kiện tốt nghiệp là gì",
     "Em còn thiếu bao nhiêu tín chỉ để tốt nghiệp",
