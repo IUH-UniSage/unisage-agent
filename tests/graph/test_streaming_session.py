@@ -7,6 +7,7 @@ import httpx2
 import openai
 import pytest
 from pydantic_ai.models.function import FunctionModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors.llm_failure import FailureReason
@@ -14,6 +15,7 @@ from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import ModelRegistryError
 from app.core.usage.usage_recorder import UsageRecorder
+from app.database.models import ConversationClarificationState
 from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
 from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
@@ -154,6 +156,15 @@ async def test_run_and_persist_patches_error_on_graph_exception(
     assert isinstance(await queue.get(), DoneItem)
 
 
+async def _state_row_exists(session: AsyncSession, conversation_id: str) -> bool:
+    result = await session.execute(
+        select(ConversationClarificationState.id).where(
+            ConversationClarificationState.conversation_id == conversation_id
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
 @pytest.mark.asyncio
 async def test_run_and_persist_persists_clarification_state_on_success(
     mock_sync_llm_model: Callable[[str], FunctionModel],
@@ -187,10 +198,11 @@ async def test_run_and_persist_persists_clarification_state_on_success(
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )
 
-    # off_topic never touches confirmed_metadata, but a row should still
-    # exist (upserted with the empty defaults).
+    # off_topic never computes anything, but a row should still exist (upserted with
+    # the empty defaults).
     state = await ClarificationRoundRepository(db_session).get_round("conv-42")
-    assert state.status is None and state.confirmed_metadata == {}
+    assert state.status is None and state.recent_calculations == []
+    assert await _state_row_exists(db_session, "conv-42")
 
 
 @pytest.mark.asyncio
@@ -251,8 +263,7 @@ async def test_queue_sentinel_still_arrives_when_java_patch_raises_unexpected_er
 
     # The clarification-state write (which runs BEFORE the Java PATCH since
     # UNISAGE-99: state first, projection second) still happened.
-    state = await ClarificationRoundRepository(db_session).get_round("conv-1")
-    assert state.confirmed_metadata == {}
+    assert await _state_row_exists(db_session, "conv-1")
 
 
 @pytest.mark.asyncio

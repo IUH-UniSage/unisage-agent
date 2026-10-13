@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
 from app.graph import streaming_session
 from app.graph.clarification_round import (
     TaskQuestions,
@@ -170,7 +171,7 @@ async def test_existing_round_is_not_overwritten_and_no_metadata_is_sent(
 ) -> None:
     first = _round()
     async with db_session_factory() as session:
-        await ClarificationRoundRepository(session).upsert_open("c1", first, {})
+        await ClarificationRoundRepository(session).upsert_open("c1", first)
         await session.commit()
     java = _Java()
     items = await _run(
@@ -185,7 +186,7 @@ async def test_existing_round_is_not_overwritten_and_no_metadata_is_sent(
 
 
 @pytest.mark.asyncio
-async def test_turn_without_panel_saves_confirmed_metadata(
+async def test_turn_without_panel_saves_the_guest_profile(
     db_session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     java = _Java()
@@ -197,7 +198,8 @@ async def test_turn_without_panel_saves_confirmed_metadata(
     )
     async with db_session_factory() as session:
         state = await ClarificationRoundRepository(session).get_round("c1")
-    assert state.status is None and state.confirmed_metadata == {"nganh": "cntt"}
+        profile = await StudentProfileRepository(session).get(ProfileOwner(conversation_id="c1"))
+    assert state.status is None and profile == {"nganh": "cntt"}
 
 
 @pytest.mark.asyncio
