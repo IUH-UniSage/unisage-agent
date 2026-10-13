@@ -967,3 +967,129 @@ async def test_an_unfenced_ask_form_becomes_a_panel_not_text() -> None:
     assert result.pending_round is not None
     [question] = result.pending_round.panel.questions
     assert question.prompt == "Bạn thuộc bậc/hệ đào tạo nào?"
+
+
+_FEE_TABLE = RetrievedChunk(
+    chunk_id="hp:3.1",
+    content=(
+        "| 3.1 | Khóa tuyển sinh năm học 2025-2026 | | |\n"
+        "| | - Khối Công nghệ: Môn lý thuyết: 980.000 / Môn thực hành: 1.600.000 | | |"
+    ),
+    source="Quyet Dinh 1035 - Hoc phi 2025-2026",
+    score=0.9,
+)
+_PRICES_FOUND = {
+    "values": {
+        "don_gia_lt": {"value": 980000, "chunk": 1},
+        "don_gia_th": {"value": 1600000, "chunk": 1},
+    },
+    "ask": [],
+}
+
+
+def _tuition_models(*scripted: object, chunks: list[RetrievedChunk]) -> GraphModels:
+    return GraphModels(
+        classification=_scripted(*scripted),
+        query_transformation=_echo_model(),
+        generation=_note_model("Mình đã tính theo biểu phí."),
+        retrieval=_RecordingRetrieval(chunks),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tuition_prices_come_from_the_fee_schedule_with_a_citation() -> None:
+    query = "Khoá 2025-2026, kỳ này em học 15 tín lý thuyết 4 tín thực hành, học phí bao nhiêu?"
+    result = await run_graph(
+        _input(query),
+        _tuition_models(
+            {"tasks": [{"intent": "academic_calculation", "query": query}]},
+            {
+                "formula_id": "tuition_semester",
+                "params": {"tc_lt": 15, "tc_th": 4, "khoa_tuyen_sinh": "2025-2026"},
+                "retrieval_query": None,
+            },
+            _PRICES_FOUND,
+            chunks=[_FEE_TABLE],
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert result.pending_round is None
+    assert "Học phí một học kỳ **21.100.000 đồng**" in result.response_text
+    assert "- Đơn giá 1 tín chỉ lý thuyết (đồng): 980.000 đồng [1]" in result.response_text
+    assert LLM_NOTICE not in result.response_text
+    assert [(c["index"], c["title"]) for c in result.citations] == [
+        (1, "Quyet Dinh 1035 - Hoc phi 2025-2026")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tuition_asks_the_intake_first_then_reads_the_prices() -> None:
+    query = "tính học phí học kỳ này giúp em"
+    task = {"tasks": [{"intent": "academic_calculation", "query": query}]}
+    extraction = {"formula_id": "tuition_semester", "params": {}, "retrieval_query": None}
+    ask_intake = {
+        "values": {},
+        "ask": [{"field": "khoa_tuyen_sinh", "options": ["2025-2026", "2024-2025"]}],
+    }
+    first = await run_graph(
+        _input(query),
+        _tuition_models(task, extraction, ask_intake, chunks=[_FEE_TABLE]),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert first.pending_round is not None
+    questions = {q.field: q for q in first.pending_round.panel.questions}
+    assert list(questions) == ["khoa_tuyen_sinh", "tc_lt", "tc_th"]
+    intake = questions["khoa_tuyen_sinh"]
+    submit = ClarificationSubmit(
+        action="submit",
+        panel_id=first.pending_round.panel.panel_id,
+        answers=[
+            Answer(question_id=intake.id, option_id=intake.options[0].id),
+            Answer(question_id=questions["tc_lt"].id, number=Decimal(15)),
+            Answer(question_id=questions["tc_th"].id, number=Decimal(4)),
+        ],
+    )
+    resume = ResumeInput(
+        pending_round=first.pending_round,
+        answers=validate_answers(first.pending_round.panel, submit),
+    )
+    second = await run_graph(
+        _input("đã trả lời", resume=resume),
+        _tuition_models(_PRICES_FOUND, chunks=[_FEE_TABLE]),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert second.pending_round is None
+    assert "**21.100.000 đồng**" in second.response_text
+
+
+@pytest.mark.asyncio
+async def test_without_documents_tuition_asks_theory_and_practice_credits_separately() -> None:
+    query = "tính giúp tôi học phí cả ngành công nghệ thông tin đi"
+    result = await run_graph(
+        _input(query),
+        _tuition_models(
+            {"tasks": [{"intent": "academic_calculation", "query": query}]},
+            {"formula_id": "tuition_program", "params": {}, "retrieval_query": None},
+            chunks=[],
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert result.pending_round is not None
+    assert [q.field for q in result.pending_round.panel.questions] == [
+        "tc_lt",
+        "tc_th",
+        "don_gia_lt",
+        "don_gia_th",
+    ]

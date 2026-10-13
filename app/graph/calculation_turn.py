@@ -72,7 +72,7 @@ def number_citations(
     citations: list[dict[str, Any]] = []
     next_index = first_index
     for outcome in outcomes:
-        if not isinstance(outcome, LlmAnswered):
+        if not isinstance(outcome, LlmAnswered | Computed) or not outcome.sources:
             numbered.append(outcome)
             continue
         mapping: dict[int, int] = {}
@@ -82,9 +82,12 @@ def number_citations(
             sources.append((next_index, chunk))
             citations.append(chunk_citation(next_index, chunk))
             next_index += 1
-        numbered.append(
-            replace(outcome, text=renumber_markers(outcome.text, mapping), sources=sources)
-        )
+        if isinstance(outcome, LlmAnswered):
+            text = renumber_markers(outcome.text, mapping)
+            numbered.append(replace(outcome, text=text, sources=sources))
+        else:
+            notes = tuple(renumber_markers(note, mapping) for note in outcome.notes)
+            numbered.append(replace(outcome, notes=notes, sources=sources))
     return numbered, citations
 
 
@@ -94,7 +97,11 @@ def render_outcome(outcome: TaskOutcome) -> str:
     markers, which the client links through the message's `citations`."""
 
     if isinstance(outcome, Computed):
-        return render_markdown(outcome.result)
+        rendered = render_markdown(outcome.result)
+        if not outcome.notes:
+            return rendered
+        lines = "\n".join(f"- {note}" for note in outcome.notes)
+        return f"{rendered}\n\nSố liệu lấy từ tài liệu:\n{lines}"
     if isinstance(outcome, LlmAnswered):
         return f"**{LLM_NOTICE}**\n\n{outcome.text}"
     if isinstance(outcome, Unresolved):
@@ -289,7 +296,7 @@ def trace_items(
     private: list[dict[str, JsonValue]] = []
     for outcome in outcomes:
         mode = _mode(outcome)
-        sources = outcome.sources if isinstance(outcome, LlmAnswered) else []
+        sources = outcome.sources if isinstance(outcome, LlmAnswered | Computed) else []
         item: dict[str, JsonValue] = {
             "item_id": outcome.task_id,
             "run_id": run_id,
@@ -330,6 +337,8 @@ def trace_items(
             trace["outputs"] = [
                 {"label": label, "value": value} for label, value in outcome.result.outputs
             ]
+            if sources:
+                trace["sources"] = [_chunk_trace(index, chunk) for index, chunk in sources]
         if isinstance(outcome, LlmAnswered):
             trace["retrieval_query"] = outcome.plan.retrieval_query
             trace["known_params"] = dict(outcome.known_params)

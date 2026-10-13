@@ -16,7 +16,8 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import JsonValue
@@ -31,6 +32,7 @@ from app.calculation.formulas import (
     describe_builtin_formulas,
     describe_builtin_rules,
     missing_params,
+    money,
     param_spec,
     plain,
     route_builtin,
@@ -79,6 +81,10 @@ class Computed:
     result: CalculationResult
     plan: CalculationPlan
     params: dict[str, JsonValue]
+    # Lines naming each value read from the documents, with its [n] marker, and the
+    # chunk behind each marker; renumbered for the whole message before it is shown.
+    notes: tuple[str, ...] = ()
+    sources: list[tuple[int, RetrievedChunk]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -687,6 +693,66 @@ async def fill_from_documents(
     return DocumentValues(values, sources, questions)
 
 
+_DOCUMENT_PRICE_NOTE = (
+    "Đơn giá theo biểu phí đại học chính quy tại trụ sở chính; hệ hoặc cơ sở khác có đơn giá riêng."
+)
+
+
+def _value_text(spec: ParamSpec, value: JsonValue) -> str:
+    if spec.unit == "đồng":
+        return money(Decimal(str(value)))
+    return f"{value} {spec.unit}" if spec.unit else str(value)
+
+
+def _with_document_notes(
+    outcome: Computed, formula_id: FormulaId, found: DocumentValues
+) -> Computed:
+    """The values read from the documents, each with its [n] marker (one per chunk)."""
+
+    markers: dict[str, int] = {}
+    sources: list[tuple[int, RetrievedChunk]] = []
+    notes: list[str] = []
+    prices = False
+    for name, chunk in found.sources.items():
+        spec = param_spec(formula_id, name)
+        if spec is None:
+            continue
+        if chunk.chunk_id not in markers:
+            markers[chunk.chunk_id] = len(markers) + 1
+            sources.append((markers[chunk.chunk_id], chunk))
+        notes.append(
+            f"{spec.label}: {_value_text(spec, found.values[name])} [{markers[chunk.chunk_id]}]"
+        )
+        prices = prices or spec.unit == "đồng"
+    if prices:
+        notes.append(_DOCUMENT_PRICE_NOTE)
+    return replace(outcome, notes=tuple(notes), sources=sources)
+
+
+async def builtin_task(
+    task_id: str,
+    formula_id: FormulaId,
+    query: str,
+    params: Mapping[str, JsonValue],
+    deps: CalculationDeps,
+) -> Computed | NeedsInput:
+    """A built-in formula, documents first: values that can be looked up are read from
+    Qdrant before anything is asked. When the documents need the intake or the faculty
+    group first, that is asked together with the student's own missing values, and the
+    lookup runs again on the answer. Whatever is still missing goes to the panel."""
+
+    known = {key: value for key, value in params.items() if param_spec(formula_id, key)}
+    found = await fill_from_documents(formula_id, query, known, deps)
+    if found.questions:
+        own = [spec for spec in missing_params(formula_id, known) if not spec.lookup]
+        questions = [*found.questions, *(question_for(spec) for spec in own)]
+        return NeedsInput(task_id, CalculationPlan(formula_id=formula_id), known, questions)
+    outcome = builtin_outcome(task_id, formula_id, {**known, **found.values})
+    if isinstance(outcome, Computed) and found.sources:
+        return _with_document_notes(outcome, formula_id, found)
+    return outcome
+
+
 # ---------------------------------------------------------------------------
 # Entry points
 # ---------------------------------------------------------------------------
@@ -698,11 +764,11 @@ async def run_calculation_task(task_id: str, query: str, deps: CalculationDeps) 
         previous = deps.previous
         assert previous is not None and previous.plan.formula_id != "llm"
         params = {**previous.params, **extraction.params}
-        return builtin_outcome(task_id, previous.plan.formula_id, params)
+        return await builtin_task(task_id, previous.plan.formula_id, query, params, deps)
     if extraction.formula_id == "llm":
         plan = CalculationPlan(formula_id="llm", retrieval_query=extraction.retrieval_query)
         return await llm_outcome(task_id, query, plan, extraction.params, deps)
-    return builtin_outcome(task_id, extraction.formula_id, extraction.params)
+    return await builtin_task(task_id, extraction.formula_id, query, extraction.params, deps)
 
 
 async def resume_calculation_task(
@@ -713,13 +779,14 @@ async def resume_calculation_task(
     answers: Mapping[str, JsonValue],
     deps: CalculationDeps,
 ) -> TaskOutcome:
-    """A panel answer: never calls the extractor again. A built-in formula just
-    computes; an LLM calculation is asked again with the answers as known values."""
+    """A panel answer: never calls the extractor again. A built-in formula computes
+    (looking its values up again when an answer told which fee schedule row applies);
+    an LLM calculation is asked again with the answers as known values."""
 
     values = {**known_params, **answers}
     if plan.formula_id == "llm":
         return await llm_outcome(task_id, query, plan, values, deps)
-    return builtin_outcome(task_id, plan.formula_id, values)
+    return await builtin_task(task_id, plan.formula_id, query, values, deps)
 
 
 # Fixed sentences for a task that cannot be calculated (rendered by Python, no LLM).
