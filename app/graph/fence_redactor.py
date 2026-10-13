@@ -104,6 +104,32 @@ class FenceRedactor:
         return self._opening + self._content + FENCE
 
 
+_BARE_TYPE = re.compile(r'"type"\s*:\s*"(?:' + "|".join(sorted(CAPTURED_TYPES)) + r')"')
+
+
+def take_bare_blocks(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Our JSON blocks written without a ``` fence, cut out of a finished (non-streamed)
+    text: `text` without them, and the blocks. A model sometimes drops the fence, and the
+    raw JSON would otherwise be shown to the student."""
+
+    blocks: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder()
+    search_from = 0
+    while (match := _BARE_TYPE.search(text, search_from)) is not None:
+        start = text.rfind("{", 0, match.start())
+        try:
+            value, end = decoder.raw_decode(text, start) if start != -1 else (None, 0)
+        except ValueError:
+            value = None
+        if not isinstance(value, dict) or value.get("type") not in CAPTURED_TYPES:
+            search_from = match.end()
+            continue
+        blocks.append(value)
+        text = (text[:start].rstrip() + "\n\n" + text[end:].lstrip()).strip()
+        search_from = start
+    return text, blocks
+
+
 def _partial_fence_suffix(text: str) -> int:
     """How many trailing characters could be the start of ``` (0-2)."""
 

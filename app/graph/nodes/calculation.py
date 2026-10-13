@@ -38,7 +38,7 @@ from app.calculation.result import CalculationInputError, CalculationResult
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.graph.clarification_round import slug
-from app.graph.fence_redactor import FenceRedactor
+from app.graph.fence_redactor import FenceRedactor, take_bare_blocks
 from app.graph.nodes.llm_rerank import (
     LLM_RERANK_SKIPPED,
     build_llm_rerank_agent,
@@ -480,8 +480,8 @@ async def _ask_llm(
         logger.warning("calculation.llm_failed", exc_info=True)
         return Unresolved(task_id, "llm_failed")
     redactor = FenceRedactor()
-    text = (redactor.feed(raw) + redactor.finish()).strip()
-    questions = llm_questions(redactor.captured, known)
+    text, bare = take_bare_blocks((redactor.feed(raw) + redactor.finish()).strip())
+    questions = llm_questions([*redactor.captured, *bare], known)
     if questions:
         return NeedsInput(task_id, plan, dict(known), questions, lead=text or None)
     if not text:

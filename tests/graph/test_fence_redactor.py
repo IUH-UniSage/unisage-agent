@@ -1,6 +1,6 @@
 import pytest
 
-from app.graph.fence_redactor import FenceRedactor
+from app.graph.fence_redactor import FenceRedactor, take_bare_blocks
 
 ANSWER = (
     "Điều kiện tốt nghiệp phụ thuộc vào khoá của bạn.\n\n"
@@ -79,3 +79,19 @@ def test_held_back_text_is_at_most_a_fence_prefix() -> None:
     redactor = FenceRedactor()
     assert redactor.feed("abc``") == "abc"
     assert redactor.feed("x") == "``x"
+
+
+def test_an_unfenced_form_is_cut_out_and_captured() -> None:
+    form = (
+        '{"type":"ask_user_form","fields":[{"field":"bac_he","label":"Bậc/hệ?",'
+        '"kind":"choice","options":[{"id":"a","label":"Đại học {chính quy}"}]}]}'
+    )
+    text, blocks = take_bare_blocks(f"Mình cần thêm thông tin:\n\n{form}\n\nCảm ơn bạn.")
+
+    assert text == "Mình cần thêm thông tin:\n\nCảm ơn bạn."
+    assert [block["fields"][0]["field"] for block in blocks] == ["bac_he"]
+
+
+def test_other_json_and_broken_blocks_are_left_in_the_text() -> None:
+    original = 'Ví dụ {"type": "other"} và {"type": "ask_user_form", "fields": ['
+    assert take_bare_blocks(original) == (original, [])

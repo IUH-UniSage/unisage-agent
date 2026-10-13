@@ -925,3 +925,45 @@ async def test_a_missing_rerank_model_warns_the_ai_admin_on_a_calculation_turn(
     [warning] = result.admin_warnings
     assert warning.code == "LLM_RERANK_UNAVAILABLE"
     assert warning.message.endswith("chưa có credential RERANK")
+
+
+@pytest.mark.asyncio
+async def test_an_unfenced_ask_form_becomes_a_panel_not_text() -> None:
+    query = "tính giúp tôi học phí cả ngành công nghệ thông tin đi"
+    ask = "Mình chưa tìm thấy biểu phí. Vui lòng chọn:\n\n" + json.dumps(
+        {
+            "type": "ask_user_form",
+            "fields": [
+                {
+                    "field": "bac_he",
+                    "label": "Bạn thuộc bậc/hệ đào tạo nào?",
+                    "kind": "choice",
+                    "options": [
+                        {"id": "dhcq", "label": "Đại học chính quy"},
+                        {"id": "ths", "label": "Cao học (Thạc sĩ)"},
+                    ],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    result = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "llm", "params": {}, "retrieval_query": None},
+            ),
+            query_transformation=_echo_model(),
+            generation=_note_model(ask),
+            retrieval=_RecordingRetrieval([]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert "ask_user_form" not in result.response_text
+    assert result.pending_round is not None
+    [question] = result.pending_round.panel.questions
+    assert question.prompt == "Bạn thuộc bậc/hệ đào tạo nào?"
