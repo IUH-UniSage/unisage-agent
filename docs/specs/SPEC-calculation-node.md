@@ -72,7 +72,7 @@ TaskOutcome = (
   form và kết quả "một năm học", lệch với câu hỏi.
 - `parse_extraction`: `llm` luôn thắng; còn lại một công thức cài sẵn duy nhất do router luật khớp sẽ
   thắng (kể cả khi output hỏng); output hỏng/không rõ mà router không khớp → `llm` (LLM vẫn hỏi lại được).
-  `previous` chỉ nhận khi có `last_calculation` cài sẵn.
+  `previous` chỉ nhận khi phép tính gần nhất (`recent_calculations[-1]`) là công thức cài sẵn.
 
 ### 1.1 Định tuyến công thức cài sẵn bằng luật (trước LLM)
 
@@ -221,10 +221,12 @@ def build_round(outcomes, advisory_asks, *, original_query, chain_depth, assista
 
 ```
 answers → nhóm theo question.task_id
-  PendingCalculationTask: values = known_params ∪ {question.field: answer}
+  mọi câu trả lời: field → canonical_field (tên chuẩn trong known_metadata_fields.json)
+      field scope profile (hoặc field advisory lạ) → hồ sơ, giá trị chuẩn hoá (khoa_nhap_hoc = năm)
+  PendingCalculationTask: values = hồ sơ (tham số scope profile) ∪ known_params ∪ {field: answer}
       cài sẵn → formulas.calculate (không gọi LLM)
       llm     → chat_calculation_llm lại với known_values mới (không gọi extractor, không qua classifier)
-  PendingAdvisoryTask: confirmed_metadata ∪ {field: option_id | other_text} → _run_advisory_flow
+  PendingAdvisoryTask: hồ sơ đã cập nhật → _run_advisory_flow
 ```
 
 Còn thiếu thì tạo panel mới với `chain_depth + 1` (không giới hạn; field đã trả lời không bao giờ bị hỏi lại).
@@ -354,12 +356,22 @@ user hoặc guest giống `startTurn`)
 Admin điều tra trong màn `support-tickets` hiện có, lọc theo type `AI_CALCULATION_WRONG`. Trace đầy đủ nằm
 trong `description`, nên không cần màn hình mới, và staff chỉ thấy trace qua quyền xem ticket sẵn có.
 
-## 8. Phép tính trước (`last_calculation`)
+## 8. Phép tính gần đây (`recent_calculations`, 13-10-2026)
 
-- Cột JSON trên `conversation_clarification_states` (migration `a4b5c6d7e8f9`), ghi cùng `confirmed_metadata`:
-  phép tính cuối của lượt. Cài sẵn: kèm `params` (câu nối tiếp tính xuôi `formula_id="previous"` gộp số cũ
-  với số mới). LLM: chỉ `title` (câu hỏi) - số của nó nằm trong lịch sử chat, LLM đọc lại khi cần.
-- `title` đi vào classifier (`<previous_calculation_turn>`, mục 9). Lượt không có phép tính giữ nguyên.
+- Cột JSON trên `conversation_clarification_states` (migration `b5c6d7e8f9a0`, thay `last_calculation`):
+  tối đa 5 phép tính gần nhất của hội thoại (cũ trước), **mọi** phép tính của lượt được nối vào. Mỗi phép
+  tính giữ số của riêng nó: cài sẵn kèm `params`; LLM kèm các giá trị đã biết (tên chuẩn nếu có trong sổ,
+  nhãn câu hỏi nếu không; bỏ lý do review). Lượt không có phép tính giữ nguyên danh sách.
+- Phần tử cuối là `GraphInput.last_calculation`: câu nối tiếp tính xuôi `formula_id="previous"` gộp số cũ
+  với số mới, và `title` đi vào classifier (`<previous_calculation_turn>`, mục 9).
+- Thứ tự ưu tiên tham số của công thức cài sẵn: số gõ ở lượt này (extractor) > hồ sơ sinh viên (tham số
+  scope `profile`: `khoa_nhap_hoc`, `khoi_nganh`) > số của phép tính trước. Câu giả định "khoá 2021 thì
+  sao" không bị hồ sơ ghi đè; khoá đã sửa trong hồ sơ thay khoá cũ của phép tính trước.
+- LLM tự tính nhận `<recent_calculations>` (mỗi phép tính một dòng, kèm số) và bảng tên field chuẩn mọi
+  scope; quy tắc "ĐỌC TRƯỚC KHI HỎI": dùng hồ sơ và số của phép tính gần đây (chỉ khi cùng phép tính/cùng
+  phạm vi), chỉ hỏi field còn thiếu, dùng đúng tên trong bảng. Code chặn lại lần nữa (`llm_questions`).
+- Node 10 không nhận số: `{calculation_results}` chỉ có tên phép tính kèm `[đã có: <tên field>]`, và câu
+  hỏi form của node 10 có field nằm trong danh sách đó bị bỏ.
 
 ## 9. Classifier qua nhiều lượt
 
@@ -368,7 +380,7 @@ Nguyên tắc: **câu trả lời cho câu hỏi của bot không bao giờ đư
 1. Mọi câu hỏi lại (thiếu số, nhiều công thức, thuộc tính advisory) đi qua panel; lượt submit vào
    thẳng `_run_resume`, không gọi classifier. Panel đang mở thì tin nhắn thường bị chặn (`409`).
 2. Câu gõ tự do sau một phép tính: classifier nhận `<previous_calculation_turn>` (tên phép tính trong
-   `last_calculation`) - tín hiệu có cấu trúc thay vì đoán từ lịch sử chat.
+   phép tính gần nhất của `recent_calculations`) - tín hiệu có cấu trúc thay vì đoán từ lịch sử chat.
 3. Quy tắc 1c trong `message_classification.yaml`: câu bổ sung dữ kiện/đổi số/hỏi ngược về phép tính
    trước giữ `academic_calculation`, `query` gộp yêu cầu tính ban đầu với dữ kiện mới; câu hỏi quy định
    mới vẫn là advisory. Test giữ quy tắc và ví dụ trong prompt.
@@ -376,6 +388,8 @@ Nguyên tắc: **câu trả lời cho câu hỏi của bot không bao giờ đư
    định/điều kiện; sửa lỗi chính tả, viết tắt khi chắc nghĩa; chỉ thêm ngữ cảnh lịch sử khi tin nhắn
    không đứng riêng được; chuyển ý định thì không kéo ngữ cảnh cũ; "kỳ này" giữ nguyên, không thay bằng
    học kỳ tự suy.
+5. Cập nhật hồ sơ (13-10-2026): classifier nhận `<student_profile>` và bảng field `profile`, trả thêm
+   `metadata_updates` khi sinh viên tự khai/sửa thông tin của mình (SPEC-clarification-panel §2.8).
 
 ## Thời gian hiện tại (`<current_time>`, 13-10-2026)
 
@@ -389,10 +403,10 @@ Lịch khác theo khoa nên câu trả lời dựa vào học kỳ phải kèm m
 Học kỳ của riêng sinh viên (dòng thứ ba của khối): mỗi năm học 2 học kỳ chính đánh số liên tục từ năm
 nhập học, học kỳ hè không đánh số (4 năm = 8, 4,5 năm = 9): HK I → `2 × (năm đầu của năm học − năm nhập
 học) + 1`, HK II → `+ 2`; kỳ hè ghi "học kỳ hè sau học kỳ N", kỳ nghỉ ghi học kỳ tới. Khoá IUH: khóa N =
-nhập học năm 2004+N. Nguồn là `confirmed_metadata["khoa_nhap_hoc"]` (năm 4 chữ số). Chưa có thì khối kèm
+nhập học năm 2004+N. Nguồn là hồ sơ sinh viên `khoa_nhap_hoc` (năm 4 chữ số). Chưa có thì khối kèm
 bảng tra năm nhập học → học kỳ và dặn hỏi MỘT câu `choice` field `khoa_nhap_hoc` (`id` = năm, `label`
 "Nhập học 2022 (đang học kỳ 9)", cho tự gõ). Câu trả lời (form advisory hay calculation) được lưu vào
-`confirmed_metadata` dưới dạng năm (`parse_intake_year`: năm, "K20", "kỳ 9" quy đổi tại thời điểm trả lời)
+hồ sơ sinh viên dưới dạng năm (`parse_intake_year`: năm, "K20", "kỳ 9" quy đổi tại thời điểm trả lời)
 và lượt resume dùng ngay. Khối thay cho
 `<current_date>` cũ của node 10. Review không được viết số của khối này (kiểm tra số mục 3.2 vẫn chặt).
 
@@ -408,7 +422,7 @@ và lượt resume dùng ngay. Khối thay cho
 
 - **Extractor** (`tests/graph/test_calculation_task.py`): `llm` không bị router ghi đè; router khoá công
   thức cài sẵn kể cả khi output hỏng; output hỏng không có router → `llm`; `previous` cần
-  `last_calculation`; `llm_questions` bỏ field đã biết/trùng/sai kiểu.
+  phép tính gần nhất cài sẵn; `llm_questions` bỏ field đã biết (mọi alias)/có trong hồ sơ/trùng/sai kiểu.
 - **Công thức cài sẵn:** đủ số → `Computed`; thiếu → `NeedsInput` từ `ParamSpec`; điểm 11 → hỏi lại kèm lý do.
 - **Graph** (`tests/graph/test_calculation_node.py`): lượt chỉ có tính toán (khối tính + nhận xét đã
   kiểm tra số); thiếu số → panel; lượt hỗn hợp → một panel, khối tính trước advisory; câu hỏi ngược sau

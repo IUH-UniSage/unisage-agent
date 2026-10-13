@@ -175,7 +175,9 @@ hỏi từ client:
 - **`messages.metadata.clarification` bên Java là bản chiếu để hiển thị.** Agent không đọc nó để ra quyết
   định. Bản chiếu chỉ được coi là đã có khi PATCH **thành công**, và event tương ứng chỉ được gửi sau đó
   (mục 2.6, 2.4).
-- `confirmed_metadata` vẫn nằm trong bảng này như cũ.
+- Bảng này không còn giữ thuộc tính sinh viên tự khai (cột `confirmed_metadata` đã bỏ, 13-10-2026):
+  chúng nằm ở hồ sơ sinh viên (mục 2.8). Bảng giữ `recent_calculations`: tối đa 5 phép tính gần nhất
+  của hội thoại, mỗi phép tính kèm số của riêng nó.
 
 ### 2.2 State machine
 
@@ -292,7 +294,7 @@ luôn nhận `4093`, không thể lọt qua thành lượt bình thường.
      lỗi. State và bản chiếu vẫn khớp nhau (cả hai đều `open`).
 
 Huỷ **không** gọi `start_turn`, không tạo message, không trừ quota, không gọi LLM.
-`confirmed_metadata` giữ nguyên.
+Hồ sơ sinh viên giữ nguyên.
 
 ### 2.6 Tạo panel mới (cuối lượt)
 
@@ -313,7 +315,7 @@ không bị `409` vì lý do lệch state.
 
 Không có giới hạn chuỗi panel (đã chốt 09-10-2026): còn thiếu gì thì panel kế tiếp hỏi tiếp, với
 `chain_depth + 1`. Không thể hỏi vòng: thuộc tính advisory sinh viên đã trả lời (kể cả "Khác") nằm trong
-`confirmed_metadata` và không bao giờ được hỏi lại; câu hỏi tính toán do code dựng nên luôn hữu hạn.
+hồ sơ sinh viên (mục 2.8, theo tên field chuẩn) và không bao giờ được hỏi lại; câu hỏi tính toán do code dựng nên luôn hữu hạn.
 Mọi câu hỏi của một lượt nằm trong **một** panel (không cắt ở 12 tab nữa).
 
 ### 2.7 Sửa hai bug của luồng cũ
@@ -321,6 +323,28 @@ Mọi câu hỏi của một lượt nằm trong **một** panel (không cắt �
 - Lượt chào không xoá round đang mở nữa, vì khi có round, mọi `message` đều bị chặn bằng `409` từ trước
   khi vào graph.
 - Khi panel đang mở, tin nhắn không còn bị ép đi luồng advisory, vì lý do tương tự.
+
+### 2.8 Hồ sơ sinh viên và nơi lưu câu trả lời (13-10-2026)
+
+- **Hồ sơ** (thuộc tính ổn định: khoá nhập học, ngành, hệ, bậc, khối ngành, cơ sở...) ở bảng
+  `student_profiles` (`StudentProfileRepository`): theo `user_id` khi đã đăng nhập, nên đi qua mọi hội
+  thoại; khách (không có `user_id`) theo `conversation_id`. Đúng một trong hai cột có giá trị (check
+  constraint). Chỉ dùng để chọn nhánh trả lời và để không hỏi lại - không bao giờ là bộ lọc Qdrant hay
+  phân quyền. Migration `b5c6d7e8f9a0` chép `confirmed_metadata` cũ thành hồ sơ theo hội thoại (không gộp
+  sang hồ sơ người dùng vì bảng không biết hội thoại thuộc ai).
+- **Tên field chuẩn:** `known_metadata_fields.json` là sổ đăng ký duy nhất (`scope`: `profile` |
+  `calculation`, `key_aliases`). Mọi tên field (câu hỏi form, câu trả lời, `ParamSpec`, cập nhật hồ sơ)
+  đi qua `metadata_fields.canonical_field` trước khi dùng; hồ sơ đọc lên qua `canonical_profile`.
+- **Câu trả lời panel:** field `profile` (hoặc field advisory không có trong sổ) → hồ sơ, giá trị chuẩn hoá
+  (`khoa_nhap_hoc` là năm); mọi câu trả lời vẫn vào tham số của task. Field `calculation` chỉ vào task.
+- **Không hỏi lại:** câu hỏi advisory bỏ field có trong hồ sơ hoặc trong số các phép tính của lượt đã có;
+  câu hỏi của LLM tự tính bỏ field đã biết (dưới mọi alias) hoặc có trong hồ sơ.
+- **Sửa bằng tin nhắn** ("tôi nhầm, khoá 2023 mới đúng"): node 03 trả `metadata_updates` (chỉ khi sinh viên
+  tự nói về bản thân; câu giả định/hỏi về khoá khác không cập nhật). `apply_updates` chỉ nhận field
+  `profile` có trong sổ; thay đổi được ghi DB **ngay** sau node 03 (`on_profile_change`), mọi bước sau
+  dùng giá trị mới, và câu trả lời mở đầu bằng một dòng cố định nêu điều đã cập nhật.
+- Ghi cuối lượt: hồ sơ được ghi cùng transaction với state khi lượt làm đổi nó; phép tính của lượt nối vào
+  `recent_calculations`.
 
 ## 3. SSE contract
 
@@ -361,7 +385,8 @@ class FenceRedactor:
   vào phần đã bắt, không bao giờ qua sink.
 - Các khối đã bắt được chuyển thành câu hỏi `origin="advisory"`: `ask_user_form.fields[]` thành
   `choice` có `allow_other=True`. Field thiếu options, hoặc có dưới 2 options, thì bị bỏ (giữ nguyên
-  hành vi hiện nay). Khối `confirmed_metadata` vẫn đi qua `collect_confirmed_metadata_updates`.
+  hành vi hiện nay). Khối `confirmed_metadata` chỉ còn bị nuốt (lưới an toàn, không đọc): hồ sơ chỉ
+  đổi qua câu trả lời panel hoặc `metadata_updates` của node 03 (mục 2.8).
 - `build_missing_metadata_block` gửi cả **label thật** của option cho LLM (sửa lỗi hiện tại là label bị
   thay bằng id).
 
@@ -481,7 +506,7 @@ Backend: ./mvnw test -Dtest='MessageControllerTest,MessageServiceImplTest,*Clari
 
 - Mỗi câu hỏi là một tab; một panel chứa mọi câu hỏi của lượt đó (không cắt; 50 chỉ chặn payload bất thường).
 - Graph lỗi sau khi claim thì không khôi phục round; history đã đủ context.
-- ~~Chuỗi panel tối đa 3~~ - đã bỏ ngày 09-10-2026: không giới hạn số panel nối tiếp, không cắt ở 12 tab; chống hỏi vòng nhờ `confirmed_metadata`.
+- ~~Chuỗi panel tối đa 3~~ - đã bỏ ngày 09-10-2026: không giới hạn số panel nối tiếp, không cắt ở 12 tab; chống hỏi vòng nhờ hồ sơ sinh viên (mục 2.8).
 - (Review lần 2) State machine `OPEN/PROCESSING` + `claim_token` + lease thay cho việc dùng `NULL`. Bản
   chiếu không còn best-effort: dữ liệu card đi cùng `start_turn`; panel mới và lệnh huỷ đều phải PATCH
   thành công trước khi gửi event.

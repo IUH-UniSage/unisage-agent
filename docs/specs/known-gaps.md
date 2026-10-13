@@ -390,6 +390,20 @@ can wake up after another request took the conversation over. Every state write 
 `claim_token` and the finalize PATCH is skipped when the claim was lost, so only SSE tokens to
 the long-disconnected old client could leak.
 
+### A guest's profile does not follow them after they log in (2026-10)
+
+A guest's declared attributes are kept per conversation (`student_profiles.conversation_id`);
+once the same person logs in, their user profile starts empty and is not merged with what they
+declared as a guest. Profiles migrated from the old per-conversation `confirmed_metadata` are
+conversation-owned too, even for logged-in users (the table cannot tell which user a
+conversation belongs to). Downgrading migration `b5c6d7e8f9a0` drops user-owned profiles.
+
+### The classifier decides what is a profile correction (2026-10)
+
+`metadata_updates` comes from node 03: it can mistake a question about another cohort for a
+correction, or miss one. Only registry `profile` fields are applied, and the reply opens with a
+fixed line naming what was saved, so the student sees it and can correct it.
+
 ### At most 3 tasks per message
 
 A message with more than 3 genuinely different-intent questions only gets
