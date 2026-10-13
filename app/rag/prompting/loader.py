@@ -106,6 +106,7 @@ def _load_all_templates() -> PromptTemplates:
         response_style=_load_yaml_template(common / "response_style.yaml"),
         citation_rules=_load_yaml_template(common / "citation_rules.yaml"),
         prepared_context=_load_yaml_template(common / "prepared_context.yaml"),
+        current_time=_load_yaml_template(common / "current_time.yaml"),
         web_search_context=_load_yaml_template(common / "web_search_context.yaml"),
         task_1=_load_yaml_template(common / "task_1.yaml"),
         task_2=_load_yaml_template(common / "task_2.yaml"),

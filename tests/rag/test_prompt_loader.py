@@ -3,10 +3,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.rag.prompting import (
+    build_calculation_llm_prompt,
     build_calculation_review_prompt,
     build_json_repair_prompt,
     build_multi_intent_prompt,
     build_system_prompt,
+    build_ticket_fallback_prompt,
     get_templates,
 )
 from app.schemas.chat_history import HistoryMessage
@@ -64,6 +66,28 @@ def test_calculation_review_prompt_renders_the_question_and_the_json_contract() 
     )
     assert "Câu hỏi của sinh viên: học phí 2 năm đầu" in prompt
     assert '{"fits": true, "issue": null, "answer": ' in prompt
+
+
+def test_ticket_fallback_and_calculation_prompts_carry_the_current_time() -> None:
+    prompts = [
+        build_ticket_fallback_prompt(
+            user_query="Học phí kỳ này?", security=AcademicSecurityContext(), confirmed_metadata={}
+        ),
+        build_calculation_llm_prompt(
+            user_query="Học phí còn lại kỳ này?",
+            builtin_rules="",
+            documents="",
+            known_values="(chưa có)",
+            history=[],
+            security=AcademicSecurityContext(),
+            confirmed_metadata={},
+        ),
+        build_calculation_review_prompt(user_query="x", calculation_payload="[]", history=[]),
+    ]
+    for prompt in prompts:
+        assert "<current_time>" in prompt
+        assert "Học kỳ hiện tại:" in prompt
+        assert "lịch của khoa bạn có thể khác" in prompt
 
 
 def test_task_2_no_longer_mentions_the_pending_block_or_confirmed_metadata() -> None:
@@ -506,7 +530,7 @@ def test_websearch_block_sits_below_academic_context_numbered_after_the_chunks()
     assert "[3] (lich-thi — https://pdt.iuh.edu.vn/lich-thi) Nội dung lich-thi" in prompt
     # Tag names also appear inside the rules; compare the blocks' own lines.
     assert prompt.index("\n</academic_context>") < prompt.index("\n<websearch>\n")
-    assert prompt.index("\n</websearch>") < prompt.index("\n<current_date>\n")
+    assert prompt.index("\n</websearch>") < prompt.index("\n<current_time>\n")
     assert "luôn theo `<academic_context>`" in prompt
 
 

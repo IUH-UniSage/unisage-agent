@@ -14,6 +14,8 @@ template: |
 
   {history_message}
 
+  {current_time}
+
   ## Đầu ra
   CHỈ một object JSON, không markdown code fence, không giải thích ngoài JSON:
   {{"fits": true, "issue": null, "answer": "Học phí 2 năm đầu của bạn là **165.200.000 đồng**."}}

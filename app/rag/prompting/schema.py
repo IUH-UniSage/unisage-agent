@@ -37,6 +37,7 @@ class PromptTemplates:
     response_style: str
     citation_rules: str
     prepared_context: str
+    current_time: str
     web_search_context: str
     task_1: str
     task_2: str

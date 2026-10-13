@@ -27,6 +27,8 @@ template: |
 
   {history}
 
+  {current_time}
+
   ## Cách trình bày (Markdown, ngắn gọn)
   1. **Công thức**: ghi công thức dùng, kèm chỉ số trích dẫn `[1]`, `[2]`... nếu lấy từ `<academic_context>` (không cần cho `<builtin_rules>`).
   2. **Thay số**: các bước thế số, mỗi bước một dòng, làm tròn ĐÚNG theo quy tắc làm tròn của công thức (VD điểm thành phần làm tròn 0.5 trước, rồi các điểm trung bình làm tròn 0.1).

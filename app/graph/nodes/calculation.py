@@ -59,7 +59,7 @@ from app.graph.streaming import (
     run_agent_text_with_failover,
 )
 from app.graph.streaming_state import AdminWarning, GraphModels
-from app.rag.prompting import build_calculation_llm_prompt, get_templates
+from app.rag.prompting import append_current_time, build_calculation_llm_prompt, get_templates
 from app.rag.prompting.citations import cited_indexes, source_title
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import CalculationPlan, LastCalculation
@@ -240,6 +240,7 @@ async def extract_request(query: str, deps: CalculationDeps) -> Extraction:
             allowed = [*allowed, "previous"]
     if len(allowed) > 1:
         prompt += "\n\n<allowed_formula_ids>" + ", ".join(allowed) + "</allowed_formula_ids>"
+    prompt = append_current_time(prompt)
     try:
         raw = await run_agent_text_with_failover(
             build_calculation_extractor_agent(deps.models.classification),
@@ -610,7 +611,7 @@ def _value_prompt(
     }
     known_lines = "; ".join(f"{name}: {value}" for name, value in context.items())
     wanted_lines = "; ".join(f"{spec.name}: {spec.label}" for spec in wanted)
-    return (
+    return append_current_time(
         f"<question>{query}</question>\n<known>{known_lines or '(trống)'}</known>\n"
         f"<wanted>{wanted_lines}</wanted>\n<documents>\n{_documents(chunks)}\n</documents>"
     )

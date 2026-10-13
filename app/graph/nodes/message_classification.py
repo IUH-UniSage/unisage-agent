@@ -21,7 +21,7 @@ from app.graph.streaming import (
     auxiliary_model_settings,
     run_agent_text_with_failover,
 )
-from app.rag.prompting import append_recent_history, get_templates
+from app.rag.prompting import append_current_time, append_recent_history, get_templates
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
 
@@ -216,6 +216,7 @@ async def classify_intent(
         prompt += (
             f"\n\n<previous_calculation_turn>{previous_calculation}</previous_calculation_turn>"
         )
+    prompt = append_current_time(prompt)
     output = await run_agent_text_with_failover(
         agent,
         prompt,

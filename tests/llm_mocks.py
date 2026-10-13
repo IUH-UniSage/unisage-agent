@@ -131,6 +131,7 @@ _NO_ROUTING_MODE_INTENTS = frozenset(
 # `append_recent_history` puts the message first, then this separator and
 # the recent history - everything before it is the user's own message.
 _HISTORY_SEPARATOR = "\n\nLịch sử hội thoại gần đây"
+_CURRENT_TIME_SEPARATOR = "\n\n<current_time>"
 
 
 def _task_payload(intent: str, query: str, routing_mode: str | None) -> dict[str, object]:
@@ -152,7 +153,7 @@ def make_classification_llm_model(*intents: str, routing_mode: str | None = None
             content = getattr(part, "content", None)
             if isinstance(content, str):
                 prompt = content
-        message = prompt.split(_HISTORY_SEPARATOR, 1)[0]
+        message = prompt.split(_HISTORY_SEPARATOR, 1)[0].split(_CURRENT_TIME_SEPARATOR, 1)[0]
         if len(intents) == 1:
             tasks = [_task_payload(intents[0], message, routing_mode)]
         else:

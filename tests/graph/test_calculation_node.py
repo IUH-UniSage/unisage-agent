@@ -1334,3 +1334,63 @@ async def test_tuition_for_two_years_asks_and_titles_the_period_the_student_name
     assert second.pending_round is None
     assert "Học phí 2 năm đầu **165.200.000 đồng**" in second.response_text
     assert "một năm học" not in second.response_text
+
+
+@pytest.mark.asyncio
+async def test_every_llm_call_of_a_calculation_turn_gets_the_current_time() -> None:
+    classification: list[str] = []
+    generation: list[str] = []
+    await run_graph(
+        _input(_TWO_YEARS),
+        GraphModels(
+            classification=_recording(
+                classification,
+                json.dumps({"tasks": [{"intent": "academic_calculation", "query": _TWO_YEARS}]}),
+                json.dumps({"formula_id": "tuition_year", "params": {"tc_lt": 100, "tc_th": 42}}),
+                json.dumps(_PRICES_FOUND),
+            ),
+            query_transformation=_echo_model(),
+            generation=_recording(generation, _review(True, "ok"), "x"),
+            retrieval=_RecordingRetrieval([_FEE_TABLE]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    # classifier, extractor, value extractor; then the review
+    assert len(classification) == 3 and len(generation) == 1
+    assert all("<current_time>" in prompt for prompt in classification + generation)
+    assert "Học kỳ hiện tại:" in generation[0]
+
+
+@pytest.mark.asyncio
+async def test_every_llm_call_of_an_advisory_turn_gets_the_current_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    hyde: list[str] = []
+    generation: list[str] = []
+
+    def echo(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        prompt = str(getattr(messages[-1].parts[-1], "content", ""))
+        hyde.append(prompt)
+        return ModelResponse(parts=[TextPart(content=prompt.splitlines()[0])])
+
+    await run_graph(
+        _input("Học phí kỳ này bao nhiêu?"),
+        GraphModels(
+            classification=make_classification_llm_model(
+                "academic_advisory", routing_mode="SINGLE"
+            ),
+            query_transformation=FunctionModel(function=echo),
+            generation=_prompt_capturing_generation(generation),
+            retrieval=_RecordingRetrieval([_CHUNK]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert hyde and generation
+    assert all("<current_time>" in prompt for prompt in hyde + generation)

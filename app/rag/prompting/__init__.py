@@ -19,9 +19,11 @@ from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
 
 from .builder import (
+    append_current_time,
     append_recent_history,
     build_ask_user_form_guide,
     build_calculation_results_section,
+    build_current_time_section,
     build_history_section,
     build_json_repair_prompt,
     build_known_metadata_fields_section,
@@ -35,10 +37,12 @@ from .schema import PromptTemplates
 
 __all__ = [
     "PromptTemplates",
+    "append_current_time",
     "append_recent_history",
     "build_ask_user_form_guide",
     "build_calculation_llm_prompt",
     "build_calculation_review_prompt",
+    "build_current_time_section",
     "build_history_section",
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
@@ -150,6 +154,7 @@ def build_ticket_fallback_prompt(
         security_access_control=templates.security_access_control,
         response_style=templates.response_style,
         ticket_fallback=templates.ticket_fallback,
+        current_time=build_current_time_section(),
         user_query=user_query,
     )
 
@@ -169,6 +174,7 @@ def build_calculation_review_prompt(
         header=templates.header,
         calculation_payload=calculation_payload,
         history_message=build_history_section(history),
+        current_time=build_current_time_section(),
         user_query=user_query,
     )
 
@@ -199,5 +205,6 @@ def build_calculation_llm_prompt(
         documents=documents or "(không có tài liệu)",
         known_values=known_values,
         history=build_history_section(history),
+        current_time=build_current_time_section(),
         user_query=user_query,
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
+from app.core.academic_calendar import describe_current_term
 from app.core.timezone import now_ict
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.retrieval import RetrievedChunk
@@ -32,7 +33,7 @@ _AMOUNT_PATTERN = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
 # one of them could close the frame early and have what follows read as
 # prompt rather than data.
 _CONTEXT_FRAME_TAG_PATTERN = re.compile(
-    r"<\s*(/?)\s*(academic_context|websearch|current_date)\s*>", re.IGNORECASE
+    r"<\s*(/?)\s*(academic_context|websearch|current_date|current_time)\s*>", re.IGNORECASE
 )
 
 
@@ -169,9 +170,7 @@ def build_prepared_context_section(
 ) -> str:
     """Build `{prepared_context}` - the `<academic_context>` block, chunks numbered
     to match the `[1][2]` citation indices the generation prompt asks the model to use,
-    plus the `<current_date>` block (today, ICT/GMT+7) so the model has a real-world
-    time anchor for questions like "học phí năm 2025-2026" without nêu rõ mốc thời gian,
-    or for checking whether a document's stated effective date has passed.
+    plus the `<current_time>` block (`build_current_time_section`).
 
     Each chunk's source is suffixed with its page number(s) when available
     (`_page_suffix`); `citation_rules.yaml` tells the LLM to cite them.
@@ -189,12 +188,28 @@ def build_prepared_context_section(
         )
         or _NO_RETRIEVED_CONTEXT
     )
-    current_date = now_ict().strftime("%d/%m/%Y")
     return get_templates().prepared_context.format(
         context_chunks=context_chunks,
         web_search_context=_build_web_search_context(web_results, first_index=len(chunks) + 1),
-        current_date=current_date,
+        current_time=build_current_time_section(),
     )
+
+
+def build_current_time_section() -> str:
+    """`<current_time>`: today (ICT) and the current term of the provisional school
+    calendar - one block, given to every chat flow."""
+
+    today = now_ict()
+    return get_templates().current_time.format(
+        current_date=today.strftime("%d/%m/%Y"),
+        current_term=describe_current_term(today.date()),
+    )
+
+
+def append_current_time(prompt: str) -> str:
+    """For agents whose system prompt is static: the block goes into the message."""
+
+    return f"{prompt}\n\n{build_current_time_section()}"
 
 
 def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_index: int) -> str:

@@ -396,10 +396,10 @@ async def test_classifier_is_told_the_previous_calculation() -> None:
     )
     await classify_intent(agent, "điều kiện tốt nghiệp là gì?")
 
-    assert prompts[0].endswith(
+    assert (
         "<previous_calculation_turn>Điểm tổng kết học phần (lý thuyết + thực hành)"
-        "</previous_calculation_turn>"
-    )
+        "</previous_calculation_turn>\n\n<current_time>"
+    ) in prompts[0]
     assert "<previous_calculation_turn>" not in prompts[1]
 
 
