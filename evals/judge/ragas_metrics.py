@@ -333,6 +333,7 @@ class RagasScorerFactory:
     prompts_dir: Path
     adapt_prompts: bool
     metrics: list[str]
+    rpd_recheck_s: float = 0.0
     _callers: list[GeminiCaller] = field(default_factory=list)
 
     def __call__(self, primary_only: bool) -> RagasScorer:
@@ -340,6 +341,7 @@ class RagasScorerFactory:
         caller = GeminiCaller(
             pools={model: KeyPool(self.keys, rpm=self.rpm) for model in models},
             client_for=_client_cache(),
+            rpd_recheck_s=self.rpd_recheck_s,
         )
         self._callers.append(caller)
         llm = GeminiJudgeLLM(

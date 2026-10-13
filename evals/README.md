@@ -22,7 +22,7 @@ evals/
   judge/       4. RAGAS scores on Gemini, in its own environment
     cli.py        python -m evals.judge
     ragas_metrics.py  the RAGAS metrics and the Gemini LLM/embeddings they call
-    gemini_pool.py    key pool: per-key RPM, daily-quota reset, 503/504 retries
+    gemini_pool.py    key pool: per-key RPM, daily-quota reset (or --rpd-recheck), 503/504 move on to another key
     prompts/      RAGAS prompt examples translated to Vietnamese (cached, reused)
     requirements.in / requirements.txt  pinned judge environment
 ```

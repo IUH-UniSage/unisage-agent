@@ -309,14 +309,17 @@ def test_errors_are_classified_from_the_code_and_the_quota_details() -> None:
     assert classify(FakeError(400)) == ("fatal", None)
 
 
-def _caller(keys: list[str], clock: Clock, outcomes: dict[str, list[Any]]) -> GeminiCaller:
+def _caller(
+    keys: list[str], clock: Clock, outcomes: dict[str, list[Any]], **options: Any
+) -> GeminiCaller:
     """A caller whose client for a key is the key itself (see `_call`)."""
 
     return GeminiCaller(
         pools={"m": _pool(keys, clock, rpm=10)},
         client_for=lambda key: key,
-        sleep=clock.sleep,
         next_reset=lambda: 99_999.0,
+        wall=clock,
+        **options,
     )
 
 
@@ -347,26 +350,43 @@ def test_429_per_minute_moves_to_another_key_and_per_day_retires_the_key() -> No
     assert state.key == "key-one-123456"  # back on the first key after its 20 s cool-down
 
 
-def test_503_backs_off_on_the_same_key_then_gives_up_for_the_fallback() -> None:
+def test_per_day_429_can_bench_a_key_only_until_a_recheck() -> None:
     clock = Clock()
-    outcomes = {"key-one-123456": [FakeError(503)] * 6, "key-two-123456": ["never used"]}
+    outcomes = {"key-one-123456": [FakeError(429, {"quotaId": "PerDay"}), "ok"]}
+    caller = _caller(list(outcomes), clock, outcomes, rpd_recheck_s=600)
+
+    with pytest.raises(QuotaExhausted) as raised:
+        _call(caller, outcomes)
+    assert raised.value.reset_at == 600.0
+
+    clock.now = 601.0
+    assert _call(caller, outcomes)[0] == "ok"
+
+
+def test_503_and_504_cool_the_key_down_and_move_on_to_another_key() -> None:
+    clock = Clock()
+    outcomes = {"key-one-123456": [FakeError(503), FakeError(504), "ok"],
+                "key-two-123456": [FakeError(503), FakeError(504)]}
     caller = _caller(list(outcomes), clock, outcomes)
 
-    with pytest.raises(ModelUnavailable):
-        _call(caller, outcomes)
-    assert caller.pools["m"].keys[0].stats["unavailable"] == 6
-    assert outcomes["key-two-123456"] == ["never used"]
-    assert len(clock.slept) >= 5 and all(2 <= s <= 48 for s in clock.slept[:5])
+    response, state = _call(caller, outcomes)
+
+    assert response == "ok" and state.key == "key-one-123456"
+    keys = caller.pools["m"].keys
+    assert [k.stats["unavailable"] for k in keys] == [1, 1]
+    assert [k.stats["timeout"] for k in keys] == [1, 1]
+    assert outcomes == {"key-one-123456": [], "key-two-123456": []}
 
 
-def test_timeouts_are_retried_twice_and_a_bad_request_fails_at_once() -> None:
+def test_the_model_is_given_up_after_too_many_503_and_a_bad_request_fails_at_once() -> None:
     clock = Clock()
-    outcomes = {"key-one-123456": [FakeError(504), FakeError(504), "ok"]}
-    assert _call(_caller(list(outcomes), clock, outcomes), outcomes)[0] == "ok"
+    outcomes = {"key-one-123456": [FakeError(503)] * 3, "key-two-123456": [FakeError(503)] * 3}
+    with pytest.raises(ModelUnavailable):
+        _call(_caller(list(outcomes), clock, outcomes, max_unavailable=5), outcomes)
 
     outcomes = {"key-one-123456": [FakeError(504)] * 3}
     with pytest.raises(CallFailed):
-        _call(_caller(list(outcomes), clock, outcomes), outcomes)
+        _call(_caller(list(outcomes), clock, outcomes, max_timeouts=2), outcomes)
 
     outcomes = {"key-one-123456": [FakeError(400)]}
     with pytest.raises(CallFailed):

@@ -541,6 +541,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="minutes to sleep when every key is out for the day (0 = stop, rerun later)",
     )
     parser.add_argument("--max-quota-waits", type=int, default=48)
+    parser.add_argument(
+        "--rpd-recheck",
+        type=float,
+        default=0.0,
+        help="minutes before a key hit by a per-day 429 is tried again (0 = next daily reset)",
+    )
     parser.add_argument("--env-file", type=Path, default=Path(".env.eval"))
     parser.add_argument("--prompts-dir", type=Path, default=Path(__file__).parent / "prompts")
     parser.add_argument(
@@ -594,6 +600,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prompts_dir=args.prompts_dir,
         adapt_prompts=args.adapt_prompts,
         metrics=args.metrics,
+        rpd_recheck_s=args.rpd_recheck * 60,
     )
     run = JudgeRun(
         out=args.out,

@@ -4,11 +4,12 @@ Free-tier quotas apply per project and per model: each key gets its own client-s
 limit (≤ 12 RPM by default) and the keys are used round-robin. What happens on an error:
 
 - 429 out of requests per minute: wait the `retryDelay` the error gives, on another key;
-- 429 out of requests per day: the key sits out until the daily reset (midnight Pacific time);
-- 503 / 500 (model overloaded): exponential backoff 2-32 s with jitter, up to 5 times, on the
-  same key - the overload is the model's, not the key's - then `ModelUnavailable`, so the
-  caller can switch to the fallback model;
-- 504 / client timeout: retried twice, then `CallFailed`;
+- 429 out of requests per day: the key sits out until the daily reset (midnight Pacific time),
+  or only `rpd_recheck_s` when set - Google's free tier sometimes answers per-day 429 for a key
+  that still has quota, so the key is tried again later;
+- 503 / 500 / 504 / client timeout: the key cools down 2-32 s (backoff with jitter) and the call
+  moves on to another key; after `max_unavailable` / `max_timeouts` tries `ModelUnavailable`
+  (the caller can switch to the fallback model) or `CallFailed`;
 - every key out for the day: `QuotaExhausted` with the earliest reset time.
 
 Nothing here imports `google.genai`: errors are read by duck typing (`.code`, `.details`), so
@@ -105,28 +106,22 @@ class KeyPool:
         slot = state.recent[0] + WINDOW_S if len(state.recent) >= self.rpm else now
         return max(slot, state.cooldown_until)
 
-    async def acquire(self, prefer: KeyState | None = None) -> KeyState:
-        """The next key allowed to call, waiting for a free slot if none is free now.
-        `prefer` asks for that key (a 503 retry stays on its key) while it is still live."""
+    async def acquire(self) -> KeyState:
+        """The next key allowed to call, waiting for a free slot if none is free now."""
 
         while True:
             now, wall = self._clock(), self._wall()
             live = [state for state in self.keys if state.exhausted_until <= wall]
             if not live:
                 raise QuotaExhausted(min(state.exhausted_until for state in self.keys))
-            if prefer is not None and prefer in live:
-                order = [prefer]
-            else:
-                start = self._next % len(self.keys)
-                rotated = self.keys[start:] + self.keys[:start]
-                order = [state for state in rotated if state in live]
+            start = self._next % len(self.keys)
+            order = [state for state in self.keys[start:] + self.keys[:start] if state in live]
             ready = [(self._ready_at(state, now), state) for state in order]
             for at, state in ready:
                 if at <= now:
                     state.recent.append(now)
                     state.stats["calls"] += 1
-                    if prefer is None:
-                        self._next = self.keys.index(state) + 1
+                    self._next = self.keys.index(state) + 1
                     return state
             await self._sleep(max(0.01, min(at for at, _state in ready) - now))
 
@@ -172,21 +167,20 @@ class GeminiCaller:
     pools: dict[str, KeyPool]
     client_for: Callable[[str], Any]
     timeout_s: float = 90.0
-    max_unavailable: int = 5
-    max_timeouts: int = 2
-    sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep
+    max_unavailable: int = 30
+    max_timeouts: int = 30
+    rpd_recheck_s: float = 0.0  # 0 = a per-day 429 benches the key until the daily reset
     rng: random.Random = field(default_factory=random.Random)
     next_reset: Callable[[], float] = next_daily_reset
+    wall: Callable[[], float] = time.time
 
     async def call(
         self, model: str, request: Callable[[Any], Awaitable[Any]]
     ) -> tuple[Any, KeyState]:
         pool = self.pools[model]
         unavailable = timeouts = 0
-        prefer: KeyState | None = None
         while True:
-            state = await pool.acquire(prefer)
-            prefer = None
+            state = await pool.acquire()
             try:
                 response = await asyncio.wait_for(
                     request(self.client_for(state.key)), self.timeout_s
@@ -200,18 +194,24 @@ class GeminiCaller:
                 if kind == "rpm":
                     pool.cool_down(state, delay if delay is not None else WINDOW_S)
                 elif kind == "rpd":
-                    pool.exhaust(state, self.next_reset())
+                    until = self.next_reset()
+                    if self.rpd_recheck_s > 0:
+                        until = min(until, self.wall() + self.rpd_recheck_s)
+                    pool.exhaust(state, until)
                 elif kind == "unavailable":
                     unavailable += 1
                     if unavailable > self.max_unavailable:
                         raise ModelUnavailable(f"{model}: {error}") from error
-                    backoff = min(32.0, 2.0 ** unavailable)
-                    await self.sleep(backoff + self.rng.uniform(0, backoff / 2))
-                    prefer = state
+                    pool.cool_down(state, self._backoff(unavailable))
                 else:  # timeout
                     timeouts += 1
                     if timeouts > self.max_timeouts:
                         raise CallFailed(f"{model}: timed out {timeouts} times") from error
+                    pool.cool_down(state, self._backoff(timeouts))
+
+    def _backoff(self, attempt: int) -> float:
+        base = min(32.0, 2.0**attempt)
+        return base + self.rng.uniform(0, base / 2)
 
     def stats(self) -> dict[str, dict[str, dict[str, int]]]:
         return {
