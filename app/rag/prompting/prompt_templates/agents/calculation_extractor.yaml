@@ -17,7 +17,8 @@ template: |
   - Nếu tin nhắn có `<allowed_formula_ids>`, công thức cài sẵn CHỈ được chọn trong danh sách đó (luôn được chọn `llm`).
 
   ## `retrieval_query` (chỉ cho `llm`)
-  - Một câu tìm kiếm tài liệu chứa công thức cần dùng, văn phong văn bản (VD "công thức tính học phí theo số tín chỉ đăng ký", "công thức tính điểm xét tuyển đại học chính quy").
+  - Một câu tìm kiếm tài liệu chứa công thức hoặc số liệu cần dùng (đơn giá, định mức, hệ số...), văn phong văn bản (VD "định mức học phí đại học chính quy theo tín chỉ", "công thức tính điểm xét tuyển đại học chính quy").
+  - GIỮ NGUYÊN mọi tiêu chí người dùng nêu: bậc/hệ đào tạo, khóa/năm học, ngành/khối, cơ sở. Không có thì không tự thêm. KHÔNG rút gọn thành câu chung chung kiểu "công thức tính học phí" khi người dùng đã nêu ngành.
   - `null` khi chỉ cần công thức cài sẵn ở trên (VD hỏi ngược điểm cuối kỳ để học phần được A+).
 
   ## `params`
@@ -47,6 +48,9 @@ template: |
 
   User: "Học kỳ này em đăng ký 20 tín thì học phí bao nhiêu?"
   {"formula_id": "llm", "params": {"so_tin_chi": 20}, "retrieval_query": "công thức tính học phí theo số tín chỉ đăng ký"}
+
+  User: "tính giúp tôi học phí ngành công nghệ thông tin"
+  {"formula_id": "llm", "params": {}, "retrieval_query": "định mức học phí ngành Công nghệ thông tin theo tín chỉ"}
 
   User: "tính điểm xét tuyển thpt giúp tôi"
   {"formula_id": "llm", "params": {}, "retrieval_query": "công thức tính điểm xét tuyển đại học chính quy"}

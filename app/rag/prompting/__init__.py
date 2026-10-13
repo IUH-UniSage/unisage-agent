@@ -185,6 +185,7 @@ def build_calculation_llm_prompt(
     templates = get_templates()
     return templates.chat_calculation_llm.format(
         header=templates.header,
+        academic_domain_rules=templates.academic_domain_rules,
         response_style=templates.response_style,
         citation_rules=templates.citation_rules,
         builtin_rules=builtin_rules,
