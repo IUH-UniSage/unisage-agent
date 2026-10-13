@@ -73,7 +73,6 @@ async def cancel_panel(
     conversation_id: str,
     pending: PendingRound,
     action: ClarificationCancel,
-    confirmed_metadata: dict[str, str],
 ) -> AsyncGenerator[str, None]:
     """claim → PATCH projection (must succeed) → complete. No start_turn, no quota, no
     LLM. A projection that cannot be written restores the round and fails with 503,
@@ -102,7 +101,7 @@ async def cancel_panel(
         await db_session.commit()
         raise BackendJavaUnavailableException()
 
-    await rounds.complete(conversation_id, token, None, confirmed_metadata)
+    await rounds.complete(conversation_id, token, None)
     await db_session.commit()
     logger.info(
         "clarification.cancelled conversation_id=%s panel_id=%s", conversation_id, action.panel_id

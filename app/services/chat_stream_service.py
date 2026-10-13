@@ -36,9 +36,12 @@ from app.core.errors.exceptions import (
     UsageLimitExceededException,
 )
 from app.core.security.sanitizer import detect_prompt_injection, sanitize_input_text
+from app.core.timezone import now_ict
 from app.core.usage.cost_calculator import estimate as estimate_cost
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
+from app.graph.metadata_fields import canonical_profile
 from app.graph.queue_items import (
     ClarificationClosedItem,
     ClarificationItem,
@@ -251,6 +254,9 @@ class ChatStreamService:
 
         conversation_id = request.conversation_id
         round_state = await ClarificationRoundRepository(self._db).get_round(conversation_id)
+        profile = await StudentProfileRepository(self._db).get(
+            ProfileOwner.of(caller.security, conversation_id)
+        )
         await self._db.commit()  # get_round may have consumed an expired lease
         pending_round = gate_clarification(round_state, request)
 
@@ -266,7 +272,6 @@ class ChatStreamService:
                     conversation_id=conversation_id,
                     pending=pending_round,
                     action=action,
-                    confirmed_metadata=round_state.confirmed_metadata,
                 )
             assert isinstance(action, ClarificationSubmit)
             prepared = await prepare_submit(
@@ -306,8 +311,8 @@ class ChatStreamService:
             conversation_id=conversation_id,
             message=message,
             caller=caller,
-            confirmed_metadata=round_state.confirmed_metadata,
-            last_calculation=round_state.last_calculation,
+            confirmed_metadata=canonical_profile(profile, now_ict().date()),
+            recent_calculations=round_state.recent_calculations,
             resume=resume,
             claim=claim,
         )
@@ -320,7 +325,7 @@ class ChatStreamService:
         message: str,
         caller: ChatCaller,
         confirmed_metadata: dict[str, str],
-        last_calculation: LastCalculation | None,
+        recent_calculations: list[LastCalculation],
         resume: ResumeInput | None,
         claim: ClaimContext | None,
     ) -> AsyncGenerator[str, None]:
@@ -354,7 +359,7 @@ class ChatStreamService:
             confirmed_metadata=confirmed_metadata,
             history=_history_from_context(turn.get("context") or []),
             resume=resume,
-            last_calculation=last_calculation,
+            recent_calculations=list(recent_calculations),
         )
 
         queue: asyncio.Queue[QueueItem] = asyncio.Queue()

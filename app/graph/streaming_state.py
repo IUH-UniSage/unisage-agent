@@ -54,6 +54,12 @@ class GraphInput:
     resume: ResumeInput | None = None
     # The conversation's latest computed calculation (follow-up target questions).
     last_calculation: LastCalculation | None = None
+    # The conversation's latest calculations, oldest first, each with its own numbers.
+    recent_calculations: list[LastCalculation] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.last_calculation is None and self.recent_calculations:
+            self.last_calculation = self.recent_calculations[-1]
 
 
 @dataclass(frozen=True)

@@ -88,6 +88,19 @@ def apply_updates(
     return merged, changed
 
 
+def canonical_profile(profile: Mapping[str, str], today: date) -> dict[str, str]:
+    """A stored profile under registry names with normalised values - rows written
+    before the registry (or under an alias) read back the same as new ones."""
+
+    result: dict[str, str] = {}
+    for name, raw in profile.items():
+        field = canonical_field(name)
+        value = normalize_value(field, raw, today)
+        if value is not None:
+            result.setdefault(field, value)
+    return result
+
+
 def canonical_params(params: Mapping[str, object]) -> dict[str, object]:
     """Known values keyed by registry names (the first name wins on a clash)."""
 

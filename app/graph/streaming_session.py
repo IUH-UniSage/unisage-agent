@@ -57,6 +57,7 @@ from app.core.errors.public_errors import (
 from app.core.observability.graph_trace import GraphTrace
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
 from app.database.session import async_session_factory
 from app.graph.queue_items import (
     ClarificationItem,
@@ -168,33 +169,28 @@ async def _store_round_state(
     conversation_id: str,
     claim: ClaimContext | None,
     pending_round: PendingRound | None,
-    confirmed_metadata: dict[str, str],
-    last_calculation: LastCalculation | None = None,
+    recent_calculations: list[LastCalculation] | None = None,
+    profile: tuple[ProfileOwner, dict[str, str]] | None = None,
 ) -> object:
     """True when written, False when the write failed or was refused, `_LOST_CLAIM`
-    when a submit turn no longer owns its claim."""
+    when a submit turn no longer owns its claim. `profile` (owner, attributes) is
+    written in the same transaction when the turn changed it."""
 
     try:
         async with session_factory() as session:
             repo = ClarificationRoundRepository(session)
+            if profile is not None:
+                await StudentProfileRepository(session).save(*profile)
             if claim is not None:
                 done = await repo.complete(
-                    conversation_id,
-                    claim.token,
-                    pending_round,
-                    confirmed_metadata,
-                    last_calculation,
+                    conversation_id, claim.token, pending_round, recent_calculations
                 )
                 await session.commit()
                 return True if done else _LOST_CLAIM
             if pending_round is not None:
-                opened = await repo.upsert_open(
-                    conversation_id, pending_round, confirmed_metadata, last_calculation
-                )
+                opened = await repo.upsert_open(conversation_id, pending_round, recent_calculations)
             else:
-                await repo.save_confirmed_metadata(
-                    conversation_id, confirmed_metadata, last_calculation
-                )
+                await repo.save_calculations(conversation_id, recent_calculations)
                 opened = True
             await session.commit()
             return opened
@@ -333,6 +329,14 @@ async def run_and_persist(
                 if graph_output is not None
                 else graph_input.confirmed_metadata
             )
+            profile = (
+                (ProfileOwner.of(graph_input.security, conversation_id), dict(confirmed))
+                if confirmed != graph_input.confirmed_metadata
+                else None
+            )
+            computed = (
+                graph_output.last_calculation if status == "COMPLETED" and graph_output else None
+            )
             # State first, projection second, event last: a client that receives
             # `event: clarification` can always reload and submit that panel.
             persisted = await _store_round_state(
@@ -340,8 +344,8 @@ async def run_and_persist(
                 conversation_id,
                 claim,
                 pending_round,
-                confirmed,
-                graph_output.last_calculation if status == "COMPLETED" and graph_output else None,
+                [*graph_input.recent_calculations, computed] if computed else None,
+                profile,
             )
             if persisted is _LOST_CLAIM:
                 # Our claim was taken over (lease expired): another request owns the
