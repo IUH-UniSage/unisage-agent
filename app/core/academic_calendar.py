@@ -71,6 +71,12 @@ def student_term(today: date, intake_year: int) -> int | None:
     return number if number >= 1 else None
 
 
+def cohort_label(intake_year: int) -> str:
+    """IUH's name for an intake: 2022 → "K18" - never "K2022"."""
+
+    return f"K{intake_year - COHORT_YEAR_OFFSET}"
+
+
 def describe_student_term(today: date, intake_year: int | None) -> str:
     if intake_year is None:
         options = "; ".join(

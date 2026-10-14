@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 
 from app.core.academic_calendar import (
+    cohort_label,
     current_term,
     describe_current_term,
     describe_student_term,
@@ -107,3 +108,8 @@ def test_parse_intake_year_reads_a_year_a_cohort_or_a_term_number(
     value: object, intake: int | None
 ) -> None:
     assert parse_intake_year(value, _TODAY) == intake
+
+
+def test_cohort_label_counts_intakes_from_2004() -> None:
+    assert cohort_label(2022) == "K18"
+    assert cohort_label(2024) == "K20"

@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 
 from app.core.academic_calendar import (
     INTAKE_FIELD,
+    cohort_label,
     describe_current_term,
     describe_student_term,
     parse_intake_year,
@@ -61,7 +62,10 @@ def build_metadata_section(
         or _NO_DEPARTMENT_ACCESS
     )
     confirmed_metadata_text = (
-        "\n".join(f"    - {field}: {value}" for field, value in confirmed_metadata.items())
+        "\n".join(
+            f"    - {field}: {_declared_value(field, value)}"
+            for field, value in confirmed_metadata.items()
+        )
         or f"    {_NO_DECLARED_ATTRIBUTES}"
     )
     return get_templates().academic_metadata.format(
@@ -70,6 +74,16 @@ def build_metadata_section(
         department_access_lines=department_access_lines,
         confirmed_metadata=confirmed_metadata_text,
     )
+
+
+def _declared_value(field: str, value: str) -> str:
+    """The intake year carries its cohort ("2022 (khóa K18)"), so the model never
+    names the cohort after the year ("K2022")."""
+
+    if field != INTAKE_FIELD:
+        return value
+    year = parse_intake_year(value, now_ict().date())
+    return f"{value} (khóa {cohort_label(year)})" if year is not None else value
 
 
 def build_known_metadata_fields_section(*, every_scope: bool = False) -> str:

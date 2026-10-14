@@ -61,12 +61,13 @@ async def test_prompt_carries_the_profile_the_rules_and_the_message() -> None:
         build_social_chat_agent(_prompt_capturing_model(prompts)),
         "Bạn biết thông tin gì về tôi?",
         security=AcademicSecurityContext(),
-        confirmed_metadata={"nganh": "Công nghệ thông tin"},
+        confirmed_metadata={"nganh": "Công nghệ thông tin", "khoa_nhap_hoc": "2022"},
         token_sink=_sink([]),
     )
 
     (prompt,) = prompts
     assert "- nganh: Công nghệ thông tin" in prompt
+    assert "- khoa_nhap_hoc: 2022 (khóa K18)" in prompt
     assert "Quy Tắc Bảo Mật" in prompt
     assert "câu hỏi dẫn dắt" in prompt
     assert prompt.rstrip().endswith("Tin nhắn của người dùng: Bạn biết thông tin gì về tôi?")
