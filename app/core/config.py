@@ -223,11 +223,10 @@ class Settings(BaseSettings):
         "lich_thong_bao",
         "lien_he_co_so",
     ]
-    # Tavily bills per search, not per result, so asking for more candidates is free;
-    # the judge and PER_TURN still bound what reaches the prompt.
+    # Tavily bills per search, not per result, so asking for more candidates is free; every
+    # page left after the junk filters goes to the web judge, and PER_TURN / MAX_SOURCES
+    # bound what reaches the prompt.
     CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=10, ge=1, le=20)
-    # Pages per search shown to the web judge, after the domain policy ordered them.
-    CHAT_WEB_SEARCH_CANDIDATES_PER_QUERY: int = Field(default=5, ge=1)
     CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=2, ge=1)
     # Official pages the web judge kept although their snippet lacks the answer (a scanned
     # fee decision): at most this many are linked by the ticket fallback.

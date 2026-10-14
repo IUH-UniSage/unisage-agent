@@ -130,7 +130,6 @@ def order_candidates(
     topic: str | None,
     co_so: str | None = None,
     floor: float,
-    limit: int,
 ) -> list[WebSearchResult]:
     """Pages worth showing the web judge, best first: not a listing or another campus's
     site, the topic's own sites before the rest, the newest academic year first, then
@@ -155,7 +154,7 @@ def order_candidates(
             -result.score,
         )
     )
-    return kept[:limit]
+    return kept
 
 
 def is_listing_page(url: str) -> bool:

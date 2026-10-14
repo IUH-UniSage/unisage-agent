@@ -108,7 +108,7 @@ def test_candidates_put_the_topics_own_sites_first() -> None:
         _page("https://www.iuh.edu.vn/vi/thong-bao/hoc-phi", 0.2),
     ]
 
-    ordered = order_candidates(pages, topic="hoc_phi", floor=0.05, limit=5)
+    ordered = order_candidates(pages, topic="hoc_phi", floor=0.05)
 
     assert [page.url for page in ordered] == [
         "https://ptckt.iuh.edu.vn/upload/qd-hoc-phi.pdf",
@@ -131,8 +131,8 @@ def test_the_score_floor_never_drops_a_page_of_the_topics_own_sites() -> None:
     fee_decision = _page("https://ptckt.iuh.edu.vn/upload/files/bieumau/1035-QD-DHCN.pdf", 0.03)
     weak_news = _page("https://iuh.edu.vn/vi/tin-tuc/hoc-bong", 0.03)
 
-    ordered = order_candidates([weak_news, fee_decision], topic="hoc_phi", floor=0.05, limit=5)
+    ordered = order_candidates([weak_news, fee_decision], topic="hoc_phi", floor=0.05)
 
     assert ordered == [fee_decision.model_copy(update={"academic_year": None})]
     # Another topic does not trust ptckt: the floor applies there.
-    assert order_candidates([fee_decision], topic="tuyen_sinh", floor=0.05, limit=5) == []
+    assert order_candidates([fee_decision], topic="tuyen_sinh", floor=0.05) == []

@@ -6,8 +6,8 @@ or - when classification wrote no slots - the question of a sub-query rerank lef
 Requests are searched in parallel, each through the Redis result cache. Tavily's score only
 drops junk (`CHAT_WEB_SEARCH_SCORE_FLOOR`): it rates a question-form query's right page 0.08
 and a keyword query's off-topic page 0.90, so relevance is the judge's call. The pages left
-are ordered by the topic's own sites, the newest academic year, then score, and the best
-`CHAT_WEB_SEARCH_CANDIDATES_PER_QUERY` of each search are shared out round-robin.
+are ordered by the topic's own sites, the newest academic year, then score, and every one
+of them goes to the judge (searches shared out round-robin): no page is lost for its rank.
 
 With no judge (no RERANK/EXTRACTION model, or it failed), `select_without_judge` keeps
 the rule from before it existed: pages scoring at least `CHAT_WEB_SEARCH_MIN_SCORE`.
@@ -145,7 +145,6 @@ async def _search_one(
         topic=request.topic,
         co_so=request.co_so,
         floor=settings.CHAT_WEB_SEARCH_SCORE_FLOOR,
-        limit=settings.CHAT_WEB_SEARCH_CANDIDATES_PER_QUERY,
     )
     # Always logged: every page with its score, and which ones are shown to the judge -
     # enough to tune the domain policy from production logs.

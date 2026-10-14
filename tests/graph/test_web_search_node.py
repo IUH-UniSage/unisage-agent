@@ -50,7 +50,6 @@ def _web_search_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", True)
     monkeypatch.setattr(settings, "TAVILY_API_KEY", "tvly-test")
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB", 10)
-    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_CANDIDATES_PER_QUERY", 5)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN", 2)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_QUERIES", 4)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_SCORE_FLOOR", 0.05)
@@ -152,13 +151,12 @@ async def test_candidates_are_shared_round_robin_without_duplicate_urls() -> Non
 
 
 @pytest.mark.asyncio
-async def test_candidates_per_query_are_capped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_CANDIDATES_PER_QUERY", 2)
-    client = _FakeClient({"q": [_page(f"p{i}", 0.9 - i / 10) for i in range(5)]})
+async def test_every_page_left_after_the_filters_reaches_the_judge() -> None:
+    client = _FakeClient({"q": [_page(f"p{i}", 0.9 - i / 20) for i in range(10)]})
 
     outcome = await search_web(["q"], client=client, use_cache=False)
 
-    assert [r.title for r in outcome.results] == ["p0", "p1"]
+    assert [r.title for r in outcome.results] == [f"p{i}" for i in range(10)]
 
 
 @pytest.mark.asyncio
