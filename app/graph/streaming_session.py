@@ -59,11 +59,13 @@ from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
 from app.database.session import async_session_factory
+from app.graph.progress import status_reporter
 from app.graph.queue_items import (
     ClarificationItem,
     DoneItem,
     ErrorItem,
     QueueItem,
+    StatusItem,
     TokenItem,
     WarningItem,
 )
@@ -276,11 +278,16 @@ async def run_and_persist(
         accumulated.append(token)
         await queue.put(TokenItem(token))
 
+    def put_status(stage: str, url: str | None) -> None:
+        # Unbounded queue: never blocks, so a sync trace callback can put on it.
+        queue.put_nowait(StatusItem(stage=stage, url=url))
+
     trace = GraphTrace(
         conversation_id=conversation_id,
         message_id=assistant_message_id,
         user_id=graph_input.security.user_id,
         client_ip=client_ip,
+        on_status=status_reporter(put_status),
     )
 
     # Bound up front (not just declared) so `finally` below can always read it, even

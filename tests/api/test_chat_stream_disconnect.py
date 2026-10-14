@@ -186,7 +186,10 @@ async def test_client_disconnect_mid_stream_still_patches_completed(
     # the gated model has yielded its first token and is now blocked on
     # `gate.wait()` inside the (still-running) background `run_and_persist`
     # task - so at this point that task is provably still mid-flight.
+    # `event: status` chunks (what the turn is doing) come first; skip to the first token.
     first_chunk = await asyncio.wait_for(driver.next_body_chunk(), timeout=5.0)
+    while first_chunk.startswith(b"event: status"):
+        first_chunk = await asyncio.wait_for(driver.next_body_chunk(), timeout=5.0)
     assert first_chunk == b'event: token\ndata: "token-1 "\n\n'
     assert not driver.task.done()
     assert all(c["method"] != "PATCH" for c in java.calls)

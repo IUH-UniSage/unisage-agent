@@ -48,6 +48,7 @@ from app.graph.queue_items import (
     DoneItem,
     ErrorItem,
     QueueItem,
+    StatusItem,
     TokenItem,
     WarningItem,
 )
@@ -192,6 +193,11 @@ async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenera
             break
         if isinstance(item, TokenItem):
             yield f"event: token\ndata: {json.dumps(item.text, ensure_ascii=False)}\n\n"
+        elif isinstance(item, StatusItem):
+            status: dict[str, str] = {"stage": item.stage}
+            if item.url is not None:
+                status["url"] = item.url
+            yield f"event: status\ndata: {json.dumps(status, ensure_ascii=False)}\n\n"
         elif isinstance(item, ErrorItem):
             payload = {"code": item.code, "message": item.message, "retryable": item.retryable}
             yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

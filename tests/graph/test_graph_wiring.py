@@ -20,6 +20,7 @@ from app.graph.nodes.greeting import GREETING_TEMPLATE
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
 from app.graph.nodes.social_chat import THANKS_TEMPLATES
 from app.graph.nodes.web_search import WebSearchOutcome, WebSearchRequest
+from app.graph.progress import status_reporter
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
@@ -690,6 +691,66 @@ async def test_speculative_search_runs_but_is_not_used_when_the_knowledge_base_a
     assert result.used_web_search is False
     assert "09b_WebSearchNode" not in _traced_nodes(caplog)
     assert not [w for w in result.admin_warnings if w.code.startswith("WEB_")]
+
+
+def _status_trace(seen: list[tuple[str, str | None]]) -> GraphTrace:
+    return GraphTrace(
+        conversation_id="c1",
+        message_id="m1",
+        user_id=None,
+        client_ip=None,
+        on_status=status_reporter(lambda stage, url: seen.append((stage, url))),
+    )
+
+
+@pytest.mark.asyncio
+async def test_web_branch_reports_each_page_it_reads(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    _fake_slot_web_search(monkeypatch, [_WEB_PAGE, _FEE_DECISION])
+    seen: list[tuple[str, str | None]] = []
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí ... [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+
+    await run_graph(_fee_input(), models, _sink([]), _status_trace(seen), _usage_recorder())
+
+    assert seen == [
+        ("thinking", None),
+        ("analyzing", None),
+        ("retrieving", None),
+        ("web_searching", None),
+        ("web_searching", _WEB_PAGE.url),
+        ("web_searching", _FEE_DECISION.url),
+        ("generating", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unused_speculative_search_reports_no_web_status(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    _fake_slot_web_search(monkeypatch, [_WEB_PAGE])
+    seen: list[tuple[str, str | None]] = []
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí ... [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+
+    await run_graph(_fee_input(), models, _sink([]), _status_trace(seen), _usage_recorder())
+
+    assert [stage for stage, _url in seen] == ["thinking", "analyzing", "retrieving", "generating"]
 
 
 @pytest.mark.parametrize(

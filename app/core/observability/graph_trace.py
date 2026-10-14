@@ -21,6 +21,7 @@ request did:
 
 import logging
 import time
+from collections.abc import Callable
 from contextvars import ContextVar, Token
 
 from pydantic_ai import Agent
@@ -101,7 +102,11 @@ class GraphTrace:
         message_id: str,
         user_id: str | None,
         client_ip: str | None,
+        on_status: Callable[[str, str | None], None] | None = None,
     ) -> None:
+        # Told (node name, page URL or None) each time a node starts or a web page is
+        # read, so the chat stream can show the user what is happening (`event: status`).
+        self._on_status = on_status
         self._conversation_id = conversation_id
         self._message_id = message_id
         self._user_id = user_id or "guest"
@@ -119,6 +124,8 @@ class GraphTrace:
     ) -> None:
         self._end_current_node()
         self._current = (name, time.perf_counter())
+        if self._on_status is not None:
+            self._on_status(name, None)
         logger.info(
             "node=%s model=%s thinking=%s credential=%s conversation_id=%s message_id=%s "
             "user_id=%s ip=%s",
@@ -131,6 +138,14 @@ class GraphTrace:
             self._user_id,
             self._client_ip,
         )
+
+    def web_page(self, url: str) -> None:
+        """A web page the running node is reading - status only, no log line (the web
+        search node logs every page with its score)."""
+
+        if self._on_status is not None:
+            node_name = self._current[0] if self._current is not None else "-"
+            self._on_status(node_name, url)
 
     def step(
         self,

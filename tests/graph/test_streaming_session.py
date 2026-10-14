@@ -18,7 +18,7 @@ from app.core.usage.usage_recorder import UsageRecorder
 from app.database.models import ConversationClarificationState
 from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, StatusItem, TokenItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
 from app.graph.streaming_session import _admin_warnings, _error_item_for, run_and_persist
 from app.graph.streaming_state import AdminWarning, GraphInput, GraphModels, GraphOutput
@@ -93,13 +93,19 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
     assert "citations" not in patched["body"]
 
     tokens = []
+    stages = []
     while True:
         item = await queue.get()
         if isinstance(item, DoneItem):
             break
+        if isinstance(item, StatusItem):
+            stages.append(item.stage)
+            continue
         assert isinstance(item, TokenItem)
         tokens.append(item.text)
     assert tokens == [patched["body"]["content"]]
+    # Off-topic: classification, then the canned reply (no further status for it).
+    assert stages[:2] == ["thinking", "analyzing"]
 
 
 @pytest.mark.asyncio

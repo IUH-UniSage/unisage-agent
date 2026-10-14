@@ -849,6 +849,8 @@ async def _run_advisory_flow(
             )
         for result in web_outcome.results:
             trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
+            # The user sees each page the web judge is about to read.
+            trace.web_page(result.url)
         judgement = await _judge_web_results(
             models,
             trace,
