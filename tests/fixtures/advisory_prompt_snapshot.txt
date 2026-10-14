@@ -271,8 +271,8 @@ diện, đầy đủ và chính xác câu hỏi của người dùng bên dướ
 định dạng theo loại câu hỏi (advisory/procedure/document/calendar) trong
 phần ACADEMIC DOMAIN RULES phía trên.
 
+Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn.
+
 Câu hỏi: Học phí khóa 2024 ngành CNTT là bao nhiêu?
 
 (Nguyên văn người dùng vừa nhắn ở lượt này: "còn khóa 2024 thì sao?")
-
-Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn.

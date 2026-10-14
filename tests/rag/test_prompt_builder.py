@@ -1,4 +1,8 @@
-from app.rag.prompting import build_ticket_fallback_prompt
+from app.rag.prompting import (
+    build_multi_intent_prompt,
+    build_system_prompt,
+    build_ticket_fallback_prompt,
+)
 from app.rag.prompting.builder import build_prepared_context_section
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
@@ -119,3 +123,23 @@ def test_chunks_and_web_pages_come_together_numbered_on() -> None:
     assert section.index("</academic_context>") < section.index("<websearch>")
     assert "trả lời theo trang web mới hơn" in section
     assert "Quy định, điều kiện, thủ tục, chính sách: theo `<academic_context>`" in section
+
+
+def test_the_question_is_the_last_thing_the_model_reads() -> None:
+    """The whole prompt is one message: a reminder placed after the question was answered
+    instead of it ("Bạn muốn mình tra nội dung nào?", 14-10-2026)."""
+
+    question = "Học phí ngành CNTT năm nay bao nhiêu?"
+    single = build_system_prompt(
+        user_query=question, security=AcademicSecurityContext(), confirmed_metadata={}, chunks=[]
+    )
+    multi = build_multi_intent_prompt(
+        user_query=question,
+        sub_queries=["Học phí ngành CNTT?", "Lịch thi chứng chỉ CNTT?"],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
+        chunks=[],
+    )
+
+    assert single.rstrip().endswith(f"Câu hỏi: {question}")
+    assert multi.rstrip().endswith(f"Câu hỏi gốc: {question}")
