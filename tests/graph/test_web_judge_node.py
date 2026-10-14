@@ -43,6 +43,7 @@ _NOTICE = WebSearchResult(
 def _limits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN", 2)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MIN_SCORE", 0.5)
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_SOURCES", 3)
 
 
 @pytest.mark.asyncio
@@ -137,3 +138,18 @@ def test_prompt_shows_each_page_with_its_academic_year() -> None:
     assert "[W1] (Tiêu đề: 1035-QD-DHCN; URL: https://ptckt.iuh.edu.vn" in prompt
     assert "Năm học: 2025-2026)" in prompt
     assert "Năm học: không ghi)" in prompt
+
+
+@pytest.mark.asyncio
+async def test_sources_are_capped_by_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_SOURCES", 1)
+    agent = build_web_judge_agent(
+        make_sync_llm_model(
+            '{"SQ1": {"W1": {"reason": "QĐ học phí", "answer": false},'
+            ' "W2": {"reason": "thông báo học phí", "answer": false}}}'
+        )
+    )
+
+    judgement = await judge_web_results(agent, ["Học phí"], [_FEE_DECISION, _NOTICE])
+
+    assert judgement.sources == [_FEE_DECISION]

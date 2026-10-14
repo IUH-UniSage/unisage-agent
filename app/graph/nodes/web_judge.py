@@ -42,8 +42,6 @@ from app.schemas.web_search import WebSearchResult
 logger = logging.getLogger(__name__)
 
 DEFAULT_PURPOSE = "RERANK"
-# Pages linked by the ticket fallback, at most.
-MAX_SOURCES = 3
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _SUB_QUERY_KEY = re.compile(r"^SQ(\d+)$")
 _PAGE_KEY = re.compile(r"^\[?W?(\d+)\]?$")
@@ -118,7 +116,9 @@ async def judge_web_results(
         answers=[candidates[index] for index in answer_indexes][
             : settings.CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN
         ],
-        sources=[candidates[index] for index in source_indexes][:MAX_SOURCES],
+        sources=[candidates[index] for index in source_indexes][
+            : settings.CHAT_WEB_SEARCH_MAX_SOURCES
+        ],
     )
 
 

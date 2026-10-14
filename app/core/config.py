@@ -229,6 +229,9 @@ class Settings(BaseSettings):
     # Pages per search shown to the web judge, after the domain policy ordered them.
     CHAT_WEB_SEARCH_CANDIDATES_PER_QUERY: int = Field(default=5, ge=1)
     CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=2, ge=1)
+    # Official pages the web judge kept although their snippet lacks the answer (a scanned
+    # fee decision): at most this many are linked by the ticket fallback.
+    CHAT_WEB_SEARCH_MAX_SOURCES: int = Field(default=3, ge=0)
     # Searches per turn: a message with several tasks can leave many sub-queries without
     # chunks, but only PER_TURN pages reach the prompt, so the rest would be paid-for
     # searches thrown away. The worst-missed sub-queries are searched first.
@@ -244,7 +247,7 @@ class Settings(BaseSettings):
     # Redis cache of raw search results, keyed by the query and Tavily's parameters; its
     # TTL depends on the topic (app/rag/web_query.py). Own database index so it never
     # shares eviction with the pub/sub and budget keys on REDIS_URL. Empty URL = no cache.
-    WEB_SEARCH_CACHE_REDIS_URL: str = "redis://localhost:6379/3"
+    WEB_SEARCH_CACHE_REDIS_URL: str = "redis://localhost:6379/6"
 
     # GenerationSynthesisNode's JSON-repair follow-up call (see
     # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
