@@ -1,6 +1,26 @@
 # Plan: Tối ưu web search (WebSearchNode)
 
-> Trạng thái: **chờ review, chưa implement.**
+> Trạng thái: **đang implement (14-10-2026).** Điều chỉnh so với bản review ở mục "Điều chỉnh khi
+> implement" ngay dưới.
+
+## Điều chỉnh khi implement
+
+Số đo sau khi sửa latency retrieval (`changes/14-10-2026-Retrieval-Latency`) làm thay đổi hai quyết định:
+
+- **Retrieval giờ chỉ còn 0.3-0.4s**, nên Tavily (2-5s) không còn nằm gọn sau retrieval. Gộp chunk và
+  trang web vào **một** lần rerank (W5 cũ) sẽ bắt rerank chờ Tavily ở **mọi** lượt thuộc topic động,
+  kể cả khi KB đã trả lời được. Thay bằng: rerank chunk giữ nguyên; trang web được **một lần chấm
+  riêng** (prompt `agents/web_result_judge.yaml`, cùng model RERANK), chỉ chạy khi có câu hỏi con
+  không còn chunk. Đường thành công không đổi latency và không tốn lời gọi LLM nào thêm.
+- **Tavily bắt đầu ngay đầu nhánh advisory** (trước query transformation, vốn mất 1-2s khi người dùng
+  có hồ sơ), song song với query transformation + retrieval + rerank (khoảng 3-5s). Không cần ngưỡng
+  `CHAT_WEB_SEARCH_SKIP_IF_CHUNK_SCORE`: kết quả web chỉ được chấm khi rerank để trống một câu hỏi con.
+  Lượt không cần web thì để Tavily chạy nốt ở nền (kết quả vào cache cho lượt sau).
+- **Bộ chấm web lỗi hoặc không có model RERANK** → quay về luật cũ (`CHAT_WEB_SEARCH_MIN_SCORE`, 0.5),
+  kèm cảnh báo admin. Ứng viên lấy với sàn `CHAT_WEB_SEARCH_SCORE_FLOOR` (0.05).
+- **W0:** bộ câu hỏi nằm ở repo gateway (`dataset/official/questions.jsonl`, hiện có 6 câu
+  `web_search`). Không sửa bộ dữ liệu trong lần này; baseline chạy bằng
+  `task eval:run env=eval -- --web on --category web_search`.
 
 ## Vấn đề
 
