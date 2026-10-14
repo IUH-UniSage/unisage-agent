@@ -87,7 +87,11 @@ from app.graph.nodes.query_transformation import (
 )
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.graph.nodes.social_chat import build_social_chat_agent, run_social_chat
-from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
+from app.graph.nodes.ticket_fallback import (
+    build_ticket_fallback_agent,
+    missing_source_links,
+    run_ticket_fallback,
+)
 from app.graph.nodes.web_judge import WebJudgement, build_web_judge_agent, judge_web_results
 from app.graph.nodes.web_search import (
     WebSearchOutcome,
@@ -970,6 +974,12 @@ async def _run_advisory_flow(
         budget=budget,
     )
     response_text = strip_source_list(generation_result.response_text)
+    # Official pages the judge kept only as links: listed after the answer, as the
+    # fallback lists them, instead of being lost because another page answered.
+    links = missing_source_links(response_text, web_sources)
+    if links:
+        await token_sink(links)
+        response_text += links
     return GraphOutput(
         response_text=response_text,
         confirmed_metadata=confirmed_metadata,

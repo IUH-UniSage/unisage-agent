@@ -810,6 +810,39 @@ async def test_official_page_without_the_figures_is_linked_by_the_ticket_fallbac
     assert "09c_WebJudgeNode" in _traced_nodes(caplog)
 
 
+@pytest.mark.asyncio
+async def test_pages_kept_only_as_links_are_listed_after_an_answer(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One page answers, another is an official document without the figures: the
+    second one is linked after the answer rather than lost."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    _fake_slot_web_search(monkeypatch, [_WEB_PAGE, _FEE_DECISION])
+    streamed: list[str] = []
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Lịch thi bắt đầu 05/01 [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+        rerank=mock_sync_llm_model(
+            '{"SQ1": {"W1": {"reason": "lịch thi 05/01", "answer": true},'
+            ' "W2": {"reason": "QĐ học phí, chỉ có tiêu đề", "answer": false}}}'
+        ),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink(streamed), _TRACE, _usage_recorder())
+
+    assert result.response_text == (
+        "Lịch thi bắt đầu 05/01 [1].\n\nVăn bản liên quan trên website của Trường:\n"
+        f"- [1035-QD-DHCN]({_FEE_DECISION.url}) (năm học 2025-2026)"
+    )
+    assert "".join(streamed) == result.response_text
+    assert [c["url"] for c in result.citations] == [_WEB_PAGE.url]
+
+
 # ── LLMRerankNode (09a, RERANK model) ──────────────────────────────────────
 
 
