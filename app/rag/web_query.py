@@ -16,6 +16,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date
 from urllib.parse import unquote, urlsplit
 
+from app.core.academic_calendar import current_term
 from app.schemas.web_search import WebSearchResult, WebSlots
 
 SCHOOL = "IUH"
@@ -262,6 +263,33 @@ def _matches_any(url: str, patterns: Sequence[str]) -> bool:
         if host == pattern_host and path.startswith(f"/{prefix}" if prefix else ""):
             return True
     return False
+
+
+# Relative time words (matched without diacritics) the classifier is told to turn into a
+# year, for when it does not: "lịch thi chứng chỉ CNTT đợt gần nhất" was searched without
+# one (14-10-2026). Not "hiện tại", too often "ngành hiện tại của tôi".
+_THIS_TERM = re.compile(r"\b(?:hoc ky nay|ky nay|nam hoc nay)\b")
+_THIS_YEAR = re.compile(
+    r"\b(?:moi nhat|gan nhat|gan day|vua roi|vua qua|sap toi|hien nay|nam nay|thang nay)\b"
+)
+_LAST_YEAR = re.compile(r"\bnam ngoai\b")
+_NEXT_YEAR = re.compile(r"\bnam (?:sau|toi)\b")
+
+
+def relative_year(text: str, today: date) -> str | None:
+    """The year (or academic year, for "kỳ này") a relative time word in `text` means
+    today; None without one."""
+
+    plain = _without_diacritics(text)
+    if _THIS_TERM.search(plain):
+        return current_term(today).academic_year
+    if _THIS_YEAR.search(plain):
+        return str(today.year)
+    if _LAST_YEAR.search(plain):
+        return str(today.year - 1)
+    if _NEXT_YEAR.search(plain):
+        return str(today.year + 1)
+    return None
 
 
 def is_postgraduate(text: str) -> bool:

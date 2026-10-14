@@ -11,6 +11,7 @@ from app.rag.web_query import (
     is_listing_page,
     is_postgraduate,
     order_candidates,
+    relative_year,
 )
 from app.schemas.web_search import WebSearchResult, WebSlots
 
@@ -198,3 +199,13 @@ def test_a_postgraduate_page_is_left_out_unless_the_question_is_about_that_level
     assert masters.url in [page.url for page in postgraduate]
     assert is_postgraduate("Thạc sĩ") and is_postgraduate("chuong-trinh-cao-hoc")
     assert not is_postgraduate("Học phí đại học chính quy")
+
+
+def test_a_relative_time_word_means_this_year_or_this_academic_year() -> None:
+    """For when the classifier leaves the year out ("đợt gần nhất", 14-10-2026)."""
+
+    assert relative_year("Lịch thi chứng chỉ CNTT đợt gần nhất là khi nào?", _OCT_2026) == "2026"
+    assert relative_year("học phí kỳ này", _OCT_2026) == "2026-2027"
+    assert relative_year("lịch nghỉ tết năm sau", _OCT_2026) == "2027"
+    assert relative_year("ngành hiện tại của tôi", _OCT_2026) is None
+    assert relative_year("điều kiện học bổng", _OCT_2026) is None

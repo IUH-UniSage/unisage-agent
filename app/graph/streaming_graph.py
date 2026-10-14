@@ -111,7 +111,7 @@ from app.rag.prompting.citations import (
     source_links_block,
     strip_source_list,
 )
-from app.rag.web_query import build_web_query, is_postgraduate
+from app.rag.web_query import build_web_query, is_postgraduate, relative_year
 from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
 from app.schemas.web_search import WebSearchResult, WebSlots
@@ -716,6 +716,11 @@ def _web_request(slots: WebSlots | None, question: str) -> WebSearchRequest:
 
     if slots is None:
         return WebSearchRequest(query=question, postgraduate=is_postgraduate(question))
+    if slots.nam_hoc is None:
+        # "đợt gần nhất", "năm nay" the classifier left without a year.
+        year = relative_year(question, now_ict().date())
+        if year is not None:
+            slots = slots.model_copy(update={"nam_hoc": year})
     return WebSearchRequest(
         query=build_web_query(slots),
         topic=slots.topics[0],

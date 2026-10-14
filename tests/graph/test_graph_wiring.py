@@ -2,6 +2,8 @@ import asyncio
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
+from unittest.mock import patch
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -982,7 +984,7 @@ async def test_pages_kept_only_as_links_are_listed_after_an_answer(
 
     assert result.response_text == (
         "Lịch thi bắt đầu 05/01 [1].\n\nVăn bản liên quan trên website của Trường:\n"
-        f"- [1035-QD-DHCN]({_FEE_DECISION.url}) (năm học 2025-2026)"
+        f"- [1035-QD-DHCN]({_FEE_DECISION.url}) · ptckt.iuh.edu.vn · năm học 2025-2026"
     )
     assert "".join(streamed) == result.response_text
     assert [c["url"] for c in result.citations] == [_WEB_PAGE.url]
@@ -1095,6 +1097,20 @@ def test_a_postgraduate_question_keeps_postgraduate_pages() -> None:
     assert _web_request(masters, "Học phí thạc sĩ?").postgraduate is True
     assert _web_request(undergraduate, "Học phí ngành CNTT?").postgraduate is False
     assert _web_request(None, "Học phí cao học bao nhiêu?").postgraduate is True
+
+
+def test_a_relative_time_word_gives_the_web_query_a_year_the_classifier_left_out() -> None:
+    exam = WebSlots(topics=["lich_thong_bao"], subject="lịch thi chứng chỉ CNTT")
+    named = WebSlots(topics=["lich_thong_bao"], subject="lịch thi chứng chỉ CNTT", nam_hoc="2025")
+
+    with patch("app.graph.streaming_graph.now_ict", return_value=datetime(2026, 10, 14)):
+        latest = _web_request(exam, "Lịch thi chứng chỉ CNTT đợt gần nhất là khi nào?")
+        asked = _web_request(named, "Lịch thi chứng chỉ CNTT đợt gần nhất năm 2025?")
+        plain = _web_request(exam, "Lịch thi chứng chỉ CNTT thế nào?")
+
+    assert latest.query == "lịch thi chứng chỉ CNTT năm 2026 IUH"
+    assert asked.query == "lịch thi chứng chỉ CNTT năm 2025 IUH"
+    assert plain.query == "lịch thi chứng chỉ CNTT IUH"
 
 
 # ── LLMRerankNode (09a, RERANK model) ──────────────────────────────────────
