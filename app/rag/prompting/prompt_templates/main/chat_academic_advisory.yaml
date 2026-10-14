@@ -26,3 +26,5 @@ template: |
   phần ACADEMIC DOMAIN RULES phía trên.
 
   Câu hỏi: {user_query}
+
+  Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn.
