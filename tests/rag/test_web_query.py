@@ -7,6 +7,7 @@ from app.rag.web_query import (
     academic_year_of,
     build_web_query,
     cache_ttl_seconds,
+    campus_of,
     is_listing_page,
     order_candidates,
 )
@@ -92,6 +93,7 @@ def test_listing_pages_are_recognised() -> None:
     assert is_listing_page("https://ipe.iuh.edu.vn/vi/author/namlt/page/26")
     assert is_listing_page("https://www.iuh.edu.vn/vi/thong-bao.html")
     assert is_listing_page("https://www.iuh.edu.vn/vi/thong-tin-tuyen-sinh.html")
+    assert is_listing_page("https://iuh.edu.vn/vi/thong-bao.html/p=13")
     assert not is_listing_page(
         "https://www.iuh.edu.vn/vi/thong-bao/thong-bao-v-v-dang-ky-hoc-phan-2188.html"
     )
@@ -136,3 +138,29 @@ def test_the_score_floor_never_drops_a_page_of_the_topics_own_sites() -> None:
     assert ordered == [fee_decision.model_copy(update={"academic_year": None})]
     # Another topic does not trust ptckt: the floor applies there.
     assert order_candidates([fee_decision], topic="tuyen_sinh", floor=0.05) == []
+
+
+def test_a_campus_notice_is_kept_last_only_for_the_universitys_own_notices() -> None:
+    """The 2025 National Day notice was found only on the Quảng Ngãi campus site."""
+
+    campus = _page(
+        "https://qn.iuh.edu.vn/thong-bao/thong-bao-v-v-nghi-le-quoc-khanh-nam-2025", 0.65
+    )
+    main = _page("https://www.iuh.edu.vn/vi/thong-bao/thong-bao-nghi-le-2232.html", 0.47)
+    other = _page("https://fct.iuh.edu.vn/news.html@detail@264@682@Thong-bao", 0.19)
+
+    notices = order_candidates([campus, main, other], topic="lich_thong_bao", floor=0.05)
+    fees = order_candidates([campus, main, other], topic="hoc_phi", floor=0.05)
+
+    assert [page.url for page in notices] == [main.url, other.url, campus.url]
+    assert campus.url not in [page.url for page in fees]
+
+
+def test_campus_sites_are_known_by_name() -> None:
+    thanh_hoa = _page("https://th.iuh.edu.vn/thong-bao/tien-do-dao-tao-2026-2027", 0.6)
+
+    assert campus_of(thanh_hoa.url) == "Cơ sở Thanh Hóa"
+    assert campus_of("https://pdt.iuh.edu.vn/thong-bao") is None
+    # Kept for a fee question only when it names that campus, whichever accent it uses.
+    assert order_candidates([thanh_hoa], topic="hoc_phi", floor=0.05) == []
+    assert order_candidates([thanh_hoa], topic="hoc_phi", co_so="Thanh Hoá", floor=0.05)

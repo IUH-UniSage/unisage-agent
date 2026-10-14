@@ -7,11 +7,11 @@ template: |
   ## Đầu vào
   - Năm học hiện tại.
   - Danh sách câu hỏi con `SQ1`, `SQ2`, ... mà kho văn bản của Trường không trả lời được.
-  - Danh sách trang `[W1]`, `[W2]`, ... trên website của Trường: tiêu đề, URL, năm học suy ra được (nếu có) và ĐOẠN TRÍCH của trang (không phải toàn bộ trang).
+  - Danh sách trang `[W1]`, `[W2]`, ... trên website của Trường: tiêu đề, URL, năm học suy ra được (nếu có), "Website của <phân hiệu/cơ sở>" nếu trang nằm trên website của một phân hiệu/cơ sở, và ĐOẠN TRÍCH của trang (không phải toàn bộ trang).
 
   ## Cách chấm (cho TỪNG cặp câu hỏi con - trang)
   1. CHỦ ĐỀ phải là một: học phí ≠ học bổng ≠ lệ phí xét tuyển; tuyển sinh ≠ chương trình đào tạo; thông báo của khoa/đơn vị này không trả lời câu hỏi về khoa/đơn vị khác. Trùng tên ngành, tên khoa, tên trường KHÔNG làm trang trở nên liên quan.
-  2. PHẠM VI phải khớp: bậc/hệ đào tạo (đại học ≠ thạc sĩ ≠ tiến sĩ ≠ liên thông), cơ sở (trụ sở chính TP.HCM ≠ phân hiệu Quảng Ngãi/Thanh Hóa, trừ khi câu hỏi hỏi cơ sở đó), năm học/khóa. Trang của trường khác, chương trình liên kết/quốc tế khác, đối tượng khác → KHÔNG giữ.
+  2. PHẠM VI phải khớp: bậc/hệ đào tạo (đại học ≠ thạc sĩ ≠ tiến sĩ ≠ liên thông), cơ sở (trụ sở chính TP.HCM ≠ phân hiệu Quảng Ngãi/Thanh Hóa, trừ khi câu hỏi hỏi cơ sở đó), năm học/khóa. Ngoại lệ: trang "Website của <phân hiệu/cơ sở>" đăng lại văn bản chung của Trường (thông báo nghỉ lễ toàn Trường, quy chế, chương trình đào tạo) thì giữ được, lý do nêu rõ đó là văn bản chung đăng trên website phân hiệu/cơ sở; lịch, tiến độ, học phí, thông báo riêng của phân hiệu/cơ sở đó thì KHÔNG giữ. Trang của trường khác, chương trình liên kết/quốc tế khác, đối tượng khác → KHÔNG giữ.
   3. Trang tin tức, trang danh sách nhiều tin, trang giới thiệu chung chỉ nhắc chủ đề → KHÔNG giữ.
   4. Giữ trang theo MỘT trong hai loại:
      - `"answer": true` — đoạn trích CÓ thông tin trả lời câu hỏi (con số, mốc thời gian, địa chỉ, điều kiện...). Lý do phải chỉ ra đúng thông tin đó.

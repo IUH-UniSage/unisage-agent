@@ -140,6 +140,20 @@ def test_prompt_shows_each_page_with_its_academic_year() -> None:
     assert "Năm học: không ghi)" in prompt
 
 
+def test_prompt_names_the_campus_whose_site_a_page_is_on() -> None:
+    notice = WebSearchResult(
+        title="Thông báo v/v nghỉ lễ Quốc khánh năm 2025",
+        url="https://qn.iuh.edu.vn/thong-bao/thong-bao-v-v-nghi-le-quoc-khanh-nam-2025",
+        content="tb-846-2025 Tải xuống",
+        score=0.65,
+    )
+
+    prompt = build_judge_prompt(["Lịch nghỉ lễ Quốc khánh 2025"], [notice, _FEE_DECISION])
+
+    assert "Năm học: không ghi; Website của Phân hiệu Quảng Ngãi)" in prompt
+    assert prompt.count("Website của") == 1
+
+
 @pytest.mark.asyncio
 async def test_sources_are_capped_by_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_SOURCES", 1)

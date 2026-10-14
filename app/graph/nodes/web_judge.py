@@ -37,6 +37,7 @@ from app.graph.streaming import (
     run_agent_text_with_failover,
 )
 from app.rag.prompting import get_templates
+from app.rag.web_query import campus_of
 from app.schemas.web_search import WebSearchResult
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ def build_judge_prompt(questions: Sequence[str], candidates: Sequence[WebSearchR
     )
     page_lines = "\n\n".join(
         f"[W{index}] (Tiêu đề: {page.title}; URL: {page.url}; "
-        f"Năm học: {page.academic_year or 'không ghi'})\n{page.content}"
+        f"Năm học: {page.academic_year or 'không ghi'}{_campus_note(page.url)})\n{page.content}"
         for index, page in enumerate(candidates, 1)
     )
     academic_year = current_term(now_ict().date()).academic_year
@@ -136,6 +137,11 @@ def build_judge_prompt(questions: Sequence[str], candidates: Sequence[WebSearchR
         f"Năm học hiện tại: {academic_year}\n\n"
         f"Câu hỏi con:\n{question_lines}\n\nTrang web:\n{page_lines}"
     )
+
+
+def _campus_note(url: str) -> str:
+    campus = campus_of(url)
+    return f"; Website của {campus}" if campus else ""
 
 
 def parse_judgement(

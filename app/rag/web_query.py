@@ -33,11 +33,19 @@ TOPIC_DOMAINS: dict[str, tuple[str, ...]] = {
     "khac": (),
 }
 
-# Campus sites, shown only when the question names that campus: a Quảng Ngãi fee page
-# scored 0.39 for a question about the main campus.
-CAMPUS_HOSTS: dict[str, tuple[str, ...]] = {
-    "qn.iuh.edu.vn": ("quảng ngãi", "quang ngai"),
+# Campus sites: host -> (the campus's name, how a question names it). Their pages are for
+# questions naming that campus: a Quảng Ngãi fee page scored 0.39 for a question about
+# the main campus.
+CAMPUS_HOSTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "qn.iuh.edu.vn": ("Phân hiệu Quảng Ngãi", ("quảng ngãi", "quang ngai")),
+    "th.iuh.edu.vn": ("Cơ sở Thanh Hóa", ("thanh hóa", "thanh hoá", "thanh hoa")),
 }
+# Topics where a campus site reposts the University's own documents (the 2025 National
+# Day notice TB-846-2025 was found only on qn.iuh.edu.vn; regulations and training
+# programmes are the University's): a campus page is kept for these, after every other
+# page, and the web judge is told which campus it is from. Fees, admission and contacts
+# differ per campus, so their campus pages stay out.
+CAMPUS_SHARED_TOPICS = frozenset({"lich_thong_bao", "quy_che_thu_tuc", "chuong_trinh_dao_tao"})
 
 # Seconds a topic's search results stay cached. Fees change once a year, admission
 # figures several times a day in season, notices daily, contacts hardly ever.
@@ -56,7 +64,7 @@ EMPTY_RESULT_TTL_SECONDS = 30 * 60
 
 # A home page, a listing or an author/tag page: many headlines, no content.
 _LISTING_PATH = re.compile(
-    r"/page/\d+|[@?&]p=\d+|/author/|/tag/|/category[/.@]|news\.html@\d+@"
+    r"/page/\d+|[@?&/]p=\d+|/author/|/tag/|/category[/.@]|news\.html@\d+@"
     r"|/(?:thong-bao|tin-tuc|thong-tin-tuyen-sinh)\.html$",
     re.IGNORECASE,
 )
@@ -132,8 +140,9 @@ def order_candidates(
     floor: float,
 ) -> list[WebSearchResult]:
     """Pages worth showing the web judge, best first: not a listing or another campus's
-    site, the topic's own sites before the rest, the newest academic year first, then
-    Tavily's score. Each page carries the academic year it is about.
+    site (kept last for `CAMPUS_SHARED_TOPICS`), the topic's own sites before the rest, the
+    newest academic year first, then Tavily's score. Each page carries the academic year
+    it is about.
 
     `floor` only drops pages off the topic's own sites: the latest fee decision on
     ptckt.iuh.edu.vn scored 0.05-0.07, right at it, while the lowest score seen at all was
@@ -142,14 +151,22 @@ def order_candidates(
     preferred = TOPIC_DOMAINS.get(topic or "", ())
     kept: list[WebSearchResult] = []
     for result in results:
-        if is_listing_page(result.url) or _other_campus(result.url, co_so):
+        if is_listing_page(result.url) or (
+            _other_campus(result.url, co_so) and topic not in CAMPUS_SHARED_TOPICS
+        ):
             continue
         if result.score < floor and not _matches_any(result.url, preferred):
             continue
         kept.append(result.model_copy(update={"academic_year": academic_year_of(result)}))
+
+    def tier(url: str) -> int:
+        if _other_campus(url, co_so):
+            return 2
+        return 0 if _matches_any(url, preferred) else 1
+
     kept.sort(
         key=lambda result: (
-            0 if _matches_any(result.url, preferred) else 1,
+            tier(result.url),
             -int((result.academic_year or "0")[:4]),
             -result.score,
         )
@@ -226,9 +243,16 @@ def _matches_any(url: str, patterns: Sequence[str]) -> bool:
     return False
 
 
+def campus_of(url: str) -> str | None:
+    """The campus whose site the page is on; None for the University's own sites."""
+
+    campus = CAMPUS_HOSTS.get(_host(url))
+    return campus[0] if campus else None
+
+
 def _other_campus(url: str, co_so: str | None) -> bool:
-    names = CAMPUS_HOSTS.get(_host(url))
-    if names is None:
+    campus = CAMPUS_HOSTS.get(_host(url))
+    if campus is None:
         return False
-    asked = (co_so or "").lower()
-    return not any(name in asked for name in names)
+    asked = unicodedata.normalize("NFC", co_so or "").lower()
+    return not any(name in asked for name in campus[1])
