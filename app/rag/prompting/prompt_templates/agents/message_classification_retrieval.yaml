@@ -5,13 +5,22 @@ template: |
   Mỗi task `academic_advisory` có thêm field truy vấn tìm kiếm và field `web`, ngoài `intent`/`query`/`routing_mode` ở trên. Các ví dụ phía trên chỉ minh họa phân loại - output thật luôn có thêm các field này như ví dụ dưới. Task khác nhãn không có các field này.
 
   ### `routing_mode = "SINGLE"` → `standalone_question` + `hyde_passage`
-  - `standalone_question`: nếu câu hỏi là câu nối tiếp/rút gọn (VD "còn khóa <năm học khác> thì sao?"), dùng lịch sử hội thoại viết lại thành MỘT câu hỏi độc lập: giữ CHỦ ĐỀ của lượt trước và các tiêu chí người dùng không đổi (bậc/hệ đào tạo, khóa/năm học, khối/ngành, cơ sở), chỉ thay tiêu chí vừa nêu. Câu phản hồi/làm rõ không chứa nội dung hỏi ("ý tôi là...", "sao không trả lời?") → viết lại đúng câu hỏi gần nhất của chính người dùng trong lịch sử; lời trả lời/từ chối của trợ lý KHÔNG phải nguồn nội dung. Câu hỏi đã đầy đủ thì giữ nguyên. TUYỆT ĐỐI KHÔNG tự thêm khóa/năm học, bậc/hệ, khối/ngành hay cơ sở mà cả câu hỏi lẫn lịch sử đều không nhắc tới.
+  - `standalone_question`: nếu câu hỏi là câu nối tiếp/rút gọn (VD "còn khóa <năm học khác> thì sao?"), dùng lịch sử hội thoại viết lại thành MỘT câu hỏi độc lập: giữ CHỦ ĐỀ của lượt trước và các tiêu chí người dùng không đổi (bậc/hệ đào tạo, khóa/năm học, khối/ngành, cơ sở), chỉ thay tiêu chí vừa nêu. Câu phản hồi/làm rõ không chứa nội dung hỏi ("ý tôi là...", "sao không trả lời?") → viết lại đúng câu hỏi gần nhất của chính người dùng trong lịch sử; lời trả lời/từ chối của trợ lý KHÔNG phải nguồn nội dung. Câu hỏi đã đầy đủ thì giữ nguyên. TUYỆT ĐỐI KHÔNG tự thêm khóa/năm học, bậc/hệ, khối/ngành hay cơ sở mà cả câu hỏi lẫn lịch sử đều không nhắc tới (trạng từ thời gian như "năm nay", "mới nhất" LÀ có nhắc: đổi theo mục "Mốc thời gian tương đối").
   - `hyde_passage`: MỘT câu ngắn (tối đa 30 từ) theo văn phong văn bản hành chính của Nhà trường, nêu thông tin mà `standalone_question` cần tìm. PHẢI chứa nguyên văn mọi từ khóa của `standalone_question` (chủ đề, bậc/hệ, khóa/năm học, khối/ngành, cơ sở; tên/viết tắt trường giữ nguyên như "iuh"), không thay bằng từ đồng nghĩa, không lan sang chủ đề không được hỏi, không bịa con số cụ thể (mức tiền, ngày tháng, số điều khoản). Không xin lỗi, không từ chối, không nhắc tới trợ lý hay hội thoại.
 
   ### `routing_mode = "MULTI"` → `sub_queries`
   - `sub_queries`: 2 đến 3 câu hỏi con độc lập để tìm kiếm song song. Mỗi câu chứa đầy đủ thực thể, không dùng đại từ ("nó", "ngành đó").
   - Mọi tiêu chí phạm vi người dùng nêu (ngành/khối, bậc/hệ, cơ sở/phân hiệu, khóa/năm học) PHẢI chép vào MỌI câu hỏi con, dù chỉ nói một lần; chỉ bỏ khi chính câu hỏi con đó nêu giá trị khác thay thế. Không chắc → vẫn chép.
   - Giữ nguyên chữ người dùng dùng cho chủ đề và tiêu chí. Lịch sử chỉ dùng để hiểu câu nối tiếp, không tạo câu hỏi con cho nội dung lượt trước.
+
+  ### Mốc thời gian tương đối
+  Áp dụng cho `standalone_question`, `hyde_passage`, MỌI câu hỏi con và `web.nam_hoc` (`query` vẫn giữ nguyên lời người dùng). Câu hỏi có trạng từ chỉ thời gian tương đối thì đổi thành mốc cụ thể theo `<current_time>` (KHÔNG tự đoán năm):
+  - "mới nhất", "gần đây", "dạo gần đây", "hiện nay", "năm nay" → năm hiện tại (VD hôm nay 14/10/2026 → "năm 2026");
+  - "tháng này" → tháng và năm hiện tại (VD "tháng 10/2026"); "tháng trước", "tháng sau" tính tương tự;
+  - "năm học này", "học kỳ này", "kỳ này" → học kỳ/năm học hiện tại theo dòng "Học kỳ hiện tại" (VD "Học kỳ I năm học 2026-2027");
+  - "năm ngoái", "năm trước" → năm hiện tại trừ 1; "năm sau", "năm tới" → cộng 1.
+  Không có trạng từ như vậy thì vẫn KHÔNG tự thêm năm.
+  VD "Tin tức mới nhất về hội thảo khoa học quốc tế của IUH?" (hôm nay 14/10/2026) → `standalone_question` "Tin tức về hội thảo khoa học quốc tế của IUH năm 2026", `nam_hoc` "2026".
 
   ### `web` (MỌI task `academic_advisory`, cả SINGLE lẫn MULTI)
   Để tìm trên website của Trường khi kho văn bản không có câu trả lời. Hệ thống tự ghép các field thành từ khóa tìm kiếm, nên chỉ điền đúng phần được yêu cầu:
@@ -26,7 +35,7 @@ template: |
     Câu thuộc nhiều nhóm: nhãn chính theo thứ tự ưu tiên `hoc_phi`, `tuyen_sinh`, `lich_thong_bao`, `lien_he_co_so` trước các nhãn còn lại (VD "hạn đóng học phí học kỳ 1" → `["hoc_phi", "lich_thong_bao"]`).
   - `subject`: cụm từ khóa ngắn (2-8 từ) nêu đúng thứ cần tìm, KHÔNG phải câu hỏi, KHÔNG chứa ngành/bậc/hệ/cơ sở/năm học (đã có field riêng), KHÔNG chứa tên trường. VD "mức thu học phí", "điểm chuẩn", "lịch đăng ký học phần học kỳ 1", "địa chỉ", "thời hạn link khôi phục mật khẩu cổng giảng viên".
   - `bac_dao_tao`, `he_dao_tao`, `nganh_hoc`, `co_so`: CHỈ khi câu hỏi hoặc lịch sử hội thoại nêu rõ; KHÔNG lấy từ `<student_profile>`; không có thì `null`.
-  - `nam_hoc`: dạng "YYYY-YYYY" (hoặc "YYYY" nếu người dùng chỉ nêu một năm), CHỈ khi người dùng nêu năm học/năm cụ thể; không nêu thì `null` (từ khóa tìm kiếm khi đó không có năm). Khóa nhập học ("khóa 2024") KHÔNG phải năm học.
+  - `nam_hoc`: dạng "YYYY-YYYY" (hoặc "YYYY" nếu người dùng chỉ nêu một năm), CHỈ khi người dùng nêu năm học/năm cụ thể HOẶC trạng từ thời gian tương đối (đổi theo mục "Mốc thời gian tương đối"); không nêu thì `null` (từ khóa tìm kiếm khi đó không có năm). Khóa nhập học ("khóa 2024") KHÔNG phải năm học.
 
   ### Ví dụ output đầy đủ
   User: "Điều kiện nhận học bổng loại giỏi là gì?"

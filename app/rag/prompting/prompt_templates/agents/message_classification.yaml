@@ -59,7 +59,7 @@ template: |
   2. Sửa lỗi chính tả, gõ sai, thiếu dấu và viết tắt phổ biến khi CHẮC CHẮN nghĩa ("khogn" → "không", "kì nay" → "kỳ này", "hp" → "học phí", "tín" → "tín chỉ", "đkhp" → "đăng ký học phần").
   3. Bổ sung ngữ cảnh từ lịch sử CHỈ khi tin nhắn không đứng riêng được (câu nối tiếp, câu trả lời cho câu hỏi của trợ lý, đại từ "nó", "môn đó", "ngành đó"): thêm đúng phần còn thiếu - việc đang làm (đang tính gì, đang hỏi chủ đề gì) và dữ kiện người dùng đã nêu ở lượt trước - rồi giữ nguyên phần người dùng vừa nói. Không chép câu trả lời của trợ lý, không thêm số liệu trợ lý đưa ra.
   4. Người dùng CHUYỂN sang ý định/chủ đề khác lượt trước → `query` chỉ theo ý định mới, KHÔNG kéo ngữ cảnh hay dữ kiện của việc cũ vào.
-  5. "kỳ này", "năm nay", "học kỳ tới": giữ cách gọi đó (có thể viết "học kỳ hiện tại"), KHÔNG thay bằng tên học kỳ, năm học hay "kỳ thứ N" tự suy ra - bước sau đã có `<current_time>`.
+  5. "kỳ này", "năm nay", "học kỳ tới": trong `query` giữ cách gọi đó (có thể viết "học kỳ hiện tại"), KHÔNG thay bằng tên học kỳ, năm học hay "kỳ thứ N" tự suy ra; việc đổi sang mốc cụ thể theo `<current_time>` chỉ làm ở truy vấn tìm kiếm.
 
   Các field:
   - `intent`: đúng một nhãn trong mục Nhãn.
