@@ -1,6 +1,8 @@
 import json
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -446,6 +448,34 @@ def test_parse_reads_one_set_of_web_slots_per_multi_sub_query() -> None:
         "lịch thi chứng chỉ ứng dụng CNTT",
     ]
     assert "sub_query_web" not in parsed.model_dump()
+
+
+def test_parse_gives_a_relative_time_word_its_year_when_the_classifier_left_it_out() -> None:
+    """gpt-5-mini wrote no nam_hoc for "lịch thi chứng chỉ CNTT đợt gần nhất" four turns
+    in a row (14-10-2026); a year the classifier did write is kept."""
+
+    task = _task("academic_advisory", _MESSAGE, "MULTI") | {
+        "sub_queries": ["Học phí năm học 2025-2026?", "Lịch thi chứng chỉ CNTT đợt gần nhất?"],
+        "web": [
+            {"topics": ["hoc_phi"], "subject": "mức thu học phí", "nam_hoc": "2025-2026"},
+            {"topics": ["lich_thong_bao"], "subject": "lịch thi chứng chỉ CNTT"},
+        ],
+    }
+    single = _task("academic_advisory", "học phí kỳ này?", "SINGLE") | {
+        "web": {"topics": ["hoc_phi"], "subject": "mức thu học phí"}
+    }
+
+    with patch(
+        "app.graph.nodes.message_classification.now_ict", return_value=datetime(2026, 10, 14)
+    ):
+        multi_task, single_task = parse_classification(_payload(task, single), _MESSAGE).tasks
+
+    assert multi_task.sub_query_web is not None
+    assert [slots.nam_hoc if slots else None for slots in multi_task.sub_query_web] == [
+        "2025-2026",
+        "2026",
+    ]
+    assert single_task.web is not None and single_task.web.nam_hoc == "2026-2027"
 
 
 def test_parse_pads_missing_sub_query_slots_and_reads_a_list_on_a_single_task() -> None:

@@ -13,6 +13,7 @@ from pydantic_ai.models import Model
 from app.core.config import settings
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import ModelRouter
+from app.core.timezone import now_ict
 from app.graph.streaming import (
     AgentFactory,
     AttemptRecorder,
@@ -28,6 +29,7 @@ from app.rag.prompting import (
     build_known_metadata_fields_section,
     get_templates,
 )
+from app.rag.web_query import relative_year
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
 from app.schemas.web_search import WEB_TOPICS, WebSlots
@@ -131,14 +133,32 @@ def _task_web(raw_task: dict[str, Any], routing_mode: str | None) -> dict[str, A
     in the order of `sub_queries`: `sub_query_web`, padded / cut to their number."""
 
     raw = raw_task.get("web")
+    question = _text(raw_task.get("standalone_question")) or _text(raw_task.get("query")) or ""
     if not isinstance(raw, list):
-        return {"web": _web_slots(raw)}
+        return {"web": _with_year(_web_slots(raw), question)}
     per_sub = [_web_slots(item) for item in raw]
     sub_queries = _sub_queries(raw_task) if routing_mode == "MULTI" else None
     if sub_queries is None:
-        return {"web": next((slots for slots in per_sub if slots is not None), None)}
+        slots = next((slots for slots in per_sub if slots is not None), None)
+        return {"web": _with_year(slots, question)}
     per_sub = (per_sub + [None] * len(sub_queries))[: len(sub_queries)]
+    per_sub = [_with_year(slots, sub) for slots, sub in zip(per_sub, sub_queries, strict=True)]
     return {"sub_query_web": per_sub} if any(per_sub) else {}
+
+
+def _with_year(slots: WebSlots | None, question: str) -> WebSlots | None:
+    """The year a relative time word in the question means ("đợt gần nhất", "năm nay"),
+    when the classifier left `nam_hoc` out - it is told to write it, and did not for
+    "lịch thi chứng chỉ CNTT đợt gần nhất" (14-10-2026)."""
+
+    if slots is None or slots.nam_hoc is not None:
+        return slots
+    year = relative_year(question, now_ict().date())
+    return slots.model_copy(update={"nam_hoc": year}) if year else slots
+
+
+def _text(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _hyde_text(raw_task: dict[str, Any]) -> str | None:
