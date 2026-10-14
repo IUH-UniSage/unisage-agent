@@ -896,8 +896,6 @@ async def _search_then_judge(
     `served[k]`: the sub-queries of the k-th searched request."""
 
     outcome = await search
-    for result in outcome.results:
-        trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
     jobs = [
         (indexes, pages)
         for indexes, pages in zip(served, outcome.per_request, strict=False)
@@ -1120,9 +1118,6 @@ async def _run_advisory_flow(
         )
         for outcome in outcomes:
             for result in outcome.results:
-                trace.prompt(
-                    "09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}"
-                )
                 # The user sees each page the web judge is about to read.
                 trace.web_page(result.url)
         trace.node("09c_WebJudgeNode")

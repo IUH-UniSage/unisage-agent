@@ -156,8 +156,8 @@ async def _search_one(
         postgraduate=request.postgraduate,
         floor=settings.CHAT_WEB_SEARCH_SCORE_FLOOR,
     )
-    # Always logged: every page with its score, and which ones are shown to the judge -
-    # enough to tune the domain policy from production logs.
+    # Always logged: every page's URL with its score (never the page text, even with
+    # APP_DEBUG) - enough to tune the domain policy from production logs.
     logger.info(
         "Web search query=%r topic=%s cache=%s: %d page(s) found, %d candidate(s) [%s]",
         request.query,
@@ -167,12 +167,6 @@ async def _search_one(
         len(candidates),
         ", ".join(f"{result.score:.2f} {result.url}" for result in results),
     )
-    if settings.APP_DEBUG:
-        logger.info(
-            "Web search query=%r page contents:\n%s",
-            request.query,
-            "\n".join(f"[{result.score:.2f}] {result.url}\n{result.content}" for result in results),
-        )
     return candidates, None, cache_hit
 
 

@@ -275,11 +275,12 @@ async def test_only_the_first_max_queries_requests_are_searched(
     assert [query for query, _ in client.calls] == ["a", "b"]
 
 
+@pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.asyncio
-async def test_page_scores_are_logged_without_debug(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+async def test_page_urls_and_scores_are_logged_never_their_text(
+    debug: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(settings, "APP_DEBUG", False)
+    monkeypatch.setattr(settings, "APP_DEBUG", debug)
     client = _FakeClient({"q": [_page("good", 0.8), _page("weak", 0.01, content="secret body")]})
 
     with caplog.at_level("INFO", logger="app.graph.nodes.web_search"):
@@ -287,7 +288,7 @@ async def test_page_scores_are_logged_without_debug(
 
     assert "query='q' topic=None cache=off: 2 page(s) found, 1 candidate(s)" in caplog.text
     assert "0.01 https://iuh.edu.vn/weak" in caplog.text
-    # Page bodies only with APP_DEBUG.
+    # Not even with APP_DEBUG: the page text flooded the console.
     assert "secret body" not in caplog.text
 
 
