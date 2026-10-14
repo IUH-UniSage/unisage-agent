@@ -106,12 +106,47 @@ async def test_a_link_in_the_reply_is_exact_and_only_the_other_pages_are_listed_
     assert text == (
         f"Bạn xem [Thông báo năm 2025]({_NOTICE.url}) nhé.\n\n"
         "Văn bản liên quan trên website của Trường:\n"
-        f"- [TB-957-2026.pdf]({notice_2026.url})"
+        f"- [TB-957-2026]({notice_2026.url}) · iuh.edu.vn"
     )
-    assert "".join(seen).endswith(f"- [TB-957-2026.pdf]({notice_2026.url})")
+    assert "".join(seen).endswith(f"- [TB-957-2026]({notice_2026.url}) · iuh.edu.vn")
 
 
 def test_nothing_is_listed_when_the_reply_links_every_page() -> None:
     assert source_links_block([_NOTICE], f"Xem [thông báo]({_NOTICE.url}).") == ""
     assert source_links_block([], "Mình chưa tìm thấy.") == ""
-    assert "(website Phân hiệu Quảng Ngãi)" in source_links_block([_NOTICE])
+    assert source_links_block([_NOTICE]).endswith(
+        f"- [Thông báo v/v nghỉ lễ Quốc khánh năm 2025]({_NOTICE.url})"
+        " · qn.iuh.edu.vn · Phân hiệu Quảng Ngãi"
+    )
+
+
+def test_link_titles_are_short_and_a_notice_is_listed_once() -> None:
+    """The 14-10-2026 list: Tavily's titles with the site name appended, a letterhead line
+    as a title, and one notice reached by two addresses."""
+
+    def page(title: str, url: str) -> WebSearchResult:
+        return WebSearchResult(title=title, url=url, content="", score=0.5)
+
+    plan = (
+        "Thông báo kế hoạch học và thi các lớp chứng chỉ ứng dụng CNTT cơ bản khóa tháng "
+        "3,4,5,6,7,8- Trung Tâm Tin Học - Đại học Công Nghiệp TP.HCM:.."
+    )
+    block = source_links_block(
+        [
+            page(plan, "https://itc.iuh.edu.vn/detail@91-1541-ke-hoach.html@p=2"),
+            page(plan, "https://itc.iuh.edu.vn/detail@91-1541-.html@p=0"),
+            page(
+                "BỘ CÔNG THƯƠNG TRƯỜNG ĐẠI HỌC CÔNG NGHIỆP ...",
+                "https://ptckt.iuh.edu.vn/upload/files/bieumau/1035-QD-DHCN-11-4-2025.pdf",
+            ),
+            page(
+                "2027 - Đại học Công nghiệp Thành phố Hồ Chí Minh",
+                "https://www.iuh.edu.vn/vi/thong-bao/thong-bao-v-v-dang-ky-hoc-phan-2188.html",
+            ),
+        ]
+    )
+
+    assert block.count("Thông báo kế hoạch học và thi") == 1
+    assert "- Trung Tâm Tin Học" not in block and ":.." not in block
+    assert "[1035-QD-DHCN-11-4-2025](" in block
+    assert "[Thong bao v v dang ky hoc phan](" in block and "· iuh.edu.vn" in block

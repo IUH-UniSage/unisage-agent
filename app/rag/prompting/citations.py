@@ -12,7 +12,7 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from app.rag.web_query import campus_of
 from app.schemas.retrieval import RetrievedChunk
@@ -33,6 +33,16 @@ _SOURCE_HEADING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _RULE_PATTERN = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+# What site name Tavily's page titles end with, after a dash, bar or colon.
+_SITE_SUFFIX = re.compile(
+    r"\s*[-\u2013|:]\s*(?:trung tâm|trường|đại học công nghiệp|iuh\b|industrial university"
+    r"|(?:tp\.?\s*)?hồ chí minh|tp\.?\s*hcm)[^-\u2013|]*$",
+    re.IGNORECASE,
+)
+# A title that is a file name ("TB-957-2026.pdf"); not "TP.HCM".
+_FILE_EXTENSION = re.compile(r"\.(?:pdf|docx?|xlsx?|pptx?|html?)$", re.IGNORECASE)
+_TITLE_MIN_CHARS = 6
+_TITLE_MAX_CHARS = 90
 _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\((\S+?)\)")
 _BARE_URL = re.compile(r"(?<!\()https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'\"]")
 
@@ -95,19 +105,57 @@ def source_links_block(pages: Sequence[WebSearchResult], reply: str = "") -> str
     so every one is the page's real address."""
 
     lines = []
+    shown: set[str] = set()
     for page in pages:
-        if page.url in reply:
+        title = display_title(page)
+        # The same notice reached by two addresses is listed once.
+        if page.url in reply or title.lower() in shown:
             continue
-        title = page.title.replace("[", "(").replace("]", ")").strip() or page.url
-        notes = [f"năm học {page.academic_year}"] if page.academic_year else []
+        shown.add(title.lower())
+        notes = [(urlsplit(page.url).hostname or "").removeprefix("www.")]
+        if page.academic_year and page.academic_year not in title:
+            notes.append(f"năm học {page.academic_year}")
         campus = campus_of(page.url)
         if campus:
-            notes.append(f"website {campus}")
-        suffix = f" ({', '.join(notes)})" if notes else ""
-        lines.append(f"- [{title}]({page.url}){suffix}")
+            notes.append(campus)
+        lines.append(f"- [{title}]({page.url}) · {' · '.join(note for note in notes if note)}")
     if not lines:
         return ""
     return "\n\nVăn bản liên quan trên website của Trường:\n" + "\n".join(lines)
+
+
+def display_title(page: WebSearchResult) -> str:
+    """A page's title as a short link text: the site name Tavily appends ("- Trung Tâm Tin
+    Học - Đại học Công Nghiệp TP.HCM:..") dropped, the file or address name instead of a
+    letterhead ("BỘ CÔNG THƯƠNG TRƯỜNG ĐẠI HỌC ...") or a stub ("2027"), at most
+    `_TITLE_MAX_CHARS` long."""
+
+    title = _FILE_EXTENSION.sub("", re.sub(r"\s+", " ", page.title).strip())
+    previous = None
+    while previous != title:
+        previous = title
+        title = _SITE_SUFFIX.sub("", title).strip(" -\u2013|:.\u2026")
+    # A letterhead line in capitals ("BỘ CÔNG THƯƠNG ..."), not a document code ("TB-957").
+    if len(title) < _TITLE_MIN_CHARS or (title.isupper() and title.count(" ") >= 3):
+        title = _name_from_url(page.url)
+    title = title.replace("[", "(").replace("]", ")")
+    if len(title) > _TITLE_MAX_CHARS:
+        title = title[:_TITLE_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,-\u2013:") + "\u2026"
+    return title
+
+
+def _name_from_url(url: str) -> str:
+    """The last part of the address as a name: "1035-QD-DHCN-11-4-2025.pdf" ->
+    "1035-QD-DHCN-11-4-2025"; a slug "thong-bao-v-v-dang-ky-hoc-phan-2188.html" ->
+    "Thong bao v v dang ky hoc phan"."""
+
+    parts = urlsplit(url)
+    name = unquote(parts.path.rstrip("/").rsplit("/", 1)[-1]) or (parts.hostname or url)
+    name = _EXTENSION_PATTERN.sub("", name)
+    if re.fullmatch(r"[a-z0-9-]+", name) and name.count("-") >= 3:
+        words = re.sub(r"-\d+$", "", name).replace("-", " ")
+        return words[:1].upper() + words[1:]
+    return name
 
 
 def _fold_url(url: str) -> str:
