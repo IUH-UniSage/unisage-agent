@@ -239,3 +239,16 @@ async def test_calculation_trace_is_pushed_before_the_public_summary_is_finalize
     metadata = java.patches[0]["metadata"]
     assert metadata == {"calculation": {"schema_version": 1, "items": public}}
     assert "question_raw" not in json.dumps(metadata, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_a_completed_answer_stores_its_response_time(
+    db_session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    java = _Java()
+
+    await _run(db_session_factory, java, GraphOutput(response_text="x"), monkeypatch)
+
+    response_time = java.patches[0]["responseTimeMs"]
+    assert isinstance(response_time, int)
+    assert response_time >= 0

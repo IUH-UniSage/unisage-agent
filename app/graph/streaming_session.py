@@ -37,6 +37,7 @@ never has a chance to arrive after `event: done`.
 
 import asyncio
 import logging
+import time
 import uuid
 from asyncio import Queue
 from collections.abc import Awaitable, Callable
@@ -256,8 +257,12 @@ async def run_and_persist(
     session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
     budget: BudgetContext | None = None,
     claim: ClaimContext | None = None,
+    started_at: float | None = None,
 ) -> None:
     """Run the graph, stream tokens into `queue`, always finalize.
+
+    `started_at` (`time.perf_counter()` when the request arrived) starts the turn's clock;
+    a completed answer stores the total as the message's `responseTimeMs`.
 
     Uses its own database session (via `session_factory`, defaulting to the
     module-level `async_session_factory` - NOT the request's session)
@@ -272,6 +277,7 @@ async def run_and_persist(
     """
 
     accumulated: list[str] = []
+    turn_started_at = started_at if started_at is not None else time.perf_counter()
 
     async def sink(token: str) -> None:
         trace.first_token()
@@ -416,6 +422,10 @@ async def run_and_persist(
                     if graph_output is not None
                     else None,
                     metadata=metadata or None,
+                    # Shown next to the answer's actions, after a reload too.
+                    response_time_ms=round((time.perf_counter() - turn_started_at) * 1000)
+                    if status == "COMPLETED"
+                    else None,
                     authorization=authorization,
                 ),
                 what=f"finalize message {assistant_message_id}",

@@ -18,6 +18,7 @@ disconnect):
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -255,6 +256,9 @@ class ChatStreamService:
     ) -> AsyncGenerator[str, None]:
         """Run every check, start the turn, and return the SSE event stream."""
 
+        # The turn's clock starts here, before the Java calls that create the messages, so
+        # the stored total is close to what the user saw count up from sending.
+        started_at = time.perf_counter()
         if body_size > CHAT_REQUEST_MAX_BYTES:
             raise RequestTooLargeException()
 
@@ -321,6 +325,7 @@ class ChatStreamService:
             recent_calculations=round_state.recent_calculations,
             resume=resume,
             claim=claim,
+            started_at=started_at,
         )
 
     def _run_turn(
@@ -334,6 +339,7 @@ class ChatStreamService:
         recent_calculations: list[LastCalculation],
         resume: ResumeInput | None,
         claim: ClaimContext | None,
+        started_at: float,
     ) -> AsyncGenerator[str, None]:
         assistant_message_id = str(turn["assistantMessage"]["id"])
         user_message_id = str(turn["userMessage"]["id"])
@@ -383,6 +389,7 @@ class ChatStreamService:
                 session_factory=self._session_factory,
                 budget=budget,
                 claim=claim,
+                started_at=started_at,
             )
         )
         _background_tasks.add(task)

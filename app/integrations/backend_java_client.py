@@ -268,9 +268,12 @@ class BackendJavaClient:
         citations: list[dict[str, Any]] | None = None,
         retrieval_score: float | None = None,
         metadata: dict[str, Any] | None = None,
+        response_time_ms: int | None = None,
         authorization: str | None = None,
     ) -> dict[str, Any]:
         """`PATCH /messages/{id}` — finalizes a `STREAMING` assistant message.
+
+        `response_time_ms`: the turn's total time, stored in `messages.response_time_ms`.
 
         Contract: only the message's own `conversation_id`, only
         `role=ASSISTANT`, only `STREAMING -> COMPLETED|ERROR`, idempotent on
@@ -298,6 +301,8 @@ class BackendJavaClient:
             body["retrievalScore"] = retrieval_score
         if metadata is not None:
             body["metadata"] = metadata
+        if response_time_ms is not None:
+            body["responseTimeMs"] = response_time_ms
 
         result = await self._request(
             "PATCH",
