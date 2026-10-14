@@ -95,6 +95,11 @@ def test_listing_pages_are_recognised() -> None:
     assert is_listing_page("https://www.iuh.edu.vn/vi/thong-bao.html")
     assert is_listing_page("https://www.iuh.edu.vn/vi/thong-tin-tuyen-sinh.html")
     assert is_listing_page("https://iuh.edu.vn/vi/thong-bao.html/p=13")
+    # A detail page with a page parameter is still a detail page.
+    assert not is_listing_page(
+        "https://itc.iuh.edu.vn/detail@91-1541-Thong-bao-ke-hoach-hoc-va-thi-cac-lop-chung-chi"
+        "-ung-dung-CNTT-co-ban-khoa-thang-3,4,5,6,7,8.html@p=2"
+    )
     assert not is_listing_page(
         "https://www.iuh.edu.vn/vi/thong-bao/thong-bao-v-v-dang-ky-hoc-phan-2188.html"
     )

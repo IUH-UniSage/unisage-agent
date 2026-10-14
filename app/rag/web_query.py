@@ -77,6 +77,7 @@ _LISTING_PATH = re.compile(
     r"|/(?:thong-bao|tin-tuc|thong-tin-tuyen-sinh)\.html$",
     re.IGNORECASE,
 )
+_DETAIL_PAGE = re.compile(r"[/@]detail[@/]", re.IGNORECASE)
 # "2025-2026", "2025 - 2026" with an en dash, "2025_2026" (in file names).
 _YEAR_RANGE = re.compile(r"(20\d{2})\s*[-\u2013/_ ]\s*(20\d{2})")
 
@@ -194,6 +195,11 @@ def is_listing_page(url: str) -> bool:
     path = parts.path.rstrip("/")
     if not path and not parts.query:
         return True
+    # A detail page is never a listing, whatever page parameter it carries: the IT
+    # certificate exam plan "itc.iuh.edu.vn/detail@91-1541-...html@p=2" was dropped as a
+    # paginated listing (14-10-2026).
+    if _DETAIL_PAGE.search(url):
+        return False
     return bool(_LISTING_PATH.search(unquote(url)))
 
 
