@@ -239,6 +239,20 @@ giờ xuất hiện trong response của message hay trong SSE.
   thường của message vẫn tạo được song song.
 - `note` chỉ được lưu trong ticket, không ghi vào metadata của message.
 
+## 5c. Tổng thời gian của lượt: `responseTimeMs`
+
+Message ASSISTANT `COMPLETED` có field `responseTimeMs` (cột `messages.response_time_ms`, backend
+V35), đọc qua `GET /messages/conversation/{id}`:
+
+```jsonc
+{"id": "…", "role": "ASSISTANT", "status": "COMPLETED", "responseTimeMs": 16240, …}
+```
+
+Agent gửi trong `PATCH /messages/{id}` lúc ghi kết quả cuối. `responseTimeMs` tính từ lúc agent
+nhận `POST /chat/stream` (trước khi gọi Java tạo message) tới lúc ghi kết quả cuối, nên gần với
+đồng hồ client đếm từ lúc gửi. Web hiện nó ở mép phải hàng nút của câu trả lời. Message USER,
+`ERROR`, bị dừng hoặc tạo trước ngày 14-10-2026 có `null`: client không hiện gì.
+
 ## 6. Thay đổi so với contract cũ
 
 - Bỏ khối ```` ```json ask_user_form ```` trong `content`/token. Web chỉ còn đọc khối này trong message
