@@ -64,7 +64,12 @@ def _fold_confirmed_metadata_into_query(user_query: str, confirmed_metadata: dic
     if not confirmed_metadata:
         return user_query
     declared = ", ".join(f"{field}={value}" for field, value in confirmed_metadata.items())
-    return f"{user_query} (thông tin sinh viên đã xác nhận: {declared})"
+    # Only for what the question leaves open: "học phí ngành điện tử" from a CNTT student
+    # was rewritten to the CNTT fee (14-10-2026).
+    return (
+        f"{user_query} (hồ sơ sinh viên đã khai, CHỈ dùng cho tiêu chí câu hỏi không tự nêu: "
+        f"{declared})"
+    )
 
 
 async def transform_query(

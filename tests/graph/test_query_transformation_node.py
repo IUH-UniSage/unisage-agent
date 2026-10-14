@@ -52,6 +52,20 @@ async def test_transform_query_folds_confirmed_metadata_into_prompt(
     )
 
     assert "chinh_quy" in seen_prompts[-1]
+    # The profile only fills what the question leaves open (a CNTT student asking about
+    # "ngành điện tử" was rewritten to the CNTT fee).
+    assert "CHỈ dùng cho tiêu chí câu hỏi không tự nêu" in seen_prompts[-1]
+
+
+def test_hyde_and_decomposer_keep_the_asked_value_over_the_profile() -> None:
+    from app.rag.prompting import get_templates
+
+    for template in (
+        get_templates().agent_hyde_generator,
+        get_templates().agent_multi_query_decomposer,
+    ):
+        assert "TUYỆT ĐỐI không thay bằng giá trị trong hồ sơ" in template
+        assert "KHÔNG thêm thông tin hồ sơ" in template
 
 
 @pytest.mark.asyncio
