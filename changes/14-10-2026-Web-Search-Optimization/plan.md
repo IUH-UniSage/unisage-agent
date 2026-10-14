@@ -18,6 +18,10 @@ Số đo sau khi sửa latency retrieval (`changes/14-10-2026-Retrieval-Latency`
   Lượt không cần web thì để Tavily chạy nốt ở nền (kết quả vào cache cho lượt sau).
 - **Bộ chấm web lỗi hoặc không có model RERANK** → quay về luật cũ (`CHAT_WEB_SEARCH_MIN_SCORE`, 0.5),
   kèm cảnh báo admin. Ứng viên lấy với sàn `CHAT_WEB_SEARCH_SCORE_FLOOR` (0.05).
+- **Không tự thêm năm học vào query** (14-10-2026, sau khi chạy thật): năm học hiện tại thêm mặc
+  định đẩy quyết định học phí mới nhất (QĐ 1035, 2025-2026; bản 2026-2027 chưa đăng) ra khỏi top 10.
+  Năm chỉ vào query khi người dùng nêu. `TAVILY_SEARCH_DEPTH` mặc định về `basic` (1 credit): với
+  query không năm, `basic` đưa QĐ 1035 lên đầu danh sách ứng viên.
 - **W0:** bộ câu hỏi nằm ở repo gateway (`dataset/official/questions.jsonl`, hiện có 6 câu
   `web_search`). Không sửa bộ dữ liệu trong lần này; baseline chạy bằng
   `task eval:run env=eval -- --web on --category web_search`.
@@ -106,8 +110,8 @@ classify (+ web slots) ─┬─ retrieval ────────────�
 - Mẫu theo topic, ví dụ `hoc_phi`: `{subject} {bac} {he} năm học {nam_hoc} IUH` (không đưa tên
   ngành vào, vì biểu học phí chia theo khối); `tuyen_sinh`: `{subject} {nganh} {bac} năm {nam}
   IUH`.
-- `nam_hoc` mặc định do code tính từ `APP_TIMEZONE` (từ tháng 8 là `Y-(Y+1)`). Khóa nhập học
-  không đưa vào query.
+- `nam_hoc` chỉ khi người dùng nêu (xem "Điều chỉnh khi implement"). Khóa nhập học không đưa vào
+  query.
 - Chuẩn hóa alias ("CNTT"/"IT" → "Công nghệ Thông tin", "ĐHCQ" → Đại học + Chính quy) từ
   `aliases` trong `known_metadata_fields.json`. Slot thiếu hoặc lỗi thì quay về câu hỏi HyDE.
 - **AC:** test cho từng topic; ca gốc ra `mức thu học phí Đại học Chính quy năm học 2026-2027 IUH`.
