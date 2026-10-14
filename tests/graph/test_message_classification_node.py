@@ -375,7 +375,75 @@ def test_describe_classification_shows_the_retrieval_text_too() -> None:
 
     assert described["tasks"][0]["sub_queries"] == ["a", "b"]
     assert described["tasks"][0]["hyde_text"] is None
+    assert described["tasks"][0]["web"] is None
     assert described["confidence"] == 0.9
+
+
+def test_parse_reads_web_slots_of_an_advisory_task() -> None:
+    task = _task("academic_advisory", "học phí ngành cntt", "SINGLE") | {
+        "web": {
+            "topics": ["hoc_phi", "unknown", "hoc_phi", "lich_thong_bao"],
+            "subject": " mức thu học phí ",
+            "nganh_hoc": "Công nghệ Thông tin",
+            "bac_dao_tao": "null",
+            "nam_hoc": 2026,
+        }
+    }
+
+    (parsed,) = parse_classification(_payload(task), "học phí ngành cntt").tasks
+
+    assert parsed.web is not None
+    assert parsed.web.topics == ["hoc_phi", "lich_thong_bao"]
+    assert parsed.web.subject == "mức thu học phí"
+    assert parsed.web.nganh_hoc == "Công nghệ Thông tin"
+    assert parsed.web.bac_dao_tao is None
+    assert parsed.web.nam_hoc == "2026"
+    assert "web" not in parsed.model_dump()
+
+
+@pytest.mark.parametrize(
+    "web",
+    [None, "hoc_phi", {"topics": ["hoc_phi"]}, {"topics": ["hoc_phi"], "subject": "  "}],
+)
+def test_parse_drops_web_slots_without_a_subject(web: object) -> None:
+    task = _task("academic_advisory", _MESSAGE, "SINGLE") | {"web": web}
+
+    (parsed,) = parse_classification(_payload(task), _MESSAGE).tasks
+
+    assert parsed.web is None
+
+
+def test_parse_maps_web_slots_without_a_known_topic_to_khac() -> None:
+    task = _task("academic_advisory", _MESSAGE, "SINGLE") | {
+        "web": {"topic": "xyz", "subject": "xếp hạng"}
+    }
+
+    (parsed,) = parse_classification(_payload(task), _MESSAGE).tasks
+
+    assert parsed.web is not None
+    assert parsed.web.topics == ["khac"]
+
+
+def test_parse_ignores_web_slots_outside_advisory_tasks() -> None:
+    task = _task("academic_calculation", "tính GPA", None) | {
+        "web": {"topics": ["khac"], "subject": "GPA"}
+    }
+
+    (parsed,) = parse_classification(_payload(task), "tính GPA").tasks
+
+    assert parsed.web is None
+
+
+def test_classification_prompt_asks_for_web_slots_with_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "CHAT_CLASSIFY_WITH_RETRIEVAL", True)
+    prompt = "".join(build_classification_agent("test")._system_prompts)
+
+    assert "### `web`" in prompt
+    assert "KHÔNG lấy từ `<student_profile>`" in prompt
 
 
 @pytest.mark.asyncio

@@ -126,8 +126,11 @@ class Settings(BaseSettings):
     # Comma-separated in .env. Only these sites (and their subdomains) are searched - the
     # answer must come from the university's own pages, never a forum or another school.
     TAVILY_INCLUDE_DOMAINS: Annotated[list[str], NoDecode] = ["iuh.edu.vn"]
-    # `basic` costs 1 credit per search, `advanced` 2 but returns longer, more relevant snippets.
-    TAVILY_SEARCH_DEPTH: Literal["basic", "advanced"] = "basic"
+    # `basic` costs 1 credit per search, `advanced` 2 but returns longer, more relevant snippets:
+    # up to TAVILY_CHUNKS_PER_SOURCE passages of each page that match the query, picked by
+    # Tavily, instead of one short excerpt.
+    TAVILY_SEARCH_DEPTH: Literal["basic", "advanced"] = "advanced"
+    TAVILY_CHUNKS_PER_SOURCE: int = Field(default=3, ge=1, le=3)
     # Deadline for the whole search call. Tavily usually answers in ~3s but has spikes
     # past 10s; a timeout only drops web results, the turn still ends in the ticket fallback.
     TAVILY_TIMEOUT_SECONDS: float = 15.0
@@ -208,16 +211,40 @@ class Settings(BaseSettings):
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),
     # however long the question or however many sub-queries it split into.
     CHAT_WEB_SEARCH_ENABLED: bool = False
+    # `speculative`: for a task whose topic is in SPECULATIVE_TOPICS (fees, admission,
+    # notices, contacts - what changes every year and is posted on the website first),
+    # the search starts with the advisory branch, alongside query transformation, retrieval
+    # and rerank, and its pages are only judged when a sub-query is left without a chunk.
+    # `fallback`: searched only after rerank left a sub-query empty, as before.
+    CHAT_WEB_SEARCH_MODE: Literal["fallback", "speculative"] = "speculative"
+    CHAT_WEB_SEARCH_SPECULATIVE_TOPICS: Annotated[list[str], NoDecode] = [
+        "hoc_phi",
+        "tuyen_sinh",
+        "lich_thong_bao",
+        "lien_he_co_so",
+    ]
     # Tavily bills per search, not per result, so asking for more candidates is free;
-    # MIN_SCORE and PER_TURN still bound what reaches the prompt.
-    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=5, ge=1, le=20)
+    # the judge and PER_TURN still bound what reaches the prompt.
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=10, ge=1, le=20)
+    # Pages per search shown to the web judge, after the domain policy ordered them.
+    CHAT_WEB_SEARCH_CANDIDATES_PER_QUERY: int = Field(default=5, ge=1)
     CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=2, ge=1)
     # Searches per turn: a message with several tasks can leave many sub-queries without
     # chunks, but only PER_TURN pages reach the prompt, so the rest would be paid-for
     # searches thrown away. The worst-missed sub-queries are searched first.
     CHAT_WEB_SEARCH_MAX_QUERIES: int = Field(default=2, ge=1)
+    # Tavily's score depends on how the query is worded far more than on relevance (a
+    # question-form query scores the right page 0.08, a keyword query scores an off-topic
+    # page 0.90), so it only drops junk (SCORE_FLOOR); the web judge decides relevance.
+    CHAT_WEB_SEARCH_SCORE_FLOOR: float = Field(default=0.05, ge=0.0, le=1.0)
+    # Only used when the judge can't run (no RERANK/EXTRACTION model, or it failed):
+    # pages at or above this score are used as they are, the rule before the judge existed.
     CHAT_WEB_SEARCH_MIN_SCORE: float = Field(default=0.5, ge=0.0, le=1.0)
     CHAT_WEB_SEARCH_RESULT_MAX_CHARS: int = Field(default=1500, ge=100)
+    # Redis cache of raw search results, keyed by the query and Tavily's parameters; its
+    # TTL depends on the topic (app/rag/web_query.py). Own database index so it never
+    # shares eviction with the pub/sub and budget keys on REDIS_URL. Empty URL = no cache.
+    WEB_SEARCH_CACHE_REDIS_URL: str = "redis://localhost:6379/3"
 
     # GenerationSynthesisNode's JSON-repair follow-up call (see
     # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
@@ -262,7 +289,7 @@ class Settings(BaseSettings):
     # budget should have caught.
     BUDGET_ESTIMATE_MAX_OUTPUT_TOKENS: int = 2000
 
-    @field_validator("TAVILY_INCLUDE_DOMAINS", mode="before")
+    @field_validator("TAVILY_INCLUDE_DOMAINS", "CHAT_WEB_SEARCH_SPECULATIVE_TOPICS", mode="before")
     @classmethod
     def _split_domains(cls, value: object) -> object:
         if isinstance(value, str):

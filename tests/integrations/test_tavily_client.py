@@ -63,6 +63,37 @@ async def test_search_sends_domain_restricted_request_and_parses_results() -> No
 
 
 @pytest.mark.asyncio
+async def test_advanced_search_asks_for_query_matched_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "TAVILY_SEARCH_DEPTH", "advanced")
+    monkeypatch.setattr(settings, "TAVILY_CHUNKS_PER_SOURCE", 3)
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": []})
+
+    await _client(httpx.MockTransport(handler)).search("học phí", max_results=10)
+
+    assert bodies[0]["search_depth"] == "advanced"
+    assert bodies[0]["chunks_per_source"] == 3
+
+
+@pytest.mark.asyncio
+async def test_basic_search_sends_no_chunks_per_source() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": []})
+
+    await _client(httpx.MockTransport(handler)).search("học phí", max_results=10)
+
+    assert "chunks_per_source" not in bodies[0]
+
+
+@pytest.mark.asyncio
 async def test_missing_api_key_raises_without_calling_tavily(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

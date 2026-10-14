@@ -26,6 +26,7 @@ class PromptTemplates:
     agent_calculation_extractor: str
     agent_calculation_value_extractor: str
     agent_reranker_compressor: str
+    agent_web_result_judge: str
     agent_multi_representation_enricher: str
 
     # Common components
@@ -43,6 +44,7 @@ class PromptTemplates:
     task_2: str
     ask_user_form_guide: str
     ticket_fallback: str
+    web_candidate_sources: str
 
     # sha256[:12] of each template's text, by attribute name - the prompt version
     # recorded in calculation traces.

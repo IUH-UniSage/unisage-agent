@@ -19,7 +19,7 @@ from app.graph.clarification_round import (
 from app.graph.nodes.greeting import GREETING_TEMPLATE
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
 from app.graph.nodes.social_chat import THANKS_TEMPLATES
-from app.graph.nodes.web_search import WebSearchOutcome
+from app.graph.nodes.web_search import WebSearchOutcome, WebSearchRequest
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
@@ -575,6 +575,179 @@ async def test_all_sub_queries_with_chunks_never_search_the_web(
 
     assert calls == []
     assert result.used_web_search is False
+
+
+# ── Speculative web search + WebJudgeNode (09c) ───────────────────────────
+
+_FEE_DECISION = WebSearchResult(
+    title="1035-QD-DHCN",
+    url="https://ptckt.iuh.edu.vn/upload/files/bieumau/1035-QD-DHCN-11-4-2025.pdf",
+    content="Quy định mức học phí năm học 2025-2026 (chi tiết theo phụ lục đính kèm).",
+    score=0.08,
+    academic_year="2025-2026",
+)
+
+
+def _web_slot_classification(
+    mock_sync_llm_model: Callable[[str], FunctionModel], topic: str = "hoc_phi"
+) -> FunctionModel:
+    payload = {
+        "tasks": [
+            {
+                "intent": "academic_advisory",
+                "query": "học phí ngành cntt",
+                "routing_mode": "SINGLE",
+                "web": {
+                    "topics": [topic],
+                    "subject": "mức thu học phí",
+                    "nganh_hoc": "Công nghệ Thông tin",
+                },
+            }
+        ],
+        "confidence": 0.95,
+    }
+    return mock_sync_llm_model(json.dumps(payload, ensure_ascii=False))
+
+
+def _fake_slot_web_search(
+    monkeypatch: pytest.MonkeyPatch, pages: list[WebSearchResult]
+) -> list[list[object]]:
+    calls: list[list[object]] = []
+
+    async def search_web(requests: Sequence[object]) -> WebSearchOutcome:
+        calls.append(list(requests))
+        return WebSearchOutcome(results=pages)
+
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", True)
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MODE", "speculative")
+    monkeypatch.setattr("app.graph.streaming_graph.search_web", search_web)
+    return calls
+
+
+def _fee_input() -> GraphInput:
+    return GraphInput(
+        conversation_id="c1",
+        user_message="học phí ngành cntt",
+        is_first_turn=False,
+        security=AcademicSecurityContext(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fee_question_searches_the_slot_query_and_answers_from_the_web(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)  # nothing can pass
+    calls = _fake_slot_web_search(monkeypatch, [_WEB_PAGE])
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    ((request,),) = calls
+    assert isinstance(request, WebSearchRequest)
+    assert request.topic == "hoc_phi"
+    assert request.query.startswith("mức thu học phí năm học ")
+    assert request.query.endswith(" IUH")
+    # Fee schedules are split by Khối: the major stays out of the query.
+    assert "Công nghệ" not in request.query
+    assert result.used_web_search is True
+    codes = [warning.code for warning in result.admin_warnings]
+    # No RERANK model here: the page is kept by its score, and the admin is told.
+    assert "WEB_JUDGE_FAILED" in codes
+    assert "WEB_SOURCE_USED" in codes
+    assert "09b_WebSearchNode" in _traced_nodes(caplog)
+
+
+@pytest.mark.asyncio
+async def test_speculative_search_runs_but_is_not_used_when_the_knowledge_base_answers(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    calls = _fake_slot_web_search(monkeypatch, [_WEB_PAGE])
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí ... [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert len(calls) == 1  # started with the advisory branch, for the cache
+    assert result.used_web_search is False
+    assert "09b_WebSearchNode" not in _traced_nodes(caplog)
+    assert not [w for w in result.admin_warnings if w.code.startswith("WEB_")]
+
+
+@pytest.mark.parametrize(
+    ("topic", "mode"), [("quy_che_thu_tuc", "speculative"), ("hoc_phi", "fallback")]
+)
+@pytest.mark.asyncio
+async def test_no_speculative_search_for_a_stable_topic_or_in_fallback_mode(
+    topic: str,
+    mode: str,
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    calls = _fake_slot_web_search(monkeypatch, [_WEB_PAGE])
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MODE", mode)
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model, topic),
+        query_transformation=mock_sync_llm_model("HyDE"),
+        generation=mock_streaming_llm_model(["... [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+
+    await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_official_page_without_the_figures_is_linked_by_the_ticket_fallback(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    _fake_slot_web_search(monkeypatch, [_FEE_DECISION])
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+        rerank=mock_sync_llm_model(
+            '{"SQ1": {"W1": {"reason": "QĐ mức học phí 2025-2026, chỉ có tiêu đề",'
+            ' "answer": false}}}'
+        ),
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.used_ticket_fallback is True
+    assert result.used_web_search is False
+    (prompt,) = seen_prompts
+    assert "<web_sources>" in prompt
+    assert f"{_FEE_DECISION.url}; năm học 2025-2026" in prompt
+    assert [w.code for w in result.admin_warnings] == ["WEB_SOURCE_USED"]
+    assert "09c_WebJudgeNode" in _traced_nodes(caplog)
 
 
 # ── LLMRerankNode (09a, RERANK model) ──────────────────────────────────────

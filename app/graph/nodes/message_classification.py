@@ -29,6 +29,7 @@ from app.rag.prompting import (
 )
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
+from app.schemas.web_search import WEB_TOPICS, WebSlots
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,7 @@ def _normalize_task(raw_task: object, message: str) -> ClassifiedTask | None:
         routing_mode=routing_mode,
         hyde_text=_hyde_text(raw_task) if routing_mode == "SINGLE" else None,
         sub_queries=_sub_queries(raw_task) if routing_mode == "MULTI" else None,
+        web=_web_slots(raw_task) if intent == "academic_advisory" else None,
     )
 
 
@@ -147,6 +149,46 @@ def _sub_queries(raw_task: dict[str, Any]) -> list[str] | None:
     return queries[: settings.CHAT_MAX_SUB_QUERIES] if len(queries) >= 2 else None
 
 
+def _web_slots(raw_task: dict[str, Any]) -> WebSlots | None:
+    """`web` as `WebSlots`: unknown topics dropped (none left -> `khac`), empty or "null"
+    texts as None. No subject means nothing to search for -> None (the web search then
+    falls back to the sub-query's question)."""
+
+    raw = raw_task.get("web")
+    if not isinstance(raw, dict):
+        return None
+    subject = _slot_text(raw.get("subject"))
+    if subject is None:
+        return None
+    raw_topics = raw.get("topics", raw.get("topic"))
+    if isinstance(raw_topics, str):
+        raw_topics = [raw_topics]
+    topics: list[str] = []
+    for topic in raw_topics if isinstance(raw_topics, list) else []:
+        name = topic.strip().lower() if isinstance(topic, str) else ""
+        if name in WEB_TOPICS and name not in topics:
+            topics.append(name)
+    return WebSlots.model_validate(
+        {
+            "topics": topics or ["khac"],
+            "subject": subject,
+            **{
+                name: _slot_text(raw.get(name))
+                for name in ("bac_dao_tao", "he_dao_tao", "nganh_hoc", "co_so", "nam_hoc")
+            },
+        }
+    )
+
+
+def _slot_text(value: object) -> str | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text if text and text.lower() not in {"null", "none"} else None
+
+
 def _metadata_updates(raw: object) -> dict[str, str | None]:
     """`{field: value | null}`; a number is kept as text, anything else is dropped.
     Which fields may change is decided later (`metadata_fields.apply_updates`)."""
@@ -172,6 +214,7 @@ def describe_classification(classification: IntentClassification) -> str:
             "routing_mode": task.routing_mode,
             "hyde_text": task.hyde_text,
             "sub_queries": task.sub_queries,
+            "web": task.web.model_dump(exclude_none=True) if task.web else None,
         }
         for task in classification.tasks
     ]

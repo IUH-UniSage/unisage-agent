@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.web_search import WebSlots
+
 RoutingMode = Literal["SINGLE", "MULTI"]
 
 
@@ -20,6 +22,9 @@ class ClassifiedTask(BaseModel):
     # task re-runs on a new query.
     hyde_text: str | None = Field(default=None, exclude=True)
     sub_queries: list[str] | None = Field(default=None, exclude=True)
+    # What WebSearchNode looks for, as slots code turns into a keyword query
+    # (app/rag/web_query.py). Not persisted either: a resumed task searches by its question.
+    web: WebSlots | None = Field(default=None, exclude=True)
 
 
 class IntentClassification(BaseModel):

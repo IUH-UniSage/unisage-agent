@@ -7,6 +7,7 @@ template: |
   {security_access_control}
   {response_style}
   {ticket_fallback}
+  {web_sources}
   {current_time}
 
   ## Thông Báo Người Dùng

@@ -36,11 +36,12 @@ _JSON_BLOCK_PATTERN = re.compile(r"```json.*?```", re.DOTALL)
 # different question, and would otherwise be copied into this turn's output.
 _AMOUNT_PATTERN = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
 # The tags that frame retrieved text in `prepared_context.yaml` /
-# `web_search_context.yaml`. Text from a document or a web page that contains
-# one of them could close the frame early and have what follows read as
-# prompt rather than data.
+# `web_search_context.yaml` / `web_candidate_sources.yaml`. Text from a document
+# or a web page that contains one of them could close the frame early and have
+# what follows read as prompt rather than data.
 _CONTEXT_FRAME_TAG_PATTERN = re.compile(
-    r"<\s*(/?)\s*(academic_context|websearch|current_date|current_time)\s*>", re.IGNORECASE
+    r"<\s*(/?)\s*(academic_context|websearch|web_sources|current_date|current_time)\s*>",
+    re.IGNORECASE,
 )
 
 
@@ -234,11 +235,27 @@ def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_i
     if not web_results:
         return ""
     entries = "\n".join(
-        f"  [{index}] ({_neutralize_frame_tags(result.title)} — "
-        f"{_neutralize_frame_tags(result.url)}) {_neutralize_frame_tags(result.content)}"
+        f"  [{index}] ({_page_label(result)}) {_neutralize_frame_tags(result.content)}"
         for index, result in enumerate(web_results, first_index)
     )
     return "\n" + get_templates().web_search_context.format(web_results=entries) + "\n"
+
+
+def build_web_sources_section(sources: Sequence[WebSearchResult]) -> str:
+    """The `<web_sources>` block of the ticket fallback, or nothing: official pages on the
+    asked topic the web judge kept although their snippet lacks the answer."""
+
+    if not sources:
+        return ""
+    entries = "\n".join(
+        f"  - {_page_label(source)}: {_neutralize_frame_tags(source.content)}" for source in sources
+    )
+    return get_templates().web_candidate_sources.format(web_sources=entries)
+
+
+def _page_label(result: WebSearchResult) -> str:
+    year = f"; năm học {result.academic_year}" if result.academic_year else ""
+    return f"{_neutralize_frame_tags(result.title)} — {_neutralize_frame_tags(result.url)}{year}"
 
 
 def build_json_repair_prompt(

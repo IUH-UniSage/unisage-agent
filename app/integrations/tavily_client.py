@@ -84,6 +84,8 @@ class TavilyClient:
             "include_answer": False,
             "include_raw_content": False,
         }
+        if settings.TAVILY_SEARCH_DEPTH == "advanced":
+            body["chunks_per_source"] = settings.TAVILY_CHUNKS_PER_SOURCE
         try:
             # One deadline for the whole call - httpx's own timeout applies per phase
             # (connect, read, ...), so a slow connect plus a slow read could add up past it.

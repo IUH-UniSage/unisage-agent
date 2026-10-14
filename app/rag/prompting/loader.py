@@ -95,6 +95,7 @@ def _load_all_templates() -> PromptTemplates:
             agents / "calculation_value_extractor.yaml"
         ),
         agent_reranker_compressor=_load_yaml_template(agents / "reranker_compressor.yaml"),
+        agent_web_result_judge=_load_yaml_template(agents / "web_result_judge.yaml"),
         agent_multi_representation_enricher=_load_yaml_template(
             agents / "multi_representation_enricher.yaml"
         ),
@@ -112,6 +113,7 @@ def _load_all_templates() -> PromptTemplates:
         task_2=_load_yaml_template(common / "task_2.yaml"),
         ask_user_form_guide=_load_yaml_template(common / "ask_user_form_guide.yaml"),
         ticket_fallback=_load_yaml_template(common / "ticket_fallback.yaml"),
+        web_candidate_sources=_load_yaml_template(common / "web_candidate_sources.yaml"),
     )
     versions = {
         item.name: hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]

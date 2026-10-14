@@ -88,7 +88,13 @@ from app.graph.nodes.query_transformation import (
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.graph.nodes.social_chat import social_chat_reply
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
-from app.graph.nodes.web_search import search_web
+from app.graph.nodes.web_judge import WebJudgement, build_web_judge_agent, judge_web_results
+from app.graph.nodes.web_search import (
+    WebSearchOutcome,
+    WebSearchRequest,
+    search_web,
+    select_without_judge,
+)
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
 from app.graph.streaming_state import (
     AdminWarning,
@@ -98,6 +104,7 @@ from app.graph.streaming_state import (
     ResumeInput,
 )
 from app.rag.prompting.citations import build_citations
+from app.rag.web_query import build_web_query
 from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
 from app.schemas.web_search import WebSearchResult
@@ -108,6 +115,17 @@ logger = logging.getLogger(__name__)
 _WEB_SEARCH_FAILED = (
     "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
 )
+_WEB_JUDGE_SKIPPED = (
+    "Bỏ qua bước chấm trang web (mô hình Rerank/Extraction), trang web được giữ theo điểm Tavily: "
+)
+_WEB_SOURCE_USED = (
+    "Lượt này dùng trang trên website Trường vì kho văn bản không có; cân nhắc nạp các văn "
+    "bản này vào kho: "
+)
+
+# Speculative web searches a turn turned out not to need keep running so their results
+# land in the cache for the next turn; held here so they are not garbage-collected.
+_background_searches: set[asyncio.Task[WebSearchOutcome]] = set()
 
 
 def _make_failover_applier(models: GraphModels) -> FailoverCallback:
@@ -623,6 +641,89 @@ def _with_follow_up_round(
     return replace(output, pending_round=follow_up)
 
 
+def _web_requests(
+    advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
+) -> list[WebSearchRequest]:
+    """One keyword search per task classification wrote `web` slots for."""
+
+    today = now_ict().date()
+    return [
+        WebSearchRequest(
+            query=build_web_query(task.web, today=today),
+            topic=task.web.topics[0],
+            co_so=task.web.co_so,
+        )
+        for task, _mode in advisory_tasks
+        if task.web is not None
+    ]
+
+
+def _start_speculative_search(
+    advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
+    web_requests: Sequence[WebSearchRequest],
+) -> asyncio.Task[WebSearchOutcome] | None:
+    if (
+        not settings.CHAT_WEB_SEARCH_ENABLED
+        or settings.CHAT_WEB_SEARCH_MODE != "speculative"
+        or not web_requests
+    ):
+        return None
+    speculative_topics = set(settings.CHAT_WEB_SEARCH_SPECULATIVE_TOPICS)
+    if not any(
+        topic in speculative_topics
+        for task, _mode in advisory_tasks
+        if task.web is not None
+        for topic in task.web.topics
+    ):
+        return None
+    return asyncio.create_task(search_web(web_requests))
+
+
+def _page_reference(page: WebSearchResult) -> str:
+    return f"{page.url} (năm học {page.academic_year})" if page.academic_year else page.url
+
+
+def _finish_in_background(task: asyncio.Task[WebSearchOutcome]) -> None:
+    _background_searches.add(task)
+    task.add_done_callback(_discard_background_search)
+
+
+def _discard_background_search(task: asyncio.Task[WebSearchOutcome]) -> None:
+    _background_searches.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("Background web search failed", exc_info=task.exception())
+
+
+async def _judge_web_results(
+    models: GraphModels,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    questions: Sequence[str],
+    candidates: Sequence[WebSearchResult],
+    *,
+    budget: BudgetContext | None,
+) -> WebJudgement:
+    if not candidates:
+        return WebJudgement(answers=[])
+    if models.rerank is None:
+        return WebJudgement(
+            answers=select_without_judge(candidates),
+            failure=models.rerank_unavailable or "chưa cấu hình mô hình Rerank/Extraction.",
+        )
+    agent = build_web_judge_agent(models.rerank)
+    trace.node("09c_WebJudgeNode", agent=agent, credential=models.rerank_credential)
+    return await judge_web_results(
+        agent,
+        questions,
+        candidates,
+        credential=models.rerank_credential,
+        purpose=models.rerank_purpose,
+        snapshot_version=models.snapshot_version,
+        on_attempt=usage_recorder.bind("WebJudgeNode"),
+        budget=budget,
+    )
+
+
 async def _run_advisory_flow(
     graph_input: GraphInput,
     models: GraphModels,
@@ -643,6 +744,12 @@ async def _run_advisory_flow(
     means the whole user message."""
 
     question = question or graph_input.user_message
+
+    # WebSearchNode, early: a task about something posted on the website first (fees,
+    # admission, notices, contacts) starts its search now, alongside query transformation,
+    # retrieval and rerank; its pages are only judged if a sub-query ends up without a chunk.
+    web_requests = _web_requests(advisory_tasks)
+    speculative_search = _start_speculative_search(advisory_tasks, web_requests)
 
     # QueryTransformationNode: HyDE per SINGLE task, decomposer per MULTI task.
     query_transformation_agent = build_query_transformation_agent(models.query_transformation)
@@ -722,13 +829,17 @@ async def _run_advisory_flow(
                 )
             )
 
-    # WebSearchNode: only the sub-queries left with no chunk.
+    # WebSearchNode + WebJudgeNode: only for the sub-queries left with no chunk.
     failed_sub_queries = [questions[index] for index in rerank_result.failed_query_indexes]
     web_results: list[WebSearchResult] = []
+    web_sources: list[WebSearchResult] = []
     if failed_sub_queries and settings.CHAT_WEB_SEARCH_ENABLED:
         trace.node("09b_WebSearchNode")
-        web_outcome = await search_web(failed_sub_queries)
-        web_results = web_outcome.results
+        web_outcome = (
+            await speculative_search
+            if speculative_search is not None
+            else await search_web(web_requests or failed_sub_queries)
+        )
         if web_outcome.failure is not None:
             admin_warnings.append(
                 AdminWarning(
@@ -736,8 +847,44 @@ async def _run_advisory_flow(
                     message=f"{_WEB_SEARCH_FAILED}{web_outcome.failure}",
                 )
             )
-        for result in web_results:
+        for result in web_outcome.results:
             trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
+        judgement = await _judge_web_results(
+            models,
+            trace,
+            usage_recorder,
+            failed_sub_queries,
+            web_outcome.results,
+            budget=budget,
+        )
+        web_results, web_sources = judgement.answers, judgement.sources
+        if judgement.failure is not None:
+            admin_warnings.append(
+                AdminWarning(
+                    code="WEB_JUDGE_FAILED", message=f"{_WEB_JUDGE_SKIPPED}{judgement.failure}"
+                )
+            )
+        if web_results or web_sources:
+            admin_warnings.append(
+                AdminWarning(
+                    code="WEB_SOURCE_USED",
+                    message=_WEB_SOURCE_USED
+                    + "; ".join(_page_reference(page) for page in [*web_results, *web_sources]),
+                )
+            )
+        logger.info(
+            "Web search turn: mode=%s topics=%s requests=%d cache_hits=%d candidates=%d "
+            "answers=%d sources=%d",
+            "speculative" if speculative_search is not None else "fallback",
+            [task.web.topics if task.web else None for task, _mode in advisory_tasks],
+            len(web_requests) or len(failed_sub_queries),
+            web_outcome.cache_hits,
+            len(web_outcome.results),
+            len(web_results),
+            len(web_sources),
+        )
+    elif speculative_search is not None:
+        _finish_in_background(speculative_search)
 
     # Barrier: the calculation blocks go out before any advisory token.
     calculation_titles_shown = (
@@ -758,6 +905,7 @@ async def _run_advisory_flow(
             security=graph_input.security,
             confirmed_metadata=confirmed_metadata,
             history=graph_input.history,
+            web_sources=web_sources,
             token_sink=token_sink,
             purpose="CHAT",
             credential=models.generation_credential,

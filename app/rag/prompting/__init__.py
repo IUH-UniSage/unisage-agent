@@ -32,6 +32,7 @@ from .builder import (
     build_prepared_context_section,
     build_recent_calculations_section,
     build_task_2_section,
+    build_web_sources_section,
     render_resolved_user_query,
 )
 from .loader import get_templates, reset_templates_cache
@@ -143,10 +144,13 @@ def build_ticket_fallback_prompt(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     history: Sequence[HistoryMessage] = (),
+    web_sources: Sequence[WebSearchResult] = (),
 ) -> str:
     """TicketFallbackNode frame: no `{prepared_context}`/`task_1`/`task_2` -
     the model gets no chunks and no clarification machinery, so it can only
-    write the fallback message, never cite a regulation it has no source for."""
+    write the fallback message, never cite a regulation it has no source for.
+    `web_sources` (official pages the web judge kept whose snippet lacks the answer) are
+    only linked, with their title and academic year - never quoted for figures."""
 
     templates = get_templates()
     return templates.chat_ticket_fallback.format(
@@ -156,6 +160,7 @@ def build_ticket_fallback_prompt(
         security_access_control=templates.security_access_control,
         response_style=templates.response_style,
         ticket_fallback=templates.ticket_fallback,
+        web_sources=build_web_sources_section(web_sources),
         current_time=build_current_time_section(confirmed_metadata),
         user_query=user_query,
     )
