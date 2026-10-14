@@ -147,3 +147,16 @@ def test_a_link_the_model_wrote_must_be_one_of_the_pages_it_was_given() -> None:
     assert keep_known_links(text, [page]) == (
         f"Xem [thông báo]({page.url}), trang lạ và {page.url}."
     )
+
+
+def test_a_web_citation_shows_the_short_title() -> None:
+    page = WebSearchResult(
+        title="Kết quả thi- Trung Tâm Tin Học - Đại học Công Nghiệp TP.HCM:..",
+        url="https://itc.iuh.edu.vn/news@93-Ket-qua-thi.html",
+        content="Kết quả kỳ thi ngày 08,09/10/2026 [1]",
+        score=0.7,
+    )
+
+    (citation,) = build_citations("Kết quả kỳ thi ngày 08,09/10/2026 [1].", [], [page])
+
+    assert citation["title"] == "Kết quả thi"

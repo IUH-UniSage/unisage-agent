@@ -218,7 +218,7 @@ def _web_citation(index: int, result: WebSearchResult) -> dict[str, Any]:
     return {
         "index": index,
         "documentId": None,
-        "title": result.title,
+        "title": display_title(result),
         "section": None,
         "pageStart": None,
         "pageEnd": None,
