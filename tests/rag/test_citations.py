@@ -1,6 +1,7 @@
 from app.rag.prompting.citations import (
     build_citations,
     cited_indexes,
+    keep_known_links,
     source_title,
     strip_source_list,
 )
@@ -129,3 +130,20 @@ def test_strip_source_list_keeps_an_answer_without_one() -> None:
     text = "Ý A [1].\n\n---\n\nNguồn\n\nBạn có thể tạo ticket để được hỗ trợ."
     assert strip_source_list(text) == text
     assert strip_source_list("Ý A [1].\n\n---") == "Ý A [1].\n\n---"
+
+
+def test_a_link_the_model_wrote_must_be_one_of_the_pages_it_was_given() -> None:
+    page = WebSearchResult(
+        title="TB",
+        url="https://iuh.edu.vn/thong-bao/nghi-le-quoc-khanh-2026",
+        content="",
+        score=0.5,
+    )
+    text = (
+        "Xem [thông báo](https://iuh.edu.vn/thong-bao/nghi-le-quoc-khánh-2026), "
+        "[trang lạ](https://iuh.edu.vn/khong-co) và https://iuh.edu.vn/THONG-BAO/nghi-le-quoc-khanh-2026."
+    )
+
+    assert keep_known_links(text, [page]) == (
+        f"Xem [thông báo]({page.url}), trang lạ và {page.url}."
+    )

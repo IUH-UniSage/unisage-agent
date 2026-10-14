@@ -4,11 +4,8 @@ import pytest
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from app.graph.nodes.ticket_fallback import (
-    build_ticket_fallback_agent,
-    missing_source_links,
-    run_ticket_fallback,
-)
+from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
+from app.rag.prompting.citations import source_links_block
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
 
@@ -79,12 +76,22 @@ async def test_prompt_carries_no_retrieved_chunk_and_has_the_security_block() ->
 
 
 @pytest.mark.asyncio
-async def test_pages_the_reply_left_out_are_listed_after_it(
+async def test_a_link_in_the_reply_is_exact_and_only_the_other_pages_are_listed_after_it(
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
 ) -> None:
-    """The 14-10-2026 turn: the judge kept official notices, the model named none."""
+    """The 14-10-2026 turn: the model retyped the notice's URL as "quoc-khánh" (a 404),
+    then the same notice was listed again under the reply."""
 
-    agent = build_ticket_fallback_agent(mock_streaming_llm_model(["Mình chưa tìm thấy."]))
+    retyped = _NOTICE.url.replace("quoc-khanh", "quoc-khánh")
+    notice_2026 = WebSearchResult(
+        title="TB-957-2026.pdf",
+        url="https://iuh.edu.vn/upload/files/2026/08/TB-957-2026.pdf",
+        content="nghỉ lễ Quốc khánh 2026",
+        score=0.4,
+    )
+    agent = build_ticket_fallback_agent(
+        mock_streaming_llm_model([f"Bạn xem [Thông báo năm 2025]({retyped}) nhé."])
+    )
     seen: list[str] = []
 
     text = await run_ticket_fallback(
@@ -92,17 +99,19 @@ async def test_pages_the_reply_left_out_are_listed_after_it(
         "Lịch nghỉ lễ Quốc khánh 2/9 năm 2025?",
         security=AcademicSecurityContext(),
         confirmed_metadata={},
-        web_sources=[_NOTICE],
+        web_sources=[_NOTICE, notice_2026],
         token_sink=_sink(seen),
     )
 
     assert text == (
-        "Mình chưa tìm thấy.\n\nVăn bản liên quan trên website của Trường:\n"
-        f"- [Thông báo v/v nghỉ lễ Quốc khánh năm 2025]({_NOTICE.url})"
+        f"Bạn xem [Thông báo năm 2025]({_NOTICE.url}) nhé.\n\n"
+        "Văn bản liên quan trên website của Trường:\n"
+        f"- [TB-957-2026.pdf]({notice_2026.url})"
     )
-    assert "".join(seen) == text
+    assert "".join(seen).endswith(f"- [TB-957-2026.pdf]({notice_2026.url})")
 
 
-def test_a_reply_that_links_a_page_gets_nothing_added() -> None:
-    assert missing_source_links(f"Xem thông báo tại {_NOTICE.url}.", [_NOTICE]) == ""
-    assert missing_source_links("Mình chưa tìm thấy.", []) == ""
+def test_nothing_is_listed_when_the_reply_links_every_page() -> None:
+    assert source_links_block([_NOTICE], f"Xem [thông báo]({_NOTICE.url}).") == ""
+    assert source_links_block([], "Mình chưa tìm thấy.") == ""
+    assert "(website Phân hiệu Quảng Ngãi)" in source_links_block([_NOTICE])

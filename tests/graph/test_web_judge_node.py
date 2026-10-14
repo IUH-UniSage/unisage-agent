@@ -95,6 +95,30 @@ async def test_a_page_of_another_year_than_the_one_asked_is_only_a_link() -> Non
 
 
 @pytest.mark.asyncio
+async def test_sources_of_the_year_asked_come_first() -> None:
+    def notice(year: str) -> WebSearchResult:
+        return WebSearchResult(
+            title=f"Thông báo v/v nghỉ lễ Quốc khánh năm {year}",
+            url=f"https://iuh.edu.vn/thong-bao/nghi-le-quoc-khanh-nam-{year}",
+            content="Tải xuống",
+            score=0.7,
+        )
+
+    agent = build_web_judge_agent(
+        make_sync_llm_model(
+            '{"SQ1": {"W1": {"reason": "thông báo 2026", "answer": false},'
+            ' "W2": {"reason": "thông báo 2025", "answer": false}}}'
+        )
+    )
+
+    judgement = await judge_web_results(
+        agent, ["Lịch nghỉ lễ Quốc khánh năm 2025"], [notice("2026"), notice("2025")]
+    )
+
+    assert [page.url[-4:] for page in judgement.sources] == ["2025", "2026"]
+
+
+@pytest.mark.asyncio
 async def test_a_page_answering_one_sub_query_is_not_also_a_source() -> None:
     agent = build_web_judge_agent(
         make_sync_llm_model(

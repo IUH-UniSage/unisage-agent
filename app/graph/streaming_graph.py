@@ -87,11 +87,7 @@ from app.graph.nodes.query_transformation import (
 )
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.graph.nodes.social_chat import build_social_chat_agent, run_social_chat
-from app.graph.nodes.ticket_fallback import (
-    build_ticket_fallback_agent,
-    missing_source_links,
-    run_ticket_fallback,
-)
+from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
 from app.graph.nodes.web_judge import WebJudgement, build_web_judge_agent, judge_web_results
 from app.graph.nodes.web_search import (
     WebSearchOutcome,
@@ -107,7 +103,12 @@ from app.graph.streaming_state import (
     GraphOutput,
     ResumeInput,
 )
-from app.rag.prompting.citations import build_citations, strip_source_list
+from app.rag.prompting.citations import (
+    build_citations,
+    keep_known_links,
+    source_links_block,
+    strip_source_list,
+)
 from app.rag.web_query import build_web_query
 from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
@@ -973,10 +974,12 @@ async def _run_advisory_flow(
         on_attempt=usage_recorder.bind("GenerationSynthesisNode"),
         budget=budget,
     )
-    response_text = strip_source_list(generation_result.response_text)
+    response_text = keep_known_links(
+        strip_source_list(generation_result.response_text), [*web_results, *web_sources]
+    )
     # Official pages the judge kept only as links: listed after the answer, as the
     # fallback lists them, instead of being lost because another page answered.
-    links = missing_source_links(response_text, web_sources)
+    links = source_links_block(web_sources, response_text)
     if links:
         await token_sink(links)
         response_text += links

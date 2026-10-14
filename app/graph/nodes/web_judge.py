@@ -115,8 +115,11 @@ async def judge_web_results(
         (index, is_answer) for per_query in kept for index, (_r, is_answer) in per_query.items()
     ]
     answer_indexes = sorted({index for index, is_answer in verdicts if is_answer})
+    # The year asked first: for "năm 2025" the 2025 notice before the 2026 one.
+    asked = set().union(*(_years_in(question) for question in questions))
     source_indexes = sorted(
-        {index for index, is_answer in verdicts if not is_answer} - set(answer_indexes)
+        {index for index, is_answer in verdicts if not is_answer} - set(answer_indexes),
+        key=lambda index: (not asked & _years_of(candidates[index]), index),
     )
     return WebJudgement(
         answers=[candidates[index] for index in answer_indexes][
@@ -217,8 +220,12 @@ def _answers_of_the_year_asked(
 
 
 def _other_year(page: WebSearchResult, asked: set[str]) -> bool:
-    named = _years_in(f"{page.title} {unquote(page.url)}")
+    named = _years_of(page)
     return bool(asked and named and not asked & named)
+
+
+def _years_of(page: WebSearchResult) -> set[str]:
+    return _years_in(f"{page.title} {unquote(page.url)}")
 
 
 def _years_in(text: str) -> set[str]:

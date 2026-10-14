@@ -9,9 +9,12 @@ through untouched, so anything put here reaches the client.
 """
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from typing import Any
+from urllib.parse import unquote
 
+from app.rag.web_query import campus_of
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.web_search import WebSearchResult
 
@@ -30,6 +33,8 @@ _SOURCE_HEADING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _RULE_PATTERN = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+_MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\((\S+?)\)")
+_BARE_URL = re.compile(r"(?<!\()https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'\"]")
 
 
 def cited_indexes(response_text: str, source_count: int) -> list[int]:
@@ -65,6 +70,51 @@ def strip_source_list(response_text: str) -> str:
     if not found or end == 0:
         return response_text
     return "\n".join(lines[:end]).rstrip()
+
+
+def keep_known_links(text: str, pages: Sequence[WebSearchResult]) -> str:
+    """Links the model wrote, pointed back at the pages it was given: a URL it retyped
+    with diacritics ("quoc-khánh") goes to that page again, any other one is dropped (the
+    link text stays). The model only copies URLs, so none it writes can be new."""
+
+    known = {_fold_url(page.url): page.url for page in pages}
+
+    def markdown(match: re.Match[str]) -> str:
+        url = known.get(_fold_url(match.group(2)))
+        return f"[{match.group(1)}]({url})" if url else match.group(1)
+
+    def bare(match: re.Match[str]) -> str:
+        return known.get(_fold_url(match.group(0)), "")
+
+    return _BARE_URL.sub(bare, _MARKDOWN_LINK.sub(markdown, text))
+
+
+def source_links_block(pages: Sequence[WebSearchResult], reply: str = "") -> str:
+    """The links listed under `reply` for the official pages kept without their content
+    that it does not link yet (pass it through `keep_known_links` first): written by code,
+    so every one is the page's real address."""
+
+    lines = []
+    for page in pages:
+        if page.url in reply:
+            continue
+        title = page.title.replace("[", "(").replace("]", ")").strip() or page.url
+        notes = [f"năm học {page.academic_year}"] if page.academic_year else []
+        campus = campus_of(page.url)
+        if campus:
+            notes.append(f"website {campus}")
+        suffix = f" ({', '.join(notes)})" if notes else ""
+        lines.append(f"- [{title}]({page.url}){suffix}")
+    if not lines:
+        return ""
+    return "\n\nVăn bản liên quan trên website của Trường:\n" + "\n".join(lines)
+
+
+def _fold_url(url: str) -> str:
+    """A URL without diacritics, case or a trailing slash, for matching a retyped one."""
+
+    text = unicodedata.normalize("NFD", unquote(url).replace("đ", "d").replace("Đ", "D"))
+    return "".join(char for char in text if not unicodedata.combining(char)).lower().rstrip("/")
 
 
 def source_title(source: str) -> str:
