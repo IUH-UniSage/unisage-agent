@@ -102,6 +102,9 @@ def _load_all_templates() -> PromptTemplates:
         ),
         header=_load_yaml_template(common / "header.yaml"),
         academic_metadata=_load_yaml_template(common / "academic_metadata.yaml"),
+        student_declared_attributes=_load_yaml_template(
+            common / "student_declared_attributes.yaml"
+        ),
         history_message=_load_yaml_template(common / "history_message.yaml"),
         security_access_control=_load_yaml_template(common / "security_access_control.yaml"),
         academic_domain_rules=_load_yaml_template(common / "academic_domain_rules.yaml"),

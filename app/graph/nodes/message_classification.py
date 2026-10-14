@@ -24,6 +24,7 @@ from app.graph.streaming import (
 from app.rag.prompting import (
     append_current_time,
     append_recent_history,
+    build_declared_attributes_section,
     build_known_metadata_fields_section,
     get_templates,
 )
@@ -294,11 +295,7 @@ async def classify_intent(
         prompt += (
             f"\n\n<previous_calculation_turn>{previous_calculation}</previous_calculation_turn>"
         )
-    prompt += (
-        "\n\n<student_profile>\n"
-        + ("\n".join(f"- {name}: {value}" for name, value in (profile or {}).items()) or "(trống)")
-        + "\n</student_profile>"
-    )
+    prompt += "\n\n" + build_declared_attributes_section(profile or {})
     prompt = append_current_time(prompt)
     output = await run_agent_text_with_failover(
         agent,

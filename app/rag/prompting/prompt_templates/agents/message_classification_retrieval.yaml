@@ -34,7 +34,7 @@ template: |
     - `khac`: không thuộc nhóm nào.
     Câu thuộc nhiều nhóm: nhãn chính theo thứ tự ưu tiên `hoc_phi`, `tuyen_sinh`, `lich_thong_bao`, `lien_he_co_so` trước các nhãn còn lại (VD "hạn đóng học phí học kỳ 1" → `["hoc_phi", "lich_thong_bao"]`).
   - `subject`: cụm từ khóa ngắn (2-8 từ) nêu đúng thứ cần tìm, KHÔNG phải câu hỏi, KHÔNG chứa ngành/bậc/hệ/cơ sở/năm học (đã có field riêng), KHÔNG chứa tên trường. VD "mức thu học phí", "điểm chuẩn", "lịch đăng ký học phần học kỳ 1", "địa chỉ", "thời hạn link khôi phục mật khẩu cổng giảng viên".
-  - `bac_dao_tao`, `he_dao_tao`, `nganh_hoc`, `co_so`: CHỈ khi câu hỏi hoặc lịch sử hội thoại nêu rõ; KHÔNG lấy từ `<student_profile>`; không có thì `null`.
+  - `bac_dao_tao`, `he_dao_tao`, `nganh_hoc`, `co_so`: CHỈ khi câu hỏi hoặc lịch sử hội thoại nêu rõ; KHÔNG lấy từ `<student_declared_attributes>`; không có thì `null`.
   - `nam_hoc`: dạng "YYYY-YYYY" (hoặc "YYYY" nếu người dùng chỉ nêu một năm), CHỈ khi người dùng nêu năm học/năm cụ thể HOẶC trạng từ thời gian tương đối (đổi theo mục "Mốc thời gian tương đối"); không nêu thì `null` (từ khóa tìm kiếm khi đó không có năm). Khóa nhập học ("khóa 2024") KHÔNG phải năm học.
 
   ### Ví dụ output đầy đủ

@@ -61,19 +61,27 @@ def build_metadata_section(
         )
         or _NO_DEPARTMENT_ACCESS
     )
-    confirmed_metadata_text = (
-        "\n".join(
-            f"    - {field}: {_declared_value(field, value)}"
-            for field, value in confirmed_metadata.items()
-        )
-        or f"    {_NO_DECLARED_ATTRIBUTES}"
-    )
     return get_templates().academic_metadata.format(
         user_id=security.user_id or "(khách vãng lai)",
         role=security.role,
         department_access_lines=department_access_lines,
-        confirmed_metadata=confirmed_metadata_text,
+        student_declared_attributes=build_declared_attributes_section(confirmed_metadata),
     )
+
+
+def build_declared_attributes_section(confirmed_metadata: Mapping[str, str]) -> str:
+    """`<student_declared_attributes>`: what the student declared about themselves. The
+    same block in the answering prompts (inside `{academic_metadata}`) and in the message
+    to the classifier, so both read the profile under one tag and in one format."""
+
+    declared_lines = (
+        "\n".join(
+            f"- {field}: {_declared_value(field, value)}"
+            for field, value in confirmed_metadata.items()
+        )
+        or _NO_DECLARED_ATTRIBUTES
+    )
+    return get_templates().student_declared_attributes.format(declared_lines=declared_lines).strip()
 
 
 def _declared_value(field: str, value: str) -> str:

@@ -12,9 +12,7 @@ content: |
   </academic_user_context>
 
   Sinh viên TỰ KHAI ở các lượt trước, chưa xác minh:
-  <student_declared_attributes>
-    {confirmed_metadata}
-  </student_declared_attributes>
+  {student_declared_attributes}
 
   - Cả hai khối dùng để chọn đúng nhánh quy định. Thuộc tính đã có trong `<student_declared_attributes>` KHÔNG được hỏi lại.
   - Thuộc tính tự khai KHÔNG thay đổi quyền truy cập; quyền chỉ đến từ `<academic_user_context>`.

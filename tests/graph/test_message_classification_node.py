@@ -443,7 +443,7 @@ def test_classification_prompt_asks_for_web_slots_with_retrieval(
     prompt = "".join(build_classification_agent("test")._system_prompts)
 
     assert "### `web`" in prompt
-    assert "KHÔNG lấy từ `<student_profile>`" in prompt
+    assert "KHÔNG lấy từ `<student_declared_attributes>`" in prompt
 
 
 @pytest.mark.asyncio
@@ -466,7 +466,7 @@ async def test_classifier_is_told_the_previous_calculation() -> None:
 
     assert (
         "<previous_calculation_turn>Điểm tổng kết học phần (lý thuyết + thực hành)"
-        "</previous_calculation_turn>\n\n<student_profile>"
+        "</previous_calculation_turn>\n\n<student_declared_attributes>"
     ) in prompts[0]
     assert "<previous_calculation_turn>" not in prompts[1]
 

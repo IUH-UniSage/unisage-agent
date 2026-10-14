@@ -84,8 +84,8 @@ async def test_the_classifier_sees_the_profile_and_the_profile_field_table() -> 
     await classify_intent(agent, "tôi nhầm, khoá 2023 mới đúng", profile=_PROFILE)
 
     assert (
-        "<student_profile>\n- khoa_nhap_hoc: 2022\n- nganh_hoc: CNTT\n</student_profile>"
-        in (prompts[0])
+        "<student_declared_attributes>\n- khoa_nhap_hoc: 2022 (khóa K18)\n- nganh_hoc: CNTT\n"
+        "</student_declared_attributes>" in (prompts[0])
     )
     system = "\n".join(str(prompt) for prompt in agent._system_prompts)
     assert "{profile_fields}" not in system

@@ -1,0 +1,6 @@
+# STUDENT_DECLARED_ATTRIBUTES_TEMPLATE
+description: "Thuộc tính sinh viên tự khai (hồ sơ, chưa xác minh) - một khối dùng chung: nhúng trong academic_metadata của prompt trả lời và gửi kèm tin nhắn cho bộ phân loại"
+content: |
+  <student_declared_attributes>
+  {declared_lines}
+  </student_declared_attributes>

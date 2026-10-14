@@ -34,11 +34,11 @@ template: |
   7. PHÂN BIỆT `academic_advisory` vs `academic_calculation`: hỏi một ĐƠN GIÁ/MỨC THU đã có sẵn trong văn bản (giá 1 tín chỉ, học phí 1 năm, mức học bổng...) là TRA CỨU → `academic_advisory`, dù câu hỏi có chữ số hay đơn vị tính. Chỉ là `academic_calculation` khi người dùng đưa SỐ LIỆU CỤ THỂ và yêu cầu TÍNH RA một con số mới bằng phép toán (nhân/cộng/trừ/chia) trên số liệu đó, VD "18 tín chỉ thì tốn bao nhiêu" (phải nhân số tín chỉ với đơn giá), "tính GPA giúp em" (phải tính trung bình có trọng số). Hỏi lại/làm rõ về ĐƠN GIÁ 1 tín chỉ sau khi đã hỏi về học phí vẫn là `academic_advisory`, không phải `academic_calculation`. Câu hỏi "cần/phải đạt bao nhiêu (điểm cuối kỳ, giữa kỳ...) để được <điểm chữ/điểm số>" hoặc "thi bao nhiêu thì qua môn" luôn là `academic_calculation` (hệ thống tự tính ngược từ công thức), kể cả khi người dùng chưa đưa số liệu nào hoặc đang nối tiếp một phép tính ở lượt trước.
 
   ## Cập nhật hồ sơ sinh viên (`metadata_updates`)
-  `<student_profile>` là những gì sinh viên đã khai về BẢN THÂN (khoá, ngành, hệ...), lưu cho mọi cuộc hội thoại sau. Chỉ ghi `metadata_updates` khi tin nhắn này sinh viên TỰ NÓI về bản thân mình:
+  `<student_declared_attributes>` là những gì sinh viên đã khai về BẢN THÂN (khoá, ngành, hệ...), lưu cho mọi cuộc hội thoại sau. Chỉ ghi `metadata_updates` khi tin nhắn này sinh viên TỰ NÓI về bản thân mình:
   - Khai mới ("em là sinh viên khoá 2023 ngành CNTT") hoặc SỬA giá trị đã khai ("tôi nhầm, khoá 2023 mới đúng", "mình học Kế toán chứ không phải CNTT") → `{"<field>": "<giá trị mới>"}`.
   - Sinh viên nói một giá trị trong hồ sơ không còn đúng mà không nói giá trị mới ("mình không học ngành đó nữa") → `{"<field>": null}`.
   - KHÔNG ghi khi sinh viên hỏi về người/trường hợp khác hoặc giả định ("khoá 2021 thì học phí bao nhiêu?", "nếu học Kế toán thì sao?", "bạn tôi học ngành X") - đó là câu hỏi, không phải thông tin về bản thân.
-  - Giá trị giống hệt `<student_profile>` thì không ghi. Không có gì để cập nhật → `{}`.
+  - Giá trị giống hệt `<student_declared_attributes>` thì không ghi. Không có gì để cập nhật → `{}`.
   - Tên field CHỈ lấy trong bảng dưới; giá trị viết như sinh viên nói (đã sửa chính tả), không tự suy thêm.
 
   {profile_fields}
@@ -128,17 +128,17 @@ template: |
   Output: {"tasks": [{"intent": "academic_calculation", "query": "Tính học phí còn lại phải nộp của học kỳ này: tôi không biết tổng học phí kỳ này bao nhiêu nhưng tôi đã nộp 6 triệu rồi", "routing_mode": null}], "confidence": 0.9}
   (Sửa chính tả, thêm việc đang tính từ lịch sử, GIỮ "không biết" và "6 triệu" đúng như người dùng nói; không tự đổi "kỳ này" thành một học kỳ cụ thể.)
 
-  <student_profile>
+  <student_declared_attributes>
   - khoa_nhap_hoc: 2022
   - nganh_hoc: Công nghệ thông tin
-  </student_profile>
+  </student_declared_attributes>
   User: "à tôi nhầm, khoá 2023 mới đúng, tính lại học phí kỳ này giúp tôi"
   Output: {"tasks": [{"intent": "academic_calculation", "query": "Tính lại học phí học kỳ này giúp tôi, khoá 2023", "routing_mode": null}], "confidence": 0.9, "metadata_updates": {"khoa_nhap_hoc": "2023"}}
   (Sinh viên sửa khoá của chính mình → cập nhật hồ sơ, và vẫn phân loại phần còn lại như bình thường.)
 
-  <student_profile>
+  <student_declared_attributes>
   - khoa_nhap_hoc: 2022
-  </student_profile>
+  </student_declared_attributes>
   User: "khoá 2021 thì học phí 1 tín chỉ bao nhiêu?"
   Output: {"tasks": [{"intent": "academic_advisory", "query": "khoá 2021 thì học phí 1 tín chỉ bao nhiêu?", "routing_mode": "SINGLE"}], "confidence": 0.9, "metadata_updates": {}}
   (Hỏi về khoá khác, không phải sinh viên nói mình thuộc khoá 2021 → không cập nhật hồ sơ.)
