@@ -48,6 +48,7 @@ Mỗi câu hỏi của panel phải có đúng một answer: không thiếu, kh�
 
 | Event | `data` | Ghi chú |
 |---|---|---|
+| `status` | `{"stage": "retrieving"}` hoặc `{"stage": "web_searching", "url": "https://pdt.iuh.edu.vn/…"}` | Lượt đang làm gì, gửi mỗi khi đổi bước (xem bảng dưới). Có thể xen giữa các `token` (VD lượt vừa tính toán vừa tra cứu). Client không biết `stage` thì hiện như `thinking` |
 | `token` | chuỗi JSON, ví dụ `"Điểm "` | Đã được lọc: không bao giờ chứa khối `ask_user_form`/`confirmed_metadata` |
 | `clarification` | `ClarificationPanel` (§3) | Tối đa 1 lần, sau token cuối, trước `done`. **Khi đã nhận event này, server bảo đảm panel đã được lưu ở cả state lẫn `messages.metadata`** |
 | `clarification_closed` | `{"panel_id": "7f1c…", "status": "cancelled"}` | Chỉ có trong response của lệnh huỷ |
@@ -56,6 +57,19 @@ Mỗi câu hỏi của panel phải có đúng một answer: không thiếu, kh�
 | `done` | `{}` | Luôn là event cuối |
 
 Response của lệnh huỷ chỉ có `clarification_closed` rồi `done`, không có token nào.
+
+`stage` của event `status` (`app/graph/progress.py`), theo node đang chạy:
+
+| `stage` | Node | Gợi ý hiển thị |
+|---|---|---|
+| `analyzing` | 03 classify, 04 routing, 06 query transformation | Đang phân tích |
+| `retrieving` | 08 retrieval, 09 / 09a rerank | Đang tìm thông tin |
+| `calculating` | 07 / 07a tính toán | Đang tính toán |
+| `web_searching` | 09b tìm web, 09c chấm trang web | Đang tìm kiếm web; có `url` → Đang tìm kiếm trên `<url>` (một event mỗi trang) |
+| `generating` | 10 tạo câu trả lời | Đang tạo câu trả lời |
+| `thinking` | còn lại (chào, tiếp tục panel, trò chuyện, ngoài phạm vi, ticket fallback) | Đang suy nghĩ |
+
+Hai node liên tiếp cùng `stage` chỉ gửi một event; event có `url` luôn được gửi.
 
 ## 3. `ClarificationPanel` (bản client thấy)
 
