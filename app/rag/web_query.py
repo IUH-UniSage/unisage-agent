@@ -109,6 +109,8 @@ def build_web_query(slots: WebSlots) -> str:
 
     topic = slots.topics[0]
     year = _year_part(topic, slots.nam_hoc)
+    if year and all(digits in (slots.subject or "") for digits in re.findall(r"20\d{2}", year)):
+        year = None  # "lịch nghỉ lễ Quốc khánh 2025" already has it
     bac = _canonical("bac_dao_tao", slots.bac_dao_tao)
     he = _canonical("he_dao_tao", slots.he_dao_tao)
     nganh = _canonical("nganh_hoc", slots.nganh_hoc)

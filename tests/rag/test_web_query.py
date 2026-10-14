@@ -164,3 +164,11 @@ def test_campus_sites_are_known_by_name() -> None:
     # Kept for a fee question only when it names that campus, whichever accent it uses.
     assert order_candidates([thanh_hoa], topic="hoc_phi", floor=0.05) == []
     assert order_candidates([thanh_hoa], topic="hoc_phi", co_so="Thanh Hoá", floor=0.05)
+
+
+def test_a_year_already_in_the_subject_is_not_added_again() -> None:
+    slots = WebSlots(
+        topics=["lich_thong_bao"], subject="lịch nghỉ lễ Quốc khánh 2025", nam_hoc="2025"
+    )
+
+    assert build_web_query(slots) == "lịch nghỉ lễ Quốc khánh 2025 IUH"
