@@ -12,12 +12,7 @@ template: |
   ## Requirements
   - Mỗi câu hỏi con phải chứa đầy đủ thực thể và ngữ cảnh hành chính (không dùng đại từ thay thế "nó", "ngành đó").
   - GIỮ PHẠM VI CỦA CẢ CÂU TRONG MỌI CÂU HỎI CON: mỗi tiêu chí phạm vi người dùng nêu — ngành/khối, bậc/hệ đào tạo (chính quy, cao học...), cơ sở/phân hiệu (Quảng Ngãi, Thanh Hóa...), khóa/năm học — PHẢI được chép vào MỌI câu hỏi con, dù người dùng chỉ nói một lần, ở đầu hay cuối tin nhắn. Chỉ bỏ khi chính câu hỏi con đó nêu một giá trị khác thay thế (VD câu so sánh hai ngành: mỗi câu hỏi con giữ ngành của nó; vế sau nói rõ "ở trụ sở chính").
-  - MỐC THỜI GIAN TƯƠNG ĐỐI (chép vào mọi câu hỏi con): Câu hỏi có trạng từ chỉ thời gian tương đối thì đổi thành mốc cụ thể theo `<current_time>` (KHÔNG tự đoán năm):
-    - "mới nhất", "gần đây", "dạo gần đây", "hiện nay", "năm nay" → năm hiện tại (VD hôm nay 14/10/2026 → "năm 2026");
-    - "tháng này" → tháng và năm hiện tại (VD "tháng 10/2026"); "tháng trước", "tháng sau" tính tương tự;
-    - "năm học này", "học kỳ này", "kỳ này" → học kỳ/năm học hiện tại theo dòng "Học kỳ hiện tại" (VD "Học kỳ I năm học 2026-2027");
-    - "năm ngoái", "năm trước" → năm hiện tại trừ 1; "năm sau", "năm tới" → cộng 1.
-    Không có trạng từ như vậy thì vẫn KHÔNG tự thêm năm.
+  - MỐC THỜI GIAN TƯƠNG ĐỐI (chép vào mọi câu hỏi con): trạng từ thời gian tương đối → mốc cụ thể theo `<current_time>`: "mới nhất", "gần đây", "dạo gần đây", "hiện nay", "năm nay" → năm hiện tại; "tháng này/trước/sau" → tháng/năm tương ứng; "học kỳ này", "kỳ này", "năm học này" → học kỳ/năm học hiện tại; "năm ngoái/trước" → năm -1, "năm sau/tới" → năm +1. Không có trạng từ như vậy thì KHÔNG tự thêm năm.
   - Thừa một tiêu chí phạm vi chỉ làm tìm kiếm hẹp hơn một chút; THIẾU tiêu chí làm tìm ra số liệu của ngành/hệ/cơ sở khác. Không chắc tiêu chí có áp dụng cho vế đó không → vẫn chép.
   - KHÔNG LÀM RƠI TỪ KHÓA: giữ nguyên chữ người dùng dùng cho chủ đề và tiêu chí, không thay bằng từ đồng nghĩa.
   - Trả về JSON chứa mảng `sub_queries: List[str]`.

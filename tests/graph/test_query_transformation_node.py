@@ -356,18 +356,21 @@ async def test_retrieval_text_written_by_classification_skips_the_llm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_confirmed_metadata_reruns_hyde_instead_of_reusing_classification_text() -> None:
+async def test_classification_text_is_reused_with_a_profile_too() -> None:
+    """Classification sees the same profile, so a logged-in student's turn does not pay a
+    second LLM call (it took 14s on 14-10-2026)."""
+
     task = ClassifiedTask(
         intent="academic_advisory",
         query="Học phí?",
         routing_mode="SINGLE",
-        hyde_text="Học phí?\n\nMức thu học phí...",
+        hyde_text="Học phí chính quy?\n\nMức thu học phí hệ chính quy...",
     )
 
     (sub_query,) = await transform_tasks(
-        build_query_transformation_agent(_fixed_model("HyDE with metadata")),
+        build_query_transformation_agent(_fixed_model("must not be called")),
         [(task, "SINGLE")],
         confirmed_metadata={"training_type": "chinh_quy"},
     )
 
-    assert sub_query.retrieval_text == "HyDE with metadata"
+    assert sub_query.retrieval_text == task.hyde_text
