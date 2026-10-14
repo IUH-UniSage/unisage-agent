@@ -167,6 +167,10 @@ classify (+ web slots) ─┬─ retrieval ────────────�
 - **Files:** `app/graph/streaming_graph.py`, `app/graph/nodes/web_search.py`, config, test.
 - **Size:** M.
 - **Phụ thuộc:** W1-W5.
+- **Sau đó (14/10/2026):** chỉ chấm khi câu hỏi con không còn chunk là chưa đủ - rerank giữ đoạn liên
+  quan nhưng cũ (kết quả thi 2022 cho câu "lịch thi đợt gần nhất"). Topic động giờ chấm trang web cho
+  mọi câu hỏi con song song với rerank và đưa cạnh chunk: xem
+  `changes/14-10-2026-Web-Judge-With-Chunks/` (`CHAT_WEB_JUDGE_WITH_CHUNKS`).
 
 ### W7 - Fallback mềm
 

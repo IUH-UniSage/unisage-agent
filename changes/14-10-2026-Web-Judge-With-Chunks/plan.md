@@ -148,6 +148,36 @@ generation dài thêm ~1-2k token khi có trang dùng được.
 | Speculative search chậm hơn rerank → chờ | Thấp | Search đã chạy từ đầu nhánh; nếu cần, đặt timeout cho judge_task và bỏ web khi đã có đoạn |
 | Status UI nhảy qua lại | Thấp | T3 |
 
+## Bổ sung sau chạy thật 14/10 (T7-T9)
+
+Log 19:36 (câu MULTI "Học phí ngành CNTT năm nay bao nhiêu, với lại lịch thi chứng chỉ CNTT đợt gần nhất
+là khi nào?") cho thấy thêm ba lỗi:
+- Cả task chỉ có MỘT lần tìm, `subject` gộp "mức thu học phí và lịch thi chứng chỉ" → Tavily chỉ trả trang
+  học phí; câu lịch thi không bao giờ có trang để chấm.
+- Bộ chấm giữ trang "Thông báo tuyển sinh **Thạc sĩ** 2026" làm answer cho học phí ngành CNTT (đại học).
+- Giới hạn `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN=2` cắt theo thứ tự ứng viên (có phần theo điểm Tavily),
+  không theo lựa chọn của bộ chấm, và chung cho cả lượt.
+
+### T7 - Mỗi câu hỏi con một lần tìm + một lần chấm
+- Classify (MULTI) viết `web` là DANH SÁCH theo thứ tự `sub_queries` (`ClassifiedTask.sub_query_web`);
+  dạng object cũ vẫn đọc được (một lần tìm cho cả task).
+- Graph: `_WebGroup` = một lần tìm + những câu hỏi con nó phục vụ; nhóm chủ đề động tìm ở nền song song;
+  mỗi nhóm được chấm trên ĐÚNG trang của nó, các lần chấm song song (`_judge_jobs`), rồi gộp
+  (`_merge_judgements`). Luồng cũ (`CHAT_WEB_JUDGE_WITH_CHUNKS=false` hoặc chủ đề tĩnh): chỉ nhóm phục vụ
+  câu hỏi con không còn đoạn; câu không nhóm nào phục vụ thì tìm bằng chính câu hỏi.
+- `SubQuery.task_index` để biết câu hỏi con thuộc task nào; `WebSearchOutcome.per_request`.
+- `CHAT_WEB_SEARCH_MAX_QUERIES` mặc định 3 (= `CHAT_MAX_SUB_QUERIES`).
+
+### T8 - Bộ chấm chọn tối đa 2 trang mỗi câu hỏi con
+- `CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB=2` thay `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN`.
+- Prompt bộ chấm: tối đa `{max_answers}` trang answer mỗi câu hỏi con, trang tốt nhất trước; code giữ đúng
+  thứ tự trong JSON của bộ chấm, không xếp lại theo điểm Tavily.
+
+### T9 - Lọc trang sau đại học
+- `is_postgraduate` (tiêu đề/URL, không dấu): thạc sĩ, tiến sĩ, cao học, sau đại học, nghiên cứu sinh,
+  `sdh.iuh.edu.vn`; bỏ khỏi ứng viên trừ khi câu hỏi/slot nêu bậc đó (`WebSearchRequest.postgraduate`).
+- Prompt bộ chấm: câu hỏi không nêu bậc là đại học chính quy.
+
 ## Câu hỏi mở
 
 - Có mở rộng sang `quy_che_thu_tuc` khi câu hỏi có trạng từ thời gian ("mới nhất", "năm nay") không?
