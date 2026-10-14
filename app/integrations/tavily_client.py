@@ -90,8 +90,12 @@ class TavilyClient:
             # One deadline for the whole call - httpx's own timeout applies per phase
             # (connect, read, ...), so a slow connect plus a slow read could add up past it.
             async with asyncio.timeout(settings.TAVILY_TIMEOUT_SECONDS):
+                # httpx's own 5s default would cut an advanced search (4-7s) long before
+                # TAVILY_TIMEOUT_SECONDS: the deadline above is the only limit.
                 async with httpx.AsyncClient(
-                    base_url=settings.TAVILY_BASE_URL, transport=self._transport
+                    base_url=settings.TAVILY_BASE_URL,
+                    transport=self._transport,
+                    timeout=httpx.Timeout(settings.TAVILY_TIMEOUT_SECONDS),
                 ) as client:
                     response = await client.post(
                         "/search",
