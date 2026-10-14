@@ -656,10 +656,9 @@ async def test_fee_question_searches_the_slot_query_and_answers_from_the_web(
     ((request,),) = calls
     assert isinstance(request, WebSearchRequest)
     assert request.topic == "hoc_phi"
-    assert request.query.startswith("mức thu học phí năm học ")
-    assert request.query.endswith(" IUH")
-    # Fee schedules are split by Khối: the major stays out of the query.
-    assert "Công nghệ" not in request.query
+    # Fee schedules are split by Khối: the major stays out of the query; the user named no
+    # year, so none is added either.
+    assert request.query == "mức thu học phí IUH"
     assert result.used_web_search is True
     codes = [warning.code for warning in result.admin_warnings]
     # No RERANK model here: the page is kept by its score, and the admin is told.

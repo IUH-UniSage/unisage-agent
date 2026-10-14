@@ -14,7 +14,7 @@ template: |
   - Giữ nguyên chữ người dùng dùng cho chủ đề và tiêu chí. Lịch sử chỉ dùng để hiểu câu nối tiếp, không tạo câu hỏi con cho nội dung lượt trước.
 
   ### `web` (MỌI task `academic_advisory`, cả SINGLE lẫn MULTI)
-  Để tìm trên website của Trường khi kho văn bản không có câu trả lời. Hệ thống tự ghép các field thành từ khóa tìm kiếm và tự thêm năm học hiện tại, nên chỉ điền đúng phần được yêu cầu:
+  Để tìm trên website của Trường khi kho văn bản không có câu trả lời. Hệ thống tự ghép các field thành từ khóa tìm kiếm, nên chỉ điền đúng phần được yêu cầu:
   - `topics`: 1-2 nhãn, nhãn chính đứng đầu:
     - `hoc_phi`: mức thu, đơn giá tín chỉ, hạn/cách đóng học phí;
     - `tuyen_sinh`: điểm chuẩn, chỉ tiêu, phương thức/tổ hợp xét tuyển, hồ sơ, ngưỡng đầu vào;
@@ -26,7 +26,7 @@ template: |
     Câu thuộc nhiều nhóm: nhãn chính theo thứ tự ưu tiên `hoc_phi`, `tuyen_sinh`, `lich_thong_bao`, `lien_he_co_so` trước các nhãn còn lại (VD "hạn đóng học phí học kỳ 1" → `["hoc_phi", "lich_thong_bao"]`).
   - `subject`: cụm từ khóa ngắn (2-8 từ) nêu đúng thứ cần tìm, KHÔNG phải câu hỏi, KHÔNG chứa ngành/bậc/hệ/cơ sở/năm học (đã có field riêng), KHÔNG chứa tên trường. VD "mức thu học phí", "điểm chuẩn", "lịch đăng ký học phần học kỳ 1", "địa chỉ", "thời hạn link khôi phục mật khẩu cổng giảng viên".
   - `bac_dao_tao`, `he_dao_tao`, `nganh_hoc`, `co_so`: CHỈ khi câu hỏi hoặc lịch sử hội thoại nêu rõ; KHÔNG lấy từ `<student_profile>`; không có thì `null`.
-  - `nam_hoc`: dạng "YYYY-YYYY", CHỈ khi người dùng nêu năm học/năm cụ thể; không nêu thì `null` (hệ thống tự dùng năm học hiện tại). Khóa nhập học ("khóa 2024") KHÔNG phải năm học.
+  - `nam_hoc`: dạng "YYYY-YYYY" (hoặc "YYYY" nếu người dùng chỉ nêu một năm), CHỈ khi người dùng nêu năm học/năm cụ thể; không nêu thì `null` (từ khóa tìm kiếm khi đó không có năm). Khóa nhập học ("khóa 2024") KHÔNG phải năm học.
 
   ### Ví dụ output đầy đủ
   User: "Điều kiện nhận học bổng loại giỏi là gì?"

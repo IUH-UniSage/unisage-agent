@@ -3,10 +3,11 @@ sites a topic trusts first, which pages are never worth showing, the academic ye
 page is about, and how long a topic's results stay cached.
 
 The query is built here, not written by the model: Tavily scores a question-form query
-("Học phí ngành Công nghệ thông tin là bao nhiêu?") low on every page (0.04-0.19, the
-fee decision 0.08), while a keyword query with the school and the academic year finds
-the fee notices. Building it from slots also turns the same question into the same
-query every time, which is what the result cache is keyed on.
+("Học phí ngành Công nghệ thông tin là bao nhiêu?") low on every page (0.04-0.19), and
+building it from slots turns the same question into the same query every time, which is
+what the result cache is keyed on. A year goes in only when the user named one: the
+current year added by default pushed the latest fee decision (QĐ 1035, for 2025-2026,
+the 2026-2027 one not yet posted) out of the top 10 (14-10-2026).
 """
 
 import re
@@ -15,7 +16,6 @@ from collections.abc import Iterable, Sequence
 from datetime import date
 from urllib.parse import unquote, urlsplit
 
-from app.core.academic_calendar import current_term
 from app.schemas.web_search import WebSearchResult, WebSlots
 
 SCHOOL = "IUH"
@@ -56,7 +56,9 @@ EMPTY_RESULT_TTL_SECONDS = 30 * 60
 
 # A home page, a listing or an author/tag page: many headlines, no content.
 _LISTING_PATH = re.compile(
-    r"/page/\d+|[@?&]p=\d+|/author/|/tag/|/category[/.@]|news\.html@\d+@", re.IGNORECASE
+    r"/page/\d+|[@?&]p=\d+|/author/|/tag/|/category[/.@]|news\.html@\d+@"
+    r"|/(?:thong-bao|tin-tuc|thong-tin-tuyen-sinh)\.html$",
+    re.IGNORECASE,
 )
 # "2025-2026", "2025 - 2026" with an en dash, "2025_2026" (in file names).
 _YEAR_RANGE = re.compile(r"(20\d{2})\s*[-\u2013/_ ]\s*(20\d{2})")
@@ -94,22 +96,22 @@ _ALIASES: dict[str, dict[str, str]] = {
 }
 
 
-def build_web_query(slots: WebSlots, *, today: date) -> str:
+def build_web_query(slots: WebSlots) -> str:
     """The keyword query for `slots`, by the template of its first topic."""
 
     topic = slots.topics[0]
-    academic_year = _academic_year(slots.nam_hoc) or current_term(today).academic_year
+    year = _year_part(topic, slots.nam_hoc)
     bac = _canonical("bac_dao_tao", slots.bac_dao_tao)
     he = _canonical("he_dao_tao", slots.he_dao_tao)
     nganh = _canonical("nganh_hoc", slots.nganh_hoc)
     co_so = _clean(slots.co_so)
     if topic == "hoc_phi":
         # No major: fee schedules are split by "Khối", the major's name is not in them.
-        parts = [slots.subject, bac, he, co_so, f"năm học {academic_year}"]
+        parts = [slots.subject, bac, he, co_so, year]
     elif topic == "tuyen_sinh":
-        parts = [slots.subject, nganh, bac, he, co_so, f"năm {academic_year[:4]}"]
+        parts = [slots.subject, nganh, bac, he, co_so, year]
     elif topic == "lich_thong_bao":
-        parts = [slots.subject, bac, he, co_so, f"năm học {academic_year}"]
+        parts = [slots.subject, bac, he, co_so, year]
     elif topic == "chuong_trinh_dao_tao":
         parts = [slots.subject, nganh, bac, he]
     elif topic == "quy_che_thu_tuc":
@@ -130,18 +132,22 @@ def order_candidates(
     floor: float,
     limit: int,
 ) -> list[WebSearchResult]:
-    """Pages worth showing the web judge, best first: above `floor`, not a listing or
-    another campus's site, the topic's own sites before the rest, the newest academic
-    year first, then Tavily's score. Each page carries the academic year it is about."""
+    """Pages worth showing the web judge, best first: not a listing or another campus's
+    site, the topic's own sites before the rest, the newest academic year first, then
+    Tavily's score. Each page carries the academic year it is about.
 
+    `floor` only drops pages off the topic's own sites: the latest fee decision on
+    ptckt.iuh.edu.vn scored 0.05-0.07, right at it, while the lowest score seen at all was
+    0.04 - Tavily already cuts to its 10 best, so a topic page is never junk by score alone."""
+
+    preferred = TOPIC_DOMAINS.get(topic or "", ())
     kept: list[WebSearchResult] = []
     for result in results:
-        if result.score < floor or is_listing_page(result.url):
+        if is_listing_page(result.url) or _other_campus(result.url, co_so):
             continue
-        if _other_campus(result.url, co_so):
+        if result.score < floor and not _matches_any(result.url, preferred):
             continue
         kept.append(result.model_copy(update={"academic_year": academic_year_of(result)}))
-    preferred = TOPIC_DOMAINS.get(topic or "", ())
     kept.sort(
         key=lambda result: (
             0 if _matches_any(result.url, preferred) else 1,
@@ -179,11 +185,17 @@ def cache_ttl_seconds(topic: str | None, *, today: date, empty: bool) -> int:
     return TOPIC_CACHE_TTL_SECONDS.get(topic or "", DEFAULT_CACHE_TTL_SECONDS)
 
 
-def _academic_year(value: str | None) -> str | None:
+def _year_part(topic: str, value: str | None) -> str | None:
+    """The year the user named, as the topic's documents write it ("năm học 2025-2026", an
+    admission's "năm 2026"); None when they named none - no year is guessed."""
+
     match = _YEAR_RANGE.search(value or "")
     if match and int(match.group(2)) == int(match.group(1)) + 1:
-        return f"{match.group(1)}-{match.group(2)}"
-    return None
+        if topic == "tuyen_sinh":
+            return f"năm {match.group(1)}"
+        return f"năm học {match.group(1)}-{match.group(2)}"
+    single = re.search(r"\b(20\d{2})\b", value or "")
+    return f"năm {single.group(1)}" if single else None
 
 
 def _canonical(field: str, value: str | None) -> str | None:

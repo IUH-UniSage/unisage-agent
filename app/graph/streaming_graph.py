@@ -663,10 +663,9 @@ def _web_requests(
 ) -> list[WebSearchRequest]:
     """One keyword search per task classification wrote `web` slots for."""
 
-    today = now_ict().date()
     return [
         WebSearchRequest(
-            query=build_web_query(task.web, today=today),
+            query=build_web_query(task.web),
             topic=task.web.topics[0],
             co_so=task.web.co_so,
         )
