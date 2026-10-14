@@ -16,7 +16,7 @@ template: |
   4. Giữ trang theo MỘT trong hai loại:
      - `"answer": true` — đoạn trích CÓ thông tin trả lời câu hỏi (con số, mốc thời gian, địa chỉ, điều kiện...). Lý do phải chỉ ra đúng thông tin đó.
      - `"answer": false` — đây là VĂN BẢN CHÍNH THỨC của Trường đúng chủ đề và phạm vi (quyết định, thông báo, hướng dẫn: tiêu đề/đoạn trích cho thấy rõ), nhưng đoạn trích KHÔNG có thông tin cần (VD chỉ có tiêu đề "Quy định mức học phí ... năm học 2025-2026 (chi tiết theo phụ lục đính kèm)"). Người dùng sẽ được dẫn link để tự xem.
-  5. Năm học: trang của năm học cũ hơn năm học hiện tại vẫn giữ được nếu không có trang mới hơn, nhưng ghi rõ năm học trong lý do.
+  5. Năm học: trang của năm học cũ hơn năm học hiện tại vẫn giữ được nếu không có trang mới hơn, nhưng ghi rõ năm học trong lý do. Câu hỏi nêu năm cụ thể (VD "năm 2025") thì trang của năm khác KHÔNG BAO GIỜ là `"answer": true` (chỉ có thể là `"answer": false`), và trang đúng năm được hỏi (kể cả trên website phân hiệu/cơ sở đăng lại văn bản chung) được ưu tiên giữ.
   6. Lý do chung chung ("liên quan tới học phí", "có nhắc ngành CNTT") là CHƯA đủ → không giữ. Lý do nói trang KHÔNG chứa thông tin cần hoặc sai phạm vi → không giữ trang đó.
 
   ## Output

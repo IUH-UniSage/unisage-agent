@@ -20,6 +20,7 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from urllib.parse import unquote
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
@@ -46,6 +47,9 @@ DEFAULT_PURPOSE = "RERANK"
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 _SUB_QUERY_KEY = re.compile(r"^SQ(\d+)$")
 _PAGE_KEY = re.compile(r"^\[?W?(\d+)\]?$")
+# A year, but not an intake ("khóa 2024", "K2024"): the fee of intake 2024 is in the
+# 2025-2026 fee decision.
+_YEAR = re.compile(r"(?<!\d)(?:(khóa|khoá|khoa|k)\s*)?(20\d{2})(?!\d)", re.IGNORECASE)
 
 
 class MalformedWebJudgementError(ValueError):
@@ -105,6 +109,7 @@ async def judge_web_results(
         logger.warning("Web judge failed - keeping pages by score: %s", message)
         return WebJudgement(answers=select_without_judge(candidates), failure=message)
 
+    kept = _answers_of_the_year_asked(questions, candidates, kept)
     _log_decisions(questions, candidates, kept)
     verdicts = [
         (index, is_answer) for per_query in kept for index, (_r, is_answer) in per_query.items()
@@ -185,6 +190,39 @@ def parse_judgement(
     if not recognised:
         raise MalformedWebJudgementError("no SQk keys")
     return kept
+
+
+def _answers_of_the_year_asked(
+    questions: Sequence[str],
+    candidates: Sequence[WebSearchResult],
+    kept: list[dict[int, tuple[str, bool]]],
+) -> list[dict[int, tuple[str, bool]]]:
+    """A page whose title and URL name only other years than the question does is kept
+    as a link, never quoted: the judge once took the 2026 National Day notice as the
+    answer for 2025, noting itself "năm trong văn bản là 2026 chứ không phải 2025"."""
+
+    checked: list[dict[int, tuple[str, bool]]] = []
+    for question, per_query in zip(questions, kept, strict=True):
+        asked = _years_in(question)
+        checked.append(
+            {
+                index: (
+                    reason,
+                    is_answer and not _other_year(candidates[index], asked),
+                )
+                for index, (reason, is_answer) in per_query.items()
+            }
+        )
+    return checked
+
+
+def _other_year(page: WebSearchResult, asked: set[str]) -> bool:
+    named = _years_in(f"{page.title} {unquote(page.url)}")
+    return bool(asked and named and not asked & named)
+
+
+def _years_in(text: str) -> set[str]:
+    return {match.group(2) for match in _YEAR.finditer(text) if not match.group(1)}
 
 
 def _log_decisions(

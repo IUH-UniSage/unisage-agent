@@ -67,6 +67,34 @@ async def test_pages_split_into_answers_and_official_sources() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_page_of_another_year_than_the_one_asked_is_only_a_link() -> None:
+    """The 14-10-2026 turn: the 2026 notice taken as the answer for 2025."""
+
+    notice_2026 = WebSearchResult(
+        title="TB-957-2026.pdf",
+        url="https://iuh.edu.vn/upload/files/2026/08/TB-957-2026.pdf",
+        content="nghỉ lễ Quốc khánh 05 ngày (từ thứ Bảy, ngày 29 tháng 8 năm 2026 ...",
+        score=0.48,
+    )
+    agent = build_web_judge_agent(
+        make_sync_llm_model(
+            '{"SQ1": {"W1": {"reason": "lịch nghỉ 2026", "answer": true}},'
+            ' "SQ2": {"W2": {"reason": "mức thu 2025-2026", "answer": true}}}'
+        )
+    )
+
+    judgement = await judge_web_results(
+        agent,
+        ["Lịch nghỉ lễ Quốc khánh 2/9 năm 2025", "Học phí khóa 2024"],
+        [notice_2026, _FEE_DECISION],
+    )
+
+    # An intake year ("khóa 2024") is not the year the page must be about.
+    assert judgement.answers == [_FEE_DECISION]
+    assert judgement.sources == [notice_2026]
+
+
+@pytest.mark.asyncio
 async def test_a_page_answering_one_sub_query_is_not_also_a_source() -> None:
     agent = build_web_judge_agent(
         make_sync_llm_model(
