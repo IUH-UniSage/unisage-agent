@@ -12,6 +12,7 @@ from evals.run.metrics import (
     recall_at_k,
     score_row,
     summarize,
+    web_scope_ok,
     wilson,
 )
 
@@ -188,3 +189,94 @@ def test_hidden_access_passes_when_neither_id_nor_title_reaches_the_context() ->
 
     cited = _row(**hidden, context=[], citations=[{"documentId": "doc-p", "title": "x"}])
     assert score_row(cited)["pass"] is False
+
+
+# --- web search -------------------------------------------------------------------------------
+
+_FEE_PAGE = {"url": "https://ptckt.iuh.edu.vn/qd-hoc-phi.pdf", "title": "QĐ học phí"}
+_MASTER_PAGE = {
+    "url": "https://faet.iuh.edu.vn/news.html@detail@1@Thong-bao-tuyen-sinh-Thac-si",
+    "title": "Tuyển sinh thạc sĩ",
+}
+
+
+def _web_row(**extra: Any) -> dict[str, Any]:
+    return _row(category="web_search", web="on", **extra)
+
+
+def test_a_linked_official_page_is_a_web_source_outcome() -> None:
+    row = _web_row(used_ticket_fallback=True, context=[], web_sources=[_FEE_PAGE])
+
+    assert outcome_of(row) == ["ticket", "web_source"]
+    assert score_row(row)["pass"] is True
+
+
+def test_older_web_questions_pass_on_an_answer_from_the_web() -> None:
+    row = _web_row(
+        used_web_search=True,
+        context=[],
+        citations=[{"sourceType": "WEB"}],
+        web_results=[_FEE_PAGE],
+    )
+
+    assert score_row(row)["pass"] is True
+    assert score_row(_web_row(used_ticket_fallback=True, context=[]))["pass"] is False
+
+
+def test_a_page_of_the_wrong_scope_fails() -> None:
+    row = _web_row(
+        used_web_search=True,
+        context=[],
+        citations=[{"sourceType": "WEB"}],
+        web_results=[_MASTER_PAGE],
+        expected_web_outcome="web_any",
+        forbidden_source_patterns=["thac-si", "thạc sĩ"],
+    )
+
+    checks = score_row(row)
+    assert checks["web_scope_ok"] is False
+    assert checks["pass"] is False
+
+
+def test_pages_must_be_on_the_expected_sites() -> None:
+    on_site = _web_row(web_sources=[_FEE_PAGE], expected_source_hosts=["ptckt.iuh.edu.vn"])
+    off_site = _web_row(web_sources=[_MASTER_PAGE], expected_source_hosts=["ptckt.iuh.edu.vn"])
+    parent = _web_row(web_sources=[_MASTER_PAGE], expected_source_hosts=["iuh.edu.vn"])
+
+    assert web_scope_ok(on_site) is True
+    assert web_scope_ok(off_site) is False
+    assert web_scope_ok(parent) is True
+    assert web_scope_ok(_web_row()) is None
+
+
+def test_a_knowledge_base_question_fails_when_the_web_is_used() -> None:
+    answered_by_kb = _web_row(expected_web_outcome="kb")
+    used_web = _web_row(
+        expected_web_outcome="kb", used_ticket_fallback=True, context=[], web_sources=[_FEE_PAGE]
+    )
+
+    assert score_row(answered_by_kb)["pass"] is True
+    assert score_row(used_web)["pass"] is False
+
+
+def test_summary_counts_web_use_and_cache_hits() -> None:
+    rows = [
+        _web_row(
+            web_queries=["a", "b"],
+            web_cache_hits=1,
+            used_ticket_fallback=True,
+            context=[],
+            web_sources=[_FEE_PAGE],
+        ),
+        _web_row(web_queries=["c"], web_cache_hits=0),
+    ]
+    for row in rows:
+        row["checks"] = score_row(row)
+
+    assert summarize(rows)["web"] == {
+        "searches": 3,
+        "cache_hits": 1,
+        "answered_from_web": 0,
+        "linked_sources": 1,
+        "wrong_scope": 0,
+    }

@@ -193,6 +193,9 @@ def result_row(
         "expected_document_ids": expected_document_ids,
         "expected_titles": expected_titles or [],
         "expected_numbers": question.get("expected_numbers"),
+        "expected_web_outcome": question.get("expected_web_outcome"),
+        "expected_source_hosts": question.get("expected_source_hosts") or [],
+        "forbidden_source_patterns": question.get("forbidden_source_patterns") or [],
         "access": access,
         "web": web,
         "response": result.response_text,
@@ -215,6 +218,13 @@ def result_row(
             {"url": page.url, "title": page.title, "content": page.content}
             for page in recording.web_results
         ],
+        "web_sources": [
+            {"url": page.url, "title": page.title, "academic_year": page.academic_year}
+            for page in recording.web_sources
+        ],
+        "web_queries": recording.web_queries,
+        "web_cache_hits": recording.web_cache_hits,
+        "warning_codes": [warning.code for warning in output.admin_warnings] if output else [],
         "ttft_ms": recording.ttft_ms,
         "total_ms": result.total_ms,
         "usage": usage_summary(result.usage_lines),
@@ -384,6 +394,8 @@ def write_summary(out: Path) -> dict[str, Any]:
             f"{counts.get('pending', 0):>6}{counts.get('error', 0):>5}{recall:>11}{leak:>8}"
         )
     print(f"latency {summary['latency_ms']}  ttft {summary['ttft_ms']}")
+    if summary["web"].get("searches"):
+        print(f"web {summary['web']}")
     if summary["leaks"]:
         print(f"LEAKAGE in {len(summary['leaks'])} row(s): {summary['leaks'][:5]}")
     return summary

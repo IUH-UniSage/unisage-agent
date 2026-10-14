@@ -4,8 +4,9 @@ Nothing in `app/` changes. What the SSE stream never shows is captured here:
 
 - `RecordingTrace` (a `GraphTrace`) - the nodes run, the classification line, TTFT;
 - `RecordingRetrieval` - every Qdrant result before rerank, with its permission metadata;
-- `install_hooks()` - wraps `run_generation_synthesis` / `search_web` in the graph module to
-  keep the chunks (after rerank) and web pages the answer was generated from.
+- `install_hooks()` - wraps `run_generation_synthesis` / `search_web` / `run_ticket_fallback`
+  in the graph module to keep the chunks (after rerank) and web pages the answer was generated
+  from, the official pages the fallback linked, and the searches the cache answered.
 
 Each question runs with its own `Recording` in a `ContextVar`, so several questions can run
 concurrently; `asyncio.to_thread` (how the graph calls retrieval) copies the context along.
@@ -39,7 +40,11 @@ class Recording:
     retrievals: list[dict[str, Any]] = field(default_factory=list)
     context_chunks: list[RetrievedChunk] = field(default_factory=list)
     web_results: list[WebSearchResult] = field(default_factory=list)
+    # Official pages the ticket fallback linked (the web judge kept them without an answer).
+    web_sources: list[WebSearchResult] = field(default_factory=list)
     web_queries: list[str] = field(default_factory=list)
+    # Searches answered by the result cache, of `len(web_queries)`.
+    web_cache_hits: int = 0
     ttft_ms: float | None = None
 
 
@@ -136,6 +141,7 @@ def install_hooks() -> None:
     _hooks_installed = True
     original_generation = getattr(streaming_graph, "run_generation_synthesis")  # noqa: B009
     original_search = getattr(streaming_graph, "search_web")  # noqa: B009
+    original_fallback = getattr(streaming_graph, "run_ticket_fallback")  # noqa: B009
 
     async def recording_generation(*args: Any, **kwargs: Any) -> Any:
         recording = current()
@@ -144,14 +150,25 @@ def install_hooks() -> None:
             recording.web_results = list(kwargs.get("web_results") or [])
         return await original_generation(*args, **kwargs)
 
-    async def recording_search(queries: Sequence[str], **kwargs: Any) -> Any:
+    async def recording_search(queries: Sequence[Any], **kwargs: Any) -> Any:
+        # A request (`WebSearchRequest`) or, without classified slots, the question itself.
         recording = current()
         if recording is not None:
-            recording.web_queries.extend(queries)
-        return await original_search(queries, **kwargs)
+            recording.web_queries.extend(str(getattr(query, "query", query)) for query in queries)
+        outcome = await original_search(queries, **kwargs)
+        if recording is not None:
+            recording.web_cache_hits += int(getattr(outcome, "cache_hits", 0) or 0)
+        return outcome
+
+    async def recording_fallback(*args: Any, **kwargs: Any) -> Any:
+        recording = current()
+        if recording is not None:
+            recording.web_sources = list(kwargs.get("web_sources") or [])
+        return await original_fallback(*args, **kwargs)
 
     setattr(streaming_graph, "run_generation_synthesis", recording_generation)  # noqa: B010
     setattr(streaming_graph, "search_web", recording_search)  # noqa: B010
+    setattr(streaming_graph, "run_ticket_fallback", recording_fallback)  # noqa: B010
 
 
 @dataclass

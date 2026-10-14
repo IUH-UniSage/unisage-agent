@@ -11,6 +11,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 WILDCARD = "*"
 RECALL_K = 5
@@ -51,6 +52,9 @@ def outcome_of(row: dict[str, Any]) -> list[str]:
         found.append("calculation")
     if row.get("used_ticket_fallback"):
         found.append("ticket")
+        # The fallback linked official pages the web judge kept without an answer in them.
+        if row.get("web_sources"):
+            found.append("web_source")
     elif row.get("used_web_search") and any(
         c.get("sourceType") == "WEB" for c in row.get("citations") or []
     ):
@@ -72,6 +76,38 @@ def intents_of(row: dict[str, Any]) -> list[str]:
     if nodes == ["01_GreetingDetectionNode"]:
         return ["social_chat"]
     return []
+
+
+# --- web search (changes/14-10-2026-Web-Search-Eval) -----------------------------------------
+
+WEB_OUTCOMES = frozenset({"web", "web_source"})
+
+
+def web_pages(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every web page the turn used: quoted in the answer or linked by the fallback."""
+
+    return [*(row.get("web_results") or []), *(row.get("web_sources") or [])]
+
+
+def web_scope_ok(row: dict[str, Any]) -> bool | None:
+    """Every page used is on an expected site (`expected_source_hosts`, a host or a parent
+    domain) and none shows a sign of the wrong scope (`forbidden_source_patterns`, matched in
+    the URL or the title, case-insensitive). None when no page was used or nothing is set."""
+
+    pages = web_pages(row)
+    hosts = [host.lower().removeprefix("www.") for host in row.get("expected_source_hosts") or []]
+    patterns = [pattern.lower() for pattern in row.get("forbidden_source_patterns") or []]
+    if not pages or not (hosts or patterns):
+        return None
+    for page in pages:
+        url = str(page.get("url") or "")
+        host = (urlsplit(url).hostname or "").lower().removeprefix("www.")
+        if hosts and not any(host == h or host.endswith(f".{h}") for h in hosts):
+            return False
+        text = f"{url} {page.get('title') or ''}".lower()
+        if any(pattern in text for pattern in patterns):
+            return False
+    return True
 
 
 # --- permissions (scoring-rules §1.5, qdrant_store.build_access_filter) ----------------------
@@ -267,7 +303,17 @@ def score_row(row: dict[str, Any]) -> dict[str, Any]:
     elif category in ("off_topic", "social"):
         passed = outcome == [category] and not row.get("retrievals")
     elif category == "web_search":
-        passed = None if row.get("web") != "on" else "web" in outcome
+        checks["web_scope_ok"] = web_scope_ok(row)
+        used_web = bool(WEB_OUTCOMES & set(outcome))
+        if row.get("web") != "on":
+            passed = None
+        elif row.get("expected_web_outcome") == "kb":
+            # The knowledge base answers it: a speculative search must not end up used.
+            passed = "rag" in outcome and not used_web
+        else:
+            # `web_any`, and the older questions without an expectation: an answer quoting
+            # the website, or the fallback linking the school's official page, both count.
+            passed = used_web and checks["web_scope_ok"] is not False
     elif category == "access" and visible is False:
         # The persona may still get an answer from other (public) documents; what must not
         # happen is the hidden document - by id or by title - reaching the context.
@@ -319,8 +365,14 @@ def summarize(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     leaks: list[dict[str, Any]] = []
     latencies: list[float] = []
     ttfts: list[float] = []
+    web: Counter[str] = Counter()
     for row in rows:
         checks = row["checks"]
+        web["searches"] += len(row.get("web_queries") or [])
+        web["cache_hits"] += int(row.get("web_cache_hits") or 0)
+        web["answered_from_web"] += "web" in checks["outcome"]
+        web["linked_sources"] += "web_source" in checks["outcome"]
+        web["wrong_scope"] += checks.get("web_scope_ok") is False
         bucket = table[(row["variant"], row["category"])]
         bucket["rows"] += 1
         if "error" in checks["outcome"]:
@@ -348,6 +400,7 @@ def summarize(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "leaks": leaks,
         "latency_ms": _percentiles(latencies),
         "ttft_ms": _percentiles(ttfts),
+        "web": dict(web),
     }
 
 
