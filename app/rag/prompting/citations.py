@@ -22,6 +22,14 @@ _UUID_PREFIX_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_"
 )
 _EXTENSION_PATTERN = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+# A line that opens with its marker ("[1] https://...", "- [2]: Thông báo ...") is
+# a source list entry: in the answer itself a marker follows what it cites.
+_SOURCE_LINE_PATTERN = re.compile(r"^\s*(?:[-*]\s*)?\[\d+(?:\s*,\s*\d+)*\]:?(?:\s.*)?$")
+_SOURCE_HEADING_PATTERN = re.compile(
+    r"^\W*(?:nguồn(?: tham khảo| trích dẫn)?|văn bản tham chiếu|tài liệu tham khảo)\W*$",
+    re.IGNORECASE,
+)
+_RULE_PATTERN = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 
 
 def cited_indexes(response_text: str, source_count: int) -> list[int]:
@@ -35,6 +43,28 @@ def cited_indexes(response_text: str, source_count: int) -> list[int]:
             if 1 <= index <= source_count and index not in seen:
                 seen.append(index)
     return seen
+
+
+def strip_source_list(response_text: str) -> str:
+    """Drop a source list the model wrote at the end of its answer anyway
+    (`citation_rules.yaml` rule 4): the client already shows each cited source,
+    with its link, from the `[n]` markers, so the list only repeats it."""
+
+    lines = response_text.rstrip().split("\n")
+    end = len(lines)
+    found = False
+    while end > 0:
+        line = lines[end - 1]
+        if _SOURCE_LINE_PATTERN.match(line):
+            found = True
+        elif line.strip() and not (
+            _SOURCE_HEADING_PATTERN.match(line) or _RULE_PATTERN.match(line)
+        ):
+            break
+        end -= 1
+    if not found or end == 0:
+        return response_text
+    return "\n".join(lines[:end]).rstrip()
 
 
 def source_title(source: str) -> str:

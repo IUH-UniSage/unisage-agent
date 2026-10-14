@@ -1,4 +1,9 @@
-from app.rag.prompting.citations import build_citations, cited_indexes, source_title
+from app.rag.prompting.citations import (
+    build_citations,
+    cited_indexes,
+    source_title,
+    strip_source_list,
+)
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.web_search import WebSearchResult
 
@@ -101,3 +106,26 @@ def test_web_only_turn_numbers_pages_from_one_and_drops_out_of_range_markers() -
     citations = build_citations("Theo website [1], còn [2] không có.", [], [_web("lich-thi")])
 
     assert [(c["index"], c["sourceType"]) for c in citations] == [(1, "WEB")]
+
+
+def test_strip_source_list_drops_the_list_the_model_wrote_at_the_end() -> None:
+    """The 14-10-2026 answer: the cited page's address repeated under the reply."""
+
+    text = (
+        "Viên chức được nghỉ lễ Quốc khánh trong 05 ngày [1].\n\n"
+        "[1] https://iuh.edu.vn/upload/files/2026/08/TB-957-2026.pdf"
+    )
+
+    assert strip_source_list(text) == "Viên chức được nghỉ lễ Quốc khánh trong 05 ngày [1]."
+    assert (
+        strip_source_list(
+            "Ý A [1]. Ý B [2].\n\n---\n**Nguồn:**\n- [1]: Thông báo A\n- [2]: Quy chế B"
+        )
+        == "Ý A [1]. Ý B [2]."
+    )
+
+
+def test_strip_source_list_keeps_an_answer_without_one() -> None:
+    text = "Ý A [1].\n\n---\n\nNguồn\n\nBạn có thể tạo ticket để được hỗ trợ."
+    assert strip_source_list(text) == text
+    assert strip_source_list("Ý A [1].\n\n---") == "Ý A [1].\n\n---"

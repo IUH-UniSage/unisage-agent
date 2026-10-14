@@ -103,7 +103,7 @@ from app.graph.streaming_state import (
     GraphOutput,
     ResumeInput,
 )
-from app.rag.prompting.citations import build_citations
+from app.rag.prompting.citations import build_citations, strip_source_list
 from app.rag.web_query import build_web_query
 from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
@@ -969,13 +969,12 @@ async def _run_advisory_flow(
         on_attempt=usage_recorder.bind("GenerationSynthesisNode"),
         budget=budget,
     )
+    response_text = strip_source_list(generation_result.response_text)
     return GraphOutput(
-        response_text=generation_result.response_text,
+        response_text=response_text,
         confirmed_metadata=confirmed_metadata,
         ask_forms=generation_result.ask_forms,
-        citations=build_citations(
-            generation_result.response_text, rerank_result.chunks, web_results
-        ),
+        citations=build_citations(response_text, rerank_result.chunks, web_results),
         used_web_search=bool(web_results),
         admin_warnings=admin_warnings,
     )
