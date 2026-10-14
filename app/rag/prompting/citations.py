@@ -42,6 +42,7 @@ _SITE_SUFFIX = re.compile(
 # A title that is a file name ("TB-957-2026.pdf"); not "TP.HCM".
 _FILE_EXTENSION = re.compile(r"\.(?:pdf|docx?|xlsx?|pptx?|html?)$", re.IGNORECASE)
 _TITLE_MIN_CHARS = 6
+_LETTERHEAD = re.compile(r"(?:BỘ |CỘNG HÒA|CỘNG HOÀ|TRƯỜNG ĐẠI HỌC|ĐẠI HỌC CÔNG NGHIỆP)")
 _TITLE_MAX_CHARS = 90
 _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\((\S+?)\)")
 _BARE_URL = re.compile(r"(?<!\()https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'\"]")
@@ -135,8 +136,9 @@ def display_title(page: WebSearchResult) -> str:
     while previous != title:
         previous = title
         title = _SITE_SUFFIX.sub("", title).strip(" -\u2013|:.\u2026")
-    # A letterhead line in capitals ("BỘ CÔNG THƯƠNG ..."), not a document code ("TB-957").
-    if len(title) < _TITLE_MIN_CHARS or (title.isupper() and title.count(" ") >= 3):
+    # A letterhead line ("BỘ CÔNG THƯƠNG ..."), not a title in capitals ("ĐĂNG KÝ NHẬN
+    # CHỨNG CHỈ ƯD CNTT CƠ BẢN") or a document code ("TB-957").
+    if len(title) < _TITLE_MIN_CHARS or _LETTERHEAD.match(title):
         title = _name_from_url(page.url)
     title = title.replace("[", "(").replace("]", ")")
     if len(title) > _TITLE_MAX_CHARS:
@@ -151,6 +153,11 @@ def _name_from_url(url: str) -> str:
 
     parts = urlsplit(url)
     name = unquote(parts.path.rstrip("/").rsplit("/", 1)[-1]) or (parts.hostname or url)
+    if "@" in name:
+        # "detail@91-1589-DANG-KY-..." / "news.html@detail@155@3536@Thong-bao-...": the
+        # slug after the last "@", without its leading ids, as words.
+        slug = re.sub(r"^(?:\d+-)+", "", _EXTENSION_PATTERN.sub("", name.rsplit("@", 1)[-1]))
+        return slug.replace("-", " ") or name
     name = _EXTENSION_PATTERN.sub("", name)
     if re.fullmatch(r"[a-z0-9-]+", name) and name.count("-") >= 3:
         words = re.sub(r"-\d+$", "", name).replace("-", " ")

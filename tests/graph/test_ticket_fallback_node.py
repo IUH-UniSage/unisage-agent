@@ -5,7 +5,7 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
-from app.rag.prompting.citations import source_links_block
+from app.rag.prompting.citations import display_title, source_links_block
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
 
@@ -150,3 +150,19 @@ def test_link_titles_are_short_and_a_notice_is_listed_once() -> None:
     assert "- Trung Tâm Tin Học" not in block and ":.." not in block
     assert "[1035-QD-DHCN-11-4-2025](" in block
     assert "[Thong bao v v dang ky hoc phan](" in block and "· iuh.edu.vn" in block
+
+
+def test_a_title_in_capitals_is_kept_and_an_address_name_drops_its_ids() -> None:
+    caps = WebSearchResult(
+        title=(
+            "ĐĂNG KÝ NHẬN CHỨNG CHỈ ƯD CNTT CƠ BẢN- Trung Tâm Tin Học"
+            " - Đại học Công Nghiệp TP.HCM:.."
+        ),
+        url="https://itc.iuh.edu.vn/detail@91-1589-DANG-KY-NHAN-CHUNG-CHI-UD-CNTT-CO-BAN.html",
+        content="",
+        score=0.8,
+    )
+    stub = caps.model_copy(update={"title": "2027"})
+
+    assert display_title(caps) == "ĐĂNG KÝ NHẬN CHỨNG CHỈ ƯD CNTT CƠ BẢN"
+    assert display_title(stub) == "DANG KY NHAN CHUNG CHI UD CNTT CO BAN"
