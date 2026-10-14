@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -21,13 +22,13 @@ from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
 from app.graph.nodes.web_search import WebSearchOutcome, WebSearchRequest
 from app.graph.progress import status_reporter
 from app.graph.streaming import TokenSink
-from app.graph.streaming_graph import run_graph
+from app.graph.streaming_graph import _web_request, run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
 from app.schemas.clarification import Answer, ClarificationSubmit, PendingRound
 from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
-from app.schemas.web_search import WebSearchResult
+from app.schemas.web_search import WebSearchResult, WebSlots
 from tests.llm_mocks import FakeRetrievalService, RetrieveManyMixin, make_classification_llm_model
 
 _TRACE = GraphTrace(conversation_id="c1", message_id="m1", user_id=None, client_ip=None)
@@ -429,9 +430,10 @@ def _fake_web_search(
 ) -> list[list[str]]:
     calls: list[list[str]] = []
 
-    async def search_web(queries: Sequence[str]) -> WebSearchOutcome:
-        calls.append(list(queries))
-        return WebSearchOutcome(results=pages)
+    async def search_web(requests: Sequence[WebSearchRequest]) -> WebSearchOutcome:
+        # By query text: the sub-queries without a chunk are searched by their question.
+        calls.append([request.query for request in requests])
+        return WebSearchOutcome(results=pages, per_request=[pages for _ in requests])
 
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", True)
     monkeypatch.setattr("app.graph.streaming_graph.search_web", search_web)
@@ -617,7 +619,7 @@ def _fake_slot_web_search(
 
     async def search_web(requests: Sequence[object]) -> WebSearchOutcome:
         calls.append(list(requests))
-        return WebSearchOutcome(results=pages)
+        return WebSearchOutcome(results=pages, per_request=[pages for _ in requests])
 
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", True)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MODE", "speculative")
@@ -667,13 +669,19 @@ async def test_fee_question_searches_the_slot_query_and_answers_from_the_web(
     assert "09b_WebSearchNode" in _traced_nodes(caplog)
 
 
+@pytest.mark.parametrize("with_chunks", [False, True])
 @pytest.mark.asyncio
 async def test_speculative_search_runs_but_is_not_used_when_the_knowledge_base_answers(
+    with_chunks: bool,
     mock_sync_llm_model: Callable[[str], FunctionModel],
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Judging alongside the chunks needs the RERANK model: without one, no page picked
+    by its score alone goes next to them (and LLM_RERANK_UNAVAILABLE already tells)."""
+
+    monkeypatch.setattr(settings, "CHAT_WEB_JUDGE_WITH_CHUNKS", with_chunks)
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
     calls = _fake_slot_web_search(monkeypatch, [_WEB_PAGE])
     models = GraphModels(
@@ -708,6 +716,7 @@ async def test_web_branch_reports_each_page_it_reads(
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(settings, "CHAT_WEB_JUDGE_WITH_CHUNKS", False)
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
     _fake_slot_web_search(monkeypatch, [_WEB_PAGE, _FEE_DECISION])
     seen: list[tuple[str, str | None]] = []
@@ -729,6 +738,142 @@ async def test_web_branch_reports_each_page_it_reads(
         ("web_searching", _FEE_DECISION.url),
         ("generating", None),
     ]
+
+
+@pytest.mark.asyncio
+async def test_pages_judged_alongside_rerank_are_reported_once_rerank_is_done(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Judged while retrieval runs: a status then would interleave with retrieval's, so
+    the pages the answer uses are shown after rerank (no RERANK model here: the score
+    rule keeps the page above CHAT_WEB_SEARCH_MIN_SCORE only)."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    _fake_slot_web_search(monkeypatch, [_WEB_PAGE, _FEE_DECISION])
+    seen: list[tuple[str, str | None]] = []
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí ... [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+    )
+
+    await run_graph(_fee_input(), models, _sink([]), _status_trace(seen), _usage_recorder())
+
+    assert seen == [
+        ("thinking", None),
+        ("analyzing", None),
+        ("retrieving", None),
+        ("web_searching", None),
+        ("web_searching", _WEB_PAGE.url),
+        ("generating", None),
+    ]
+
+
+_JUDGE_KEEPS_THE_PAGE = '{"SQ1": {"W1": {"reason": "lịch thi ngày 05,06/11/2026", "answer": true}}}'
+
+
+@pytest.mark.asyncio
+async def test_a_page_is_judged_and_used_next_to_the_kept_chunks(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The 14-10-2026 turn: the 2022 exam results were kept for "the latest exam date",
+    so the page with the 2026 schedule was never judged."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    _fake_slot_web_search(monkeypatch, [_WEB_PAGE])
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model, "lich_thong_bao"),
+        query_transformation=mock_sync_llm_model("HyDE lịch thi"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+        rerank=mock_sync_llm_model(_JUDGE_KEEPS_THE_PAGE),
+    )
+
+    with caplog.at_level("INFO"):
+        result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.used_ticket_fallback is False
+    assert result.used_web_search is True
+    (prompt,) = seen_prompts
+    # The chunk is [1], the page numbered after it.
+    assert _DUMMY_CHUNK.content in prompt
+    assert f"[2] (Lịch thi HK1 — {_WEB_PAGE.url})" in prompt
+    assert "mode=parallel" in caplog.text
+    assert "sub_queries_with_chunks=1/1" in caplog.text
+    assert [w.code for w in result.admin_warnings] == ["WEB_SOURCE_USED"]
+
+
+@pytest.mark.asyncio
+async def test_the_web_judge_runs_while_retrieval_is_still_running(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retrieval here only returns once the judge has been called: run one after the
+    other, the turn would time out."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    _fake_slot_web_search(monkeypatch, [_WEB_PAGE])
+    judged = asyncio.Event()
+
+    def judge(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        judged.set()
+        return ModelResponse(parts=[TextPart(content=_JUDGE_KEEPS_THE_PAGE)])
+
+    @dataclass(frozen=True)
+    class WaitsForTheJudge(FakeRetrievalService):
+        async def retrieve_many_async(
+            self,
+            queries: list[str],
+            *,
+            security: AcademicSecurityContext,
+            limit: int | None = None,
+        ) -> list[list[RetrievedChunk]]:
+            await asyncio.wait_for(judged.wait(), timeout=2)
+            return self.retrieve_many(queries, security=security, limit=limit)
+
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model, "lich_thong_bao"),
+        query_transformation=mock_sync_llm_model("HyDE lịch thi"),
+        generation=mock_streaming_llm_model(["Lịch thi ... [2]."]),
+        retrieval=WaitsForTheJudge([_DUMMY_CHUNK]),
+        rerank=FunctionModel(function=judge),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert [citation["url"] for citation in result.citations] == [_WEB_PAGE.url]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_judge_adds_no_page_next_to_the_chunks(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    _fake_slot_web_search(monkeypatch, [_WEB_PAGE])
+    models = GraphModels(
+        classification=_web_slot_classification(mock_sync_llm_model, "lich_thong_bao"),
+        query_transformation=mock_sync_llm_model("HyDE lịch thi"),
+        generation=mock_streaming_llm_model(["Lịch thi ... [1]."]),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+        rerank=mock_sync_llm_model("không phải JSON"),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.used_web_search is False
+    assert [w.code for w in result.admin_warnings] == ["WEB_JUDGE_FAILED"]
 
 
 @pytest.mark.asyncio
@@ -841,6 +986,115 @@ async def test_pages_kept_only_as_links_are_listed_after_an_answer(
     )
     assert "".join(streamed) == result.response_text
     assert [c["url"] for c in result.citations] == [_WEB_PAGE.url]
+
+
+_FEE_Q = "Học phí ngành CNTT năm học 2026-2027 là bao nhiêu?"
+_EXAM_Q = "Lịch thi chứng chỉ ứng dụng CNTT đợt gần nhất năm 2026 là khi nào?"
+_FEE_PAGE = WebSearchResult(
+    title="Quyết định mức thu học phí năm học 2026-2027",
+    url="https://ptckt.iuh.edu.vn/hoc-phi-2026-2027.pdf",
+    content="Khối Công nghệ: 1.050.000 đồng/tín chỉ",
+    score=0.3,
+)
+_EXAM_PAGE = WebSearchResult(
+    title="Thông báo lịch thi chứng chỉ",
+    url="https://itc.iuh.edu.vn/lich-thi-05-06-11-2026",
+    content="Lịch thi và danh sách thi ngày 05,06/11/2026",
+    score=0.5,
+)
+
+
+@pytest.mark.asyncio
+async def test_each_multi_sub_query_is_searched_and_judged_on_its_own_pages(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 14-10-2026 turn: "học phí ... và lịch thi chứng chỉ" searched as one keyword
+    query found only fee pages; the exam question had only 2022 results in the knowledge
+    base. Each sub-query now has its own search and its own judge call."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", True)
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MODE", "speculative")
+    searches: list[list[str]] = []
+
+    async def search_web(requests: Sequence[WebSearchRequest]) -> WebSearchOutcome:
+        searches.append([request.query for request in requests])
+        per_request = [
+            [_EXAM_PAGE] if "lịch thi" in request.query else [_FEE_PAGE] for request in requests
+        ]
+        return WebSearchOutcome(
+            results=[page for pages in per_request for page in pages], per_request=per_request
+        )
+
+    monkeypatch.setattr("app.graph.streaming_graph.search_web", search_web)
+    judged: list[tuple[str, str]] = []
+
+    def judge(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        prompt = str(getattr(messages[-1].parts[-1], "content", ""))
+        question = _EXAM_Q if _EXAM_Q in prompt else _FEE_Q
+        page = _EXAM_PAGE if question == _EXAM_Q else _FEE_PAGE
+        judged.append((question, page.url if page.url in prompt else "-"))
+        return ModelResponse(
+            parts=[TextPart(content='{"SQ1": {"W1": {"reason": "có số liệu", "answer": true}}}')]
+        )
+
+    classification = {
+        "tasks": [
+            {
+                "intent": "academic_advisory",
+                "query": "học phí cntt năm nay và lịch thi chứng chỉ cntt gần nhất?",
+                "routing_mode": "MULTI",
+                "sub_queries": [_FEE_Q, _EXAM_Q],
+                "web": [
+                    {"topics": ["hoc_phi"], "subject": "mức thu học phí", "nam_hoc": "2026-2027"},
+                    {
+                        "topics": ["lich_thong_bao"],
+                        "subject": "lịch thi chứng chỉ ứng dụng CNTT",
+                        "nam_hoc": "2026",
+                    },
+                ],
+            }
+        ],
+        "confidence": 0.9,
+    }
+    seen_prompts: list[str] = []
+    old_results = RetrievedChunk(
+        chunk_id="exam-2022",
+        content="Kết quả thi chứng chỉ ứng dụng CNTT ngày 12/3/2022",
+        source="ket-qua-thi-2022.pdf",
+        score=0.9,
+    )
+    models = GraphModels(
+        classification=mock_sync_llm_model(json.dumps(classification, ensure_ascii=False)),
+        query_transformation=mock_sync_llm_model("unused"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=_PerQueryRetrieval({_FEE_Q: [], _EXAM_Q: [old_results]}),
+        rerank=FunctionModel(function=judge),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    # One speculative search, one request per sub-query, by its own slots.
+    assert searches == [
+        ["mức thu học phí năm học 2026-2027 IUH", "lịch thi chứng chỉ ứng dụng CNTT năm 2026 IUH"]
+    ]
+    # One judge call per sub-query, each on its own page.
+    assert sorted(judged) == sorted([(_FEE_Q, _FEE_PAGE.url), (_EXAM_Q, _EXAM_PAGE.url)])
+    assert result.used_ticket_fallback is False
+    (prompt,) = seen_prompts
+    assert "ket-qua-thi-2022.pdf" in prompt
+    assert _FEE_PAGE.url in prompt and _EXAM_PAGE.url in prompt
+
+
+def test_a_postgraduate_question_keeps_postgraduate_pages() -> None:
+    masters = WebSlots(topics=["hoc_phi"], subject="mức thu học phí", bac_dao_tao="Thạc sĩ")
+    undergraduate = WebSlots(topics=["hoc_phi"], subject="mức thu học phí")
+
+    assert _web_request(masters, "Học phí thạc sĩ?").postgraduate is True
+    assert _web_request(undergraduate, "Học phí ngành CNTT?").postgraduate is False
+    assert _web_request(None, "Học phí cao học bao nhiêu?").postgraduate is True
 
 
 # ── LLMRerankNode (09a, RERANK model) ──────────────────────────────────────

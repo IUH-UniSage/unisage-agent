@@ -41,7 +41,7 @@ _NOTICE = WebSearchResult(
 
 @pytest.fixture(autouse=True)
 def _limits(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN", 2)
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB", 2)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MIN_SCORE", 0.5)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_SOURCES", 3)
 
@@ -116,6 +116,39 @@ async def test_sources_of_the_year_asked_come_first() -> None:
     )
 
     assert [page.url[-4:] for page in judgement.sources] == ["2025", "2026"]
+
+
+@pytest.mark.asyncio
+async def test_the_judge_picks_at_most_two_answers_per_sub_query_in_its_own_order() -> None:
+    """Not Tavily's order: the judge lists its best page first, and the third answer of a
+    sub-query is left out."""
+
+    pages = [
+        WebSearchResult(
+            title=f"P{i}", url=f"https://pdt.iuh.edu.vn/p{i}", content="x", score=0.9 - i / 10
+        )
+        for i in range(4)
+    ]
+    agent = build_web_judge_agent(
+        make_sync_llm_model(
+            '{"SQ1": {"W3": {"reason": "đầy đủ nhất", "answer": true},'
+            ' "W1": {"reason": "cũng trả lời", "answer": true},'
+            ' "W2": {"reason": "thừa", "answer": true}},'
+            ' "SQ2": {"W4": {"reason": "câu 2", "answer": true}}}'
+        )
+    )
+
+    judgement = await judge_web_results(agent, ["Câu 1", "Câu 2"], pages)
+
+    assert [page.title for page in judgement.answers] == ["P2", "P0", "P3"]
+
+
+def test_the_judge_prompt_names_the_per_sub_query_cap() -> None:
+    agent = build_web_judge_agent(make_sync_llm_model("{}"))
+    system = "\n".join(str(prompt) for prompt in agent._system_prompts)
+
+    assert "TỐI ĐA 2 trang" in system
+    assert "{max_answers}" not in system
 
 
 @pytest.mark.asyncio

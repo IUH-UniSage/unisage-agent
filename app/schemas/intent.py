@@ -25,6 +25,10 @@ class ClassifiedTask(BaseModel):
     # What WebSearchNode looks for, as slots code turns into a keyword query
     # (app/rag/web_query.py). Not persisted either: a resumed task searches by its question.
     web: WebSlots | None = Field(default=None, exclude=True)
+    # A MULTI task's slots per sub-query (same order as `sub_queries`, None where the
+    # classifier wrote none): each one is searched on its own - one keyword query for
+    # "học phí ... và lịch thi chứng chỉ" found only fee pages (14-10-2026).
+    sub_query_web: list[WebSlots | None] | None = Field(default=None, exclude=True)
 
 
 class IntentClassification(BaseModel):

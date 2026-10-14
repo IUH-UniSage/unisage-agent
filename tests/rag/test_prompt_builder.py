@@ -97,3 +97,25 @@ def test_ticket_fallback_links_official_sources_without_their_figures() -> None:
     assert "https://ptckt.iuh.edu.vn/1035.pdf; năm học 2025-2026" in with_source
     assert "TUYỆT ĐỐI KHÔNG nêu con số" in with_source
     assert "<web_sources>" not in without
+
+
+def test_chunks_and_web_pages_come_together_numbered_on() -> None:
+    """A fast-changing topic judges its pages next to the kept chunks: both blocks, the
+    pages numbered after the chunks, and the rule saying which one to follow."""
+
+    page = WebSearchResult(
+        title="Thông báo lịch thi",
+        url="https://itc.iuh.edu.vn/lich-thi",
+        content="Lịch thi ngày 05,06/11/2026",
+        score=0.8,
+    )
+
+    section = build_prepared_context_section(
+        [_chunk("Kết quả thi ngày 12/3/2022", source="ket-qua-2022.pdf")], [page]
+    )
+
+    assert "[1] (ket-qua-2022.pdf) Kết quả thi ngày 12/3/2022" in section
+    assert "[2] (Thông báo lịch thi — https://itc.iuh.edu.vn/lich-thi)" in section
+    assert section.index("</academic_context>") < section.index("<websearch>")
+    assert "trả lời theo trang web mới hơn" in section
+    assert "Quy định, điều kiện, thủ tục, chính sách: theo `<academic_context>`" in section

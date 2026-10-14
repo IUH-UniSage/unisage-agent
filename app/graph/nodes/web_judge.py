@@ -67,7 +67,10 @@ class WebJudgement:
 def build_web_judge_agent(model: Model | str) -> Agent[None, str]:
     return Agent(
         model=model,
-        system_prompt=get_templates().agent_web_result_judge,
+        # `.replace`, not `.format`: the prompt is full of literal JSON braces.
+        system_prompt=get_templates().agent_web_result_judge.replace(
+            "{max_answers}", str(settings.CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB)
+        ),
         model_settings=auxiliary_model_settings(model),
     )
 
@@ -107,24 +110,37 @@ async def judge_web_results(
             else f"Mô hình chấm trang web trả về kết quả không đúng định dạng ({exc})."
         )
         logger.warning("Web judge failed - keeping pages by score: %s", message)
-        return WebJudgement(answers=select_without_judge(candidates), failure=message)
+        return WebJudgement(
+            answers=select_without_judge(
+                candidates, limit=settings.CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB * len(questions)
+            ),
+            failure=message,
+        )
 
     kept = _answers_of_the_year_asked(questions, candidates, kept)
     _log_decisions(questions, candidates, kept)
-    verdicts = [
-        (index, is_answer) for per_query in kept for index, (_r, is_answer) in per_query.items()
-    ]
-    answer_indexes = sorted({index for index, is_answer in verdicts if is_answer})
+    # Per sub-query, the judge's own order (best first) and at most ANSWERS_PER_SUB: the
+    # judge picks the pages, Tavily's score does not.
+    answer_indexes: list[int] = []
+    for per_query in kept:
+        picked = [index for index, (_reason, is_answer) in per_query.items() if is_answer]
+        for index in picked[: settings.CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB]:
+            if index not in answer_indexes:
+                answer_indexes.append(index)
     # The year asked first: for "năm 2025" the 2025 notice before the 2026 one.
     asked = set().union(*(_years_in(question) for question in questions))
     source_indexes = sorted(
-        {index for index, is_answer in verdicts if not is_answer} - set(answer_indexes),
+        {
+            index
+            for per_query in kept
+            for index, (_reason, is_answer) in per_query.items()
+            if not is_answer
+        }
+        - set(answer_indexes),
         key=lambda index: (not asked & _years_of(candidates[index]), index),
     )
     return WebJudgement(
-        answers=[candidates[index] for index in answer_indexes][
-            : settings.CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN
-        ],
+        answers=[candidates[index] for index in answer_indexes],
         sources=[candidates[index] for index in source_indexes][
             : settings.CHAT_WEB_SEARCH_MAX_SOURCES
         ],

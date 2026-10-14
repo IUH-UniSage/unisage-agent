@@ -71,6 +71,14 @@ Response của lệnh huỷ chỉ có `clarification_closed` rồi `done`, khôn
 
 Hai node liên tiếp cùng `stage` chỉ gửi một event; event có `url` luôn được gửi.
 
+`web_searching` có hai kiểu, tùy lượt:
+- Câu hỏi con không còn văn bản (luồng cũ): gửi sau `retrieving`, một `url` cho **mỗi trang bộ chấm sắp
+  đọc**.
+- Chủ đề hay thay đổi (học phí, tuyển sinh, lịch/thông báo, liên hệ - `CHAT_WEB_JUDGE_WITH_CHUNKS`):
+  trang web được chấm song song với tìm văn bản, nên không gửi gì trong lúc đó (tránh xen giữa
+  `retrieving`). Sau rerank, nếu có trang được dùng thì gửi `web_searching` rồi một `url` cho **mỗi trang
+  câu trả lời dùng**; không trang nào được dùng thì không có `web_searching`.
+
 ## 3. `ClarificationPanel` (bản client thấy)
 
 ```json

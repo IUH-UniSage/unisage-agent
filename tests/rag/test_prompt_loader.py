@@ -544,7 +544,7 @@ def test_websearch_block_sits_below_academic_context_numbered_after_the_chunks()
     # Tag names also appear inside the rules; compare the blocks' own lines.
     assert prompt.index("\n</academic_context>") < prompt.index("\n<websearch>\n")
     assert prompt.index("\n</websearch>") < prompt.index("\n<current_time>\n")
-    assert "luôn theo `<academic_context>`" in prompt
+    assert "Quy định, điều kiện, thủ tục, chính sách: theo `<academic_context>`" in prompt
 
 
 def test_websearch_only_turn_has_an_empty_academic_context() -> None:

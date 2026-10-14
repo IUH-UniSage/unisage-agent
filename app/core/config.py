@@ -214,9 +214,13 @@ class Settings(BaseSettings):
     # `speculative`: for a task whose topic is in SPECULATIVE_TOPICS (fees, admission,
     # notices, contacts - what changes every year and is posted on the website first),
     # the search starts with the advisory branch, alongside query transformation, retrieval
-    # and rerank, and its pages are only judged when a sub-query is left without a chunk.
-    # `fallback`: searched only after rerank left a sub-query empty, as before.
+    # and rerank. `fallback`: searched only after rerank left a sub-query empty.
     CHAT_WEB_SEARCH_MODE: Literal["fallback", "speculative"] = "speculative"
+    # With a speculative search, its pages are judged for EVERY sub-query alongside
+    # retrieval and rerank, and generation gets them next to the kept chunks: a kept chunk
+    # can be related yet stale (the 2022 exam results kept for "the latest exam date",
+    # 14-10-2026). Off: judged only when a sub-query is left without a chunk.
+    CHAT_WEB_JUDGE_WITH_CHUNKS: bool = True
     CHAT_WEB_SEARCH_SPECULATIVE_TOPICS: Annotated[list[str], NoDecode] = [
         "hoc_phi",
         "tuyen_sinh",
@@ -224,17 +228,18 @@ class Settings(BaseSettings):
         "lien_he_co_so",
     ]
     # Tavily bills per search, not per result, so asking for more candidates is free; every
-    # page left after the junk filters goes to the web judge, and PER_TURN / MAX_SOURCES
-    # bound what reaches the prompt.
+    # page left after the junk filters goes to the web judge, and ANSWERS_PER_SUB /
+    # MAX_SOURCES bound what reaches the prompt.
     CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=10, ge=1, le=20)
-    CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=2, ge=1)
+    # Pages with the answer kept per sub-query - the web judge picks them, best first (not
+    # Tavily's score order).
+    CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB: int = Field(default=2, ge=1)
     # Official pages the web judge kept although their snippet lacks the answer (a scanned
     # fee decision): at most this many are linked by the ticket fallback.
     CHAT_WEB_SEARCH_MAX_SOURCES: int = Field(default=3, ge=0)
-    # Searches per turn: a message with several tasks can leave many sub-queries without
-    # chunks, but only PER_TURN pages reach the prompt, so the rest would be paid-for
-    # searches thrown away. The worst-missed sub-queries are searched first.
-    CHAT_WEB_SEARCH_MAX_QUERIES: int = Field(default=2, ge=1)
+    # Searches per turn: a MULTI task searches each sub-query with web slots on its own (up
+    # to CHAT_MAX_SUB_QUERIES), each one billed by Tavily. The first ones are searched.
+    CHAT_WEB_SEARCH_MAX_QUERIES: int = Field(default=3, ge=1)
     # Tavily's score depends on how the query is worded far more than on relevance (a
     # question-form query scores the right page 0.08, a keyword query scores an off-topic
     # page 0.90), so it only drops junk (SCORE_FLOOR); the web judge decides relevance.

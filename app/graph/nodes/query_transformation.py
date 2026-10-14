@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
@@ -42,6 +42,9 @@ class SubQuery:
 
     question: str
     retrieval_text: str
+    # Which advisory task (in `transform_tasks`' order) it came from - bookkeeping, not
+    # part of what the sub-query is.
+    task_index: int = field(default=0, compare=False)
 
 
 def build_query_transformation_agent(model: Model | str) -> Agent[None, str]:
@@ -286,7 +289,11 @@ async def transform_tasks(
             for task, mode in tasks
         )
     )
-    return [sub_query for sub_queries in per_task for sub_query in sub_queries]
+    return [
+        replace(sub_query, task_index=task_index)
+        for task_index, sub_queries in enumerate(per_task)
+        for sub_query in sub_queries
+    ]
 
 
 def extract_standalone_question(hyde_output: str) -> str:

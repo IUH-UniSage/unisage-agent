@@ -15,6 +15,7 @@ mocks.
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -80,6 +81,7 @@ from app.graph.nodes.message_classification import (
 from app.graph.nodes.off_topic import off_topic_reply
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.query_transformation import (
+    SubQuery,
     build_decomposer_agent,
     build_query_transformation_agent,
     extract_standalone_question,
@@ -109,10 +111,10 @@ from app.rag.prompting.citations import (
     source_links_block,
     strip_source_list,
 )
-from app.rag.web_query import build_web_query
+from app.rag.web_query import build_web_query, is_postgraduate
 from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
 from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
-from app.schemas.web_search import WebSearchResult
+from app.schemas.web_search import WebSearchResult, WebSlots
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +131,10 @@ _WEB_SOURCE_USED = (
 )
 
 # Speculative web searches a turn turned out not to need keep running so their results
-# land in the cache for the next turn; held here so they are not garbage-collected.
-_background_searches: set[asyncio.Task[WebSearchOutcome]] = set()
+# land in the cache for the next turn, and a web judge started alongside rerank keeps
+# running if the turn ends before it is awaited; held here so they are not
+# garbage-collected, and a failure is logged rather than lost.
+_background_searches: set[asyncio.Task[Any]] = set()
 
 
 def _make_failover_applier(models: GraphModels) -> FailoverCallback:
@@ -663,53 +667,107 @@ def _with_follow_up_round(
     return replace(output, pending_round=follow_up)
 
 
-def _web_requests(
-    advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
-) -> list[WebSearchRequest]:
-    """One keyword search per task classification wrote `web` slots for."""
+@dataclass(frozen=True)
+class _WebGroup:
+    """One web search and whom it is for: all of a task's sub-queries (`sub_index` None)
+    or the one MULTI sub-query the classifier wrote its own slots for."""
 
-    return [
-        WebSearchRequest(
-            query=build_web_query(task.web),
-            topic=task.web.topics[0],
-            co_so=task.web.co_so,
-        )
-        for task, _mode in advisory_tasks
-        if task.web is not None
-    ]
+    request: WebSearchRequest
+    task_index: int
+    sub_index: int | None
+    # A fast-changing topic: searched from the start of the advisory branch.
+    dynamic: bool
+
+
+def _web_groups(advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]]) -> list[_WebGroup]:
+    """A MULTI task's sub-queries are searched one by one when the classifier wrote slots
+    for each (one keyword query for "học phí ... và lịch thi chứng chỉ" found only fee
+    pages, 14-10-2026); any other task by its own slots, once."""
+
+    speculative = set(settings.CHAT_WEB_SEARCH_SPECULATIVE_TOPICS)
+    groups: list[_WebGroup] = []
+    for task_index, (task, _mode) in enumerate(advisory_tasks):
+        if task.sub_query_web and task.sub_queries:
+            for sub_index, (question, slots) in enumerate(
+                zip(task.sub_queries, task.sub_query_web, strict=False)
+            ):
+                groups.append(
+                    _WebGroup(
+                        _web_request(slots, question),
+                        task_index,
+                        sub_index,
+                        dynamic=slots is not None and bool(set(slots.topics) & speculative),
+                    )
+                )
+        elif task.web is not None:
+            groups.append(
+                _WebGroup(
+                    _web_request(task.web, task.query),
+                    task_index,
+                    None,
+                    dynamic=bool(set(task.web.topics) & speculative),
+                )
+            )
+    return groups
+
+
+def _web_request(slots: WebSlots | None, question: str) -> WebSearchRequest:
+    """By the slots' keyword query; without slots, by the question itself."""
+
+    if slots is None:
+        return WebSearchRequest(query=question, postgraduate=is_postgraduate(question))
+    return WebSearchRequest(
+        query=build_web_query(slots),
+        topic=slots.topics[0],
+        co_so=slots.co_so,
+        postgraduate=is_postgraduate(f"{slots.bac_dao_tao or ''} {slots.subject} {question}"),
+    )
+
+
+def _group_questions(
+    groups: Sequence[_WebGroup],
+    sub_queries: Sequence[SubQuery],
+    advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
+) -> list[list[int]]:
+    """Per group, the indexes of the sub-queries (after query transformation) it serves.
+    When transformation did not keep the classifier's sub-queries, a per-sub-query group
+    serves the whole task."""
+
+    served: list[list[int]] = []
+    for group in groups:
+        indexes = [i for i, sub in enumerate(sub_queries) if sub.task_index == group.task_index]
+        task = advisory_tasks[group.task_index][0]
+        if group.sub_index is not None and len(indexes) == len(task.sub_query_web or ()):
+            indexes = [indexes[group.sub_index]]
+        served.append(indexes)
+    return served
 
 
 def _start_speculative_search(
-    advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
-    web_requests: Sequence[WebSearchRequest],
-) -> asyncio.Task[WebSearchOutcome] | None:
-    if (
-        not settings.CHAT_WEB_SEARCH_ENABLED
-        or settings.CHAT_WEB_SEARCH_MODE != "speculative"
-        or not web_requests
-    ):
+    groups: Sequence[_WebGroup],
+) -> tuple[asyncio.Task[WebSearchOutcome], list[int]] | None:
+    """The fast-changing topics' searches, started now; with the positions (in `groups`)
+    of the groups searched, in request order."""
+
+    if not settings.CHAT_WEB_SEARCH_ENABLED or settings.CHAT_WEB_SEARCH_MODE != "speculative":
         return None
-    speculative_topics = set(settings.CHAT_WEB_SEARCH_SPECULATIVE_TOPICS)
-    if not any(
-        topic in speculative_topics
-        for task, _mode in advisory_tasks
-        if task.web is not None
-        for topic in task.web.topics
-    ):
+    dynamic = [position for position, group in enumerate(groups) if group.dynamic]
+    if not dynamic:
         return None
-    return asyncio.create_task(search_web(web_requests))
+    task = asyncio.create_task(search_web([groups[position].request for position in dynamic]))
+    return task, dynamic
 
 
 def _page_reference(page: WebSearchResult) -> str:
     return f"{page.url} (năm học {page.academic_year})" if page.academic_year else page.url
 
 
-def _finish_in_background(task: asyncio.Task[WebSearchOutcome]) -> None:
+def _finish_in_background(task: asyncio.Task[Any]) -> None:
     _background_searches.add(task)
     task.add_done_callback(_discard_background_search)
 
 
-def _discard_background_search(task: asyncio.Task[WebSearchOutcome]) -> None:
+def _discard_background_search(task: asyncio.Task[Any]) -> None:
     _background_searches.discard(task)
     if not task.cancelled() and task.exception() is not None:
         logger.warning("Background web search failed", exc_info=task.exception())
@@ -723,16 +781,30 @@ async def _judge_web_results(
     candidates: Sequence[WebSearchResult],
     *,
     budget: BudgetContext | None,
+    alongside: str | None = None,
 ) -> WebJudgement:
+    """`alongside`: the node this judge runs next to - it is then logged as a step of
+    it, neither ending that node's timing nor sending a status."""
+
     if not candidates:
         return WebJudgement(answers=[])
     if models.rerank is None:
         return WebJudgement(
-            answers=select_without_judge(candidates),
+            answers=select_without_judge(
+                candidates, limit=settings.CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB * len(questions)
+            ),
             failure=models.rerank_unavailable or "chưa cấu hình mô hình Rerank/Extraction.",
         )
     agent = build_web_judge_agent(models.rerank)
-    trace.node("09c_WebJudgeNode", agent=agent, credential=models.rerank_credential)
+    if alongside is None:
+        trace.node("09c_WebJudgeNode", agent=agent, credential=models.rerank_credential)
+    else:
+        trace.step(
+            "09c_WebJudgeNode",
+            parent=alongside,
+            agent=agent,
+            credential=models.rerank_credential,
+        )
     return await judge_web_results(
         agent,
         questions,
@@ -743,6 +815,154 @@ async def _judge_web_results(
         on_attempt=usage_recorder.bind("WebJudgeNode"),
         budget=budget,
     )
+
+
+# One judge call: the sub-queries (indexes into the turn's questions) and their pages.
+_JudgeJob = tuple[list[int], list[WebSearchResult]]
+
+
+async def _judge_jobs(
+    models: GraphModels,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    questions: Sequence[str],
+    jobs: Sequence[_JudgeJob],
+    *,
+    budget: BudgetContext | None,
+    alongside: str,
+) -> list[tuple[list[int], WebJudgement]]:
+    """Each search's pages judged for the sub-queries it was for, all calls at once: a
+    sub-query is judged on its own pages, so its at most ANSWERS_PER_SUB pages are the
+    judge's pick among them."""
+
+    judged = await asyncio.gather(
+        *(
+            _judge_web_results(
+                models,
+                trace,
+                usage_recorder,
+                [questions[index] for index in indexes],
+                pages,
+                budget=budget,
+                alongside=alongside,
+            )
+            for indexes, pages in jobs
+        )
+    )
+    return [(indexes, judgement) for (indexes, _pages), judgement in zip(jobs, judged, strict=True)]
+
+
+def _merge_judgements(judged: Sequence[tuple[list[int], WebJudgement]]) -> WebJudgement:
+    """Answers in sub-query order without repeating a page; sources after them, capped."""
+
+    answers: list[WebSearchResult] = []
+    sources: list[WebSearchResult] = []
+    seen: set[str] = set()
+    for _indexes, judgement in judged:
+        for page in judgement.answers:
+            if page.url not in seen:
+                answers.append(page)
+                seen.add(page.url)
+    for _indexes, judgement in judged:
+        for page in judgement.sources:
+            if page.url not in seen:
+                sources.append(page)
+                seen.add(page.url)
+    return WebJudgement(
+        answers=answers,
+        sources=sources[: settings.CHAT_WEB_SEARCH_MAX_SOURCES],
+        failure=next((j.failure for _i, j in judged if j.failure is not None), None),
+    )
+
+
+@dataclass(frozen=True)
+class _JudgedSearch:
+    outcome: WebSearchOutcome
+    judged: list[tuple[list[int], WebJudgement]]
+
+
+async def _search_then_judge(
+    models: GraphModels,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    questions: Sequence[str],
+    search: asyncio.Task[WebSearchOutcome],
+    served: Sequence[list[int]],
+    *,
+    budget: BudgetContext | None,
+) -> _JudgedSearch:
+    """The speculative searches' pages judged for every sub-query they were for, while
+    retrieval and rerank run: needs only the questions and the pages, not the chunks.
+    `served[k]`: the sub-queries of the k-th searched request."""
+
+    outcome = await search
+    for result in outcome.results:
+        trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
+    jobs = [
+        (indexes, pages)
+        for indexes, pages in zip(served, outcome.per_request, strict=False)
+        if indexes and pages
+    ]
+    judged = await _judge_jobs(
+        models,
+        trace,
+        usage_recorder,
+        questions,
+        jobs,
+        budget=budget,
+        alongside="08_RetrievalFilteringNode",
+    )
+    return _JudgedSearch(outcome=outcome, judged=judged)
+
+
+async def _search_for_failed(
+    groups: Sequence[_WebGroup],
+    served: Sequence[list[int]],
+    failed: set[int],
+    questions: Sequence[str],
+    speculative: tuple[asyncio.Task[WebSearchOutcome], list[int]] | None,
+) -> tuple[list[_JudgeJob], list[WebSearchOutcome]]:
+    """Pages for the sub-queries left without a chunk: the speculative searches' for those
+    they cover, a search now for the other groups serving one, and a search by the
+    question itself for one no group serves."""
+
+    jobs: list[_JudgeJob] = []
+    outcomes: list[WebSearchOutcome] = []
+    covered: set[int] = set()
+    searched: set[int] = set()
+    if speculative is not None:
+        task, positions = speculative
+        outcome = await task
+        outcomes.append(outcome)
+        searched.update(positions)
+        for position, pages in zip(positions, outcome.per_request, strict=False):
+            covered.update(served[position])
+            indexes = [index for index in served[position] if index in failed]
+            if indexes and pages:
+                jobs.append((indexes, pages))
+    owners: list[list[int]] = []
+    requests: list[WebSearchRequest] = []
+    for position, group in enumerate(groups):
+        indexes = [index for index in served[position] if index in failed]
+        if position in searched or not indexes:
+            continue
+        owners.append(indexes)
+        requests.append(group.request)
+        covered.update(served[position])
+    for index in sorted(failed - covered):
+        owners.append([index])
+        requests.append(
+            WebSearchRequest(query=questions[index], postgraduate=is_postgraduate(questions[index]))
+        )
+    if requests:
+        outcome = await search_web(requests)
+        outcomes.append(outcome)
+        jobs.extend(
+            (indexes, pages)
+            for indexes, pages in zip(owners, outcome.per_request, strict=False)
+            if pages
+        )
+    return jobs, outcomes
 
 
 async def _run_advisory_flow(
@@ -761,16 +981,19 @@ async def _run_advisory_flow(
 ) -> GraphOutput:
     """Advisory branch: query transformation → retrieval → rerank → web search
     for the sub-queries rerank left empty → generation (or ticket fallback
-    when neither found anything). `question` is what gets answered; `None`
-    means the whole user message."""
+    when neither found anything). A task on a fast-changing topic (speculative
+    search) has its pages judged for every sub-query alongside retrieval and
+    rerank instead (`CHAT_WEB_JUDGE_WITH_CHUNKS`), and generation gets them next
+    to the chunks. `question` is what gets answered; `None` means the whole user
+    message."""
 
     question = question or graph_input.user_message
 
     # WebSearchNode, early: a task about something posted on the website first (fees,
     # admission, notices, contacts) starts its search now, alongside query transformation,
-    # retrieval and rerank; its pages are only judged if a sub-query ends up without a chunk.
-    web_requests = _web_requests(advisory_tasks)
-    speculative_search = _start_speculative_search(advisory_tasks, web_requests)
+    # retrieval and rerank.
+    web_groups = _web_groups(advisory_tasks)
+    speculative = _start_speculative_search(web_groups)
 
     # QueryTransformationNode: HyDE per SINGLE task, decomposer per MULTI task.
     query_transformation_agent = build_query_transformation_agent(models.query_transformation)
@@ -796,6 +1019,27 @@ async def _run_advisory_flow(
     )
     for sub_query in sub_queries:
         trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
+    # The standalone question of each sub-query (HyDE's rewrite, or the decomposed
+    # question itself) - what the LLM rerank and the web judge judge against.
+    questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]
+    served = _group_questions(web_groups, sub_queries, advisory_tasks)
+    judged_search = (
+        asyncio.create_task(
+            _search_then_judge(
+                models,
+                trace,
+                usage_recorder,
+                questions,
+                speculative[0],
+                [served[position] for position in speculative[1]],
+                budget=budget,
+            )
+        )
+        if speculative is not None and settings.CHAT_WEB_JUDGE_WITH_CHUNKS
+        else None
+    )
+    if judged_search is not None:
+        _finish_in_background(judged_search)
     # The standalone rewrite only applies to a single HyDE question.
     resolved_query = (
         extract_standalone_question(sub_queries[0].retrieval_text)
@@ -814,9 +1058,6 @@ async def _run_advisory_flow(
     # PostRetrievalRerankNode (per sub-query, then merged).
     trace.node("09_PostRetrievalRerankNode")
     rerank_result = rerank_chunks(per_query_chunks)
-    # The standalone question of each sub-query (HyDE's rewrite, or the decomposed
-    # question itself) - what the LLM rerank judges against and what web search looks up.
-    questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]
     admin_warnings: list[AdminWarning] = []
 
     # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
@@ -850,37 +1091,71 @@ async def _run_advisory_flow(
                 )
             )
 
-    # WebSearchNode + WebJudgeNode: only for the sub-queries left with no chunk.
-    failed_sub_queries = [questions[index] for index in rerank_result.failed_query_indexes]
+    # WebSearchNode + WebJudgeNode: judged alongside rerank for every sub-query (fast-
+    # changing topic), else only for the sub-queries left with no chunk.
+    failed = set(rerank_result.failed_query_indexes)
     web_results: list[WebSearchResult] = []
     web_sources: list[WebSearchResult] = []
-    if failed_sub_queries and settings.CHAT_WEB_SEARCH_ENABLED:
-        trace.node("09b_WebSearchNode")
-        web_outcome = (
-            await speculative_search
-            if speculative_search is not None
-            else await search_web(web_requests or failed_sub_queries)
-        )
-        if web_outcome.failure is not None:
-            admin_warnings.append(
-                AdminWarning(
-                    code=web_outcome.failure.code,
-                    message=f"{_WEB_SEARCH_FAILED}{web_outcome.failure}",
+    outcomes: list[WebSearchOutcome] = []
+    judged: list[tuple[list[int], WebJudgement]] = []
+    mode = ""
+    if judged_search is not None:
+        waited_at = time.perf_counter()
+        parallel = await judged_search
+        wait_ms = (time.perf_counter() - waited_at) * 1000
+        outcomes = [parallel.outcome]
+        for indexes, verdict in parallel.judged:
+            if verdict.failure is not None and not failed & set(indexes):
+                # Those sub-queries have chunks: no page picked by score alone goes next to
+                # them. Without a RERANK model at all, LLM_RERANK_UNAVAILABLE already says so.
+                verdict = WebJudgement(
+                    answers=[], failure=verdict.failure if models.rerank is not None else None
                 )
-            )
-        for result in web_outcome.results:
-            trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
-            # The user sees each page the web judge is about to read.
-            trace.web_page(result.url)
-        judgement = await _judge_web_results(
+            judged.append((indexes, verdict))
+        mode = f"parallel wait_ms={wait_ms:.0f}"
+    elif failed and settings.CHAT_WEB_SEARCH_ENABLED:
+        trace.node("09b_WebSearchNode")
+        jobs, outcomes = await _search_for_failed(
+            web_groups, served, failed, questions, speculative
+        )
+        for outcome in outcomes:
+            for result in outcome.results:
+                trace.prompt(
+                    "09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}"
+                )
+                # The user sees each page the web judge is about to read.
+                trace.web_page(result.url)
+        trace.node("09c_WebJudgeNode")
+        judged = await _judge_jobs(
             models,
             trace,
             usage_recorder,
-            failed_sub_queries,
-            web_outcome.results,
+            questions,
+            jobs,
             budget=budget,
+            alongside="09c_WebJudgeNode",
         )
+        mode = "speculative" if speculative is not None else "fallback"
+    elif speculative is not None:
+        _finish_in_background(speculative[0])
+
+    if outcomes:
+        judgement = _merge_judgements(judged)
         web_results, web_sources = judgement.answers, judgement.sources
+        if judged_search is not None and (web_results or web_sources):
+            # Judged while rerank ran (no status then, it would interleave with
+            # retrieval's): the user sees the pages the answer uses.
+            trace.node("09b_WebSearchNode")
+            for page in [*web_results, *web_sources]:
+                trace.web_page(page.url)
+        search_failure = next((o.failure for o in outcomes if o.failure is not None), None)
+        if search_failure is not None:
+            admin_warnings.append(
+                AdminWarning(
+                    code=search_failure.code,
+                    message=f"{_WEB_SEARCH_FAILED}{search_failure}",
+                )
+            )
         if judgement.failure is not None:
             admin_warnings.append(
                 AdminWarning(
@@ -897,17 +1172,17 @@ async def _run_advisory_flow(
             )
         logger.info(
             "Web search turn: mode=%s topics=%s requests=%d cache_hits=%d candidates=%d "
-            "answers=%d sources=%d",
-            "speculative" if speculative_search is not None else "fallback",
-            [task.web.topics if task.web else None for task, _mode in advisory_tasks],
-            len(web_requests) or len(failed_sub_queries),
-            web_outcome.cache_hits,
-            len(web_outcome.results),
+            "answers=%d sources=%d sub_queries_with_chunks=%d/%d",
+            mode,
+            [group.request.topic for group in web_groups],
+            sum(len(outcome.per_request) for outcome in outcomes),
+            sum(outcome.cache_hits for outcome in outcomes),
+            sum(len(outcome.results) for outcome in outcomes),
             len(web_results),
             len(web_sources),
+            len(questions) - len(failed),
+            len(questions),
         )
-    elif speculative_search is not None:
-        _finish_in_background(speculative_search)
 
     # Barrier: the calculation blocks go out before any advisory token.
     calculation_titles_shown = (

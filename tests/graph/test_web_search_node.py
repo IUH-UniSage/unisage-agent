@@ -50,7 +50,7 @@ def _web_search_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_ENABLED", True)
     monkeypatch.setattr(settings, "TAVILY_API_KEY", "tvly-test")
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB", 10)
-    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN", 2)
+    monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB", 2)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MAX_QUERIES", 4)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_SCORE_FLOOR", 0.05)
     monkeypatch.setattr(settings, "CHAT_WEB_SEARCH_MIN_SCORE", 0.5)

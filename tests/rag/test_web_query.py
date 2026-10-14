@@ -9,6 +9,7 @@ from app.rag.web_query import (
     cache_ttl_seconds,
     campus_of,
     is_listing_page,
+    is_postgraduate,
     order_candidates,
 )
 from app.schemas.web_search import WebSearchResult, WebSlots
@@ -172,3 +173,23 @@ def test_a_year_already_in_the_subject_is_not_added_again() -> None:
     )
 
     assert build_web_query(slots) == "lịch nghỉ lễ Quốc khánh 2025 IUH"
+
+
+def test_a_postgraduate_page_is_left_out_unless_the_question_is_about_that_level() -> None:
+    """The 14-10-2026 turn: a master's admission notice gave its fee for an undergraduate
+    major."""
+
+    masters = _page(
+        "https://faet.iuh.edu.vn/news.html@detail@272@667@Thong-bao-tuyen-sinh-dao-tao-trinh-do-Thac-si-nam-2026",
+        0.72,
+        title="Thông báo tuyển sinh đào tạo trình độ Thạc sĩ năm 2026 - Đợt 1",
+    )
+    fees = _page("https://ptckt.iuh.edu.vn/upload/hoc-phi-2026-2027.pdf", 0.3)
+
+    undergraduate = order_candidates([masters, fees], topic="hoc_phi", floor=0.05)
+    postgraduate = order_candidates([masters, fees], topic="hoc_phi", postgraduate=True, floor=0.05)
+
+    assert [page.url for page in undergraduate] == [fees.url]
+    assert masters.url in [page.url for page in postgraduate]
+    assert is_postgraduate("Thạc sĩ") and is_postgraduate("chuong-trinh-cao-hoc")
+    assert not is_postgraduate("Học phí đại học chính quy")

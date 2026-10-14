@@ -20,7 +20,7 @@ returned (`WebSearchOutcome.failure`) so an AI admin is told why the website was
 import asyncio
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.core.config import settings
@@ -50,16 +50,21 @@ class WebSearchRequest:
     topic: str | None = None
     # The campus the question names, if any: other campuses' sites are left out.
     co_so: str | None = None
+    # The question is about a postgraduate level: master's / doctoral pages are kept.
+    postgraduate: bool = False
 
 
 @dataclass(frozen=True)
 class WebSearchOutcome:
-    """`results` are the candidates for the web judge, best first; `failure` is the first
-    search error of the turn (None when every search answered), for the AI-admin warning."""
+    """`results` are the candidates for the web judge, best first; `per_request` the same
+    pages per searched request (in request order), for judging each sub-query on its own
+    pages; `failure` is the first search error of the turn (None when every search
+    answered), for the AI-admin warning."""
 
     results: list[WebSearchResult]
     failure: WebSearchUnavailableError | None = None
     cache_hits: int = 0
+    per_request: list[list[WebSearchResult]] = field(default_factory=list)
 
 
 async def search_web(
@@ -103,15 +108,19 @@ async def search_web(
         results=[_truncated(result) for result in candidates],
         failure=failure,
         cache_hits=cache_hits,
+        per_request=[[_truncated(result) for result in results] for results in per_query],
     )
 
 
-def select_without_judge(candidates: Sequence[WebSearchResult]) -> list[WebSearchResult]:
-    """The pages used when the web judge can't run: the rule from before it existed."""
+def select_without_judge(
+    candidates: Sequence[WebSearchResult], *, limit: int | None = None
+) -> list[WebSearchResult]:
+    """The pages used when the web judge can't run: the rule from before it existed.
+    `limit` defaults to one sub-query's share."""
 
     kept = [result for result in candidates if result.score >= settings.CHAT_WEB_SEARCH_MIN_SCORE]
     kept.sort(key=lambda result: result.score, reverse=True)
-    return kept[: settings.CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN]
+    return kept[: limit or settings.CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB]
 
 
 async def _search_one(
@@ -144,6 +153,7 @@ async def _search_one(
         results,
         topic=request.topic,
         co_so=request.co_so,
+        postgraduate=request.postgraduate,
         floor=settings.CHAT_WEB_SEARCH_SCORE_FLOOR,
     )
     # Always logged: every page with its score, and which ones are shown to the judge -

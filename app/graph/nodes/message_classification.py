@@ -122,8 +122,23 @@ def _normalize_task(raw_task: object, message: str) -> ClassifiedTask | None:
         routing_mode=routing_mode,
         hyde_text=_hyde_text(raw_task) if routing_mode == "SINGLE" else None,
         sub_queries=_sub_queries(raw_task) if routing_mode == "MULTI" else None,
-        web=_web_slots(raw_task) if intent == "academic_advisory" else None,
+        **_task_web(raw_task, routing_mode) if intent == "academic_advisory" else {},
     )
+
+
+def _task_web(raw_task: dict[str, Any], routing_mode: str | None) -> dict[str, Any]:
+    """`web` is one object (SINGLE, or a MULTI written the old way) or, for MULTI, a list
+    in the order of `sub_queries`: `sub_query_web`, padded / cut to their number."""
+
+    raw = raw_task.get("web")
+    if not isinstance(raw, list):
+        return {"web": _web_slots(raw)}
+    per_sub = [_web_slots(item) for item in raw]
+    sub_queries = _sub_queries(raw_task) if routing_mode == "MULTI" else None
+    if sub_queries is None:
+        return {"web": next((slots for slots in per_sub if slots is not None), None)}
+    per_sub = (per_sub + [None] * len(sub_queries))[: len(sub_queries)]
+    return {"sub_query_web": per_sub} if any(per_sub) else {}
 
 
 def _hyde_text(raw_task: dict[str, Any]) -> str | None:
@@ -150,12 +165,11 @@ def _sub_queries(raw_task: dict[str, Any]) -> list[str] | None:
     return queries[: settings.CHAT_MAX_SUB_QUERIES] if len(queries) >= 2 else None
 
 
-def _web_slots(raw_task: dict[str, Any]) -> WebSlots | None:
-    """`web` as `WebSlots`: unknown topics dropped (none left -> `khac`), empty or "null"
-    texts as None. No subject means nothing to search for -> None (the web search then
-    falls back to the sub-query's question)."""
+def _web_slots(raw: object) -> WebSlots | None:
+    """One `web` object as `WebSlots`: unknown topics dropped (none left -> `khac`), empty
+    or "null" texts as None. No subject means nothing to search for -> None (the web search
+    then falls back to the sub-query's question)."""
 
-    raw = raw_task.get("web")
     if not isinstance(raw, dict):
         return None
     subject = _slot_text(raw.get("subject"))
@@ -215,7 +229,16 @@ def describe_classification(classification: IntentClassification) -> str:
             "routing_mode": task.routing_mode,
             "hyde_text": task.hyde_text,
             "sub_queries": task.sub_queries,
-            "web": task.web.model_dump(exclude_none=True) if task.web else None,
+            "web": (
+                [
+                    slots.model_dump(exclude_none=True) if slots else None
+                    for slots in task.sub_query_web
+                ]
+                if task.sub_query_web
+                else task.web.model_dump(exclude_none=True)
+                if task.web
+                else None
+            ),
         }
         for task in classification.tasks
     ]

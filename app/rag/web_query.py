@@ -47,6 +47,15 @@ CAMPUS_HOSTS: dict[str, tuple[str, tuple[str, ...]]] = {
 # differ per campus, so their campus pages stay out.
 CAMPUS_SHARED_TOPICS = frozenset({"lich_thong_bao", "quy_che_thu_tuc", "chuong_trinh_dao_tao"})
 
+# Postgraduate pages (title or URL): a master's admission notice gave its "1.600.000
+# đồng/tín chỉ" as the fee asked for an undergraduate major (14-10-2026). Kept only when
+# the question is about that level. Matched on text without diacritics.
+_POSTGRADUATE = re.compile(
+    r"thac[\s_-]*si|tien[\s_-]*si|cao[\s_-]*hoc|sau[\s_-]*dai[\s_-]*hoc|nghien[\s_-]*cuu[\s_-]*sinh"
+    r"|\bncs\b|\bsdh\.iuh\.edu\.vn",
+    re.IGNORECASE,
+)
+
 # Seconds a topic's search results stay cached. Fees change once a year, admission
 # figures several times a day in season, notices daily, contacts hardly ever.
 _HOUR = 3600
@@ -139,12 +148,14 @@ def order_candidates(
     *,
     topic: str | None,
     co_so: str | None = None,
+    postgraduate: bool = False,
     floor: float,
 ) -> list[WebSearchResult]:
     """Pages worth showing the web judge, best first: not a listing or another campus's
-    site (kept last for `CAMPUS_SHARED_TOPICS`), the topic's own sites before the rest, the
-    newest academic year first, then Tavily's score. Each page carries the academic year
-    it is about.
+    site (kept last for `CAMPUS_SHARED_TOPICS`), not a postgraduate page unless the
+    question is about that level (`postgraduate`), the topic's own sites before the rest,
+    the newest academic year first, then Tavily's score. Each page carries the academic
+    year it is about.
 
     `floor` only drops pages off the topic's own sites: the latest fee decision on
     ptckt.iuh.edu.vn scored 0.05-0.07, right at it, while the lowest score seen at all was
@@ -156,6 +167,8 @@ def order_candidates(
         if is_listing_page(result.url) or (
             _other_campus(result.url, co_so) and topic not in CAMPUS_SHARED_TOPICS
         ):
+            continue
+        if not postgraduate and is_postgraduate(f"{result.title} {unquote(result.url)}"):
             continue
         if result.score < floor and not _matches_any(result.url, preferred):
             continue
@@ -243,6 +256,17 @@ def _matches_any(url: str, patterns: Sequence[str]) -> bool:
         if host == pattern_host and path.startswith(f"/{prefix}" if prefix else ""):
             return True
     return False
+
+
+def is_postgraduate(text: str) -> bool:
+    """`text` names a postgraduate level (master's, doctorate, "sau đại học")."""
+
+    return bool(_POSTGRADUATE.search(_without_diacritics(text)))
+
+
+def _without_diacritics(text: str) -> str:
+    decomposed = unicodedata.normalize("NFD", text.replace("đ", "d").replace("Đ", "D"))
+    return "".join(char for char in decomposed if not unicodedata.combining(char)).lower()
 
 
 def campus_of(url: str) -> str | None:

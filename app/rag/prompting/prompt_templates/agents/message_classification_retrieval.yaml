@@ -20,6 +20,7 @@ template: |
 
   ### `web` (mọi task `academic_advisory`)
   Hệ thống tự ghép thành từ khóa tìm trên website của Trường. Field nào không có giá trị thì BỎ hẳn, không ghi `null`.
+  SINGLE: `web` là MỘT object. MULTI: `web` là DANH SÁCH object, mỗi object cho đúng một câu hỏi con theo thứ tự `sub_queries` (mỗi câu tìm riêng, không gộp hai chủ đề vào một `subject`).
   - `topics`: 1-2 nhãn, nhãn chính đầu tiên; nhiều nhóm thì ưu tiên `hoc_phi` > `tuyen_sinh` > `lich_thong_bao` > `lien_he_co_so` > còn lại (VD "hạn đóng học phí học kỳ 1" → `["hoc_phi", "lich_thong_bao"]`):
     `hoc_phi` (mức thu, đơn giá tín chỉ, hạn/cách đóng), `tuyen_sinh` (điểm chuẩn, chỉ tiêu, phương thức/tổ hợp, hồ sơ, ngưỡng đầu vào), `lich_thong_bao` (lịch, mốc thời gian, hạn nộp, đợt đăng ký, thông báo mới), `lien_he_co_so` (địa chỉ, điện thoại, email, phòng ban, cơ sở), `quy_che_thu_tuc` (quy chế, điều kiện, thủ tục, đơn từ, học bổng), `chuong_trinh_dao_tao` (chương trình khung, môn học, chuẩn đầu ra), `khac`.
   - `subject`: 2-8 từ khóa nêu đúng thứ cần tìm; không phải câu hỏi, không chứa ngành/bậc/hệ/cơ sở/năm học/tên trường. VD "mức thu học phí", "điểm chuẩn", "lịch đăng ký học phần học kỳ 1", "địa chỉ".
@@ -35,7 +36,7 @@ template: |
   Output: {"tasks": [{"intent": "academic_advisory", "query": "còn học phí đại học chính quy khóa 2025 ngành CNTT thì sao?", "routing_mode": "SINGLE", "standalone_question": "Học phí đại học chính quy khóa 2025 ngành CNTT là bao nhiêu?", "hyde_passage": "Mức thu học phí đại học chính quy khóa 2025 ngành CNTT là ... đồng/tín chỉ.", "web": {"topics": ["hoc_phi"], "subject": "mức thu học phí", "bac_dao_tao": "Đại học", "he_dao_tao": "Chính quy", "nganh_hoc": "Công nghệ Thông tin"}}], "confidence": 0.9}
 
   User: "địa chỉ cơ sở Quảng Ngãi và học phí đại học chính quy"
-  Output: {"tasks": [{"intent": "academic_advisory", "query": "địa chỉ cơ sở Quảng Ngãi và học phí đại học chính quy", "routing_mode": "MULTI", "sub_queries": ["Địa chỉ của cơ sở Quảng Ngãi", "Định mức học phí đại học chính quy tại cơ sở Quảng Ngãi"], "web": {"topics": ["hoc_phi", "lien_he_co_so"], "subject": "mức thu học phí", "bac_dao_tao": "Đại học", "he_dao_tao": "Chính quy", "co_so": "Quảng Ngãi"}}], "confidence": 0.9}
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "địa chỉ cơ sở Quảng Ngãi và học phí đại học chính quy", "routing_mode": "MULTI", "sub_queries": ["Địa chỉ của cơ sở Quảng Ngãi", "Định mức học phí đại học chính quy tại cơ sở Quảng Ngãi"], "web": [{"topics": ["lien_he_co_so"], "subject": "địa chỉ", "co_so": "Quảng Ngãi"}, {"topics": ["hoc_phi"], "subject": "mức thu học phí", "bac_dao_tao": "Đại học", "he_dao_tao": "Chính quy", "co_so": "Quảng Ngãi"}]}], "confidence": 0.9}
 
   User: "Tính giúp điểm GPA cho mình và cho mình biết thủ tục đăng ký tốt nghiệp"
   Output: {"tasks": [{"intent": "academic_calculation", "query": "Tính giúp điểm GPA cho mình", "routing_mode": null}, {"intent": "academic_advisory", "query": "Thủ tục đăng ký tốt nghiệp là gì?", "routing_mode": "SINGLE", "standalone_question": "Thủ tục đăng ký tốt nghiệp là gì?", "hyde_passage": "Sinh viên thực hiện thủ tục đăng ký tốt nghiệp bằng cách nộp hồ sơ đăng ký xét tốt nghiệp theo quy định của Nhà trường.", "web": {"topics": ["quy_che_thu_tuc"], "subject": "thủ tục đăng ký xét tốt nghiệp"}}], "confidence": 0.9}

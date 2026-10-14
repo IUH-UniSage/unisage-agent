@@ -424,6 +424,46 @@ def test_parse_maps_web_slots_without_a_known_topic_to_khac() -> None:
     assert parsed.web.topics == ["khac"]
 
 
+def test_parse_reads_one_set_of_web_slots_per_multi_sub_query() -> None:
+    """The 14-10-2026 turn: one keyword query for "học phí ... và lịch thi chứng chỉ"
+    found only fee pages, so each sub-query gets its own slots."""
+
+    task = _task("academic_advisory", _MESSAGE, "MULTI") | {
+        "sub_queries": ["Học phí ngành CNTT năm học 2026-2027?", "Lịch thi chứng chỉ CNTT 2026?"],
+        "web": [
+            {"topics": ["hoc_phi"], "subject": "mức thu học phí", "nam_hoc": "2026-2027"},
+            {"topics": ["lich_thong_bao"], "subject": "lịch thi chứng chỉ ứng dụng CNTT"},
+            {"topics": ["khac"], "subject": "thừa, không có câu hỏi con"},
+        ],
+    }
+
+    (parsed,) = parse_classification(_payload(task), _MESSAGE).tasks
+
+    assert parsed.web is None
+    assert parsed.sub_query_web is not None
+    assert [slots.subject if slots else None for slots in parsed.sub_query_web] == [
+        "mức thu học phí",
+        "lịch thi chứng chỉ ứng dụng CNTT",
+    ]
+    assert "sub_query_web" not in parsed.model_dump()
+
+
+def test_parse_pads_missing_sub_query_slots_and_reads_a_list_on_a_single_task() -> None:
+    multi = _task("academic_advisory", _MESSAGE, "MULTI") | {
+        "sub_queries": ["Câu 1?", "Câu 2?"],
+        "web": [{"topics": ["hoc_phi"], "subject": "mức thu học phí"}],
+    }
+    single = _task("academic_advisory", _MESSAGE, "SINGLE") | {
+        "web": [{"topics": ["tuyen_sinh"], "subject": "điểm chuẩn"}]
+    }
+
+    multi_task, single_task = parse_classification(_payload(multi, single), _MESSAGE).tasks
+
+    assert multi_task.sub_query_web is not None
+    assert [slots is not None for slots in multi_task.sub_query_web] == [True, False]
+    assert single_task.web is not None and single_task.web.subject == "điểm chuẩn"
+
+
 def test_parse_ignores_web_slots_outside_advisory_tasks() -> None:
     task = _task("academic_calculation", "tính GPA", None) | {
         "web": {"topics": ["khac"], "subject": "GPA"}
