@@ -183,6 +183,15 @@ class RetrieveManyMixin:
         retrieve = self.retrieve  # type: ignore[attr-defined]
         return [retrieve(query, security=security, limit=limit) for query in queries]
 
+    async def retrieve_many_async(
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[list[RetrievedChunk]]:
+        return self.retrieve_many(queries, security=security, limit=limit)
+
     def fetch(
         self,
         chunk_ids: list[str],

@@ -90,13 +90,24 @@ class RecordingRetrieval:
         self, queries: list[str], *, security: AcademicSecurityContext, limit: int | None = None
     ) -> list[list[RetrievedChunk]]:
         results = self.inner.retrieve_many(queries, security=security, limit=limit)
-        recording = current()
-        if recording is not None:
-            for query, chunks in zip(queries, results, strict=True):
-                recording.retrievals.append(
-                    {"query": query, "chunks": [chunk_summary(chunk) for chunk in chunks]}
-                )
+        _record(queries, results)
         return results
+
+    async def retrieve_many_async(
+        self, queries: list[str], *, security: AcademicSecurityContext, limit: int | None = None
+    ) -> list[list[RetrievedChunk]]:
+        results = await self.inner.retrieve_many_async(queries, security=security, limit=limit)
+        _record(queries, results)
+        return results
+
+
+def _record(queries: list[str], results: list[list[RetrievedChunk]]) -> None:
+    recording = current()
+    if recording is not None:
+        for query, chunks in zip(queries, results, strict=True):
+            recording.retrievals.append(
+                {"query": query, "chunks": [chunk_summary(chunk) for chunk in chunks]}
+            )
 
 
 def chunk_summary(chunk: RetrievedChunk) -> dict[str, Any]:

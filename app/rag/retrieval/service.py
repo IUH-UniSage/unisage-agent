@@ -1,3 +1,6 @@
+import asyncio
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -16,6 +19,8 @@ from app.schemas.ingestion import SourceLocator
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
+logger = logging.getLogger(__name__)
+
 
 class RetrievalServiceProtocol(Protocol):
     """What `GraphModels.retrieval` needs to provide - satisfied by the real
@@ -31,6 +36,14 @@ class RetrievalServiceProtocol(Protocol):
     ) -> list[RetrievedChunk]: ...
 
     def retrieve_many(
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[list[RetrievedChunk]]: ...
+
+    async def retrieve_many_async(
         self,
         queries: list[str],
         *,
@@ -79,13 +92,47 @@ class RetrievalService:
     ) -> list[list[RetrievedChunk]]:
         """One embedding call and one Qdrant round trip for all `queries`."""
 
-        effective_limit = limit if limit is not None else settings.CHAT_RETRIEVAL_MAX_CHUNKS
+        started_at = time.monotonic()
         query_vectors = self.embedder.embed(queries)
+        embedded_at = time.monotonic()
+        result = self._search(query_vectors, security=security, limit=limit)
+        _log_timing(len(queries), started_at, embedded_at)
+        return result
+
+    async def retrieve_many_async(
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[list[RetrievedChunk]]:
+        """`retrieve_many` for chat: embeds on the caller's event loop (see
+        `EmbeddingProvider.embed_async`), only the synchronous Qdrant call goes to a worker
+        thread. The instance is shared across chat requests (`app.api.deps`), so the
+        embedder's connections must always be used from the server's loop."""
+
+        started_at = time.monotonic()
+        query_vectors = await self.embedder.embed_async(queries)
+        embedded_at = time.monotonic()
+        result = await asyncio.to_thread(
+            self._search, query_vectors, security=security, limit=limit
+        )
+        _log_timing(len(queries), started_at, embedded_at)
+        return result
+
+    def _search(
+        self,
+        query_vectors: list[list[float]],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None,
+    ) -> list[list[RetrievedChunk]]:
+        effective_limit = limit if limit is not None else settings.CHAT_RETRIEVAL_MAX_CHUNKS
         client = self.client or get_client()
         per_query_points = search_chunks_batch(
             client,
             query_vectors=query_vectors,
-            limits=[effective_limit] * len(queries),
+            limits=[effective_limit] * len(query_vectors),
             query_filter=build_access_filter(security),
         )
         return [
@@ -106,6 +153,18 @@ class RetrievalService:
         client = self.client or get_client()
         records = fetch_chunks_by_ids(client, chunk_ids, build_access_filter(security))
         return [_to_retrieved_chunk(record, 1.0) for record in records]
+
+
+def _log_timing(query_count: int, started_at: float, embedded_at: float) -> None:
+    """Always logged: where a slow retrieval spent its time."""
+
+    finished_at = time.monotonic()
+    logger.info(
+        "Retrieval timing: queries=%d embed_ms=%d qdrant_ms=%d",
+        query_count,
+        int((embedded_at - started_at) * 1000),
+        int((finished_at - embedded_at) * 1000),
+    )
 
 
 def _to_retrieved_chunk(point: ScoredPoint | Record, score: float) -> RetrievedChunk:

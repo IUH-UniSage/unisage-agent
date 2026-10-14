@@ -14,6 +14,8 @@ class EmbeddingProvider(Protocol):
 
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
+    async def embed_async(self, texts: list[str]) -> list[list[float]]: ...
+
     async def embed_tracked(
         self,
         texts: list[str],

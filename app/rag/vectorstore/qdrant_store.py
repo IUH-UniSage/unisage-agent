@@ -1,9 +1,12 @@
+import os
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from qdrant_client import QdrantClient, models
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.core.config import settings
 from app.schemas.security import AcademicSecurityContext
@@ -24,10 +27,27 @@ def chunk_point_id(chunk_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, chunk_id))
 
 
-def get_client() -> QdrantClient:
-    """Build a Qdrant client from configured settings."""
+_client: tuple[int, QdrantClient] | None = None
+_client_lock = threading.Lock()
 
-    return QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
+
+def get_client() -> QdrantClient:
+    """The process's Qdrant client, built from configured settings on first use.
+
+    Shared so a chat turn reuses its pooled connection instead of paying a new connection
+    and the client's server-version check every time. Keyed by pid: a Celery prefork child
+    must never reuse a connection its parent opened."""
+
+    global _client
+    pid = os.getpid()
+    with _client_lock:
+        if _client is None or _client[0] != pid:
+            _client = (pid, QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT))
+        return _client[1]
+
+
+def _is_missing_collection(exc: UnexpectedResponse) -> bool:
+    return exc.status_code == 404
 
 
 def ensure_collection(client: QdrantClient) -> None:
@@ -203,9 +223,6 @@ def search_chunks_batch(
     """`search_chunks` for several queries at once: every query x named
     vector goes out in one `query_batch_points` round trip."""
 
-    if not client.collection_exists(settings.QDRANT_COLLECTION):
-        return [[] for _ in query_vectors]
-
     requests = [
         models.QueryRequest(
             query=vector,
@@ -217,9 +234,17 @@ def search_chunks_batch(
         for vector, limit in zip(query_vectors, limits, strict=True)
         for vector_name in _VECTOR_NAMES
     ]
-    responses = client.query_batch_points(
-        collection_name=settings.QDRANT_COLLECTION, requests=requests
-    )
+    try:
+        responses = client.query_batch_points(
+            collection_name=settings.QDRANT_COLLECTION, requests=requests
+        )
+    except UnexpectedResponse as exc:
+        # No collection yet (nothing ingested) is a normal state, not a failure. Checked
+        # here rather than with a `collection_exists` call first, which would cost every
+        # chat turn an extra round trip.
+        if _is_missing_collection(exc):
+            return [[] for _ in query_vectors]
+        raise
 
     per_query = len(_VECTOR_NAMES)
     results: list[list[models.ScoredPoint]] = []
@@ -244,20 +269,25 @@ def fetch_chunks_by_ids(
     and no vector search - with `query_filter` (the caller's permissions) still applied.
     In `chunk_ids` order; a chunk no longer indexed or no longer visible is missing."""
 
-    if not chunk_ids or not client.collection_exists(settings.QDRANT_COLLECTION):
+    if not chunk_ids:
         return []
     must: list[models.Condition] = [
         models.HasIdCondition(has_id=[chunk_point_id(chunk_id) for chunk_id in chunk_ids])
     ]
     if query_filter is not None:
         must.append(query_filter)
-    records, _ = client.scroll(
-        collection_name=settings.QDRANT_COLLECTION,
-        scroll_filter=models.Filter(must=must),
-        limit=len(chunk_ids),
-        with_payload=True,
-        with_vectors=False,
-    )
+    try:
+        records, _ = client.scroll(
+            collection_name=settings.QDRANT_COLLECTION,
+            scroll_filter=models.Filter(must=must),
+            limit=len(chunk_ids),
+            with_payload=True,
+            with_vectors=False,
+        )
+    except UnexpectedResponse as exc:
+        if _is_missing_collection(exc):
+            return []
+        raise
     order = {chunk_id: index for index, chunk_id in enumerate(chunk_ids)}
     return sorted(
         records,

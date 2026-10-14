@@ -8,6 +8,7 @@ cooling down, falling back to the top-priority one when every credential is.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from typing import Any
 
 import pytest
@@ -125,6 +126,21 @@ def test_registry_enabled_shares_one_model_across_the_three_nodes(
     assert graph_models.classification is graph_models.query_transformation
     assert graph_models.classification is graph_models.generation
     assert isinstance(graph_models.retrieval, RetrievalService)
+
+
+def test_retrieval_service_is_shared_until_the_snapshot_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
+    first = parse_snapshot(_snapshot_payload([_chat_credential()]))
+    monkeypatch.setattr(model_registry, "_current_snapshot", first)
+
+    retrieval = asyncio.run(get_graph_models()).retrieval
+    assert asyncio.run(get_graph_models()).retrieval is retrieval
+
+    second = dataclasses.replace(first, version=first.version + 1)
+    monkeypatch.setattr(model_registry, "_current_snapshot", second)
+    assert asyncio.run(get_graph_models()).retrieval is not retrieval
 
 
 def test_registry_enabled_with_no_chat_credential_raises(monkeypatch: pytest.MonkeyPatch) -> None:

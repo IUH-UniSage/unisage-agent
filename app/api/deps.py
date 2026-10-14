@@ -68,6 +68,21 @@ async def _starting_credential(purpose: str) -> CredentialConfig:
         return top_priority
 
 
+_retrieval_service: tuple[int | None, RetrievalService] | None = None
+
+
+def _shared_retrieval_service(snapshot_version: int | None) -> RetrievalService:
+    """One `RetrievalService` for every chat request until the registry snapshot changes, so
+    its embedder's resolved client - and its pooled connection to the embedding API - outlives
+    the request instead of paying a new connection and TLS handshake every turn. A new
+    snapshot may carry another EMBEDDING credential, so it gets a fresh service."""
+
+    global _retrieval_service
+    if _retrieval_service is None or _retrieval_service[0] != snapshot_version:
+        _retrieval_service = (snapshot_version, RetrievalService())
+    return _retrieval_service[1]
+
+
 async def get_graph_models() -> GraphModels:
     """FastAPI dependency: the 3 LLM-backed nodes' models for the streaming graph.
 
@@ -106,7 +121,7 @@ async def get_graph_models() -> GraphModels:
         classification=model,
         query_transformation=model,
         generation=model,
-        retrieval=RetrievalService(),
+        retrieval=_shared_retrieval_service(snapshot.version if snapshot is not None else None),
         generation_credential=credential,
         snapshot_version=snapshot.version if snapshot is not None else None,
         rerank=rerank_model,
