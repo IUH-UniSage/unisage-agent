@@ -1,13 +1,36 @@
-"""Social chat reply - deterministic, no LLM.
+"""Social chat reply - streamed by the LLM, static templates as the fallback.
 
-One fixed sentence for every social message answered "hi" with "Không có gì
-đâu", so the reply is picked by the message's kind (thanks / goodbye /
-"who are you" / greeting / anything else), then at random within that kind so repeated
-small talk does not read as a canned bot.
+`main/chat_social.yaml` gives the model the profile and the security rules but no
+chunks, so it can answer "what do you know about me" from the declared attributes
+and must not state any regulation; it always ends with one leading question.
+
+When the call fails before the first token, the reply falls back to
+`social_chat_reply`: one fixed sentence for every social message answered "hi"
+with "Không có gì đâu", so the reply is picked by the message's kind (thanks /
+goodbye / "who are you" / greeting / anything else), then at random within that
+kind so repeated small talk does not read as a canned bot.
 """
 
+import logging
 import random
 import re
+
+from pydantic_ai import Agent
+from pydantic_ai.models import Model
+
+from app.core.registry.model_registry import CredentialConfig
+from app.graph.streaming import (
+    AttemptRecorder,
+    BudgetContext,
+    FailoverCallback,
+    TokenSink,
+    auxiliary_model_settings,
+    stream_agent_text,
+)
+from app.rag.prompting import build_social_chat_prompt
+from app.schemas.security import AcademicSecurityContext
+
+logger = logging.getLogger(__name__)
 
 THANKS_TEMPLATES: list[str] = [
     "Không có gì đâu, bạn cần hỏi thêm gì cứ nhắn cho mình nhé!",
@@ -76,3 +99,57 @@ def _templates_for(message: str) -> list[str]:
     if _GREETING.search(message):
         return GREETING_TEMPLATES
     return OTHER_TEMPLATES
+
+
+def build_social_chat_agent(model: Model | str) -> Agent[None, str]:
+    # A short reply with no sources to weigh - no thinking, like the auxiliary agents.
+    return Agent(model=model, model_settings=auxiliary_model_settings(model))
+
+
+async def run_social_chat(
+    agent: Agent[None, str],
+    user_query: str,
+    *,
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    token_sink: TokenSink,
+    purpose: str | None = None,
+    credential: CredentialConfig | None = None,
+    snapshot_version: int | None = None,
+    on_failover: FailoverCallback | None = None,
+    on_attempt: AttemptRecorder | None = None,
+    budget: BudgetContext | None = None,
+) -> str:
+    prompt = build_social_chat_prompt(
+        user_query=user_query,
+        security=security,
+        confirmed_metadata=confirmed_metadata,
+    )
+    streamed = False
+
+    async def sink(token: str) -> None:
+        nonlocal streamed
+        streamed = True
+        await token_sink(token)
+
+    try:
+        return await stream_agent_text(
+            agent,
+            prompt,
+            sink,
+            purpose=purpose,
+            credential=credential,
+            snapshot_version=snapshot_version,
+            agent_factory=build_social_chat_agent,
+            on_failover=on_failover,
+            on_attempt=on_attempt,
+            budget=budget,
+        )
+    except Exception:
+        # Half a reply cannot be finished by a template.
+        if streamed:
+            raise
+        logger.warning("social_chat.llm_failed - falling back to a template", exc_info=True)
+    reply = social_chat_reply(user_query)
+    await token_sink(reply)
+    return reply

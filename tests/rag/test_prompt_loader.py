@@ -34,6 +34,9 @@ def test_design_only_templates_are_loaded() -> None:
     assert "{ticket_fallback}" in templates.chat_ticket_fallback
     assert "{prepared_context}" not in templates.chat_ticket_fallback
     assert templates.ticket_fallback
+    assert "{academic_metadata}" in templates.chat_social
+    assert "{security_access_control}" in templates.chat_social
+    assert "{prepared_context}" not in templates.chat_social
     assert templates.agent_calculation_extractor
     assert templates.agent_reranker_compressor
 

@@ -50,6 +50,7 @@ __all__ = [
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
     "build_multi_intent_prompt",
+    "build_social_chat_prompt",
     "build_system_prompt",
     "build_ticket_fallback_prompt",
     "get_templates",
@@ -162,6 +163,24 @@ def build_ticket_fallback_prompt(
         ticket_fallback=templates.ticket_fallback,
         web_sources=build_web_sources_section(web_sources),
         current_time=build_current_time_section(confirmed_metadata),
+        user_query=user_query,
+    )
+
+
+def build_social_chat_prompt(
+    *,
+    user_query: str,
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+) -> str:
+    """SocialChatNode frame: header, profile and security rules only - no chunks, so
+    the reply can talk about the student's declared attributes but never cite a rule."""
+
+    templates = get_templates()
+    return templates.chat_social.format(
+        header=templates.header,
+        academic_metadata=build_metadata_section(security, confirmed_metadata),
+        security_access_control=templates.security_access_control,
         user_query=user_query,
     )
 

@@ -86,7 +86,7 @@ from app.graph.nodes.query_transformation import (
     transform_tasks,
 )
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
-from app.graph.nodes.social_chat import social_chat_reply
+from app.graph.nodes.social_chat import build_social_chat_agent, run_social_chat
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
 from app.graph.nodes.web_judge import WebJudgement, build_web_judge_agent, judge_web_results
 from app.graph.nodes.web_search import (
@@ -268,9 +268,26 @@ async def _classified_turn(
     route_plan = plan_route(classification)
 
     if route_plan.end == "SOCIAL_CHAT":
-        trace.node("04_IntentRouting_SocialChat")
-        social_text = social_chat_reply(graph_input.user_message)
-        await token_sink(social_text)
+        # SocialChatNode (streaming).
+        social_agent = build_social_chat_agent(models.generation)
+        trace.node(
+            "04_IntentRouting_SocialChat",
+            agent=social_agent,
+            credential=models.generation_credential,
+        )
+        social_text = await run_social_chat(
+            social_agent,
+            graph_input.user_message,
+            security=graph_input.security,
+            confirmed_metadata=confirmed_metadata,
+            token_sink=token_sink,
+            purpose="CHAT",
+            credential=models.generation_credential,
+            snapshot_version=models.snapshot_version,
+            on_failover=_make_failover_applier(models),
+            on_attempt=usage_recorder.bind("SocialChatNode"),
+            budget=budget,
+        )
         return GraphOutput(
             response_text=social_text,
             confirmed_metadata=confirmed_metadata,

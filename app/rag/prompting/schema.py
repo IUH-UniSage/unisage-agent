@@ -14,6 +14,7 @@ class PromptTemplates:
     chat_academic_advisory: str
     chat_multi_intent_synthesis: str
     chat_ticket_fallback: str
+    chat_social: str
     chat_calculation_review: str
     chat_calculation_llm: str
     json_repair: str

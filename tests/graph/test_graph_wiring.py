@@ -18,7 +18,6 @@ from app.graph.clarification_round import (
 )
 from app.graph.nodes.greeting import GREETING_TEMPLATE
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
-from app.graph.nodes.social_chat import THANKS_TEMPLATES
 from app.graph.nodes.web_search import WebSearchOutcome, WebSearchRequest
 from app.graph.progress import status_reporter
 from app.graph.streaming import TokenSink
@@ -130,7 +129,7 @@ async def test_greeting_fast_path_on_first_turn_no_llm_needed(
 
 
 @pytest.mark.asyncio
-async def test_social_chat_routes_to_static_template(
+async def test_social_chat_streams_the_llm_reply(
     mock_sync_llm_model: Callable[[str], FunctionModel],
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
 ) -> None:
@@ -150,7 +149,8 @@ async def test_social_chat_routes_to_static_template(
         _usage_recorder(),
     )
 
-    assert result.response_text in THANKS_TEMPLATES
+    assert result.response_text == "Câu trả lời cuối cùng [1]."
+    assert "".join(tokens) == result.response_text
 
 
 @pytest.mark.asyncio
