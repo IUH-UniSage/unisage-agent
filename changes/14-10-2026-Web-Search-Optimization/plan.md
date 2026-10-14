@@ -121,7 +121,7 @@ classify (+ web slots) ─┬─ retrieval ────────────�
   kết quả sau khi lọc (khoảng 5 trang, content đã cắt), khoảng 5-8 KB.
 - TTL theo topic (bảng trên). Kết quả rỗng: 30 phút. Lỗi (timeout/429/hết credit): không cache.
   Redis lỗi: gọi Tavily trực tiếp.
-- Redis riêng `WEB_SEARCH_CACHE_REDIS_URL` (mặc định db 3), không dùng `allkeys-lru` trên instance
+- Redis riêng `WEB_SEARCH_CACHE_REDIS_URL` (mặc định db 6; eval db 7), không dùng `allkeys-lru` trên instance
   dùng chung.
 - **AC:** hit/miss, rỗng, lỗi không cache, Redis down đều có test; log `cache=hit|miss`.
 - **Files:** `app/integrations/web_search_cache.py`, `app/core/config.py`, `.env.example`, test.

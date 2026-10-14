@@ -8,7 +8,7 @@ Chi tiết (AC, files, size) xem `plan.md`, nhất là mục "Điều chỉnh kh
 - [x] W5' Bộ chấm trang web riêng (`09c_WebJudgeNode`, `agents/web_result_judge.yaml`): `answer` → `<websearch>`, `source` → link; lỗi/thiếu model → luật điểm cũ + `WEB_JUDGE_FAILED`, test
 - [x] W7 Fallback mềm `<web_sources>` (`common/web_candidate_sources.yaml`: link + năm học, cấm số), test
 - [x] W4 Tavily `advanced` + `chunks_per_source=3` + `max_results=10`, sàn 0.05, xếp/lọc domain theo topic (bỏ trang chủ, trang danh sách, cơ sở khác), test
-- [x] W3 Cache Redis (`app/integrations/web_search_cache.py`, db 3, key theo câu hỏi chuẩn hóa + tham số, TTL theo topic, rỗng 30 phút, lỗi không cache, fail-open), test
+- [x] W3 Cache Redis (`app/integrations/web_search_cache.py`, db 6 (eval db 7), key theo câu hỏi chuẩn hóa + tham số, TTL theo topic, rỗng 30 phút, lỗi không cache, fail-open), test
 - [x] W6 Tìm song song ngay đầu nhánh advisory cho topic động; chỉ chấm khi có câu hỏi con không còn chunk, không cần thì chạy nốt ở nền cho cache, test
 - [x] W8 Năm học từ title/URL/nội dung, xếp mới trước, ghi trong `<websearch>`/`<web_sources>`; `WEB_SOURCE_USED` + log `Web search turn: mode/topics/cache_hits/...`, test
 - [x] Checkpoint: pytest 2152 passed (bỏ `tests/e2e`, lỗi import có sẵn); ruff sạch trên file đã sửa; mypy không thêm lỗi
