@@ -125,6 +125,8 @@ SPELLING: dict[str, str] = _VOCABULARY["spelling"]
 ABBREVIATIONS: dict[str, str] = _VOCABULARY["abbreviations"]
 PHRASE_ALIASES: dict[str, str] = _VOCABULARY["phrase_aliases"]
 SUBJECT_ALIASES: dict[str, dict[str, str]] = _VOCABULARY["subject_aliases"]
+# Level and mode a query leaves out because they are what an unstated one means.
+DEFAULT_SLOTS: dict[str, str] = _VOCABULARY["default_slots"]
 # Words that may come before a slot's value in the subject ("ngành Công nghệ thông tin").
 _SLOT_LEAD_WORDS: dict[str, str] = {
     "nganh_hoc": r"(?:ngành\s+)?",
@@ -139,13 +141,13 @@ def build_web_query(slots: WebSlots) -> str:
 
     topic = slots.topics[0]
     written = slots.subject
-    slots = _with_major_from_subject(slots)
+    slots = _with_level_and_mode_from_subject(_with_major_from_subject(slots))
     slots = slots.model_copy(update={"subject": _subject(slots, topic)})
     year = _year_part(topic, slots.nam_hoc)
     if year and all(digits in (slots.subject or "") for digits in re.findall(r"20\d{2}", year)):
         year = None  # "lịch nghỉ lễ Quốc khánh 2025" already has it
-    bac = _canonical("bac_dao_tao", slots.bac_dao_tao)
-    he = _canonical("he_dao_tao", slots.he_dao_tao)
+    bac = _unless_default("bac_dao_tao", slots.bac_dao_tao)
+    he = _unless_default("he_dao_tao", slots.he_dao_tao)
     nganh = _canonical("nganh_hoc", slots.nganh_hoc)
     co_so = _clean(slots.co_so)
     if topic == "hoc_phi":
@@ -282,6 +284,23 @@ def _with_major_from_subject(slots: WebSlots) -> WebSlots:
     return slots.model_copy(update={"nganh_hoc": match.group("major").strip()})
 
 
+def _with_level_and_mode_from_subject(slots: WebSlots) -> WebSlots:
+    """A level or mode written into the subject with its slot left empty ("học phí thạc
+    sĩ", no `bac_dao_tao`) moves to the slot, by the names `_ALIASES` knows: otherwise
+    "học phí thạc sĩ IUH" and "mức thu học phí Thạc sĩ IUH" are two searches of one
+    question, and "đại học" in the subject would undo leaving out the default level."""
+
+    subject = normalize_phrases(_clean(slots.subject) or "")
+    update: dict[str, str] = {}
+    for field in ("bac_dao_tao", "he_dao_tao"):
+        if _clean(getattr(slots, field)):
+            continue
+        match = _SLOT_NAME_RES[field].search(subject)
+        if match is not None:
+            update[field] = _canonical(field, match.group(0)) or match.group(0)
+    return slots.model_copy(update=update) if update else slots
+
+
 def _subject(slots: WebSlots, topic: str) -> str:
     """The subject without what another slot already holds, in the topic's own words.
 
@@ -329,6 +348,11 @@ def _alternation(phrases: Iterable[str]) -> re.Pattern[str]:
 
 
 _SPELLING_RE = _alternation(SPELLING)
+# Every name a level or mode is written with ("thạc sĩ", "cao học", "sau đại học").
+_SLOT_NAME_RES = {
+    field: _alternation({*_ALIASES[field], *(name.lower() for name in _ALIASES[field].values())})
+    for field in ("bac_dao_tao", "he_dao_tao")
+}
 _ABBREVIATIONS_RE = _alternation(ABBREVIATIONS)
 _PHRASE_RE = _alternation(PHRASE_ALIASES)
 
@@ -345,6 +369,18 @@ def _names(field: str, value: str | None) -> list[str]:
     names = {text, canonical, normalize_phrases(text), normalize_phrases(canonical)}
     names.update(alias for alias, name in _ALIASES.get(field, {}).items() if name == canonical)
     return sorted(names, key=len, reverse=True)
+
+
+def _unless_default(field: str, value: str | None) -> str | None:
+    """The slot's canonical name, or None when it is the default an unstated one means."""
+
+    name = _canonical(field, value)
+    default = _canonical(field, DEFAULT_SLOTS.get(field))
+    return (
+        None
+        if name is not None and default is not None and name.lower() == default.lower()
+        else name
+    )
 
 
 def _canonical(field: str, value: str | None) -> str | None:

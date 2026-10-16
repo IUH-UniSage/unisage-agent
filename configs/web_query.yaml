@@ -32,6 +32,15 @@
 #                        "kì"; "thời khóa biểu", không "tkb").
 # Dạng chuẩn: thuật ngữ văn bản chính thức của Trường dùng (tiêu đề thông báo, quy chế).
 
+# Giá trị mặc định của ô bậc/hệ: KHÔNG ghi vào câu truy vấn. Câu không nêu bậc được hiểu là
+# đại học chính quy (bộ chấm trang web cũng hiểu vậy, trang sau đại học bị lọc riêng), nên
+# model điền "Đại học" hay để trống thì câu truy vấn vẫn như nhau: "ngành công nghệ tt học
+# phí 1 năm" được điền "Đại học" dù người hỏi không nói (16-10-2026), thành entry cache thứ
+# hai "mức thu học phí Đại học IUH". So sánh theo tên chuẩn (`_ALIASES` trong web_query.py).
+default_slots:
+  bac_dao_tao: Đại học
+  he_dao_tao: Chính quy
+
 spelling:
   kì: kỳ
   khoá: khóa

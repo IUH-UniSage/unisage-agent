@@ -40,7 +40,8 @@ def test_fee_query_has_the_school_but_no_major_and_no_guessed_year() -> None:
         nganh_hoc="CNTT",
     )
 
-    assert build_web_query(slots) == "mức thu học phí Đại học Chính quy IUH"
+    # Đại học Chính quy is what an unstated level means: left out, same as when unstated.
+    assert build_web_query(slots) == "mức thu học phí IUH"
 
 
 def test_a_year_the_user_named_is_kept() -> None:
@@ -60,9 +61,9 @@ def test_admission_query_keeps_the_major_and_the_year_named() -> None:
         nam_hoc="2026-2027",
     )
 
-    assert build_web_query(slots) == "điểm chuẩn Công nghệ Thông tin Đại học năm 2026 IUH"
+    assert build_web_query(slots) == "điểm chuẩn Công nghệ Thông tin năm 2026 IUH"
     assert build_web_query(slots.model_copy(update={"nam_hoc": None})) == (
-        "điểm chuẩn Công nghệ Thông tin Đại học IUH"
+        "điểm chuẩn Công nghệ Thông tin IUH"
     )
 
 
@@ -246,7 +247,7 @@ def test_a_slot_written_into_the_subject_is_added_back_by_the_template_only() ->
     )
     admission = WebSlots(topics=["tuyen_sinh"], subject="điểm trúng tuyển ngành Kế toán")
 
-    assert build_web_query(fee) == "mức thu học phí Chính quy Quảng Ngãi IUH"
+    assert build_web_query(fee) == "mức thu học phí Quảng Ngãi IUH"
     # Admission's template names the major: moved out of the subject, then put back.
     assert build_web_query(admission) == "điểm chuẩn Kế toán IUH"
 
@@ -331,3 +332,34 @@ def test_a_slot_spelled_with_the_old_accent_placement_is_still_taken_out() -> No
     slots = WebSlots(topics=["lien_he_co_so"], subject="địa chỉ cơ sở Thanh Hoá", co_so="Thanh Hóa")
 
     assert build_web_query(slots) == "địa chỉ Thanh Hóa IUH"
+
+
+def test_the_default_level_and_mode_are_left_out_whether_filled_or_not() -> None:
+    """16-10-2026: "ngành công nghệ tt học phí 1 năm" got bac_dao_tao "Đại học" although
+    the user named no level, and searched apart from the same question without it."""
+
+    unstated = WebSlots(topics=["hoc_phi"], subject="mức thu học phí")
+    filled = unstated.model_copy(update={"bac_dao_tao": "Đại học", "he_dao_tao": "chính quy"})
+    masters = unstated.model_copy(update={"bac_dao_tao": "cao học"})
+    bridging = unstated.model_copy(update={"he_dao_tao": "liên thông"})
+
+    assert build_web_query(filled) == build_web_query(unstated) == "mức thu học phí IUH"
+    assert build_web_query(masters) == "mức thu học phí Thạc sĩ IUH"
+    assert build_web_query(bridging) == "mức thu học phí Liên thông IUH"
+
+
+def test_a_level_written_into_the_subject_moves_to_its_slot() -> None:
+    """ "học phí thạc sĩ" with no level slot searched "học phí thạc sĩ IUH", apart from the
+    same question with the slot filled; "đại học" there undid leaving out the default."""
+
+    def query(subject: str, **slots: str) -> str:
+        return build_web_query(WebSlots(topics=["hoc_phi"], subject=subject, **slots))
+
+    masters = query("mức thu học phí", bac_dao_tao="Thạc sĩ", nganh_hoc="cntt")
+    assert masters == "mức thu học phí Thạc sĩ IUH"
+    assert query("học phí thạc sĩ", nganh_hoc="cntt") == masters
+    assert query("học phí cao học") == masters
+    assert query("học phí đại học chính quy") == query("học phí") == "mức thu học phí IUH"
+    assert query("học phí hệ liên thông") == "mức thu học phí Liên thông IUH"
+    # A slot already filled is not overwritten by a name in the subject.
+    assert query("học phí thạc sĩ", bac_dao_tao="Tiến sĩ") == "học phí thạc sĩ Tiến sĩ IUH"
