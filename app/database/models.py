@@ -121,8 +121,8 @@ class ConversationClarificationState(Base):
 
     `pending_clarification` holds a `PendingRound`-shaped JSON object
     (see `app/schemas/clarification.py`) or `None` when nothing is pending.
-    The student's declared attributes are not here: they live in
-    `StudentProfile`, per user rather than per conversation.
+    The asker's declared attributes are not here: they live in
+    `UserProfile`, per user rather than per conversation.
     """
 
     __tablename__ = "conversation_clarification_states"
@@ -150,9 +150,10 @@ class ConversationClarificationState(Base):
     )
 
 
-class StudentProfile(Base):
-    """What a student declared about themselves (intake, programme, training type...),
-    keyed by registry field names (`known_metadata_fields.json`, scope `profile`).
+class UserProfile(Base):
+    """What the asker declared about themselves, whatever their role (a student's intake
+    and programme, a lecturer's academic degree...), keyed by registry field names
+    (`configs/known_metadata_fields.json`, scope `profile`).
 
     Owned by the logged-in user (`user_id`, from the gateway JWT) so it carries over
     to every conversation; a guest has no user id, so theirs is per conversation.
@@ -161,10 +162,10 @@ class StudentProfile(Base):
     never for access control (`academic_user_context` alone decides that).
     """
 
-    __tablename__ = "student_profiles"
+    __tablename__ = "user_profiles"
     __table_args__ = (
         CheckConstraint(
-            "(user_id IS NULL) <> (conversation_id IS NULL)", name="ck_student_profiles_one_owner"
+            "(user_id IS NULL) <> (conversation_id IS NULL)", name="ck_user_profiles_one_owner"
         ),
     )
 

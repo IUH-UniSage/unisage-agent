@@ -400,7 +400,7 @@ async def test_a_result_that_does_not_fit_is_redone_by_the_llm() -> None:
     _review_prompt, llm_prompt = prompts
     assert '"Số tín chỉ lý thuyết của một năm học": 100' in llm_prompt
     assert f'"{REVIEW_ISSUE_KEY}": "{_TWO_YEARS_ISSUE}"' in llm_prompt
-    assert f"Câu hỏi của sinh viên: {_TWO_YEARS}" in llm_prompt
+    assert f"Câu hỏi của người dùng: {_TWO_YEARS}" in llm_prompt
     [item] = result.calculation_items
     assert (item["mode"], item["status"]) == ("llm", "computed")
     trace = result.calculation_traces[0]["trace"]
@@ -1689,7 +1689,7 @@ async def test_the_extractor_and_the_llm_see_what_the_student_typed_next_to_the_
     assert extractor.startswith(rewrite)
     assert f"<original_message>{typed}</original_message>" in extractor
     [llm] = generation
-    assert f"Câu hỏi của sinh viên: {rewrite}\nTin nhắn gốc sinh viên gõ" in llm
+    assert f"Câu hỏi của người dùng: {rewrite}\nTin nhắn gốc người dùng gõ" in llm
     assert llm.rstrip().endswith(typed)
     assert "KHÔNG hỏi lại chính giá trị đó" in llm
 
@@ -1717,7 +1717,7 @@ async def test_a_query_equal_to_the_message_is_not_repeated() -> None:
     )
 
     assert "<original_message>" not in classification[1]
-    assert "Tin nhắn gốc sinh viên gõ" not in generation[0]
+    assert "Tin nhắn gốc người dùng gõ" not in generation[0]
 
 
 @pytest.mark.asyncio

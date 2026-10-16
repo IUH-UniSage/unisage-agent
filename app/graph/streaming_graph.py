@@ -52,6 +52,7 @@ from app.graph.metadata_fields import (
     Scope,
     apply_updates,
     canonical_field,
+    concept,
     field_scope,
     normalize_value,
     registered_name,
@@ -66,7 +67,7 @@ from app.graph.nodes.calculation import (
     run_calculation_task,
 )
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
-from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
+from app.graph.nodes.greeting import detect_greeting, greeting_for
 from app.graph.nodes.intent_routing import plan_route
 from app.graph.nodes.llm_rerank import (
     LLM_RERANK_SKIPPED,
@@ -206,9 +207,10 @@ async def _run_graph(
     # GreetingDetectionNode: fast path, no LLM.
     trace.node("01_GreetingDetectionNode")
     if detect_greeting(graph_input.user_message, first_turn=graph_input.is_first_turn):
-        await token_sink(GREETING_TEMPLATE)
+        greeting = greeting_for(graph_input.security)
+        await token_sink(greeting)
         return GraphOutput(
-            response_text=GREETING_TEMPLATE,
+            response_text=greeting,
             confirmed_metadata=graph_input.confirmed_metadata,
         )
 
@@ -372,6 +374,8 @@ async def _run_resume(
     pending = resume.pending_round
     confirmed_metadata = dict(graph_input.confirmed_metadata)
     answers_by_task: dict[str, dict[str, JsonValue]] = {}
+    # Answers about someone else: part of the re-answered question, never the profile.
+    case_answers: list[str] = []
     today = now_ict().date()
     for answer in resume.answers.values():
         question = answer.question
@@ -384,6 +388,9 @@ async def _run_resume(
             else answer.value
         )
         answers_by_task.setdefault(question.task_id, {})[name] = value
+        if question.origin == "advisory" and question.about == "other":
+            case_answers.append(f"{concept(name)}: {answer.display}")
+            continue
         default_scope: Scope = "profile" if question.origin == "advisory" else "calculation"
         if field_scope(name, default_scope) == "profile":
             # The intake is kept as a year: "kỳ 9" would be wrong next term.
@@ -414,7 +421,7 @@ async def _run_resume(
             advisory = AdvisoryPart(
                 task_id=task.task_id,
                 tasks=[(origin, origin.routing_mode or "SINGLE") for origin in task.origin_tasks],
-                question=pending.original_query,
+                question=_with_case_answers(pending.original_query, case_answers),
             )
 
     return await _turn_with_calculations(
@@ -431,6 +438,18 @@ async def _run_resume(
         advisory=advisory,
         original_query=pending.original_query,
         previous_round=pending,
+    )
+
+
+def _with_case_answers(question: str, case_answers: Sequence[str]) -> str:
+    """The question with what the user just answered about the person it asks about -
+    their attributes belong to this question, not to `<declared_attributes>`, which
+    holds only the caller's own."""
+
+    if not case_answers:
+        return question
+    return (
+        f"{question}\n(Về trường hợp được hỏi, người dùng vừa cho biết: {'; '.join(case_answers)})"
     )
 
 

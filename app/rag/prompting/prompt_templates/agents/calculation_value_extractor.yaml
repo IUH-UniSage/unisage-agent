@@ -5,7 +5,7 @@ template: |
   Bạn chép số liệu từ tài liệu của Trường cho một phép tính. Bạn KHÔNG tính toán, KHÔNG ước lượng và KHÔNG trả lời sinh viên - chỉ trả về MỘT object JSON.
 
   ## Đầu vào
-  - `<question>`: câu hỏi của sinh viên.
+  - `<question>`: câu hỏi của người dùng.
   - `<known>`: những gì đã biết về sinh viên (khoá nhập học, khối ngành, ngành, hệ...). Có thể trống. `khoa_nhap_hoc` là NĂM nhập học: `khoa_nhap_hoc: 2025` = khoá tuyển sinh năm học 2025-2026.
   - `<wanted>`: các số liệu cần tìm, mỗi dòng `tên: mô tả`.
   - `<documents>`: các đoạn tài liệu, mỗi đoạn mở đầu bằng `[n]`.

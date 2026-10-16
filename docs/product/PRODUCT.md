@@ -37,7 +37,7 @@ tiết và các khoảng trống đã biết.
 - **Người vận hành/triển khai** — chỉnh biến môi trường, chạy migration, tạo lại Qdrant collection khi
   hình dạng payload đổi; từ Model Registry còn phải chạy lệnh bootstrap danh tính embedding
   (`register_embedding_index_identity`) trước khi bật registry cho collection đã có sẵn vector.
-- **Người viết prompt** — chỉnh nội dung `prompt_templates/`, `known_metadata_fields.json`; đổi hành
+- **Người viết prompt** — chỉnh nội dung `prompt_templates/`, `configs/known_metadata_fields.json`; đổi hành
   vi của một node LLM mà không đụng logic Python.
 - **System (graph orchestrator)** — chạy graph 11 node theo đúng flow_design, tự quyết dừng ở đâu
   (fast path, off-topic, fallback, hay sinh câu trả lời); không ai can thiệp giữa chừng một lượt chat.

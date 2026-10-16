@@ -59,7 +59,7 @@ from app.core.observability.graph_trace import GraphTrace
 from app.core.observability.logging_config import bind_trace_id, unbind_trace_id
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
-from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
 from app.database.session import async_session_factory
 from app.graph.progress import status_reporter
 from app.graph.queue_items import (
@@ -179,7 +179,7 @@ def _profile_saver(
     async def save(attributes: dict[str, str]) -> None:
         try:
             async with session_factory() as session:
-                await StudentProfileRepository(session).save(owner, attributes)
+                await UserProfileRepository(session).save(owner, attributes)
                 await session.commit()
         except Exception:
             logger.exception("profile.save_failed")
@@ -203,7 +203,7 @@ async def _store_round_state(
         async with session_factory() as session:
             repo = ClarificationRoundRepository(session)
             if profile is not None:
-                await StudentProfileRepository(session).save(*profile)
+                await UserProfileRepository(session).save(*profile)
             if claim is not None:
                 done = await repo.complete(
                     conversation_id, claim.token, pending_round, recent_calculations

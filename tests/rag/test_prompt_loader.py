@@ -67,7 +67,7 @@ def test_calculation_review_prompt_renders_the_question_and_the_json_contract() 
     prompt = build_calculation_review_prompt(
         user_query="học phí 2 năm đầu", calculation_payload="[]", history=[]
     )
-    assert "Câu hỏi của sinh viên: học phí 2 năm đầu" in prompt
+    assert "Câu hỏi của người dùng: học phí 2 năm đầu" in prompt
     assert '{"fits": true, "issue": null, "answer": ' in prompt
 
 
@@ -171,16 +171,16 @@ def test_prompt_renders_two_separate_tags_never_merged() -> None:
 
     assert "<academic_user_context>" in prompt
     assert "</academic_user_context>" in prompt
-    assert "<student_declared_attributes>" in prompt
-    assert "</student_declared_attributes>" in prompt
+    assert "<declared_attributes>" in prompt
+    assert "</declared_attributes>" in prompt
 
     # The two tags never share a body: KHOA_CNTT must not appear inside
-    # student_declared_attributes, and training_type must not appear inside
+    # declared_attributes, and training_type must not appear inside
     # academic_user_context.
     user_ctx_start = prompt.index("<academic_user_context>")
     user_ctx_end = prompt.index("</academic_user_context>")
-    declared_start = prompt.index("<student_declared_attributes>")
-    declared_end = prompt.index("</student_declared_attributes>")
+    declared_start = prompt.index("<declared_attributes>")
+    declared_end = prompt.index("</declared_attributes>")
 
     academic_block = prompt[user_ctx_start:user_ctx_end]
     declared_block = prompt[declared_start:declared_end]
@@ -385,7 +385,7 @@ def test_history_message_empty_renders_sentinel_not_a_crash() -> None:
     assert "chưa có lịch sử" in prompt
 
 
-def test_json_repair_prompt_includes_student_declared_attributes() -> None:
+def test_json_repair_prompt_includes_declared_attributes() -> None:
     """Regression guard for the live bug: repair must see confirmed_metadata
     so it doesn't re-ask a field the student already answered."""
 
@@ -396,7 +396,7 @@ def test_json_repair_prompt_includes_student_declared_attributes() -> None:
         confirmed_metadata={"he_dao_tao": "chinh_quy"},
     )
 
-    assert "<student_declared_attributes>" in prompt
+    assert "<declared_attributes>" in prompt
     assert "he_dao_tao: chinh_quy" in prompt
 
 

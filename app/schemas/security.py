@@ -29,3 +29,7 @@ class AcademicSecurityContext(BaseModel):
     @property
     def is_guest(self) -> bool:
         return self.role == "KHACH"
+
+    @property
+    def is_student(self) -> bool:
+        return "SINH_VIEN" in self.role.upper()

@@ -4,7 +4,7 @@ Prompt content lives in `prompt_templates/` (`common/` building blocks,
 `main/` per-node frames); this package only contains loading (`loader.py`)
 and dynamic assembly (`builder.py`) logic. Enforces one invariant across
 every prompt built here: the two identity blocks inside `{academic_metadata}`
-(`academic_user_context`, JWT-verified, vs `student_declared_attributes`,
+(`academic_user_context`, JWT-verified, vs `declared_attributes`,
 self-declared) are always rendered separately and never merged - only the
 former may ever be used to make an authorization decision.
 """
@@ -254,7 +254,7 @@ def _original_message_line(original: str | None, query: str) -> str:
     if not original or original.strip() == query.strip():
         return ""
     return (
-        "\nTin nhắn gốc sinh viên gõ ở lượt này (nguyên văn, có thể gồm cả câu hỏi khác; câu "
+        "\nTin nhắn gốc người dùng gõ ở lượt này (nguyên văn, có thể gồm cả câu hỏi khác; câu "
         "hỏi ở trên là bản đã chuẩn hoá - khác nghĩa thì tin theo tin nhắn gốc): "
         f"{original.strip()}"
     )

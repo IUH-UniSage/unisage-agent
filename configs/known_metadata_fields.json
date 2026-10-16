@@ -1,5 +1,5 @@
 {
-  "_comment": "Sổ đăng ký tên field DUY NHẤT cho mọi giá trị người dùng khai hoặc nhập trên form (app/graph/metadata_fields.py). Mỗi field: `scope` = `profile` (thuộc tính ổn định của sinh viên, lưu vào hồ sơ student_profiles theo người dùng) hoặc `calculation` (số liệu của MỘT phép tính, lưu theo phép tính đó trong recent_calculations của hội thoại); `key_aliases` = các tên khoá khác cùng nghĩa, luôn được quy về `field` trước khi dùng. Không phải whitelist đóng: field lạ vẫn dùng được, nhưng khái niệm nào có ở đây thì BẮT BUỘC dùng đúng `field`. Mọi tên tham số `ParamSpec` của app/calculation/formulas.py phải có ở đây (test). Bảng cho node 10 (ask_user_form_guide.yaml) chỉ render field `profile`.",
+  "_comment": "Sổ đăng ký tên field DUY NHẤT cho mọi giá trị người dùng khai hoặc nhập trên form (app/graph/metadata_fields.py). Mỗi field: `scope` = `profile` (thuộc tính ổn định của CHÍNH người dùng - sinh viên: khóa, ngành...; giảng viên/cán bộ: học vị, chức danh... - lưu vào hồ sơ student_profiles theo người dùng) hoặc `calculation` (số liệu của MỘT phép tính, lưu theo phép tính đó trong recent_calculations của hội thoại); `key_aliases` = các tên khoá khác cùng nghĩa, luôn được quy về `field` trước khi dùng. Không phải whitelist đóng: field lạ vẫn dùng được, nhưng khái niệm nào có ở đây thì BẮT BUỘC dùng đúng `field`. Mọi tên tham số `ParamSpec` của app/calculation/formulas.py phải có ở đây (test). Bảng cho node 10 (ask_user_form_guide.yaml) chỉ render field `profile`.",
   "fields": [
     {
       "field": "he_dao_tao",
@@ -238,6 +238,136 @@
       "example_options": [],
       "priority": "low",
       "description": "KHÔNG hỏi qua form (không phải thuộc tính quy chế)."
+    },
+    {
+      "field": "hoc_vi",
+      "scope": "profile",
+      "key_aliases": [
+        "trinh_do",
+        "trinh_do_chuyen_mon",
+        "academic_degree",
+        "bang_cap"
+      ],
+      "concept": "Học vị (của giảng viên, cán bộ)",
+      "aliases": [
+        "học vị",
+        "trình độ",
+        "trình độ chuyên môn",
+        "bằng cấp"
+      ],
+      "example_options": [
+        "Cử nhân/Kỹ sư",
+        "Thạc sĩ",
+        "Tiến sĩ"
+      ],
+      "priority": "medium",
+      "description": "Học vị của chính giảng viên/cán bộ - KHÁC bac_dao_tao (bậc của chương trình sinh viên theo học)."
+    },
+    {
+      "field": "hoc_ham",
+      "scope": "profile",
+      "key_aliases": [
+        "academic_rank"
+      ],
+      "concept": "Học hàm (phó giáo sư, giáo sư)",
+      "aliases": [
+        "học hàm",
+        "phó giáo sư",
+        "giáo sư"
+      ],
+      "example_options": [
+        "Không có",
+        "Phó giáo sư",
+        "Giáo sư"
+      ],
+      "priority": "low",
+      "description": "Học hàm của giảng viên - KHÁC chuc_danh (chức danh nghề nghiệp)."
+    },
+    {
+      "field": "chuc_danh",
+      "scope": "profile",
+      "key_aliases": [
+        "chuc_danh_nghe_nghiep",
+        "hang_giang_vien",
+        "ngach"
+      ],
+      "concept": "Chức danh nghề nghiệp (giảng viên, giảng viên chính, giảng viên cao cấp)",
+      "aliases": [
+        "chức danh",
+        "chức danh nghề nghiệp",
+        "hạng giảng viên",
+        "ngạch"
+      ],
+      "example_options": [
+        "Giảng viên",
+        "Giảng viên chính",
+        "Giảng viên cao cấp"
+      ],
+      "priority": "medium",
+      "description": "Chức danh nghề nghiệp của giảng viên - KHÁC hoc_ham và hoc_vi."
+    },
+    {
+      "field": "hinh_thuc_cong_tac",
+      "scope": "profile",
+      "key_aliases": [
+        "loai_giang_vien",
+        "loai_hop_dong",
+        "hinh_thuc_hop_dong",
+        "hop_dong"
+      ],
+      "concept": "Hình thức công tác (cơ hữu/thỉnh giảng; viên chức/hợp đồng)",
+      "aliases": [
+        "cơ hữu",
+        "thỉnh giảng",
+        "loại hợp đồng",
+        "hình thức hợp đồng"
+      ],
+      "example_options": [
+        "Giảng viên cơ hữu",
+        "Giảng viên thỉnh giảng",
+        "Viên chức",
+        "Hợp đồng lao động"
+      ],
+      "priority": "medium",
+      "description": "Giảng viên cơ hữu hay thỉnh giảng, viên chức hay hợp đồng lao động."
+    },
+    {
+      "field": "chuc_vu_quan_ly",
+      "scope": "profile",
+      "key_aliases": [
+        "chuc_vu",
+        "kiem_nhiem"
+      ],
+      "concept": "Chức vụ quản lý, kiêm nhiệm",
+      "aliases": [
+        "chức vụ",
+        "chức vụ quản lý",
+        "kiêm nhiệm"
+      ],
+      "example_options": [
+        "Không giữ chức vụ",
+        "Trưởng/Phó trưởng khoa",
+        "Trưởng/Phó trưởng bộ môn",
+        "Trưởng/Phó phòng"
+      ],
+      "priority": "low",
+      "description": "Chỉ khi văn bản chia định mức/chế độ theo chức vụ (VD giảm giờ chuẩn cho người giữ chức vụ)."
+    },
+    {
+      "field": "don_vi_cong_tac",
+      "scope": "profile",
+      "key_aliases": [
+        "noi_cong_tac",
+        "don_vi_cong_tac_cua_toi"
+      ],
+      "concept": "Đơn vị công tác của giảng viên, cán bộ (khoa, phòng, trung tâm)",
+      "aliases": [
+        "đơn vị công tác",
+        "nơi công tác"
+      ],
+      "example_options": [],
+      "priority": "low",
+      "description": "Đơn vị nơi chính giảng viên/cán bộ làm việc - KHÁC khoa_quan_ly (khoa quản lý ngành của sinh viên). Không phải quyền truy cập."
     },
     {
       "field": "tc_lt",

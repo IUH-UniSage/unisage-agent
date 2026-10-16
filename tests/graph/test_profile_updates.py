@@ -2,13 +2,14 @@
 returns `metadata_updates`, applied and saved at once, before anything else runs."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
 from app.graph.metadata_fields import update_notice
 from app.graph.nodes.message_classification import (
     build_classification_agent,
@@ -19,6 +20,7 @@ from app.graph.streaming_graph import run_graph
 from app.graph.streaming_session import _profile_saver
 from app.graph.streaming_state import GraphModels
 from app.schemas.clarification import CalculationPlan, LastCalculation
+from app.schemas.security import AcademicSecurityContext
 from tests.graph.test_calculation_node import (
     _FEE_TABLE,
     _PRICES_FOUND,
@@ -84,8 +86,8 @@ async def test_the_classifier_sees_the_profile_and_the_profile_field_table() -> 
     await classify_intent(agent, "tôi nhầm, khoá 2023 mới đúng", profile=_PROFILE)
 
     assert (
-        "<student_declared_attributes>\n- khoa_nhap_hoc: 2022 (khóa K18)\n- nganh_hoc: CNTT\n"
-        "</student_declared_attributes>" in (prompts[0])
+        "<declared_attributes>\n- khoa_nhap_hoc: 2022 (khóa K18)\n- nganh_hoc: CNTT\n"
+        "</declared_attributes>" in (prompts[0])
     )
     system = "\n".join(str(prompt) for prompt in agent._system_prompts)
     assert "{profile_fields}" not in system
@@ -182,7 +184,7 @@ async def test_the_session_saver_writes_the_profile_at_once(
     owner = ProfileOwner(user_id="u1")
     await _profile_saver(db_session_factory, owner)({"khoa_nhap_hoc": "2023"})
     async with db_session_factory() as session:
-        assert await StudentProfileRepository(session).get(owner) == {"khoa_nhap_hoc": "2023"}
+        assert await UserProfileRepository(session).get(owner) == {"khoa_nhap_hoc": "2023"}
 
 
 @pytest.mark.asyncio
@@ -225,3 +227,27 @@ async def test_a_follow_up_after_a_correction_recomputes_with_the_new_intake() -
     assert result.last_calculation is not None
     assert result.last_calculation.params["khoa_nhap_hoc"] == "2023"
     assert result.response_text.startswith("Mình đã cập nhật thông tin của bạn")
+
+
+@pytest.mark.asyncio
+async def test_a_lecturer_declaring_their_own_degree_is_saved_like_a_student() -> None:
+    """The profile is the caller's own, whatever the role: "tôi là tiến sĩ" picks the
+    branch of a lecturer's own regulation next time."""
+
+    saved: list[dict[str, str]] = []
+
+    async def save(profile: dict[str, str]) -> None:
+        saved.append(profile)
+
+    lecturer = AcademicSecurityContext(user_id="u1", role="GIANG_VIEN")
+    output = await run_graph(
+        replace(_input("tôi là tiến sĩ, định mức giờ chuẩn của tôi?"), security=lecturer),
+        _models(_classifier({"hoc_vi": "Tiến sĩ"})),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+        on_profile_change=save,
+    )
+
+    assert saved == [{"hoc_vi": "Tiến sĩ"}]
+    assert output.confirmed_metadata == {"hoc_vi": "Tiến sĩ"}

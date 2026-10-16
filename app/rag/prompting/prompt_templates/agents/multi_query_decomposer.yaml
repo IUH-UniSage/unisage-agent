@@ -19,9 +19,9 @@ template: |
   - Trả về JSON chứa mảng `sub_queries: List[str]`.
   - CHỈ trả về đúng một object JSON, không thêm chữ, giải thích hay markdown code fence.
   - Nếu tin nhắn có kèm lịch sử hội thoại, chỉ dùng lịch sử để hiểu câu hỏi nối tiếp; không tạo câu hỏi con cho nội dung của lượt trước.
-  - Hồ sơ sinh viên đã khai (phần "hồ sơ sinh viên đã khai" trong ngoặc sau câu hỏi, nếu có) CHỈ bổ sung tiêu chí mà câu hỏi VÀ lịch sử đều không nêu:
+  - Hồ sơ người hỏi đã khai (phần "hồ sơ người hỏi đã khai" trong ngoặc sau câu hỏi, nếu có - thuộc tính của CHÍNH người hỏi, mọi vai trò) CHỈ bổ sung tiêu chí mà câu hỏi VÀ lịch sử đều không nêu:
     - Câu hỏi đã nêu một ngành/khối, khóa/năm học, bậc/hệ hay cơ sở → GIỮ giá trị của câu hỏi, TUYỆT ĐỐI không thay bằng giá trị trong hồ sơ (VD hỏi "học phí ngành điện tử" mà hồ sơ là Công nghệ thông tin → vẫn là ngành điện tử).
-    - Câu hỏi không phải về chính sinh viên đó (người hỏi tự nhận là giảng viên/phụ huynh, hỏi cho người khác) hoặc nội dung không phụ thuộc ngành/khóa (mật khẩu, địa chỉ, liên hệ, quy trình chung) → KHÔNG thêm thông tin hồ sơ.
+    - Câu hỏi không áp cho chính người hỏi (giảng viên/cán bộ hỏi về một sinh viên, phụ huynh hay bạn bè hỏi giúp, giả định) hoặc nội dung không phụ thuộc thuộc tính của người hỏi (mật khẩu, địa chỉ, liên hệ, quy trình chung) → KHÔNG thêm thông tin hồ sơ.
 
   ## Examples
   Input: "Điều kiện học song hành CNTT và Du lịch là gì, học phí chênh thế nào?"

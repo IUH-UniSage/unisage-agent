@@ -51,7 +51,7 @@ def build_metadata_section(
     confirmed_metadata: dict[str, str],
 ) -> str:
     """Build `{academic_metadata}` - two separate XML tags, JWT-verified identity
-    (`academic_user_context`) vs self-declared attributes (`student_declared_attributes`).
+    (`academic_user_context`) vs self-declared attributes (`declared_attributes`).
     Never merged: authorization must only ever be based on the former."""
 
     department_access_lines = (
@@ -65,12 +65,12 @@ def build_metadata_section(
         user_id=security.user_id or "(khách vãng lai)",
         role=security.role,
         department_access_lines=department_access_lines,
-        student_declared_attributes=build_declared_attributes_section(confirmed_metadata),
+        declared_attributes=build_declared_attributes_section(confirmed_metadata),
     )
 
 
 def build_declared_attributes_section(confirmed_metadata: Mapping[str, str]) -> str:
-    """`<student_declared_attributes>`: what the student declared about themselves. The
+    """`<declared_attributes>`: what the student declared about themselves. The
     same block in the answering prompts (inside `{academic_metadata}`) and in the message
     to the classifier, so both read the profile under one tag and in one format."""
 
@@ -81,7 +81,7 @@ def build_declared_attributes_section(confirmed_metadata: Mapping[str, str]) -> 
         )
         or _NO_DECLARED_ATTRIBUTES
     )
-    return get_templates().student_declared_attributes.format(declared_lines=declared_lines).strip()
+    return get_templates().declared_attributes.format(declared_lines=declared_lines).strip()
 
 
 def _declared_value(field: str, value: str) -> str:
@@ -295,7 +295,7 @@ def build_json_repair_prompt(
     verbatim from the text" rule has no text to copy from, and the repaired
     field falls back to `options: null` (free-text) even when the source
     document actually lists a finite set of options. `security`/
-    `confirmed_metadata` are ALSO needed - without `<student_declared_attributes>`
+    `confirmed_metadata` are ALSO needed - without `<declared_attributes>`
     this call has no way to know a field was already answered in an earlier
     turn, and can re-ask it (observed live: repair re-emitted a form for
     `he_dao_tao` already present in `confirmed_metadata`). Reuses

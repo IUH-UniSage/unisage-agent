@@ -327,7 +327,7 @@ Mọi câu hỏi của một lượt nằm trong **một** panel (không cắt �
 ### 2.8 Hồ sơ sinh viên và nơi lưu câu trả lời (13-10-2026)
 
 - **Hồ sơ** (thuộc tính ổn định: khoá nhập học, ngành, hệ, bậc, khối ngành, cơ sở...) ở bảng
-  `student_profiles` (`StudentProfileRepository`): theo `user_id` khi đã đăng nhập, nên đi qua mọi hội
+  `user_profiles` (`UserProfileRepository`): theo `user_id` khi đã đăng nhập, nên đi qua mọi hội
   thoại; khách (không có `user_id`) theo `conversation_id`. Đúng một trong hai cột có giá trị (check
   constraint). Chỉ dùng để chọn nhánh trả lời và để không hỏi lại - không bao giờ là bộ lọc Qdrant hay
   phân quyền. Migration `b5c6d7e8f9a0` chép `confirmed_metadata` cũ thành hồ sơ theo hội thoại (không gộp

@@ -49,8 +49,10 @@ def advisory_questions(
     known_fields: Collection[str] = (),
 ) -> list[dict[str, Any]]:
     """Choice questions from the model's ask_user_form blocks, under registry names. A
-    field in the profile or already known to this turn's calculations, asked twice, or
-    with fewer than 2 usable options is dropped."""
+    field already known to this turn's calculations, asked twice, or with fewer than 2
+    usable options is dropped; so is one in the profile when the form asks about the
+    caller ("about": "self", the default). A form about someone else ("other") asks it
+    anyway: the caller's own intake is not their student's or their friend's."""
 
     questions: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -58,11 +60,13 @@ def advisory_questions(
         fields = form.get("fields")
         if not isinstance(fields, list):
             continue
+        about = "other" if str(form.get("about") or "").strip().lower() == "other" else "self"
         for item in fields:
             if not isinstance(item, Mapping):
                 continue
             field = canonical_field(str(item.get("field") or ""))
-            if not field or field in seen or field in confirmed_metadata or field in known_fields:
+            in_profile = about == "self" and field in confirmed_metadata
+            if not field or field in seen or in_profile or field in known_fields:
                 continue
             options: list[ChoiceOption] = []
             for raw in item.get("options") or []:
@@ -85,6 +89,7 @@ def advisory_questions(
                     "allow_other": True,
                     "origin": "advisory",
                     "field": field,
+                    "about": about,
                 }
             )
     return questions

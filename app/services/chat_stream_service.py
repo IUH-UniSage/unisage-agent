@@ -41,7 +41,7 @@ from app.core.timezone import now_ict
 from app.core.usage.cost_calculator import estimate as estimate_cost
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
-from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
 from app.graph.metadata_fields import canonical_profile
 from app.graph.queue_items import (
     ClarificationClosedItem,
@@ -264,7 +264,7 @@ class ChatStreamService:
 
         conversation_id = request.conversation_id
         round_state = await ClarificationRoundRepository(self._db).get_round(conversation_id)
-        profile = await StudentProfileRepository(self._db).get(
+        profile = await UserProfileRepository(self._db).get(
             ProfileOwner.of(caller.security, conversation_id)
         )
         await self._db.commit()  # get_round may have consumed an expired lease

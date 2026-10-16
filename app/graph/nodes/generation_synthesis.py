@@ -116,7 +116,7 @@ async def _repair_missing_ask_form(
     thêm thông tin..., vui lòng cho biết thêm thông tin."), which is exactly
     what produced a hallucinated `ask_user_form` for an unrelated topic in a
     live observation. `security`/`confirmed_metadata` are threaded through
-    to the repair prompt so it can see `<student_declared_attributes>` and
+    to the repair prompt so it can see `<declared_attributes>` and
     skip re-asking a field already answered in an earlier turn.
 
     Streams nothing to `token_sink` until the repair call itself has

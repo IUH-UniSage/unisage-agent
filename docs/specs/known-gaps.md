@@ -392,7 +392,7 @@ the long-disconnected old client could leak.
 
 ### A guest's profile does not follow them after they log in (2026-10)
 
-A guest's declared attributes are kept per conversation (`student_profiles.conversation_id`);
+A guest's declared attributes are kept per conversation (`user_profiles.conversation_id`);
 once the same person logs in, their user profile starts empty and is not merged with what they
 declared as a guest. Profiles migrated from the old per-conversation `confirmed_metadata` are
 conversation-owned too, even for logged-in users (the table cannot tell which user a

@@ -1,7 +1,7 @@
-"""One name per concept for everything a student declares or types on a form.
+"""One name per concept for everything a user declares or types on a form.
 
-`known_metadata_fields.json` is the registry: each field is either `profile` (a
-lasting attribute of the student, kept in `student_profiles`) or `calculation` (a
+`configs/known_metadata_fields.json` is the registry: each field is either `profile` (a
+lasting attribute of the asker, kept in `user_profiles`) or `calculation` (a
 number of one calculation, kept with that calculation). Every field name - a form
 question, an answer, a correction from the classifier - goes through
 `canonical_field` first, so "khoa_tuyen_sinh" and "khoa_nhap_hoc" can never hold

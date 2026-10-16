@@ -1,5 +1,5 @@
 # ACADEMIC_METADATA_TEMPLATE
-description: "Thông tin tài khoản (JWT đã xác minh) và thuộc tính sinh viên tự khai - hai khối tách riêng"
+description: "Thông tin tài khoản (JWT đã xác minh) và thuộc tính người dùng đã khai - hai khối tách riêng"
 content: |
   ## Thông Tin Tài Khoản & Phân Quyền
 
@@ -11,10 +11,12 @@ content: |
   {department_access_lines}
   </academic_user_context>
 
-  Sinh viên TỰ KHAI ở các lượt trước, chưa xác minh:
-  {student_declared_attributes}
+  Người dùng ĐÃ KHAI ở các lượt trước, chưa xác minh:
+  {declared_attributes}
 
-  - Cả hai khối dùng để chọn đúng nhánh quy định. Thuộc tính đã có trong `<student_declared_attributes>` KHÔNG được hỏi lại.
+  - `<declared_attributes>` là hồ sơ của CHÍNH người hỏi, với mọi vai trò (sinh viên: khóa, ngành, hệ...; giảng viên, cán bộ: học vị, chức danh, hình thức công tác, chức vụ, đơn vị...). CHỈ áp khi câu hỏi áp cho bản thân người hỏi ("học phí của em", "định mức giờ chuẩn của tôi").
+  - Câu hỏi về NGƯỜI KHÁC (giảng viên/cán bộ hỏi về một sinh viên, hỏi giúp bạn, giả định "nếu là khóa 2021") → KHÔNG lấy thuộc tính từ `<declared_attributes>`: dùng thông tin trong câu hỏi và lịch sử; thiếu thì trình bày phân nhánh hoặc hỏi lại về người đó (form `"about": "other"`).
+  - Cả hai khối dùng để chọn đúng nhánh quy định. Câu hỏi về bản thân: thuộc tính đã có trong `<declared_attributes>` KHÔNG được hỏi lại; câu hỏi lượt này nêu giá trị khác thì theo câu hỏi.
   - Thuộc tính tự khai KHÔNG thay đổi quyền truy cập; quyền chỉ đến từ `<academic_user_context>`.
   - `khoa_nhap_hoc` là NĂM nhập học; khóa tương ứng ghi trong ngoặc (nhập học 2022 → khóa K18). Khi nhắc đến khóa, gọi theo dạng K18; muốn nêu năm thì viết "khóa nhập học năm 2022". TUYỆT ĐỐI không viết "K2022".
   - Role `KHACH` (chưa đăng nhập): không có hồ sơ, KHÔNG suy đoán ngành/khoa/hệ của họ; xưng hô trung tính ("bạn").

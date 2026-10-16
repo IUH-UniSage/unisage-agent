@@ -132,7 +132,7 @@ _NO_ROUTING_MODE_INTENTS = frozenset(
 # the recent history - everything before it is the user's own message.
 _HISTORY_SEPARATOR = "\n\nLịch sử hội thoại gần đây"
 _CURRENT_TIME_SEPARATOR = "\n\n<current_time>"
-_PROFILE_SEPARATOR = "\n\n<student_declared_attributes>"
+_PROFILE_SEPARATOR = "\n\n<declared_attributes>"
 
 
 def _task_payload(intent: str, query: str, routing_mode: str | None) -> dict[str, object]:

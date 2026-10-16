@@ -20,7 +20,7 @@ from app.api.deps import get_backend_java_client, get_graph_models, get_session_
 from app.core.config import settings
 from app.database.models import Base
 from app.database.repositories.clarification_state import ClarificationRoundRepository
-from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
 from app.graph import streaming_session
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations import backend_java_client
@@ -143,7 +143,7 @@ def _seed(client: TestClient, *, claim: bool = False) -> PendingRound:
             await connection.run_sync(Base.metadata.create_all)
             repo = ClarificationRoundRepository(session)
             await repo.upsert_open(CONVERSATION, pending)
-            await StudentProfileRepository(session).save(
+            await UserProfileRepository(session).save(
                 ProfileOwner(conversation_id=CONVERSATION), {"nganh": "CNTT"}
             )
             if claim:
@@ -363,13 +363,16 @@ def test_a_users_profile_carries_over_to_their_next_conversation(
 
     async def fake_graph(graph_input: GraphInput, *_args: object, **_kwargs: object) -> GraphOutput:
         seen.append(graph_input)
-        declared = {"nganh_hoc": "CNTT"} if graph_input.conversation_id == "conv-a" else {}
+        declared = {"conv-a": {"nganh_hoc": "CNTT"}, "conv-c": {"hoc_vi": "Tiến sĩ"}}.get(
+            graph_input.conversation_id, {}
+        )
         return GraphOutput(
             response_text="x", confirmed_metadata={**graph_input.confirmed_metadata, **declared}
         )
 
     monkeypatch.setattr(streaming_session, "run_graph", fake_graph)
-    user = {"X-User-Id": "u1"}
+    user = {"X-User-Id": "u1", "X-User-Role": "SINH_VIEN"}
+    lecturer = {"X-User-Id": "u2", "X-User-Role": "GIANG_VIEN"}
 
     def ask(conversation_id: str, headers: dict[str, str]) -> None:
         response = client.post(
@@ -382,5 +385,14 @@ def test_a_users_profile_carries_over_to_their_next_conversation(
     ask("conv-a", user)
     ask("conv-b", user)
     ask("conv-b", {})  # a guest in the same conversation has their own (empty) profile
+    # A lecturer's profile is their own too, and follows them the same way.
+    ask("conv-c", lecturer)
+    ask("conv-d", lecturer)
 
-    assert [item.confirmed_metadata for item in seen] == [{}, {"nganh_hoc": "CNTT"}, {}]
+    assert [item.confirmed_metadata for item in seen] == [
+        {},
+        {"nganh_hoc": "CNTT"},
+        {},
+        {},
+        {"hoc_vi": "Tiến sĩ"},
+    ]

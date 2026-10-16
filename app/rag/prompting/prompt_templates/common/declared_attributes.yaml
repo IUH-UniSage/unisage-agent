@@ -1,0 +1,6 @@
+# DECLARED_ATTRIBUTES_TEMPLATE
+description: "Hồ sơ tự khai của CHÍNH người hỏi (mọi vai trò, chưa xác minh): thuộc tính lâu dài quyết định nhánh quy định áp cho bản thân họ - sinh viên: khóa, ngành, hệ...; giảng viên/cán bộ: học vị, chức danh, hình thức công tác... Chỉ dùng khi câu hỏi áp cho chính người hỏi; thuộc tính của người khác nằm trong câu hỏi, không ở đây. Một khối dùng chung: nhúng trong academic_metadata của prompt trả lời và gửi kèm tin nhắn cho bộ phân loại"
+content: |
+  <declared_attributes>
+  {declared_lines}
+  </declared_attributes>

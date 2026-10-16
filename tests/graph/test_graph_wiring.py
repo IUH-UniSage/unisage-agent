@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 
 import pytest
@@ -1354,3 +1354,78 @@ async def test_resume_keeps_asking_new_fields_but_never_an_answered_one(
     )
     assert again.pending_round is None
     assert again.confirmed_metadata == {"he_dao_tao": "chinh_quy"}
+
+
+def _capturing_generation(prompts: list[str]) -> FunctionModel:
+    async def stream(messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        prompts.append(
+            "\n".join(
+                str(getattr(part, "content", "")) for message in messages for part in message.parts
+            )
+        )
+        yield "Trả lời [1]."
+
+    return FunctionModel(stream_function=stream)
+
+
+@pytest.mark.asyncio
+async def test_a_panel_about_someone_else_answers_that_question_and_saves_nothing(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lecturer asked about a student's fees and answered "Liên thông" for the student:
+    asked even though the lecturer's own profile has a mode, kept out of that profile,
+    and given to generation as part of the question."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    own_profile = {"he_dao_tao": "chinh_quy", "hoc_vi": "Tiến sĩ"}
+    question = "học phí của sinh viên lớp tôi chủ nhiệm"
+    pending = build_round(
+        [
+            TaskQuestions(
+                task=advisory_task(
+                    "T1",
+                    [
+                        ClassifiedTask(
+                            intent="academic_advisory", query=question, routing_mode="SINGLE"
+                        )
+                    ],
+                ),
+                questions=advisory_questions(
+                    [{**_FORM, "about": "other"}], confirmed_metadata=own_profile
+                ),
+            )
+        ],
+        original_query=question,
+        chain_depth=1,
+    )
+    assert pending is not None and pending.panel.questions[0].about == "other"
+    assert "about" not in pending.panel.questions[0].public().model_dump()
+    prompts: list[str] = []
+    models = GraphModels(
+        classification=mock_sync_llm_model("off_topic"),
+        query_transformation=_echo_query_transformation_model(),
+        generation=_capturing_generation(prompts),
+        retrieval=_RecordingRetrievalService([_DUMMY_CHUNK]),
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message="Hệ đào tạo: Liên thông",
+        is_first_turn=False,
+        security=AcademicSecurityContext(user_id="u1", role="GIANG_VIEN"),
+        confirmed_metadata=dict(own_profile),
+        resume=_resume(pending, "lien_thong"),
+    )
+
+    result = await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.confirmed_metadata == own_profile
+    assert "Về trường hợp được hỏi, người dùng vừa cho biết: Hệ đào tạo: Liên thông" in prompts[-1]
+
+
+def test_a_form_about_the_caller_skips_what_their_profile_has() -> None:
+    profile = {"he_dao_tao": "chinh_quy"}
+
+    assert advisory_questions([_FORM], confirmed_metadata=profile) == []
+    (asked,) = advisory_questions([{**_FORM, "about": "other"}], confirmed_metadata=profile)
+    assert (asked["field"], asked["about"]) == ("he_dao_tao", "other")

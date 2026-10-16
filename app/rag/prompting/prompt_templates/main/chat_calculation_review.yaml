@@ -31,4 +31,4 @@ template: |
   - Không chép lại công thức hay các bước - chúng hiện ngay bên dưới.
   - Không khẳng định điều quy chế chưa có trong dữ liệu; không đặt tiêu đề, không dùng danh sách.
 
-  Câu hỏi của sinh viên: {user_query}
+  Câu hỏi của người dùng: {user_query}

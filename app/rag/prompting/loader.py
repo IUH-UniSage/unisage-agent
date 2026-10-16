@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from app.core.configs import CONFIGS_DIR
+
 from .schema import PromptTemplates
 
 _templates_dir: Path | None = None
@@ -25,7 +27,7 @@ def reset_templates_cache() -> None:
 
 
 def get_known_metadata_fields() -> list[dict[str, Any]]:
-    """Load `known_metadata_fields.json` (lazy load with caching) - the
+    """Load `configs/known_metadata_fields.json` (lazy load with caching) - the
     common-concept-to-canonical-field-name vocabulary rendered into
     `ask_user_form_guide.yaml` (see `builder.build_known_metadata_fields_section`).
     Not part of `PromptTemplates`: it's structured data, not a format-string
@@ -33,7 +35,7 @@ def get_known_metadata_fields() -> list[dict[str, Any]]:
 
     global _known_metadata_fields_cache
     if _known_metadata_fields_cache is None:
-        path = Path(__file__).parent / "known_metadata_fields.json"
+        path = CONFIGS_DIR / "known_metadata_fields.json"
         data = json.loads(path.read_text(encoding="utf-8"))
         _known_metadata_fields_cache = data["fields"]
     return _known_metadata_fields_cache
@@ -102,9 +104,7 @@ def _load_all_templates() -> PromptTemplates:
         ),
         header=_load_yaml_template(common / "header.yaml"),
         academic_metadata=_load_yaml_template(common / "academic_metadata.yaml"),
-        student_declared_attributes=_load_yaml_template(
-            common / "student_declared_attributes.yaml"
-        ),
+        declared_attributes=_load_yaml_template(common / "declared_attributes.yaml"),
         history_message=_load_yaml_template(common / "history_message.yaml"),
         security_access_control=_load_yaml_template(common / "security_access_control.yaml"),
         academic_domain_rules=_load_yaml_template(common / "academic_domain_rules.yaml"),

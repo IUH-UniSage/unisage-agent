@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
-from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
 from app.graph import streaming_session
 from app.graph.clarification_round import (
     TaskQuestions,
@@ -201,7 +201,7 @@ async def test_turn_without_panel_saves_the_guest_profile(
     )
     async with db_session_factory() as session:
         state = await ClarificationRoundRepository(session).get_round("c1")
-        profile = await StudentProfileRepository(session).get(ProfileOwner(conversation_id="c1"))
+        profile = await UserProfileRepository(session).get(ProfileOwner(conversation_id="c1"))
     assert state.status is None and profile == {"nganh": "cntt"}
 
 

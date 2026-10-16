@@ -21,6 +21,10 @@ LETTER_GRADES = ("A+", "A", "B+", "B", "C+", "C", "D+", "D", "F")
 
 QuestionKind = Literal["choice", "number", "number_list", "number_or_list", "text", "course_table"]
 QuestionOrigin = Literal["advisory", "calculation"]
+# Whom an advisory question asks about: the caller ("self" - the answer joins their
+# profile) or someone else ("other" - a student a lecturer deals with, a friend, a
+# hypothetical case - the answer serves that one question and is never saved).
+QuestionAbout = Literal["self", "other"]
 
 
 class _Strict(BaseModel):
@@ -94,10 +98,12 @@ class Question(_QuestionBody):
     origin: QuestionOrigin
     task_id: str = Field(pattern=TASK_ID_PATTERN)
     field: str = Field(min_length=1, max_length=64)
+    # Default "self": a round stored before this field existed reads as it behaved then.
+    about: QuestionAbout = "self"
 
     def public(self) -> PublicQuestion:
         return PublicQuestion.model_validate(
-            self.model_dump(exclude={"origin", "task_id", "field"})
+            self.model_dump(exclude={"origin", "task_id", "field", "about"})
         )
 
 

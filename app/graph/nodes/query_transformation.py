@@ -70,7 +70,7 @@ def _fold_confirmed_metadata_into_query(user_query: str, confirmed_metadata: dic
     # Only for what the question leaves open: "học phí ngành điện tử" from a CNTT student
     # was rewritten to the CNTT fee (14-10-2026).
     return (
-        f"{user_query} (hồ sơ sinh viên đã khai, CHỈ dùng cho tiêu chí câu hỏi không tự nêu: "
+        f"{user_query} (hồ sơ người hỏi đã khai, CHỈ dùng cho tiêu chí câu hỏi không tự nêu: "
         f"{declared})"
     )
 
@@ -191,7 +191,7 @@ async def _transform_task(
     on_attempt: AttemptRecorder | None,
     budget: BudgetContext | None,
 ) -> list[SubQuery]:
-    # Classification saw the same profile (`<student_declared_attributes>`) and applies it by the
+    # Classification saw the same profile (`<declared_attributes>`) and applies it by the
     # same rule as the HyDE prompt, so its text is reused: a second LLM call for a
     # logged-in student took 14s (14-10-2026).
     if mode == "MULTI" and task.sub_queries:

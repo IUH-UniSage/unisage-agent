@@ -12,6 +12,7 @@ nạp nó ở `app/rag/prompting/prompt_templates/`, và các file YAML khác tr
 đọc qua `app/core/configs.py`:
 
 - `configs/web_query.yaml` — từ vựng dựng câu truy vấn web (`subject_aliases`).
+- `configs/known_metadata_fields.json` — sổ đăng ký tên field của hồ sơ người dùng và form hỏi lại.
 - `configs/evals/label_map.yaml` — bảng gán phòng ban/quyền cho bộ eval.
 
 File YAML mà công cụ đòi đúng chỗ vẫn ở chỗ cũ: `Taskfile.yml` và `taskfiles/` (Task),
@@ -20,7 +21,7 @@ File YAML mà công cụ đòi đúng chỗ vẫn ở chỗ cũ: `Taskfile.yml` 
 | Loại | Ví dụ | Giữ ở đâu | Định dạng | Ai sửa | Đổi có cần build lại image? |
 |---|---|---|---|---|---|
 | Bí mật và thứ đổi theo môi trường | `OPENAI_API_KEY`, `DB_URL`, `CHAT_RERANK_SCORE_THRESHOLD` | biến môi trường, `.env` khi chạy máy dev | `KEY=value`, đọc qua `Settings` (Pydantic) | người triển khai | Không |
-| Nội dung prompt LLM, cùng vòng đời với code | system prompt từng node, quy tắc bảo mật, từ vựng field, từ đồng nghĩa của câu truy vấn web | `app/rag/prompting/prompt_templates/`, `configs/web_query.yaml`, `known_metadata_fields.json` | YAML (`template`/`content`), JSON | người viết/tinh chỉnh prompt | Có — nạp lúc import, không đọc lại khi chạy |
+| Nội dung prompt LLM, cùng vòng đời với code | system prompt từng node, quy tắc bảo mật, từ vựng field, từ đồng nghĩa của câu truy vấn web | `app/rag/prompting/prompt_templates/`, `configs/web_query.yaml`, `configs/known_metadata_fields.json` | YAML (`template`/`content`), JSON | người viết/tinh chỉnh prompt | Có — nạp lúc import, không đọc lại khi chạy |
 | Dữ liệu máy sinh có số phiên bản | *(chưa có trong repo này)* | — | — | — | — |
 
 Không trộn hai loại đang có. Một khoá API không bao giờ nằm trong YAML prompt; một câu quy tắc
@@ -221,7 +222,7 @@ INGEST_CHUNKING_PREVIEW_MAX_CHUNKS=200
 - `loader.get_templates()` nạp và cache toàn bộ trong bộ nhớ tiến trình **một lần**, lúc gọi đầu
   tiên — sửa file YAML rồi **phải khởi động lại tiến trình** (hoặc gọi
   `reset_templates_cache()` — chỉ dùng trong test) mới thấy hiệu lực, không có hot-reload.
-- `known_metadata_fields.json` (cạnh `loader.py`) là từ vựng khái niệm → tên field chuẩn, render vào
+- `configs/known_metadata_fields.json` là từ vựng khái niệm → tên field chuẩn, render vào
   `ask_user_form_guide.yaml` qua `builder.build_known_metadata_fields_section()`. **Không phải
   whitelist đóng** — LLM vẫn được tự đặt tên field mới cho khái niệm chưa liệt kê; file chỉ ép dùng
   lại đúng tên khi khái niệm trùng một dòng đã có, để tránh một khái niệm bị phân mảnh thành hai tên

@@ -7,6 +7,8 @@ content: |
   </history_message>
 
   Cách dùng: chỉ để hiểu MẠCH cuộc trò chuyện (người dùng đang nói tiếp về gì, đã hỏi gì trước
-  đó) — KHÔNG dùng để suy ra thuộc tính sinh viên (việc đó đã có `<student_declared_attributes>`
-  ở trên, đáng tin hơn vì đã qua bước xác nhận). Nếu lịch sử và `<student_declared_attributes>`
-  mâu thuẫn nhau, LUÔN tin `<student_declared_attributes>`.
+  đó, đang hỏi về ai) — KHÔNG dùng để suy ra thuộc tính của CHÍNH người hỏi (việc đó đã có
+  `<declared_attributes>` ở trên, đáng tin hơn vì đã qua bước xác nhận). Nếu lịch sử và
+  `<declared_attributes>` mâu thuẫn về thuộc tính của chính người hỏi, LUÔN tin
+  `<declared_attributes>`. Thông tin về NGƯỜI KHÁC mà lịch sử đã nêu (khóa, ngành của sinh viên
+  được hỏi) vẫn dùng cho câu hỏi tiếp theo về người đó.
