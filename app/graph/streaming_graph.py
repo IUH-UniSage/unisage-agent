@@ -233,6 +233,8 @@ async def _run_graph(
         budget=budget,
         previous_calculation=calculation_title(graph_input.last_calculation),
         profile=confirmed_metadata,
+        role=graph_input.security.role,
+        departments=[entry.department_id for entry in graph_input.security.department_access],
     )
     trace.prompt("03_MessageClassificationNode", describe_classification(classification))
 

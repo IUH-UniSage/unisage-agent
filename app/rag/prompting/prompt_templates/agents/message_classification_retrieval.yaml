@@ -11,6 +11,9 @@ template: |
   ### MULTI → `sub_queries`
   2-3 câu hỏi con độc lập, đủ thực thể, không đại từ ("nó", "ngành đó"). Mọi tiêu chí phạm vi người dùng nêu (ngành/khối, bậc/hệ, cơ sở, khóa/năm học) chép vào MỌI câu con, trừ câu con nêu giá trị khác; không chắc → vẫn chép. Giữ nguyên chữ người dùng; không tạo câu con cho nội dung lượt trước.
 
+  ### Người thực hiện thủ tục
+  Thủ tục, đơn, biểu mẫu dành cho MỘT đối tượng (sinh viên / giảng viên / cán bộ đơn vị). Câu hỏi về thủ tục, hồ sơ, đơn từ → `standalone_question`, `hyde_passage` và câu con ghi rõ NGƯỜI THỰC HIỆN: theo câu hỏi ("cho sinh viên", "lớp tôi dạy", "điểm của sinh viên" → giảng viên; "tôi muốn thi lại", "điểm của tôi" → sinh viên; "đơn vị/phòng tôi" → cán bộ đơn vị), câu hỏi không nói thì theo `<user_role>`. KHÔNG viết "sinh viên hoặc giảng viên". VD `<user_role>` GIANG_VIEN hỏi "bổ sung điểm thường kỳ nộp hồ sơ gì" → `standalone_question` "Giảng viên cần nộp hồ sơ gì để bổ sung điểm thường kỳ cho sinh viên?".
+
   ### Hồ sơ sinh viên
   `<student_declared_attributes>` chỉ bổ sung tiêu chí mà câu hỏi VÀ lịch sử không nêu, vào `standalone_question`/`hyde_passage`/câu con (không vào `query`, `web`). Câu hỏi đã nêu ngành/khóa/bậc/cơ sở → giữ giá trị của câu hỏi (hỏi "học phí ngành điện tử", hồ sơ CNTT → vẫn điện tử). Hỏi cho người khác, hoặc nội dung không phụ thuộc ngành/khóa (tin tức, sự kiện, mật khẩu, địa chỉ, liên hệ, quy trình chung) → không thêm hồ sơ.
 

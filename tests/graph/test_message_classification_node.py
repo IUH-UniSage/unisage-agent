@@ -551,3 +551,26 @@ def test_classifier_prompt_keeps_calculation_follow_ups_as_calculations() -> Non
     assert "NỐI TIẾP PHÉP TÍNH" in prompt
     assert '"đại học chính quy á"' in prompt
     assert "<previous_calculation_turn>" in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_classifier_is_told_who_is_asking() -> None:
+    """A form is for one kind of person: "bổ sung điểm thường kỳ" from a lecturer is not a
+    student's "thi bổ sung" (14-10-2026)."""
+
+    prompts: list[str] = []
+
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        prompts.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        return ModelResponse(
+            parts=[TextPart(content=_payload(_task("academic_advisory", "q", "SINGLE")))]
+        )
+
+    agent = build_classification_agent(FunctionModel(function=respond))
+    await classify_intent(
+        agent, "bổ sung điểm thường kỳ nộp gì?", role="GIANG_VIEN", departments=["KHOA_CNTT"]
+    )
+    await classify_intent(agent, "bổ sung điểm thường kỳ nộp gì?")
+
+    assert "<user_role>GIANG_VIEN (phòng ban: KHOA_CNTT)</user_role>" in prompts[0]
+    assert "<user_role>" not in prompts[1]

@@ -320,12 +320,16 @@ async def classify_intent(
     budget: BudgetContext | None = None,
     previous_calculation: str | None = None,
     profile: Mapping[str, str] | None = None,
+    role: str | None = None,
+    departments: Sequence[str] = (),
 ) -> IntentClassification:
     """`history` lets a short follow-up be classified in context. `previous_calculation`
     names the conversation's latest computed calculation, so a free-typed follow-up on
     it ("thế cuối kỳ cần bao nhiêu") stays a calculation instead of being guessed from
     the chat text alone. `profile` is what the student declared so far, so a correction
-    ("tôi nhầm, khoá 2023 mới đúng") comes back as `metadata_updates`.
+    ("tôi nhầm, khoá 2023 mới đúng") comes back as `metadata_updates`. `role` /
+    `departments` (verified, from the token) tell who is asking, so a procedure is searched
+    for the right person: a form is for one kind of person only.
 
     `purpose`/`credential`/`snapshot_version`/`agent_factory`/`router`/
     `on_failover`/`on_attempt`/`budget` are the same opt-in failover/usage/budget
@@ -339,6 +343,9 @@ async def classify_intent(
             f"\n\n<previous_calculation_turn>{previous_calculation}</previous_calculation_turn>"
         )
     prompt += "\n\n" + build_declared_attributes_section(profile or {})
+    if role:
+        units = f" (phòng ban: {', '.join(departments)})" if departments else ""
+        prompt += f"\n\n<user_role>{role}{units}</user_role>"
     prompt = append_current_time(prompt)
     output = await run_agent_text_with_failover(
         agent,
