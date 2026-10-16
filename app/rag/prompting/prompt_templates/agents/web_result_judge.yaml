@@ -22,4 +22,5 @@ template: |
 
   ## Output
   CHỈ trả về đúng một object JSON, không giải thích ngoài JSON, không markdown code fence. Mỗi câu hỏi con đúng một khóa `SQk`; giá trị là object `{"Wn": {"reason": "lý do cụ thể", "answer": true|false}}` cho các trang được giữ, `{}` nếu không trang nào dùng được.
-  VD: {"SQ1": {"W3": {"reason": "Quyết định mức học phí các hệ năm học 2025-2026 của Trường; đoạn trích chỉ có tiêu đề, mức thu nằm ở phụ lục", "answer": false}}, "SQ2": {"W1": {"reason": "Thông báo đăng ký học phần HK1 2026-2027 ghi hạn đóng học phí 15/09/2026", "answer": true}}}
+  `reason` NGẮN, TỐI ĐA 15 TỪ: chỉ nêu đúng thông tin (hoặc loại văn bản) trên trang dùng cho câu hỏi, kèm năm học/cơ sở khi quy tắc trên yêu cầu ghi. KHÔNG nhắc lại câu hỏi, tiêu đề hay URL; KHÔNG giải thích vì sao liên quan. Mỗi từ thừa làm chậm câu trả lời cho người dùng.
+  VD: {"SQ1": {"W3": {"reason": "Quyết định mức học phí năm học 2025-2026, mức thu ở phụ lục", "answer": false}}, "SQ2": {"W1": {"reason": "hạn đóng học phí HK1 2026-2027 là 15/09/2026", "answer": true}}}

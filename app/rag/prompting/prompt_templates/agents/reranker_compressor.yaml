@@ -33,5 +33,6 @@ template: |
 
   ## Output
   CHỈ trả về đúng một object JSON, không giải thích ngoài JSON, không markdown code fence. Mỗi câu hỏi con đúng một khóa `SQk`; giá trị là object `{"Cn": "lý do cụ thể"}` cho các đoạn được giữ, `{}` nếu không đoạn nào trả lời được.
+  Lý do NGẮN, TỐI ĐA 15 TỪ: chỉ nêu đúng thông tin trong đoạn trả lời câu hỏi (kèm phạm vi/khóa/cơ sở/người thực hiện khi quy tắc trên yêu cầu ghi). KHÔNG nhắc lại câu hỏi, tên tài liệu hay mục; KHÔNG giải thích vì sao liên quan. Mỗi từ thừa làm chậm câu trả lời cho người dùng.
   VD với 2 câu hỏi con (SQ1 chương trình khung ngành CNTT, SQ2 học phí đại học chính quy) và 4 đoạn:
   {"SQ1": {}, "SQ2": {"C2": "có dòng học phí Đại học chính quy khóa 2025-2026 Khối Công nghệ", "C4": "ghi chú hỗ trợ học phí áp dụng cho đại học chính quy"}}
