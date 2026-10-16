@@ -29,6 +29,7 @@ from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_tr
 from app.core.registry.model_registry import CredentialConfig
 from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
+from app.graph.address import address_for
 from app.graph.calculation_turn import (
     REVIEW_ISSUE_KEY,
     CalculationTask,
@@ -250,7 +251,7 @@ async def _run_graph(
         logger.info("profile.updated fields=%s", sorted(changed))
         if on_profile_change is not None:
             await on_profile_change(dict(confirmed_metadata))
-        notice = f"{update_notice(changed)}\n\n"
+        notice = f"{update_notice(changed, address_for(graph_input.security))}\n\n"
         await token_sink(notice)
     output = await _classified_turn(
         graph_input,

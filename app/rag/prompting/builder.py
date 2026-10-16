@@ -14,6 +14,7 @@ from app.core.academic_calendar import (
     parse_intake_year,
 )
 from app.core.timezone import now_ict
+from app.graph.address import address_for
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import LastCalculation
 from app.schemas.retrieval import RetrievedChunk
@@ -52,7 +53,12 @@ def build_metadata_section(
 ) -> str:
     """Build `{academic_metadata}` - two separate XML tags, JWT-verified identity
     (`academic_user_context`) vs self-declared attributes (`declared_attributes`).
-    Never merged: authorization must only ever be based on the former."""
+    Never merged: authorization must only ever be based on the former. The form of
+    address is worked out here from the role, not left to the model: told only the
+    role-to-address rule, a model reading a student-like profile under SUPER_ADMIN
+    went back to "mình/bạn" (16-10-2026)."""
+
+    address = address_for(security)
 
     department_access_lines = (
         "\n".join(
@@ -64,6 +70,8 @@ def build_metadata_section(
     return get_templates().academic_metadata.format(
         user_id=security.user_id or "(khách vãng lai)",
         role=security.role,
+        address_me=address.me,
+        address_you=address.you,
         department_access_lines=department_access_lines,
         declared_attributes=build_declared_attributes_section(confirmed_metadata),
     )

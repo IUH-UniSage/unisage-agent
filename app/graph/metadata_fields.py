@@ -16,6 +16,7 @@ from functools import cache
 from typing import Literal
 
 from app.core.academic_calendar import INTAKE_FIELD, parse_intake_year
+from app.graph.address import STUDENT, Address
 from app.rag.prompting.loader import get_known_metadata_fields
 
 Scope = Literal["profile", "calculation"]
@@ -108,9 +109,9 @@ def apply_updates(
     return merged, changed
 
 
-def update_notice(changed: Mapping[str, str | None]) -> str:
+def update_notice(changed: Mapping[str, str | None], address: Address = STUDENT) -> str:
     """The fixed line a reply opens with when the turn changed the profile, so the
-    student sees what was saved (and can correct it)."""
+    asker sees what was saved (and can correct it), addressed by their role."""
 
     parts = [
         f"{_lower_first(concept(name))}: {value}"
@@ -118,7 +119,8 @@ def update_notice(changed: Mapping[str, str | None]) -> str:
         else f"bỏ {_lower_first(concept(name))}"
         for name, value in changed.items()
     ]
-    return f"Mình đã cập nhật thông tin của bạn - {'; '.join(parts)}."
+    me = address.me[:1].upper() + address.me[1:]
+    return f"{me} đã cập nhật thông tin của {address.you} - {'; '.join(parts)}."
 
 
 def _lower_first(text: str) -> str:

@@ -10,6 +10,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
+from app.graph.address import LECTURER, STAFF
 from app.graph.metadata_fields import update_notice
 from app.graph.nodes.message_classification import (
     build_classification_agent,
@@ -97,6 +98,15 @@ async def test_the_classifier_sees_the_profile_and_the_profile_field_table() -> 
 def test_the_notice_names_each_change() -> None:
     assert update_notice({"khoa_nhap_hoc": "2023", "nganh_hoc": None}) == (
         "Mình đã cập nhật thông tin của bạn - khóa nhập học: 2023; bỏ ngành học."
+    )
+
+
+def test_the_notice_addresses_staff_and_lecturers_by_role() -> None:
+    assert update_notice({"don_vi_cong_tac": "Phòng Đào tạo"}, STAFF).startswith(
+        "Em đã cập nhật thông tin của anh/chị - "
+    )
+    assert update_notice({"hoc_vi": "Tiến sĩ"}, LECTURER).startswith(
+        "Em đã cập nhật thông tin của Thầy/Cô - "
     )
 
 

@@ -7,6 +7,7 @@ from app.rag.prompting import (
     build_calculation_review_prompt,
     build_json_repair_prompt,
     build_multi_intent_prompt,
+    build_social_chat_prompt,
     build_system_prompt,
     build_ticket_fallback_prompt,
     get_templates,
@@ -336,6 +337,42 @@ def test_guest_security_context_renders_khach_role_and_no_department_access() ->
     )
 
     assert "Vai trò (Role): KHACH" in prompt
+    assert 'Xưng hô: xưng "mình", gọi người dùng "bạn"' in prompt
+
+
+def test_staff_is_addressed_by_role_even_with_a_student_like_profile() -> None:
+    """A SUPER_ADMIN who declared a cohort and a programme is still "anh/chị": the
+    address comes from the role in code, so the model cannot read it off the profile."""
+
+    security = AcademicSecurityContext(
+        user_id="admin-1",
+        role="SUPER_ADMIN",
+        department_access=[DepartmentAccessEntry(department_id="*", access_level=100)],
+    )
+    profile = {"nganh_hoc": "Công nghệ thông tin", "khoa_nhap_hoc": "2022"}
+
+    for prompt in (
+        build_system_prompt(
+            user_query="Hướng dẫn truy cập Wi-Fi",
+            security=security,
+            confirmed_metadata=profile,
+            chunks=[],
+        ),
+        build_social_chat_prompt(
+            user_query="continue", security=security, confirmed_metadata=profile
+        ),
+    ):
+        assert 'Xưng hô: xưng "em", gọi người dùng "anh/chị"' in prompt
+
+
+def test_lecturer_is_addressed_as_thay_co() -> None:
+    prompt = build_social_chat_prompt(
+        user_query="Chào em",
+        security=AcademicSecurityContext(user_id="gv-1", role="GIANG_VIEN"),
+        confirmed_metadata={},
+    )
+
+    assert 'Xưng hô: xưng "em", gọi người dùng "Thầy/Cô"' in prompt
 
 
 def test_known_metadata_fields_vocabulary_is_embedded() -> None:
