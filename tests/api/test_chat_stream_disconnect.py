@@ -81,6 +81,8 @@ class _JavaBackend:
             # event is guaranteed to see it in `self.calls`.
             self.patched.set()
             return httpx.Response(200, json={"status": body.get("status")})
+        if request.method == "POST" and request.url.path == "/internal/message-traces":
+            return httpx.Response(200, json={"messageId": body.get("messageId")})
         raise AssertionError(f"unexpected call {request.method} {request.url.path}")
 
 

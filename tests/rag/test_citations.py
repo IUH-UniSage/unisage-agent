@@ -1,5 +1,6 @@
 from app.rag.prompting.citations import (
     build_citations,
+    build_context_trace,
     cited_indexes,
     keep_known_links,
     source_title,
@@ -160,3 +161,30 @@ def test_a_web_citation_shows_the_short_title() -> None:
     (citation,) = build_citations("Kết quả kỳ thi ngày 08,09/10/2026 [1].", [], [page])
 
     assert citation["title"] == "Kết quả thi"
+
+
+def _page(url: str, title: str = "Thông báo học phí", content: str = "Học phí") -> WebSearchResult:
+    return WebSearchResult(title=title, url=url, content=content, score=0.8)
+
+
+def test_context_trace_keeps_every_source_and_marks_the_cited_ones() -> None:
+    chunks = [_chunk("c-1", score=0.9), _chunk("c-2", score=0.6, content="x" * 5000)]
+    answer_page = _page("https://iuh.edu.vn/hoc-phi")
+    link_page = _page("https://iuh.edu.vn/quy-che", title="Quy chế đào tạo")
+    reply = "Học phí 35 triệu [3]. Xem [Quy chế](https://iuh.edu.vn/quy-che)."
+
+    chunk_items, web_items = build_context_trace(reply, chunks, [answer_page], [link_page])
+
+    assert [(c["index"], c["chunkId"], c["cited"]) for c in chunk_items] == [
+        (1, "c-1", False),
+        (2, "c-2", False),
+    ]
+    assert chunk_items[0]["score"] == 0.9
+    assert chunk_items[0]["documentId"] == "doc-1"
+    assert chunk_items[0]["headingPath"] == ["QUYẾT ĐỊNH", "Khối Công nghệ"]
+    assert len(chunk_items[1]["content"]) == 2001
+    assert [(w["index"], w["kind"], w["cited"]) for w in web_items] == [
+        (3, "CONTENT", True),
+        (None, "LINK", True),
+    ]
+    assert web_items[1]["url"] == "https://iuh.edu.vn/quy-che"

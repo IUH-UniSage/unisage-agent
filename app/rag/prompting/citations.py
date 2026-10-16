@@ -197,6 +197,71 @@ def build_citations(
     return citations
 
 
+# A staff trace keeps each source's text short: enough to judge it, bounded so a turn's
+# whole trace stays far under backend-java's 256 KB limit.
+_TRACE_CONTENT_MAX_CHARS = 2000
+_TRACE_MAX_ITEMS = 50
+
+
+def build_context_trace(
+    response_text: str,
+    chunks: Sequence[RetrievedChunk],
+    web_results: Sequence[WebSearchResult] = (),
+    web_sources: Sequence[WebSearchResult] = (),
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Every chunk and web page the answer was generated from, cited or not - the
+    staff-only trace (`POST /internal/message-traces`), never the public `citations`.
+
+    Numbered like `build_citations`: `[1..len(chunks)]` are chunks, then `web_results`
+    (whose content was in the prompt). `web_sources` are official pages given as links
+    only: no index, cited when the reply links them."""
+
+    cited = set(cited_indexes(response_text, len(chunks) + len(web_results)))
+    chunk_items = [
+        {
+            **chunk_citation(index, chunk),
+            "chunkId": chunk.chunk_id,
+            "headingPath": chunk.heading_path,
+            "score": chunk.score,
+            "cited": index in cited,
+            "content": _trace_text(chunk.content),
+        }
+        for index, chunk in enumerate(chunks[:_TRACE_MAX_ITEMS], start=1)
+    ]
+    web_items = [
+        {
+            "index": index,
+            "kind": "CONTENT",
+            "title": display_title(page),
+            "url": page.url,
+            "score": page.score,
+            "cited": index in cited,
+            "content": _trace_text(page.content),
+        }
+        for index, page in enumerate(web_results, start=len(chunks) + 1)
+    ] + [
+        {
+            "index": None,
+            "kind": "LINK",
+            "title": display_title(page),
+            "url": page.url,
+            "score": page.score,
+            "cited": page.url in response_text,
+            "content": None,
+        }
+        for page in web_sources
+    ]
+    return chunk_items, web_items[:_TRACE_MAX_ITEMS]
+
+
+def _trace_text(text: str) -> str:
+    return (
+        text
+        if len(text) <= _TRACE_CONTENT_MAX_CHARS
+        else text[:_TRACE_CONTENT_MAX_CHARS] + "\u2026"
+    )
+
+
 def chunk_citation(index: int, chunk: RetrievedChunk) -> dict[str, Any]:
     document_id = chunk.metadata.get("document_id")
     return {

@@ -441,6 +441,18 @@ async def run_and_persist(
                     assistant_message_id,
                     status,
                 )
+            if finalized:
+                # Diagnostics for staff (the ticket detail) - never blocks the turn. Pushed on
+                # an ERROR turn too: its trace id is what finds the failure in the logs.
+                await _finalize_safely(
+                    lambda: java_client.push_message_trace(
+                        message_id=assistant_message_id,
+                        trace_id=usage_recorder.request_id,
+                        chunks=graph_output.context_chunks if graph_output is not None else [],
+                        web_sources=graph_output.context_web if graph_output is not None else [],
+                    ),
+                    what="message.trace_push",
+                )
             if round_stored and pending_round is not None:
                 if finalized:
                     await queue.put(

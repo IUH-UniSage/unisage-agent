@@ -63,6 +63,9 @@ class _Java:
         if request.url.path == "/internal/calculation-traces":
             self.traces = body
             return httpx.Response(200, json={})
+        if request.url.path == "/internal/message-traces":
+            self.message_trace = body
+            return httpx.Response(200, json={})
         self.patches.append(body)
         return httpx.Response(self.status, json={})
 
@@ -234,7 +237,11 @@ async def test_calculation_trace_is_pushed_before_the_public_summary_is_finalize
         GraphOutput(response_text="x", calculation_items=public, calculation_traces=private),
         monkeypatch,
     )
-    assert java.paths == ["/internal/calculation-traces", f"/messages/{ASSISTANT_ID}"]
+    assert java.paths == [
+        "/internal/calculation-traces",
+        f"/messages/{ASSISTANT_ID}",
+        "/internal/message-traces",
+    ]
     assert java.traces == {"messageId": ASSISTANT_ID, "items": private}
     metadata = java.patches[0]["metadata"]
     assert metadata == {"calculation": {"schema_version": 1, "items": public}}

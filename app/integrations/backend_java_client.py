@@ -337,6 +337,30 @@ class BackendJavaClient:
             json_body={"messageId": message_id, "items": items},
         )
 
+    async def push_message_trace(
+        self,
+        *,
+        message_id: str,
+        trace_id: str,
+        chunks: list[dict[str, Any]],
+        web_sources: list[dict[str, Any]],
+    ) -> None:
+        """`POST /internal/message-traces` - the staff-only retrieval trace of an assistant
+        message: the trace id of its log lines and every chunk / web page given to the LLM.
+        Upserted by message, so a retry is safe."""
+
+        await self._request(
+            "POST",
+            "/internal/message-traces",
+            authorization=None,
+            json_body={
+                "messageId": message_id,
+                "traceId": trace_id,
+                "chunks": chunks,
+                "webSources": web_sources,
+            },
+        )
+
     async def get_model_registry_version(self) -> int:
         """`GET /internal/model-registry/version`.
 

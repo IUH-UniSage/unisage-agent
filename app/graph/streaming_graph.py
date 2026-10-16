@@ -107,6 +107,7 @@ from app.graph.streaming_state import (
 )
 from app.rag.prompting.citations import (
     build_citations,
+    build_context_trace,
     keep_known_links,
     source_links_block,
     strip_source_list,
@@ -1209,11 +1210,13 @@ async def _run_advisory_flow(
             on_attempt=usage_recorder.bind("TicketFallbackNode"),
             budget=budget,
         )
+        _, fallback_web = build_context_trace(fallback_text, [], [], web_sources)
         return GraphOutput(
             response_text=fallback_text,
             confirmed_metadata=confirmed_metadata,
             used_ticket_fallback=True,
             admin_warnings=admin_warnings,
+            context_web=fallback_web,
         )
 
     # GenerationSynthesisNode (streaming).
@@ -1255,11 +1258,16 @@ async def _run_advisory_flow(
     if links:
         await token_sink(links)
         response_text += links
+    context_chunks, context_web = build_context_trace(
+        response_text, rerank_result.chunks, web_results, web_sources
+    )
     return GraphOutput(
         response_text=response_text,
         confirmed_metadata=confirmed_metadata,
         ask_forms=generation_result.ask_forms,
         citations=build_citations(response_text, rerank_result.chunks, web_results),
+        context_chunks=context_chunks,
+        context_web=context_web,
         used_web_search=bool(web_results),
         admin_warnings=admin_warnings,
     )

@@ -78,6 +78,10 @@ class GraphOutput:
     # LLM rerank failing, ...) - sent to AI admins only, as `event: warning`.
     admin_warnings: list[AdminWarning] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
+    # Staff-only retrieval trace: every chunk / web page given to the LLM, cited or not
+    # (`build_context_trace`), pushed to Java apart from the public `citations`.
+    context_chunks: list[dict[str, Any]] = field(default_factory=list)
+    context_web: list[dict[str, Any]] = field(default_factory=list)
     # The clarification panel this turn raises (stored, projected, then sent as
     # `event: clarification` by run_and_persist), or None.
     pending_round: PendingRound | None = None
