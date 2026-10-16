@@ -7,14 +7,20 @@ prompt, hay một trường trong `known_metadata_fields.json`.
 
 Mẫu chuẩn cho service trong hệ UniSage có ba loại (bí mật/theo môi trường → biến môi trường; ngưỡng
 vận hành sửa tay → YAML trong `configs/`; dữ liệu máy sinh → JSON có số phiên bản cạnh code nạp nó).
-`unisage-agent` hôm nay chỉ có **hai loại đầu tiên**, và loại hai không nằm trong một thư mục
-`configs/` riêng như mẫu — nó là chính nội dung prompt LLM. Đừng suy diễn có một `configs/` đang ẩn
-đâu đó; không có.
+`unisage-agent` hôm nay chỉ có **hai loại đầu tiên**. Loại hai là nội dung prompt LLM, giữ cạnh code
+nạp nó ở `app/rag/prompting/prompt_templates/`, và các file YAML khác trong `configs/` ở gốc repo,
+đọc qua `app/core/configs.py`:
+
+- `configs/web_query.yaml` — từ vựng dựng câu truy vấn web (`subject_aliases`).
+- `configs/evals/label_map.yaml` — bảng gán phòng ban/quyền cho bộ eval.
+
+File YAML mà công cụ đòi đúng chỗ vẫn ở chỗ cũ: `Taskfile.yml` và `taskfiles/` (Task),
+`.devcontainer/` và `tests/e2e/` (docker compose), `.github/workflows/` (GitHub Actions).
 
 | Loại | Ví dụ | Giữ ở đâu | Định dạng | Ai sửa | Đổi có cần build lại image? |
 |---|---|---|---|---|---|
 | Bí mật và thứ đổi theo môi trường | `OPENAI_API_KEY`, `DB_URL`, `CHAT_RERANK_SCORE_THRESHOLD` | biến môi trường, `.env` khi chạy máy dev | `KEY=value`, đọc qua `Settings` (Pydantic) | người triển khai | Không |
-| Nội dung prompt LLM, cùng vòng đời với code | system prompt từng node, quy tắc bảo mật, từ vựng field | `app/rag/prompting/prompt_templates/`, `known_metadata_fields.json` | YAML (`template`/`content`), JSON | người viết/tinh chỉnh prompt | Có — nạp lúc import, không đọc lại khi chạy |
+| Nội dung prompt LLM, cùng vòng đời với code | system prompt từng node, quy tắc bảo mật, từ vựng field, từ đồng nghĩa của câu truy vấn web | `app/rag/prompting/prompt_templates/`, `configs/web_query.yaml`, `known_metadata_fields.json` | YAML (`template`/`content`), JSON | người viết/tinh chỉnh prompt | Có — nạp lúc import, không đọc lại khi chạy |
 | Dữ liệu máy sinh có số phiên bản | *(chưa có trong repo này)* | — | — | — | — |
 
 Không trộn hai loại đang có. Một khoá API không bao giờ nằm trong YAML prompt; một câu quy tắc

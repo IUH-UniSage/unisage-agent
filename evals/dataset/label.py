@@ -26,7 +26,7 @@ import yaml  # type: ignore[import-untyped]
 
 from evals.dataset.crawl.download import DownloadState
 
-DEFAULT_MAP = Path(__file__).with_name("label_map.yaml")
+DEFAULT_MAP = Path(__file__).resolve().parents[2] / "configs/evals/label_map.yaml"
 
 
 class LabelMapError(Exception):
