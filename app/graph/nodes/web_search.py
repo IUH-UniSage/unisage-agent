@@ -30,7 +30,7 @@ from app.integrations.tavily_client import (
     WebSearchUnavailableError,
     not_configured_error,
 )
-from app.integrations.web_search_cache import WebSearchCache, default_cache
+from app.integrations.web_search_cache import WebSearchCache, default_cache, describe_key
 from app.rag.web_query import cache_ttl_seconds, order_candidates
 from app.schemas.web_search import WebSearchResult
 
@@ -129,6 +129,16 @@ async def _search_one(
     max_results = settings.CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB
     results = await cache.get(request.query, max_results=max_results) if cache else None
     cache_hit = results is not None
+    if cache is not None:
+        # Green in the console (`ColorFormatter`): which Redis entry this query was looked
+        # up under, so a miss on a query that "should" hit shows which part differed.
+        logger.info(
+            "Tavily cache %s query=%r %s%s",
+            "HIT" if cache_hit else "MISS",
+            request.query,
+            describe_key(request.query, max_results=max_results),
+            f" pages={len(results)}" if results is not None else " -> calling Tavily",
+        )
     if results is None:
         try:
             results = await client.search(request.query, max_results=max_results)

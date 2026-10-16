@@ -115,6 +115,23 @@ def test_color_formatter_highlights_graph_trace_lines() -> None:
     assert formatter.format(_graph_record("plain", name="app.other")) == "plain"
 
 
+def test_color_formatter_greens_the_tavily_cache_lookups() -> None:
+    from app.core.observability.logging_config import ColorFormatter
+
+    formatter = ColorFormatter("%(message)s")
+    name = "app.graph.nodes.web_search"
+
+    assert formatter.format(_graph_record("Tavily cache HIT query='q'", name=name)).startswith(
+        "\033[1;32m"
+    )
+    assert formatter.format(_graph_record("Tavily cache MISS query='q'", name=name)).startswith(
+        "\033[32m"
+    )
+    assert formatter.format(_graph_record("Web search query='q'", name=name)) == (
+        "Web search query='q'"
+    )
+
+
 def test_color_formatter_colors_only_the_header_of_a_prompt_dump() -> None:
     from app.core.observability.logging_config import ColorFormatter
 

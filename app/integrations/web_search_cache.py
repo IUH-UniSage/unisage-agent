@@ -47,16 +47,32 @@ def normalize_query(query: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def cache_key(query: str, *, max_results: int) -> str:
-    parts = [
+def _key_parts(query: str, *, max_results: int) -> list[object]:
+    return [
         normalize_query(query),
         sorted(settings.TAVILY_INCLUDE_DOMAINS),
         settings.TAVILY_SEARCH_DEPTH,
         settings.TAVILY_CHUNKS_PER_SOURCE if settings.TAVILY_SEARCH_DEPTH == "advanced" else None,
         max_results,
     ]
+
+
+def cache_key(query: str, *, max_results: int) -> str:
+    parts = _key_parts(query, max_results=max_results)
     digest = hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
     return f"{KEY_PREFIX}{digest}"
+
+
+def describe_key(query: str, *, max_results: int) -> str:
+    """What a lookup compares, for the log: the Redis key and every part it is hashed
+    from - two queries share an entry only when all of these match."""
+
+    normalized, domains, depth, chunks, _ = _key_parts(query, max_results=max_results)
+    return (
+        f"key={cache_key(query, max_results=max_results)} normalized={normalized!r} "
+        f"depth={depth} chunks_per_source={chunks} max_results={max_results} "
+        f"domains={domains}"
+    )
 
 
 def query_key(entry_key: str) -> str:

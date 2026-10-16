@@ -8,7 +8,12 @@ from redis import asyncio as redis_asyncio
 
 from app.core.config import settings
 from app.integrations import web_search_cache
-from app.integrations.web_search_cache import RedisWebSearchCache, cache_key, query_key
+from app.integrations.web_search_cache import (
+    RedisWebSearchCache,
+    cache_key,
+    describe_key,
+    query_key,
+)
 from app.schemas.web_search import WebSearchResult
 
 _PAGE = WebSearchResult(title="Học phí", url="https://pdt.iuh.edu.vn/a", content="x", score=0.4)
@@ -51,6 +56,13 @@ def test_key_ignores_case_accent_encoding_and_punctuation() -> None:
     assert cache_key(decomposed, max_results=10) == cache_key("mức thu học phí?", max_results=10)
     assert cache_key("MỨC THU   học phí", max_results=10) == cache_key(
         "mức thu học phí", max_results=10
+    )
+
+
+def test_describe_key_names_the_key_and_every_part_it_hashes() -> None:
+    assert describe_key("Mức thu học phí?", max_results=10) == (
+        f"key={cache_key('Mức thu học phí?', max_results=10)} normalized='mức thu học phí' "
+        "depth=advanced chunks_per_source=3 max_results=10 domains=['iuh.edu.vn']"
     )
 
 

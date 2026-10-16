@@ -172,6 +172,33 @@ async def test_cache_hit_skips_the_search() -> None:
 
 
 @pytest.mark.asyncio
+async def test_each_lookup_logs_hit_or_miss_with_the_key_it_compared(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cache = _FakeCache(stored={"Học phí?": [_page("cached", 0.7)]})
+    client = _FakeClient({"lịch thi": [_page("exam", 0.7)]})
+
+    with caplog.at_level("INFO", logger="app.graph.nodes.web_search"):
+        await search_web(["Học phí?", "lịch thi"], client=client, cache=cache)
+
+    hit, miss = (line for line in caplog.messages if line.startswith("Tavily cache "))
+    assert hit.startswith("Tavily cache HIT query='Học phí?' key=websearch:v1:")
+    assert "normalized='học phí'" in hit and hit.endswith(" pages=1")
+    assert miss.startswith("Tavily cache MISS query='lịch thi' key=websearch:v1:")
+    assert miss.endswith(" -> calling Tavily")
+
+
+@pytest.mark.asyncio
+async def test_no_cache_lookup_is_logged_without_a_cache(caplog: pytest.LogCaptureFixture) -> None:
+    client = _FakeClient({"q": [_page("a", 0.7)]})
+
+    with caplog.at_level("INFO", logger="app.graph.nodes.web_search"):
+        await search_web(["q"], client=client, use_cache=False)
+
+    assert not any(line.startswith("Tavily cache ") for line in caplog.messages)
+
+
+@pytest.mark.asyncio
 async def test_cache_miss_stores_raw_results_with_the_topic_ttl() -> None:
     cache = _FakeCache()
     raw = [_page("fee", 0.7), _page("noise", 0.01)]

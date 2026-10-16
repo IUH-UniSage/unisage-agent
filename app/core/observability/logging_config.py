@@ -66,6 +66,7 @@ _trace_id: ContextVar[str] = ContextVar("log_trace_id", default=_NO_TRACE_ID)
 _RESET = "\033[0m"
 _BOLD_CYAN = "\033[1;36m"
 _GREEN = "\033[32m"
+_BOLD_GREEN = "\033[1;32m"
 _BOLD_MAGENTA = "\033[1;35m"
 _BOLD_BLUE = "\033[1;34m"
 _BRIGHT_BLUE = "\033[94m"
@@ -144,7 +145,8 @@ class TraceIdFilter(logging.Filter):
 
 class ColorFormatter(logging.Formatter):
     """Highlights the graph trace (`unisage.graph`) so a turn reads at a glance:
-    node starts cyan, node timings green (magenta when slow), debug dumps blue."""
+    node starts cyan, node timings green (magenta when slow), debug dumps blue; and
+    the Tavily cache lookups green (bold on a hit)."""
 
     def format(self, record: logging.LogRecord) -> str:
         line = super().format(record)
@@ -163,6 +165,8 @@ class ColorFormatter(logging.Formatter):
         message = record.getMessage()
         if record.name == "google_genai.models":
             return _DIM
+        if record.name == "app.graph.nodes.web_search" and message.startswith("Tavily cache "):
+            return _BOLD_GREEN if message.startswith("Tavily cache HIT") else _GREEN
         if record.name != "unisage.graph":
             return None
         if message.startswith("node_done="):
