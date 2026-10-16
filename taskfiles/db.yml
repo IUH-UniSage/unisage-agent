@@ -28,6 +28,12 @@ tasks:
         done
       - echo "env={{.env}} sẵn sàng (Postgres, MinIO, Redis, Qdrant). Tiếp theo - task db:upgrade env={{.env}}"
 
+  web-cache:
+    desc: "Xem kết quả Tavily đang cache trong Redis (vd task db:web-cache env=eval content=1 | query=\"...\" | flush=1)"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} app.tools.web_search_cache{{if .content}} --content{{end}}{{if .query}} --query "{{.query}}"{{end}}{{if .flush}} --flush{{end}} {{.CLI_ARGS}}'
+
   upgrade:
     desc: "Apply tất cả migrations (alembic upgrade head)"
     dotenv: ['.env.{{.env}}', '.env']
