@@ -83,6 +83,14 @@ class RetrievalService:
     ) -> list[RetrievedChunk]:
         return self.retrieve_many([query], security=security, limit=limit)[0]
 
+    def warm_up(self) -> None:
+        """Opens the Qdrant client and resolves the embedder (credential, identity guard),
+        which the first retrieval would otherwise do inside a chat turn (~2 s, 16-10-2026)."""
+
+        if self.client is None:
+            get_client()
+        self.embedder.warm_up()
+
     def retrieve_many(
         self,
         queries: list[str],

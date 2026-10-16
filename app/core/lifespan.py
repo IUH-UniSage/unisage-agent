@@ -1,5 +1,6 @@
 """FastAPI startup/shutdown: load the model registry, start its hot-reload subscriber
-and the budget/pricing snapshot pollers, and stop them again on shutdown."""
+and the budget/pricing snapshot pollers, warm up chat retrieval, and stop them again on
+shutdown."""
 
 import asyncio
 import logging
@@ -8,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.deps import warm_up_retrieval
 from app.core.budget.poller import start_budget_snapshot_poller
 from app.core.budget.snapshot import refresh_budget_snapshot
 from app.core.config import settings
@@ -41,12 +43,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Prices follow the same gate: without a live backend-java every call is UNPRICED.
     budget_poller: asyncio.Task[None] | None = None
     pricing_poller: asyncio.Task[None] | None = None
+    warm_up: asyncio.Task[None] | None = None
     if settings.MODEL_REGISTRY_ENABLED:
         await refresh_budget_snapshot()
         budget_poller = start_budget_snapshot_poller()
         await refresh_pricing_snapshot()
         pricing_poller = start_pricing_snapshot_poller()
+        # In the background, not awaited: the embedder's identity guard and Qdrant checks
+        # (~2 s) move out of the first chat turn without delaying startup.
+        warm_up = asyncio.create_task(warm_up_retrieval())
     yield
+    if warm_up is not None:
+        warm_up.cancel()
     if budget_poller is not None:
         budget_poller.cancel()
     if pricing_poller is not None:

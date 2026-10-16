@@ -155,6 +155,12 @@ class OpenAIEmbedder:
             return await asyncio.to_thread(self._call_provider, client, model, texts)
         return await self._embed_recorded(client, model, texts, credential)
 
+    def warm_up(self) -> None:
+        """Resolves the credential now (client, identity guard, Qdrant checks) so the first
+        chat turn does not pay for it - see `app.api.deps.warm_up_retrieval`."""
+
+        self._ensure_resolved()
+
     def _ensure_resolved(self) -> tuple[str, OpenAI]:
         model = self.model
         client = self.client
