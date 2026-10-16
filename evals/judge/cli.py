@@ -626,6 +626,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{stats.get('pass_rate', '-'):>8}{stats['nan']:>6}"
         )
     print(f"usage {summary['usage']}  models {summary['models']}")
+    denied = sorted(
+        {
+            key
+            for keys in summary["keys"].values()
+            for key, counts in keys.items()
+            if counts.get("denied")
+        }
+    )
+    if denied:
+        print(f"key(s) denied (401/403), remove them from GEMINI_API_KEYS: {', '.join(denied)}")
     return 0 if finished else 3
 
 

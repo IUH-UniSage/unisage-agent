@@ -10,6 +10,9 @@ limit (≤ 12 RPM by default) and the keys are used round-robin. What happens on
 - 503 / 500 / 504 / client timeout: the key cools down 2-32 s (backoff with jitter) and the call
   moves on to another key; after `max_unavailable` / `max_timeouts` tries `ModelUnavailable`
   (the caller can switch to the fallback model) or `CallFailed`;
+- 401 / 403 (the key's project is blocked, "Your project has been denied access"): the key is
+  dropped from the pool for the rest of the run and the call moves on to another key;
+  `CallFailed` once no key is left;
 - every key out for the day: `QuotaExhausted` with the earliest reset time.
 
 Nothing here imports `google.genai`: errors are read by duck typing (`.code`, `.details`), so
@@ -74,6 +77,7 @@ class KeyState:
     recent: deque[float] = field(default_factory=deque)
     cooldown_until: float = 0.0  # monotonic
     exhausted_until: float = 0.0  # wall clock
+    denied: bool = False  # 401/403: the key's project cannot call the model
     stats: Counter[str] = field(default_factory=Counter)
 
     @property
@@ -111,9 +115,12 @@ class KeyPool:
 
         while True:
             now, wall = self._clock(), self._wall()
-            live = [state for state in self.keys if state.exhausted_until <= wall]
+            usable = [state for state in self.keys if not state.denied]
+            if not usable:
+                raise CallFailed("every API key was denied (401/403)")
+            live = [state for state in usable if state.exhausted_until <= wall]
             if not live:
-                raise QuotaExhausted(min(state.exhausted_until for state in self.keys))
+                raise QuotaExhausted(min(state.exhausted_until for state in usable))
             start = self._next % len(self.keys)
             order = [state for state in self.keys[start:] + self.keys[:start] if state in live]
             ready = [(self._ready_at(state, now), state) for state in order]
@@ -131,9 +138,12 @@ class KeyPool:
     def exhaust(self, state: KeyState, until: float) -> None:
         state.exhausted_until = until
 
+    def deny(self, state: KeyState) -> None:
+        state.denied = True
+
 
 def classify(error: BaseException) -> tuple[str, float | None]:
-    """(`rpm` | `rpd` | `unavailable` | `timeout` | `fatal`, retry delay in seconds)."""
+    """(`rpm` | `rpd` | `unavailable` | `timeout` | `denied` | `fatal`, retry delay in seconds)."""
 
     if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
         return "timeout", None
@@ -148,6 +158,8 @@ def classify(error: BaseException) -> tuple[str, float | None]:
         return "unavailable", None
     if code == 504:
         return "timeout", None
+    if code in (401, 403):
+        return "denied", None
     return "fatal", None
 
 
@@ -198,6 +210,13 @@ class GeminiCaller:
                     if self.rpd_recheck_s > 0:
                         until = min(until, self.wall() + self.rpd_recheck_s)
                     pool.exhaust(state, until)
+                elif kind == "denied":
+                    if not state.denied:
+                        pool.deny(state)
+                        print(
+                            f"{model}: key {state.masked} denied ({_error_text(error)[:160]}),"
+                            " dropped from the pool"
+                        )
                 elif kind == "unavailable":
                     unavailable += 1
                     if unavailable > self.max_unavailable:

@@ -306,6 +306,8 @@ def test_errors_are_classified_from_the_code_and_the_quota_details() -> None:
     assert classify(FakeError(503)) == ("unavailable", None)
     assert classify(FakeError(504)) == ("timeout", None)
     assert classify(asyncio.TimeoutError()) == ("timeout", None)
+    assert classify(FakeError(403)) == ("denied", None)
+    assert classify(FakeError(401)) == ("denied", None)
     assert classify(FakeError(400)) == ("fatal", None)
 
 
@@ -390,6 +392,27 @@ def test_the_model_is_given_up_after_too_many_503_and_a_bad_request_fails_at_onc
 
     outcomes = {"key-one-123456": [FakeError(400)]}
     with pytest.raises(CallFailed):
+        _call(_caller(list(outcomes), clock, outcomes), outcomes)
+
+
+def test_a_denied_key_is_dropped_and_the_call_moves_on_to_another_key() -> None:
+    clock = Clock()
+    denied = FakeError(403, {"error": {"message": "Your project has been denied access."}})
+    outcomes = {"key-one-123456": [denied], "key-two-123456": ["ok", "ok"]}
+    caller = _caller(list(outcomes), clock, outcomes)
+
+    assert _call(caller, outcomes) == ("ok", caller.pools["m"].keys[1])
+    assert _call(caller, outcomes)[0] == "ok"  # the denied key is not tried again
+
+    keys = caller.pools["m"].keys
+    assert keys[0].denied and keys[0].stats["denied"] == 1
+    assert outcomes == {"key-one-123456": [], "key-two-123456": []}
+
+
+def test_no_key_left_after_every_one_is_denied_fails_the_call() -> None:
+    clock = Clock()
+    outcomes = {"key-one-123456": [FakeError(403)], "key-two-123456": [FakeError(401)]}
+    with pytest.raises(CallFailed, match="denied"):
         _call(_caller(list(outcomes), clock, outcomes), outcomes)
 
 
