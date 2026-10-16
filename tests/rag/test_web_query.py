@@ -4,12 +4,17 @@ the academic year of a page, cache TTLs."""
 from datetime import date
 
 from app.rag.web_query import (
+    ABBREVIATIONS,
+    PHRASE_ALIASES,
+    SPELLING,
+    SUBJECT_ALIASES,
     academic_year_of,
     build_web_query,
     cache_ttl_seconds,
     campus_of,
     is_listing_page,
     is_postgraduate,
+    normalize_phrases,
     order_candidates,
     relative_year,
 )
@@ -209,3 +214,120 @@ def test_a_relative_time_word_means_this_year_or_this_academic_year() -> None:
     assert relative_year("lịch nghỉ tết năm sau", _OCT_2026) == "2027"
     assert relative_year("ngành hiện tại của tôi", _OCT_2026) is None
     assert relative_year("điều kiện học bổng", _OCT_2026) is None
+
+
+def test_the_same_fee_question_becomes_the_same_query_however_the_subject_is_written() -> None:
+    """16-10-2026: "học phí ngành cntt" asked twice became "học phí IUH" and "mức thu học
+    phí ngành Công nghệ thông tin IUH" - two cache entries, and the second's top page a
+    study-abroad notice."""
+
+    written = [
+        WebSlots(topics=["hoc_phi"], subject="học phí", nganh_hoc="Công nghệ Thông tin"),
+        WebSlots(
+            topics=["hoc_phi"],
+            subject="mức thu học phí ngành Công nghệ thông tin",
+            nganh_hoc="Công nghệ thông tin",
+        ),
+        WebSlots(topics=["hoc_phi"], subject="mức thu học phí ngành CNTT", nganh_hoc="cntt"),
+        # The major written into the subject only, its slot left empty.
+        WebSlots(topics=["hoc_phi"], subject="mức thu học phí ngành Công nghệ thông tin"),
+        WebSlots(topics=["hoc_phi"], subject="mức học phí"),
+    ]
+
+    assert {build_web_query(slots) for slots in written} == {"mức thu học phí IUH"}
+
+
+def test_a_slot_written_into_the_subject_is_added_back_by_the_template_only() -> None:
+    fee = WebSlots(
+        topics=["hoc_phi"],
+        subject="học phí hệ chính quy cơ sở Quảng Ngãi",
+        he_dao_tao="chính quy",
+        co_so="Quảng Ngãi",
+    )
+    admission = WebSlots(topics=["tuyen_sinh"], subject="điểm trúng tuyển ngành Kế toán")
+
+    assert build_web_query(fee) == "mức thu học phí Chính quy Quảng Ngãi IUH"
+    # Admission's template names the major: moved out of the subject, then put back.
+    assert build_web_query(admission) == "điểm chuẩn Kế toán IUH"
+
+
+def test_a_subject_about_something_else_keeps_its_words() -> None:
+    exemption = WebSlots(topics=["hoc_phi"], subject="miễn giảm học phí", nganh_hoc="cntt")
+    change = WebSlots(topics=["quy_che_thu_tuc"], subject="điều kiện chuyển ngành")
+    only_major = WebSlots(
+        topics=["chuong_trinh_dao_tao"], subject="Công nghệ thông tin", nganh_hoc="CNTT"
+    )
+    only_major_fee = WebSlots(topics=["hoc_phi"], subject="ngành CNTT", nganh_hoc="CNTT")
+
+    assert build_web_query(exemption) == "miễn giảm học phí IUH"
+    assert build_web_query(change) == "điều kiện chuyển ngành IUH"
+    # The subject was only the major: the template names it once...
+    assert build_web_query(only_major) == "Công nghệ Thông tin IUH"
+    # ...or, leaving the major out, keeps the subject as written rather than search "IUH".
+    assert build_web_query(only_major_fee) == "ngành CNTT IUH"
+
+
+def test_vocabulary_keys_are_lowercase() -> None:
+    """Every lookup lowercases first: a key in capitals would never match."""
+
+    tables = {"spelling": SPELLING, "abbreviations": ABBREVIATIONS, "phrases": PHRASE_ALIASES}
+    tables |= {f"subject_aliases.{topic}": table for topic, table in SUBJECT_ALIASES.items()}
+    for name, table in tables.items():
+        assert [key for key in table if key != key.lower()] == [], name
+
+
+def test_a_canonical_wording_is_left_as_it_is() -> None:
+    """A key that starts its own canonical form ("tạm dừng học" -> "tạm dừng học tập")
+    rewrote an already canonical subject into "tạm dừng học tập tập" until the canonical
+    form was added as a key of its own."""
+
+    canonical = {*SPELLING.values(), *ABBREVIATIONS.values(), *PHRASE_ALIASES.values()}
+    canonical |= {value for table in SUBJECT_ALIASES.values() for value in table.values()}
+    assert {
+        value: normalize_phrases(value) for value in canonical if normalize_phrases(value) != value
+    } == {}
+
+
+def test_subject_alias_keys_are_written_as_the_phrase_tables_leave_them() -> None:
+    """Whole-subject aliases are looked up after spelling, abbreviations and phrases: a key
+    those would rewrite ("tkb", "học kì") is never reached."""
+
+    stale = {
+        key: normalize_phrases(key)
+        for table in SUBJECT_ALIASES.values()
+        for key in table
+        if normalize_phrases(key).lower() != key
+    }
+    assert stale == {}
+
+
+def test_abbreviations_terms_and_synonyms_inside_a_longer_subject() -> None:
+    def query(topic: str, subject: str) -> str:
+        return build_web_query(WebSlots(topics=[topic], subject=subject))  # type: ignore[list-item]
+
+    assert query("lich_thong_bao", "lịch thi cuối kì hk2") == ("lịch thi cuối kỳ học kỳ II IUH")
+    # An abbreviation expands before the synonyms, which then see the full wording.
+    assert query("lich_thong_bao", "thời gian đkhp kỳ 3") == "lịch đăng ký học phần học kỳ III IUH"
+    assert query("hoc_phi", "hạn nộp học phí hk1") == "hạn đóng học phí học kỳ I IUH"
+    assert query("lien_he_co_so", "sđt pđt") == "số điện thoại Phòng Đào tạo IUH"
+    # A phrase is replaced as whole words only, never as the start of a longer compound.
+    assert query("hoc_phi", "tiền học bổng") == "tiền học bổng IUH"
+    assert query("quy_che_thu_tuc", "tạm dừng học tập") == "thủ tục tạm dừng học tập IUH"
+
+
+def test_whole_subject_aliases_keep_different_procedures_apart() -> None:
+    def query(topic: str, subject: str) -> str:
+        return build_web_query(WebSlots(topics=[topic], subject=subject))  # type: ignore[list-item]
+
+    assert query("quy_che_thu_tuc", "học lại") == "đăng ký học lại IUH"
+    assert query("quy_che_thu_tuc", "học cải thiện") == "đăng ký học cải thiện IUH"
+    assert query("quy_che_thu_tuc", "điều kiện chuyển ngành") == "điều kiện chuyển ngành IUH"
+    assert query("quy_che_thu_tuc", "xin chuyển ngành") == "thủ tục chuyển ngành IUH"
+    # `_all` applies whatever topic the classifier picked.
+    assert query("khac", "giá ktx") == query("hoc_phi", "tiền ký túc xá") == "phí ký túc xá IUH"
+
+
+def test_a_slot_spelled_with_the_old_accent_placement_is_still_taken_out() -> None:
+    slots = WebSlots(topics=["lien_he_co_so"], subject="địa chỉ cơ sở Thanh Hoá", co_so="Thanh Hóa")
+
+    assert build_web_query(slots) == "địa chỉ Thanh Hóa IUH"

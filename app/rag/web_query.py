@@ -14,9 +14,12 @@ import re
 import unicodedata
 from collections.abc import Iterable, Sequence
 from datetime import date
+from functools import partial
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from app.core.academic_calendar import current_term
+from app.core.configs import load_yaml
 from app.schemas.web_search import WebSearchResult, WebSlots
 
 SCHOOL = "IUH"
@@ -115,10 +118,29 @@ _ALIASES: dict[str, dict[str, str]] = {
 }
 
 
+# The subject's vocabulary (configs/web_query.yaml): spelling, abbreviations, then
+# multi-word synonyms anywhere in it, then whole-subject aliases per topic (`_all` last).
+_VOCABULARY: dict[str, Any] = load_yaml("web_query.yaml")
+SPELLING: dict[str, str] = _VOCABULARY["spelling"]
+ABBREVIATIONS: dict[str, str] = _VOCABULARY["abbreviations"]
+PHRASE_ALIASES: dict[str, str] = _VOCABULARY["phrase_aliases"]
+SUBJECT_ALIASES: dict[str, dict[str, str]] = _VOCABULARY["subject_aliases"]
+# Words that may come before a slot's value in the subject ("ngành Công nghệ thông tin").
+_SLOT_LEAD_WORDS: dict[str, str] = {
+    "nganh_hoc": r"(?:ngành\s+)?",
+    "bac_dao_tao": r"(?:(?:bậc|trình độ)\s+)?",
+    "he_dao_tao": r"(?:hệ\s+)?",
+    "co_so": r"(?:(?:tại\s+)?(?:cơ sở|phân hiệu)\s+)?",
+}
+
+
 def build_web_query(slots: WebSlots) -> str:
     """The keyword query for `slots`, by the template of its first topic."""
 
     topic = slots.topics[0]
+    written = slots.subject
+    slots = _with_major_from_subject(slots)
+    slots = slots.model_copy(update={"subject": _subject(slots, topic)})
     year = _year_part(topic, slots.nam_hoc)
     if year and all(digits in (slots.subject or "") for digits in re.findall(r"20\d{2}", year)):
         year = None  # "lịch nghỉ lễ Quốc khánh 2025" already has it
@@ -140,6 +162,8 @@ def build_web_query(slots: WebSlots) -> str:
     else:
         parts = [slots.subject, co_so]
     query = " ".join(_clean(part) or "" for part in parts if _clean(part))
+    if not query:
+        query = _clean(written) or ""  # The subject was only a slot this template leaves out.
     if SCHOOL.lower() not in query.lower().split():
         query = f"{query} {SCHOOL}"
     return re.sub(r"\s+", " ", query).strip()
@@ -234,6 +258,93 @@ def _year_part(topic: str, value: str | None) -> str | None:
         return f"năm học {match.group(1)}-{match.group(2)}"
     single = re.search(r"\b(20\d{2})\b", value or "")
     return f"năm {single.group(1)}" if single else None
+
+
+# "ngành Kế toán" closing a subject, up to a year, cohort or term. Not after "chuyển",
+# "đổi", "song", "hai": "điều kiện chuyển ngành" names no major.
+_MAJOR_IN_SUBJECT = re.compile(
+    r"(?<!chuyển )(?<!đổi )(?<!song )(?<!hai )(?<!\w)ngành\s+"
+    r"(?P<major>\w[\w\s]*?)\s*(?=$|\b(?:năm|khóa|khoá|học kỳ|hk)\b|\d)",
+    re.IGNORECASE,
+)
+
+
+def _with_major_from_subject(slots: WebSlots) -> WebSlots:
+    """A major the classifier wrote into the subject but not into `nganh_hoc` (16-10-2026:
+    "mức thu học phí ngành Công nghệ thông tin", no major slot) moves to that slot, so the
+    topic's template decides whether the query names it, the same as when it is filled."""
+
+    if _clean(slots.nganh_hoc):
+        return slots
+    match = _MAJOR_IN_SUBJECT.search(slots.subject or "")
+    if match is None:
+        return slots
+    return slots.model_copy(update={"nganh_hoc": match.group("major").strip()})
+
+
+def _subject(slots: WebSlots, topic: str) -> str:
+    """The subject without what another slot already holds, in the topic's own words.
+
+    The classifier is told to leave the major, level, mode and campus out of `subject`
+    but does not always: "mức thu học phí ngành Công nghệ thông tin" put back the major
+    the fee template leaves out on purpose, and its top page became a study-abroad notice
+    (16-10-2026). A template adds each slot back where it belongs."""
+
+    subject = normalize_phrases(_clean(slots.subject) or "")
+    for field in _SLOT_LEAD_WORDS:
+        for name in _names(field, getattr(slots, field)):
+            pattern = rf"(?<!\w){_SLOT_LEAD_WORDS[field]}{re.escape(name)}(?!\w)"
+            subject = re.sub(pattern, " ", subject, flags=re.IGNORECASE)
+    subject = re.sub(r"\s+", " ", subject).strip(" ,.-")
+    if not subject:
+        return ""
+    key = subject.lower()
+    return SUBJECT_ALIASES.get(topic, {}).get(key) or SUBJECT_ALIASES.get("_all", {}).get(
+        key, subject
+    )
+
+
+def normalize_phrases(text: str) -> str:
+    """`text` with SPELLING, ABBREVIATIONS, then PHRASE_ALIASES replaced: whole words only,
+    longest phrase first, one pass each, so a replacement is never matched again by the
+    same table."""
+
+    for table, pattern in (
+        (SPELLING, _SPELLING_RE),
+        (ABBREVIATIONS, _ABBREVIATIONS_RE),
+        (PHRASE_ALIASES, _PHRASE_RE),
+    ):
+        text = pattern.sub(partial(_replacement, table), text)
+    return text
+
+
+def _replacement(table: dict[str, str], match: re.Match[str]) -> str:
+    return table[match.group(0).lower()]
+
+
+def _alternation(phrases: Iterable[str]) -> re.Pattern[str]:
+    ordered = sorted(phrases, key=len, reverse=True)
+    body = "|".join(re.escape(phrase) for phrase in ordered)
+    return re.compile(rf"(?<!\w)(?:{body})(?!\w)", re.IGNORECASE)
+
+
+_SPELLING_RE = _alternation(SPELLING)
+_ABBREVIATIONS_RE = _alternation(ABBREVIATIONS)
+_PHRASE_RE = _alternation(PHRASE_ALIASES)
+
+
+def _names(field: str, value: str | None) -> list[str]:
+    """Every way the subject may write a slot's value: as given, its canonical name, and
+    each alias of that name ("CNTT", "it" for Công nghệ Thông tin). Longest first, so
+    "Công nghệ Thông tin" goes before a shorter alias inside it could split it."""
+
+    text = _clean(value)
+    if text is None:
+        return []
+    canonical = _canonical(field, text) or text
+    names = {text, canonical, normalize_phrases(text), normalize_phrases(canonical)}
+    names.update(alias for alias, name in _ALIASES.get(field, {}).items() if name == canonical)
+    return sorted(names, key=len, reverse=True)
 
 
 def _canonical(field: str, value: str | None) -> str | None:
