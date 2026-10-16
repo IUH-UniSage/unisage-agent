@@ -35,6 +35,7 @@ from __future__ import annotations
 import logging
 import re
 import traceback
+from contextvars import ContextVar, Token
 
 from app.core.config import settings
 from app.core.security.redaction import redact
@@ -55,7 +56,12 @@ _NOISY_PROVIDER_LOGGERS = (
 # obvious which loggers above are there *because* of the redaction rule.
 _OTHER_NOISY_LOGGERS = ("sqlalchemy.engine", "asyncio")
 
-_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+# `trace_id` is the chat turn's request id (`TraceIdFilter`), "-" outside a turn: grep one
+# id to get every line of the turn that produced an answer (shown on its staff ticket).
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s [%(trace_id)s]: %(message)s"
+_NO_TRACE_ID = "-"
+
+_trace_id: ContextVar[str] = ContextVar("log_trace_id", default=_NO_TRACE_ID)
 
 _RESET = "\033[0m"
 _BOLD_CYAN = "\033[1;36m"
@@ -115,6 +121,27 @@ class SecretRedactionFilter(logging.Filter):
         return True
 
 
+def bind_trace_id(trace_id: str) -> Token[str]:
+    """Stamps `trace_id` on every record logged from this task (and the tasks it starts)."""
+
+    return _trace_id.set(trace_id)
+
+
+def unbind_trace_id(token: Token[str]) -> None:
+    _trace_id.reset(token)
+
+
+class TraceIdFilter(logging.Filter):
+    """Sets `record.trace_id` for `_LOG_FORMAT`. On the handler like `SecretRedactionFilter`,
+    so it also covers a record built without the record factory (`makeLogRecord`); a handler
+    runs in the logging call's own context, so the contextvar is the caller's."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "trace_id"):
+            record.trace_id = _trace_id.get()
+        return True
+
+
 class ColorFormatter(logging.Formatter):
     """Highlights the graph trace (`unisage.graph`) so a turn reads at a glance:
     node starts cyan, node timings green (magenta when slow), debug dumps blue."""
@@ -165,6 +192,8 @@ def configure_logging() -> None:
     for handler in logging.getLogger().handlers:
         if not any(isinstance(existing, SecretRedactionFilter) for existing in handler.filters):
             handler.addFilter(SecretRedactionFilter())
+        if not any(isinstance(existing, TraceIdFilter) for existing in handler.filters):
+            handler.addFilter(TraceIdFilter())
         if settings.LOG_COLOR and _writes_to_terminal(handler):
             handler.setFormatter(ColorFormatter(_LOG_FORMAT))
 

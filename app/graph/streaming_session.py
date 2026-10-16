@@ -56,6 +56,7 @@ from app.core.errors.public_errors import (
     short_reference,
 )
 from app.core.observability.graph_trace import GraphTrace
+from app.core.observability.logging_config import bind_trace_id, unbind_trace_id
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.database.repositories.student_profile import ProfileOwner, StudentProfileRepository
@@ -304,6 +305,8 @@ async def run_and_persist(
     response_text: str
     graph_output = None
     error_item: ErrorItem | None = None
+    # Every log line of this turn carries its request id, the trace id on the staff ticket.
+    trace_id_token = bind_trace_id(usage_recorder.request_id)
     try:
         # A submit turn holds the panel claim: past its deadline it is cancelled
         # before any further Java or state write (the lease outlives the deadline).
@@ -468,3 +471,4 @@ async def run_and_persist(
         if error_item is not None:
             await queue.put(error_item)
         await queue.put(DoneItem())
+        unbind_trace_id(trace_id_token)

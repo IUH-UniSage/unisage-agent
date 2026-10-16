@@ -7,7 +7,13 @@ import io
 import logging
 import sys
 
-from app.core.observability.logging_config import SecretRedactionFilter, configure_logging
+from app.core.observability.logging_config import (
+    SecretRedactionFilter,
+    TraceIdFilter,
+    bind_trace_id,
+    configure_logging,
+    unbind_trace_id,
+)
 
 
 def _make_record(msg: str, *args: object, exc_info: tuple | None = None) -> logging.LogRecord:
@@ -115,3 +121,20 @@ def test_color_formatter_colors_only_the_header_of_a_prompt_dump() -> None:
     line = ColorFormatter("%(message)s").format(_graph_record('prompt node=03_X:\n{"tasks": []}'))
 
     assert line == '\033[94mprompt node=03_X:\033[0m\n{"tasks": []}'
+
+
+def test_trace_id_filter_stamps_the_bound_id_and_a_dash_outside_a_turn() -> None:
+    outside = _make_record("idle")
+    TraceIdFilter().filter(outside)
+    assert outside.trace_id == "-"
+
+    token = bind_trace_id("req-123")
+    try:
+        inside = _make_record("rerank")
+        TraceIdFilter().filter(inside)
+    finally:
+        unbind_trace_id(token)
+    assert inside.trace_id == "req-123"
+
+    formatted = logging.Formatter("[%(trace_id)s] %(message)s").format(inside)
+    assert formatted == "[req-123] rerank"
