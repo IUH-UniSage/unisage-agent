@@ -9,7 +9,8 @@ every cached Tavily answer with its pages, score, academic year and time left.
 
 Each entry is listed under the query it was searched with, read from its `QUERY_KEY_PREFIX`
 sibling; entries cached before that sibling existed show "(query not recorded)". Reads
-WEB_SEARCH_CACHE_REDIS_URL of the env the task loads (eval: DB 7, dev: DB 6).
+WEB_SEARCH_CACHE_REDIS_URL of the env the task loads (the redis-cache instance on port 6380:
+dev db 0, eval db 1).
 """
 
 from __future__ import annotations

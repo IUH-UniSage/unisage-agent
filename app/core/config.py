@@ -249,9 +249,11 @@ class Settings(BaseSettings):
     CHAT_WEB_SEARCH_MIN_SCORE: float = Field(default=0.5, ge=0.0, le=1.0)
     CHAT_WEB_SEARCH_RESULT_MAX_CHARS: int = Field(default=1500, ge=100)
     # Redis cache of raw search results, keyed by the query and Tavily's parameters; its
-    # TTL depends on the topic (app/rag/web_query.py). Own database index so it never
-    # shares eviction with the pub/sub and budget keys on REDIS_URL. Empty URL = no cache.
-    WEB_SEARCH_CACHE_REDIS_URL: str = "redis://localhost:6379/6"
+    # TTL depends on the topic (app/rag/web_query.py). Its own Redis instance (`redis-cache`
+    # in .devcontainer/docker-compose.yml: maxmemory + volatile-lru), since eviction covers a
+    # whole instance and would otherwise reach the budget/Celery keys on REDIS_URL that also
+    # carry a TTL. Empty URL = no cache.
+    WEB_SEARCH_CACHE_REDIS_URL: str = "redis://localhost:6380/0"
 
     # GenerationSynthesisNode's JSON-repair follow-up call (see
     # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
