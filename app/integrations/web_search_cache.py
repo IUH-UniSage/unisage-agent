@@ -25,6 +25,9 @@ from app.schemas.web_search import WebSearchResult
 logger = logging.getLogger(__name__)
 
 KEY_PREFIX = "websearch:v1:"
+# The query text an entry was searched with, under the same digest and TTL: the entry's key
+# is a hash, so this is the only place `task db:web-cache` can read the query back from.
+QUERY_KEY_PREFIX = "websearch:query:v1:"
 _RESULTS = TypeAdapter(list[WebSearchResult])
 
 
@@ -54,6 +57,10 @@ def cache_key(query: str, *, max_results: int) -> str:
     ]
     digest = hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
     return f"{KEY_PREFIX}{digest}"
+
+
+def query_key(entry_key: str) -> str:
+    return QUERY_KEY_PREFIX + entry_key.removeprefix(KEY_PREFIX)
 
 
 class RedisWebSearchCache:
@@ -87,12 +94,10 @@ class RedisWebSearchCache:
     ) -> None:
         try:
             client = redis_asyncio.Redis.from_url(self._url)
+            key = cache_key(query, max_results=max_results)
             try:
-                await client.set(
-                    cache_key(query, max_results=max_results),
-                    _RESULTS.dump_json(results),
-                    ex=ttl_seconds,
-                )
+                await client.set(key, _RESULTS.dump_json(results), ex=ttl_seconds)
+                await client.set(query_key(key), query, ex=ttl_seconds)
             finally:
                 await client.aclose()
         except Exception:

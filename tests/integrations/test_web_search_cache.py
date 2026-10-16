@@ -8,7 +8,7 @@ from redis import asyncio as redis_asyncio
 
 from app.core.config import settings
 from app.integrations import web_search_cache
-from app.integrations.web_search_cache import RedisWebSearchCache, cache_key
+from app.integrations.web_search_cache import RedisWebSearchCache, cache_key, query_key
 from app.schemas.web_search import WebSearchResult
 
 _PAGE = WebSearchResult(title="Học phí", url="https://pdt.iuh.edu.vn/a", content="x", score=0.4)
@@ -71,7 +71,21 @@ async def test_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
     await cache.set("học phí", [_PAGE], max_results=10, ttl_seconds=60)
 
     assert await cache.get("Học phí", max_results=10) == [_PAGE]
-    assert list(redis.ttls.values()) == [60]
+    assert list(redis.ttls.values()) == [60, 60]
+
+
+@pytest.mark.asyncio
+async def test_the_query_is_kept_beside_its_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _FakeRedis({})
+    _redis(monkeypatch, redis)
+
+    await RedisWebSearchCache("redis://x/3").set(
+        "Học phí IUH năm học 2025-2026", [_PAGE], max_results=10, ttl_seconds=60
+    )
+
+    key = cache_key("học phí iuh năm học 2025-2026", max_results=10)
+    assert redis.store[query_key(key)] == "Học phí IUH năm học 2025-2026"
+    assert not query_key(key).startswith(web_search_cache.KEY_PREFIX)
 
 
 @pytest.mark.asyncio
