@@ -127,9 +127,15 @@ def test_color_formatter_greens_the_tavily_cache_lookups() -> None:
     assert formatter.format(_graph_record("Tavily cache MISS query='q'", name=name)).startswith(
         "\033[32m"
     )
-    assert formatter.format(_graph_record("Web search query='q'", name=name)) == (
-        "Web search query='q'"
-    )
+    assert formatter.format(
+        _graph_record("Web search query='q' topic=None cache=miss", name=name)
+    ).startswith("\033[32m")
+    assert formatter.format(
+        _graph_record(
+            "Web search turn: mode=parallel cache_hits=0", name="app.graph.streaming_graph"
+        )
+    ).startswith("\033[32m")
+    assert formatter.format(_graph_record("other line", name=name)) == "other line"
 
 
 def test_color_formatter_colors_only_the_header_of_a_prompt_dump() -> None:

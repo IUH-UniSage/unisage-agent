@@ -76,6 +76,12 @@ _YELLOW = "\033[33m"
 _BOLD_RED = "\033[1;31m"
 _LEVEL_COLORS = {logging.WARNING: _YELLOW, logging.ERROR: _BOLD_RED, logging.CRITICAL: _BOLD_RED}
 _SLOW_NODE_MS = 2000
+# Green: the web search lines that say whether Tavily was answered from the cache - each
+# lookup with its key (bold on a hit), each search's pages and the turn's summary.
+_WEB_SEARCH_PREFIXES: dict[str, tuple[str, ...]] = {
+    "app.graph.nodes.web_search": ("Tavily cache ", "Web search "),
+    "app.graph.streaming_graph": ("Web search turn:",),
+}
 _ELAPSED_PATTERN = re.compile(r"elapsed_ms=(\d+)")
 
 
@@ -146,7 +152,7 @@ class TraceIdFilter(logging.Filter):
 class ColorFormatter(logging.Formatter):
     """Highlights the graph trace (`unisage.graph`) so a turn reads at a glance:
     node starts cyan, node timings green (magenta when slow), debug dumps blue; and
-    the Tavily cache lookups green (bold on a hit)."""
+    the web search / Tavily cache lines green (a cache hit bold)."""
 
     def format(self, record: logging.LogRecord) -> str:
         line = super().format(record)
@@ -165,7 +171,7 @@ class ColorFormatter(logging.Formatter):
         message = record.getMessage()
         if record.name == "google_genai.models":
             return _DIM
-        if record.name == "app.graph.nodes.web_search" and message.startswith("Tavily cache "):
+        if message.startswith(_WEB_SEARCH_PREFIXES.get(record.name, ())):
             return _BOLD_GREEN if message.startswith("Tavily cache HIT") else _GREEN
         if record.name != "unisage.graph":
             return None
