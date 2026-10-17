@@ -343,6 +343,26 @@ def test_pdf_numbered_line_before_a_table_is_promoted_without_underline() -> Non
     assert table_regions[0].heading_path == ["Tieu de", "5. Gioi thieu bang"]
 
 
+def test_pdf_overlong_heading_candidate_stays_body_text() -> None:
+    """A form's fill-in line ("1. Ngành: ....... Mã ngành: ....") right before a table
+    passes the promotion signals, but no real section title is hundreds of characters
+    long - as a heading it would be prefixed into every chunk below it and overflow
+    `chunk_size`. Same for an over-long `#` line."""
+
+    fill_in = "1. Nganh: " + "." * 300 + " Ma nganh: " + "." * 100
+    long_hash = "## " + "Noi dung in dam rat dai " * 20
+    pages = _pages(f"# Tieu de\n\n{fill_in}\n\n|A|B|\n|---|---|\n|1|2|\n\n{long_hash}\n\nKet thuc.\n")
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "form.pdf", "pdf")
+
+    assert all(region.heading_path == ["Tieu de"] for region in regions)
+    text = "\n".join(r.content for r in regions if r.region_type == RegionType.TEXT)
+    assert "Ma nganh:" in text
+    assert "Noi dung in dam rat dai" in text
+    assert "##" not in text
+
+
 def test_pdf_plain_numbered_clause_is_not_promoted_to_heading() -> None:
     """A numbered line with neither `<u>` nor a table/list right after it
     (just another paragraph) stays ordinary text - promoting every
@@ -486,3 +506,98 @@ def test_pdf_mixed_case_ordinal_line_is_not_promoted_by_all_caps_signal() -> Non
 
     assert len(regions) == 1
     assert regions[0].heading_path == ["Tieu de"]
+
+
+def test_pdf_page_number_between_continued_tables_is_not_a_region() -> None:
+    pages = _pages(
+        "# Tieu de\n\nNoi dung.\n\n|A|B|\n|---|---|\n|1|2|\n\n5\n",
+        "|A|B|\n|---|---|\n|3|4|\n\n6\n",
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert [r.content.strip() for r in regions if r.region_type == RegionType.TEXT] == [
+        "Noi dung."
+    ]
+
+
+def test_pdf_page_number_at_the_end_of_running_text_is_dropped() -> None:
+    pages = _pages(
+        "# Tieu de\n\nDoan van trang mot.\n\n1\n",
+        "Doan van trang hai.\n\n2\n",
+        "Doan van trang ba co 3 muc.\n\n3\n",
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    text = "\n".join(r.content for r in regions)
+    assert [line.strip() for line in text.splitlines() if line.strip()] == [
+        "Doan van trang mot.",
+        "Doan van trang hai.",
+        "Doan van trang ba co 3 muc.",
+    ]
+
+
+def test_pdf_heading_level_follows_the_depth_of_its_number() -> None:
+    # the extractor marks `5.2` as `#` and leaves `6.` as plain bold text; only
+    # the numbers say `6.` closes `5.2` instead of nesting inside it
+    pages = _pages(
+        "# **5. Doi ngu**\n\n# **5.2 Co so vat chat**\n\nNoi dung 5.2.\n\n"
+        "**6. Chien luoc giang day**\n\n- Gach dau dong.\n"
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert [r.heading_path for r in regions] == [
+        ["5. Doi ngu", "5.2 Co so vat chat"],
+        ["6. Chien luoc giang day"],
+    ]
+
+
+def test_pdf_numbered_heading_never_nests_under_a_number_that_is_not_its_prefix() -> None:
+    pages = _pages(
+        "# 3. Chuc nang\n\n# 3.1. Danh sach\n\nNoi dung 3.1.\n\n"
+        "# _4.1.4. Tra cuu_\n\nNoi dung 4.1.4.\n\n# a. Muc con\n\nNoi dung a.\n"
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert [r.heading_path for r in regions] == [
+        ["3. Chuc nang", "3.1. Danh sach"],
+        ["4.1.4. Tra cuu"],
+        ["4.1.4. Tra cuu", "a. Muc con"],
+    ]
+
+
+def test_pdf_numbered_heading_resumes_the_numbering_an_unnumbered_heading_interrupted() -> None:
+    pages = _pages(
+        "# Chuong trinh\n\n## 1. Muc tieu\n\nNoi dung 1.\n\n# Trinh do ngoai ngu:\n\nNoi dung.\n\n"
+        "## 2. Chuan dau ra\n\nNoi dung 2.\n\n# Phu luc\n\n## 1. Bang diem\n\nNoi dung phu luc.\n"
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert [r.heading_path for r in regions] == [
+        ["Chuong trinh", "1. Muc tieu"],
+        ["Trinh do ngoai ngu:"],
+        ["Chuong trinh", "2. Chuan dau ra"],
+        # numbering that starts over is a new context, not a resumption
+        ["Phu luc", "1. Bang diem"],
+    ]
+
+
+def test_pdf_table_row_holding_only_the_running_header_is_dropped() -> None:
+    pages = _pages(
+        "<u>KL7.0a</u>\n\n|A|B|C|\n|---|---|---|\n|1|x|y|\n",
+        "<u>KL7.0a</u>\n\n|||KL7.0a|\n|---|---|---|\n|2|z|w|\n",
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert all("KL7.0a" not in r.content for r in regions if r.region_type == RegionType.TABLE)

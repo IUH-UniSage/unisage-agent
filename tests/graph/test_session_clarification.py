@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
 from app.graph import streaming_session
 from app.graph.clarification_round import (
     TaskQuestions,
@@ -61,6 +62,9 @@ class _Java:
         body = json.loads(request.read())
         if request.url.path == "/internal/calculation-traces":
             self.traces = body
+            return httpx.Response(200, json={})
+        if request.url.path == "/internal/message-traces":
+            self.message_trace = body
             return httpx.Response(200, json={})
         self.patches.append(body)
         return httpx.Response(self.status, json={})
@@ -170,7 +174,7 @@ async def test_existing_round_is_not_overwritten_and_no_metadata_is_sent(
 ) -> None:
     first = _round()
     async with db_session_factory() as session:
-        await ClarificationRoundRepository(session).upsert_open("c1", first, {})
+        await ClarificationRoundRepository(session).upsert_open("c1", first)
         await session.commit()
     java = _Java()
     items = await _run(
@@ -185,7 +189,7 @@ async def test_existing_round_is_not_overwritten_and_no_metadata_is_sent(
 
 
 @pytest.mark.asyncio
-async def test_turn_without_panel_saves_confirmed_metadata(
+async def test_turn_without_panel_saves_the_guest_profile(
     db_session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     java = _Java()
@@ -197,7 +201,8 @@ async def test_turn_without_panel_saves_confirmed_metadata(
     )
     async with db_session_factory() as session:
         state = await ClarificationRoundRepository(session).get_round("c1")
-    assert state.status is None and state.confirmed_metadata == {"nganh": "cntt"}
+        profile = await UserProfileRepository(session).get(ProfileOwner(conversation_id="c1"))
+    assert state.status is None and profile == {"nganh": "cntt"}
 
 
 @pytest.mark.asyncio
@@ -232,8 +237,25 @@ async def test_calculation_trace_is_pushed_before_the_public_summary_is_finalize
         GraphOutput(response_text="x", calculation_items=public, calculation_traces=private),
         monkeypatch,
     )
-    assert java.paths == ["/internal/calculation-traces", f"/messages/{ASSISTANT_ID}"]
+    assert java.paths == [
+        "/internal/calculation-traces",
+        f"/messages/{ASSISTANT_ID}",
+        "/internal/message-traces",
+    ]
     assert java.traces == {"messageId": ASSISTANT_ID, "items": private}
     metadata = java.patches[0]["metadata"]
     assert metadata == {"calculation": {"schema_version": 1, "items": public}}
     assert "question_raw" not in json.dumps(metadata, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_a_completed_answer_stores_its_response_time(
+    db_session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    java = _Java()
+
+    await _run(db_session_factory, java, GraphOutput(response_text="x"), monkeypatch)
+
+    response_time = java.patches[0]["responseTimeMs"]
+    assert isinstance(response_time, int)
+    assert response_time >= 0

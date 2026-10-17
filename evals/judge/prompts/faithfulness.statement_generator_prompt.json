@@ -1,0 +1,20 @@
+{
+ "language": "vietnamese",
+ "instruction": "Given a question and an answer, analyze the complexity of each sentence in the answer. Break down each sentence into one or more fully understandable statements. Ensure that no pronouns are used in any statement.",
+ "examples": [
+  [
+   {
+    "question": "Albert Einstein là ai và ông được biết đến nhiều nhất vì điều gì?",
+    "answer": "Ông là một nhà vật lý lý thuyết sinh ra tại Đức, được công nhận rộng rãi là một trong những nhà vật lý vĩ đại và có ảnh hưởng nhất mọi thời đại. Ông được biết đến nhiều nhất với việc phát triển thuyết tương đối, ông cũng đã có những đóng góp quan trọng vào sự phát triển của lý thuyết cơ học lượng tử."
+   },
+   {
+    "statements": [
+     "Albert Einstein là một nhà vật lý lý thuyết sinh ra tại Đức.",
+     "Albert Einstein được công nhận là một trong những nhà vật lý vĩ đại và có ảnh hưởng nhất mọi thời đại.",
+     "Albert Einstein được biết đến nhiều nhất với việc phát triển thuyết tương đối.",
+     "Albert Einstein đã có những đóng góp quan trọng vào sự phát triển của lý thuyết cơ học lượng tử."
+    ]
+   }
+  ]
+ ]
+}

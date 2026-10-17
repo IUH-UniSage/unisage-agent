@@ -37,6 +37,18 @@ services:
     volumes:
       - redis_data:/data
 
+  # Tavily result cache (WEB_SEARCH_CACHE_REDIS_URL), apart from `redis`: maxmemory and its
+  # eviction policy cover a whole instance, not one db, so on `redis` they could evict the
+  # budget settle markers, Celery results and circuit-breaker keys that also carry a TTL.
+  # Every cache key has a TTL, so volatile-lru drops the least recently used entries when
+  # full. A cache only: no persistence, a restart starts it empty.
+  redis-cache:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --maxmemory 256mb --maxmemory-policy volatile-lru --save "" --appendonly no
+    ports:
+      - "6380:6379"
+
   qdrant:
     image: qdrant/qdrant:v1.15.4
     restart: always

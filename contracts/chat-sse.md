@@ -48,6 +48,7 @@ Mỗi câu hỏi của panel phải có đúng một answer: không thiếu, kh�
 
 | Event | `data` | Ghi chú |
 |---|---|---|
+| `status` | `{"stage": "retrieving"}` hoặc `{"stage": "web_searching", "url": "https://pdt.iuh.edu.vn/…"}` | Lượt đang làm gì, gửi mỗi khi đổi bước (xem bảng dưới). Có thể xen giữa các `token` (VD lượt vừa tính toán vừa tra cứu). Client không biết `stage` thì hiện như `thinking` |
 | `token` | chuỗi JSON, ví dụ `"Điểm "` | Đã được lọc: không bao giờ chứa khối `ask_user_form`/`confirmed_metadata` |
 | `clarification` | `ClarificationPanel` (§3) | Tối đa 1 lần, sau token cuối, trước `done`. **Khi đã nhận event này, server bảo đảm panel đã được lưu ở cả state lẫn `messages.metadata`** |
 | `clarification_closed` | `{"panel_id": "7f1c…", "status": "cancelled"}` | Chỉ có trong response của lệnh huỷ |
@@ -56,6 +57,27 @@ Mỗi câu hỏi của panel phải có đúng một answer: không thiếu, kh�
 | `done` | `{}` | Luôn là event cuối |
 
 Response của lệnh huỷ chỉ có `clarification_closed` rồi `done`, không có token nào.
+
+`stage` của event `status` (`app/graph/progress.py`), theo node đang chạy:
+
+| `stage` | Node | Gợi ý hiển thị |
+|---|---|---|
+| `analyzing` | 03 classify, 04 routing, 06 query transformation | Đang phân tích |
+| `retrieving` | 08 retrieval, 09 / 09a rerank | Đang tìm thông tin |
+| `calculating` | 07 / 07a tính toán | Đang tính toán |
+| `web_searching` | 09b tìm web, 09c chấm trang web | Đang tìm kiếm web; có `url` → Đang tìm kiếm trên `<url>` (một event mỗi trang) |
+| `generating` | 10 tạo câu trả lời | Đang tạo câu trả lời |
+| `thinking` | còn lại (chào, tiếp tục panel, trò chuyện, ngoài phạm vi, ticket fallback) | Đang suy nghĩ |
+
+Hai node liên tiếp cùng `stage` chỉ gửi một event; event có `url` luôn được gửi.
+
+`web_searching` có hai kiểu, tùy lượt:
+- Câu hỏi con không còn văn bản (luồng cũ): gửi sau `retrieving`, một `url` cho **mỗi trang bộ chấm sắp
+  đọc**.
+- Chủ đề hay thay đổi (học phí, tuyển sinh, lịch/thông báo, liên hệ - `CHAT_WEB_JUDGE_WITH_CHUNKS`):
+  trang web được chấm song song với tìm văn bản, nên không gửi gì trong lúc đó (tránh xen giữa
+  `retrieving`). Sau rerank, nếu có trang được dùng thì gửi `web_searching` rồi một `url` cho **mỗi trang
+  câu trả lời dùng**; không trang nào được dùng thì không có `web_searching`.
 
 ## 3. `ClarificationPanel` (bản client thấy)
 
@@ -224,6 +246,20 @@ giờ xuất hiện trong response của message hay trong SSE.
 - Mỗi item sai (của user đã đăng nhập) có **một ticket riêng**. T1 và T2 cùng sai thì có 2 ticket. Report
   thường của message vẫn tạo được song song.
 - `note` chỉ được lưu trong ticket, không ghi vào metadata của message.
+
+## 5c. Tổng thời gian của lượt: `responseTimeMs`
+
+Message ASSISTANT `COMPLETED` có field `responseTimeMs` (cột `messages.response_time_ms`, backend
+V35), đọc qua `GET /messages/conversation/{id}`:
+
+```jsonc
+{"id": "…", "role": "ASSISTANT", "status": "COMPLETED", "responseTimeMs": 16240, …}
+```
+
+Agent gửi trong `PATCH /messages/{id}` lúc ghi kết quả cuối. `responseTimeMs` tính từ lúc agent
+nhận `POST /chat/stream` (trước khi gọi Java tạo message) tới lúc ghi kết quả cuối, nên gần với
+đồng hồ client đếm từ lúc gửi. Web hiện nó ở mép phải hàng nút của câu trả lời. Message USER,
+`ERROR`, bị dừng hoặc tạo trước ngày 14-10-2026 có `null`: client không hiện gì.
 
 ## 6. Thay đổi so với contract cũ
 

@@ -352,3 +352,58 @@ def test_sample_pdf_is_one_logical_table_across_three_pages() -> None:
     )  # 2 tiers x 2 pages
     assert check_table_invariants(table) == []
     assert not any(row.cells[2] == "Mức thu 01 tín chỉ" for row in table.rows)
+
+
+def test_merge_does_not_repeat_a_row_glued_under_the_taken_header() -> None:
+    first = _plain(HEADER, [["1", "Nguyen ly thong ke (Principles of", "1", "2"]], 1)
+    # page 2 starts with the tail of that name cell; the extractor glued it onto
+    # the next row in one markdown row, so the source row read as the header
+    # also carries data row 1
+    second = _plain(
+        ["", "Economic Statistics)", "", ""],
+        [["2", "Giao duc quoc phong va an ninh", "3", "4"], ["3", "Kinh te vi mo", "5", "6"]],
+        2,
+    )
+    header, glued, rest = second.source_rows
+    header.cells = list(glued.cells)
+    header.canonical_row_ids = [1]
+    second = replace(
+        second,
+        rows=[replace(second.rows[0], source_row_ids=[header.source_row_id]), second.rows[1]],
+        source_rows=[header, rest],
+    )
+
+    merged = merge_page_tables(first, second, header_present=False)
+
+    assert [row[1] for row in merged.data_rows] == [
+        "Nguyen ly thong ke (Principles of Economic Statistics)",
+        "Giao duc quoc phong va an ninh",
+        "Kinh te vi mo",
+    ]
+
+
+def test_reproject_columns_reads_a_page_with_a_missing_rule_against_the_previous_columns() -> None:
+    from app.rag.ingestion.table_merger import reproject_columns
+
+    # the previous page split the last area into two columns; this page lost
+    # that rule, so its third column covers both
+    table = _plain(["1", "a", "x y"], [["2", "b", "z"]], 2)
+
+    reprojected = reproject_columns(table, [0, 10, 30, 50], [0, 10, 30, 40, 50])
+
+    assert reprojected is not None
+    assert reprojected.header_row == ["1", "a", "x y", ""]
+    assert reprojected.data_rows == [["2", "b", "z", ""]]
+    assert check_table_invariants(reprojected) == []
+
+
+def test_reproject_columns_joins_columns_that_fall_into_one_previous_column() -> None:
+    from app.rag.ingestion.table_merger import reproject_columns
+
+    table = _plain(["1", "a", "b", "c"], [["2", "d", "e", "f"]], 2)
+
+    reprojected = reproject_columns(table, [0, 10, 20, 30, 40], [0, 10, 40])
+
+    assert reprojected is not None
+    assert reprojected.data_rows == [["2", "d e f"]]
+    assert check_table_invariants(reprojected) == []

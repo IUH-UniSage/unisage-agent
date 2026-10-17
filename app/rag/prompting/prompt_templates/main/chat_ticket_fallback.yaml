@@ -7,6 +7,8 @@ template: |
   {security_access_control}
   {response_style}
   {ticket_fallback}
+  {web_sources}
+  {current_time}
 
   ## Thông Báo Người Dùng
   Hệ thống chưa tìm được đoạn văn bản đủ khớp để trả lời chắc chắn câu hỏi: "{user_query}".

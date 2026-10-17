@@ -3,9 +3,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.rag.prompting import (
+    build_calculation_llm_prompt,
+    build_calculation_review_prompt,
     build_json_repair_prompt,
     build_multi_intent_prompt,
+    build_social_chat_prompt,
     build_system_prompt,
+    build_ticket_fallback_prompt,
     get_templates,
 )
 from app.schemas.chat_history import HistoryMessage
@@ -31,6 +35,9 @@ def test_design_only_templates_are_loaded() -> None:
     assert "{ticket_fallback}" in templates.chat_ticket_fallback
     assert "{prepared_context}" not in templates.chat_ticket_fallback
     assert templates.ticket_fallback
+    assert "{academic_metadata}" in templates.chat_social
+    assert "{security_access_control}" in templates.chat_social
+    assert "{prepared_context}" not in templates.chat_social
     assert templates.agent_calculation_extractor
     assert templates.agent_reranker_compressor
 
@@ -44,6 +51,57 @@ def test_agent_templates_keep_literal_json_braces() -> None:
     assert '"sub_queries": [' in templates.agent_multi_query_decomposer
     assert '"formula_id": "course_score", "params": {' in templates.agent_calculation_extractor
     assert '"formula_id": "llm", "params": {' in templates.agent_calculation_extractor
+
+
+def test_rerank_lists_only_kept_chunks_and_reads_them_whole() -> None:
+    template = get_templates().agent_reranker_compressor
+
+    assert "Lý do phủ định = KHÔNG giữ" in template
+    assert "CHỈ liệt kê đoạn được giữ" in template
+    assert "bị cắt ngắn" not in template
+    assert "Mục có trong đoạn" not in template
+
+
+def test_calculation_review_prompt_renders_the_question_and_the_json_contract() -> None:
+    templates = get_templates()
+    assert not hasattr(templates, "chat_calculation")
+    prompt = build_calculation_review_prompt(
+        user_query="học phí 2 năm đầu", calculation_payload="[]", history=[]
+    )
+    assert "Câu hỏi của người dùng: học phí 2 năm đầu" in prompt
+    assert '{"fits": true, "issue": null, "answer": ' in prompt
+
+
+def test_ticket_fallback_and_calculation_prompts_carry_the_current_time() -> None:
+    prompts = [
+        build_ticket_fallback_prompt(
+            user_query="Học phí kỳ này?", security=AcademicSecurityContext(), confirmed_metadata={}
+        ),
+        build_calculation_llm_prompt(
+            user_query="Học phí còn lại kỳ này?",
+            builtin_rules="",
+            documents="",
+            known_values="(chưa có)",
+            history=[],
+            security=AcademicSecurityContext(),
+            confirmed_metadata={},
+        ),
+        build_calculation_review_prompt(user_query="x", calculation_payload="[]", history=[]),
+    ]
+    for prompt in prompts:
+        assert "<current_time>" in prompt
+        assert "Học kỳ hiện tại:" in prompt
+        assert "lịch của khoa bạn có thể khác" in prompt
+
+
+def test_classifier_normalises_the_query_without_changing_its_meaning() -> None:
+    template = get_templates().agent_message_classification
+
+    assert "## Cách viết `query`" in template
+    assert "GIỮ NGUYÊN từ ngữ, con số, tên riêng và MỌI chữ phủ định" in template
+    assert "Sửa lỗi chính tả" in template
+    assert "CHUYỂN sang ý định/chủ đề khác" in template
+    assert "chép NGUYÊN VĂN tin nhắn" not in template
 
 
 def test_task_2_no_longer_mentions_the_pending_block_or_confirmed_metadata() -> None:
@@ -114,16 +172,16 @@ def test_prompt_renders_two_separate_tags_never_merged() -> None:
 
     assert "<academic_user_context>" in prompt
     assert "</academic_user_context>" in prompt
-    assert "<student_declared_attributes>" in prompt
-    assert "</student_declared_attributes>" in prompt
+    assert "<declared_attributes>" in prompt
+    assert "</declared_attributes>" in prompt
 
     # The two tags never share a body: KHOA_CNTT must not appear inside
-    # student_declared_attributes, and training_type must not appear inside
+    # declared_attributes, and training_type must not appear inside
     # academic_user_context.
     user_ctx_start = prompt.index("<academic_user_context>")
     user_ctx_end = prompt.index("</academic_user_context>")
-    declared_start = prompt.index("<student_declared_attributes>")
-    declared_end = prompt.index("</student_declared_attributes>")
+    declared_start = prompt.index("<declared_attributes>")
+    declared_end = prompt.index("</declared_attributes>")
 
     academic_block = prompt[user_ctx_start:user_ctx_end]
     declared_block = prompt[declared_start:declared_end]
@@ -279,6 +337,42 @@ def test_guest_security_context_renders_khach_role_and_no_department_access() ->
     )
 
     assert "Vai trò (Role): KHACH" in prompt
+    assert 'Xưng hô: xưng "mình", gọi người dùng "bạn"' in prompt
+
+
+def test_staff_is_addressed_by_role_even_with_a_student_like_profile() -> None:
+    """A SUPER_ADMIN who declared a cohort and a programme is still "anh/chị": the
+    address comes from the role in code, so the model cannot read it off the profile."""
+
+    security = AcademicSecurityContext(
+        user_id="admin-1",
+        role="SUPER_ADMIN",
+        department_access=[DepartmentAccessEntry(department_id="*", access_level=100)],
+    )
+    profile = {"nganh_hoc": "Công nghệ thông tin", "khoa_nhap_hoc": "2022"}
+
+    for prompt in (
+        build_system_prompt(
+            user_query="Hướng dẫn truy cập Wi-Fi",
+            security=security,
+            confirmed_metadata=profile,
+            chunks=[],
+        ),
+        build_social_chat_prompt(
+            user_query="continue", security=security, confirmed_metadata=profile
+        ),
+    ):
+        assert 'Xưng hô: xưng "em", gọi người dùng "anh/chị"' in prompt
+
+
+def test_lecturer_is_addressed_as_thay_co() -> None:
+    prompt = build_social_chat_prompt(
+        user_query="Chào em",
+        security=AcademicSecurityContext(user_id="gv-1", role="GIANG_VIEN"),
+        confirmed_metadata={},
+    )
+
+    assert 'Xưng hô: xưng "em", gọi người dùng "Thầy/Cô"' in prompt
 
 
 def test_known_metadata_fields_vocabulary_is_embedded() -> None:
@@ -328,7 +422,7 @@ def test_history_message_empty_renders_sentinel_not_a_crash() -> None:
     assert "chưa có lịch sử" in prompt
 
 
-def test_json_repair_prompt_includes_student_declared_attributes() -> None:
+def test_json_repair_prompt_includes_declared_attributes() -> None:
     """Regression guard for the live bug: repair must see confirmed_metadata
     so it doesn't re-ask a field the student already answered."""
 
@@ -339,7 +433,7 @@ def test_json_repair_prompt_includes_student_declared_attributes() -> None:
         confirmed_metadata={"he_dao_tao": "chinh_quy"},
     )
 
-    assert "<student_declared_attributes>" in prompt
+    assert "<declared_attributes>" in prompt
     assert "he_dao_tao: chinh_quy" in prompt
 
 
@@ -486,8 +580,8 @@ def test_websearch_block_sits_below_academic_context_numbered_after_the_chunks()
     assert "[3] (lich-thi — https://pdt.iuh.edu.vn/lich-thi) Nội dung lich-thi" in prompt
     # Tag names also appear inside the rules; compare the blocks' own lines.
     assert prompt.index("\n</academic_context>") < prompt.index("\n<websearch>\n")
-    assert prompt.index("\n</websearch>") < prompt.index("\n<current_date>\n")
-    assert "luôn theo `<academic_context>`" in prompt
+    assert prompt.index("\n</websearch>") < prompt.index("\n<current_time>\n")
+    assert "Quy định, điều kiện, thủ tục, chính sách: theo `<academic_context>`" in prompt
 
 
 def test_websearch_only_turn_has_an_empty_academic_context() -> None:
@@ -531,7 +625,65 @@ def test_calculation_llm_prompt_keeps_its_ask_form_json_after_formatting() -> No
     from app.rag.prompting import build_calculation_llm_prompt
 
     prompt = build_calculation_llm_prompt(
-        user_query="q", builtin_rules="R", documents="", known_values="{}", history=[]
+        user_query="q",
+        builtin_rules="R",
+        documents="",
+        known_values="{}",
+        history=[],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={},
     )
     assert '{"type": "ask_user_form", "fields": [{"field":' in prompt
     assert "(không có tài liệu)" in prompt
+
+
+def test_calculation_llm_prompt_carries_the_security_rules_and_verified_identity() -> None:
+    from app.rag.prompting import build_calculation_llm_prompt
+
+    prompt = build_calculation_llm_prompt(
+        user_query="q",
+        builtin_rules="R",
+        documents="",
+        known_values="{}",
+        history=[],
+        security=AcademicSecurityContext(user_id="sv-1", role="SINH_VIEN"),
+        confirmed_metadata={"bac_dao_tao": "Đại học chính quy"},
+    )
+    assert "Quy Tắc Bảo Mật & Phân Quyền Thông Tin" in prompt
+    assert "<academic_user_context>" in prompt and "sv-1" in prompt
+    assert "bac_dao_tao: Đại học chính quy" in prompt
+
+
+def test_calculation_llm_prompt_shows_recent_calculations_and_every_registry_name() -> None:
+    from app.rag.prompting import build_calculation_llm_prompt
+    from app.schemas.clarification import CalculationPlan, LastCalculation
+
+    recent = [
+        LastCalculation(
+            plan=CalculationPlan(formula_id="tuition_semester"),
+            params={"tc_lt": 15, "khoa_nhap_hoc": "2022"},
+            title="Học phí học kỳ",
+        )
+    ]
+    prompt = build_calculation_llm_prompt(
+        user_query="q",
+        builtin_rules="R",
+        documents="",
+        known_values="{}",
+        history=[],
+        security=AcademicSecurityContext(),
+        confirmed_metadata={"nganh_hoc": "CNTT"},
+        recent_calculations=recent,
+    )
+    block = prompt.split("<recent_calculations>")[1].split("</recent_calculations>")[0]
+    assert '- Học phí học kỳ: {"tc_lt": 15, "khoa_nhap_hoc": "2022"}' in block
+    # The LLM names a calculation's numbers too, unlike node 10's profile-only table.
+    assert "| `tc_lt` |" in prompt and "| `khoa_nhap_hoc` |" in prompt
+    assert "ĐỌC TRƯỚC KHI HỎI" in prompt
+
+
+def test_node_10_field_table_lists_profile_fields_only() -> None:
+    from app.rag.prompting import build_known_metadata_fields_section
+
+    table = build_known_metadata_fields_section()
+    assert "`khoa_nhap_hoc`" in table and "`tc_lt`" not in table

@@ -30,11 +30,20 @@ celery_app.conf.result_expires = 60 * 60 * 24 * 7
 # `<CELERY_QUEUE_PREFIX>-<queue>` - lets the integration harness give each test
 # run its own queue namespace and `celery purge -Q <that queue>` without ever
 # touching another run's queue or (since purge is queue-scoped, not DB-scoped)
-# another Redis DB's keys. Single default queue today; task_routes can split
-# further later without changing the prefix mechanism.
+# another Redis DB's keys. `embed_chunks` runs for minutes per document, so it has
+# its own queue: credential verification and the Beat tasks in the default queue
+# never wait behind a batch of embeddings. A worker started without `-Q` consumes both.
 _default_queue = f"{settings.CELERY_QUEUE_PREFIX}-default"
+INGESTION_QUEUE = f"{settings.CELERY_QUEUE_PREFIX}-ingestion"
 celery_app.conf.task_default_queue = _default_queue
-celery_app.conf.task_queues = (Queue(_default_queue, routing_key=_default_queue),)
+celery_app.conf.task_queues = (
+    Queue(_default_queue, routing_key=_default_queue),
+    Queue(INGESTION_QUEUE, routing_key=INGESTION_QUEUE),
+)
+celery_app.conf.task_routes = {"embed_chunks": {"queue": INGESTION_QUEUE}}
+# Embedding tasks run for minutes: a worker takes one task at a time so the
+# others pick up the rest instead of idling while it holds a prefetched batch.
+celery_app.conf.worker_prefetch_multiplier = 1
 
 celery_app.conf.beat_schedule = {
     "model-registry-beat-heartbeat": {

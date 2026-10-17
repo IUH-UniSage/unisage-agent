@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
@@ -28,7 +28,7 @@ from app.graph.streaming import (
     auxiliary_model_settings,
     run_agent_text_with_failover,
 )
-from app.rag.prompting import append_recent_history, get_templates
+from app.rag.prompting import append_current_time, append_recent_history, get_templates
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, RoutingMode
 
@@ -42,6 +42,9 @@ class SubQuery:
 
     question: str
     retrieval_text: str
+    # Which advisory task (in `transform_tasks`' order) it came from - bookkeeping, not
+    # part of what the sub-query is.
+    task_index: int = field(default=0, compare=False)
 
 
 def build_query_transformation_agent(model: Model | str) -> Agent[None, str]:
@@ -64,7 +67,12 @@ def _fold_confirmed_metadata_into_query(user_query: str, confirmed_metadata: dic
     if not confirmed_metadata:
         return user_query
     declared = ", ".join(f"{field}={value}" for field, value in confirmed_metadata.items())
-    return f"{user_query} (thông tin sinh viên đã xác nhận: {declared})"
+    # Only for what the question leaves open: "học phí ngành điện tử" from a CNTT student
+    # was rewritten to the CNTT fee (14-10-2026).
+    return (
+        f"{user_query} (hồ sơ người hỏi đã khai, CHỈ dùng cho tiêu chí câu hỏi không tự nêu: "
+        f"{declared})"
+    )
 
 
 async def transform_query(
@@ -92,7 +100,7 @@ async def transform_query(
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
     return await run_agent_text_with_failover(
         agent,
-        append_recent_history(enriched_query, history),
+        append_current_time(append_recent_history(enriched_query, history), confirmed_metadata),
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,
@@ -151,7 +159,7 @@ async def decompose_query(
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
     output = await run_agent_text_with_failover(
         agent,
-        append_recent_history(enriched_query, history),
+        append_current_time(append_recent_history(enriched_query, history), confirmed_metadata),
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,
@@ -183,12 +191,13 @@ async def _transform_task(
     on_attempt: AttemptRecorder | None,
     budget: BudgetContext | None,
 ) -> list[SubQuery]:
-    # Classification never saw confirmed metadata, so its text can't be reused then.
-    if not confirmed_metadata:
-        if mode == "MULTI" and task.sub_queries:
-            return [SubQuery(question=query, retrieval_text=query) for query in task.sub_queries]
-        if mode == "SINGLE" and task.hyde_text:
-            return [SubQuery(question=task.query, retrieval_text=task.hyde_text)]
+    # Classification saw the same profile (`<declared_attributes>`) and applies it by the
+    # same rule as the HyDE prompt, so its text is reused: a second LLM call for a
+    # logged-in student took 14s (14-10-2026).
+    if mode == "MULTI" and task.sub_queries:
+        return [SubQuery(question=query, retrieval_text=query) for query in task.sub_queries]
+    if mode == "SINGLE" and task.hyde_text:
+        return [SubQuery(question=task.query, retrieval_text=task.hyde_text)]
 
     if mode == "MULTI" and decomposer_agent is not None:
         sub_queries = await decompose_query(
@@ -280,7 +289,11 @@ async def transform_tasks(
             for task, mode in tasks
         )
     )
-    return [sub_query for sub_queries in per_task for sub_query in sub_queries]
+    return [
+        replace(sub_query, task_index=task_index)
+        for task_index, sub_queries in enumerate(per_task)
+        for sub_query in sub_queries
+    ]
 
 
 def extract_standalone_question(hyde_output: str) -> str:

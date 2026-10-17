@@ -1,19 +1,31 @@
+import os
 from unittest.mock import MagicMock
 
+import httpx
+import pytest
+from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.http.models import (
+    Distance,
     FieldCondition,
     Filter,
     PayloadSchemaType,
+    PointStruct,
     QueryResponse,
     ScoredPoint,
+    VectorParams,
 )
 
 from app.core.config import settings
+from app.rag.vectorstore import qdrant_store
 from app.rag.vectorstore.qdrant_store import (
     ChunkPoint,
     build_access_filter,
+    chunk_point_id,
     collection_has_points,
     ensure_collection,
+    fetch_chunks_by_ids,
+    get_client,
     get_collection_dimension,
     search_chunks,
     search_chunks_batch,
@@ -220,14 +232,56 @@ def test_upsert_chunk_carries_structural_metadata_fields_when_set() -> None:
     assert upserted_point.payload["parse_warnings"] == ["padded_cells"]
 
 
+def _qdrant_error(status_code: int) -> UnexpectedResponse:
+    return UnexpectedResponse(
+        status_code=status_code, reason_phrase="", content=b"{}", headers=httpx.Headers()
+    )
+
+
 def test_search_chunks_returns_empty_list_when_collection_missing() -> None:
     client = MagicMock()
-    client.collection_exists.return_value = False
+    client.query_batch_points.side_effect = _qdrant_error(404)
 
     points = search_chunks(client, query_vector=[0.1, 0.2], limit=5)
 
     assert points == []
-    client.query_batch_points.assert_not_called()
+    # No separate existence check: the search itself tells a missing collection apart.
+    client.collection_exists.assert_not_called()
+
+
+def test_search_chunks_raises_other_qdrant_errors() -> None:
+    client = MagicMock()
+    client.query_batch_points.side_effect = _qdrant_error(500)
+
+    with pytest.raises(UnexpectedResponse):
+        search_chunks(client, query_vector=[0.1, 0.2], limit=5)
+
+
+def test_fetch_chunks_by_ids_returns_empty_list_when_collection_missing() -> None:
+    client = MagicMock()
+    client.scroll.side_effect = _qdrant_error(404)
+
+    assert fetch_chunks_by_ids(client, ["doc:1"]) == []
+    client.collection_exists.assert_not_called()
+
+
+def test_get_client_is_shared_within_a_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[MagicMock] = []
+
+    def _build(**_kwargs: object) -> MagicMock:
+        built.append(MagicMock())
+        return built[-1]
+
+    monkeypatch.setattr(qdrant_store, "QdrantClient", _build)
+    monkeypatch.setattr(qdrant_store, "_client", None)
+
+    assert get_client() is get_client()
+    assert len(built) == 1
+
+    # A forked child (another pid) builds its own client.
+    monkeypatch.setattr(os, "getpid", lambda: -1)
+    assert get_client() is not built[0]
+    assert len(built) == 2
 
 
 def test_search_chunks_queries_all_three_named_vectors_with_payload_attached() -> None:
@@ -476,3 +530,35 @@ def test_search_chunks_passes_query_filter_to_every_named_vector_query() -> None
     assert len(requests) == 3
     for request in requests:
         assert request.filter == access_filter
+
+
+def test_fetch_chunks_by_ids_returns_them_in_order_and_keeps_the_permission_filter() -> None:
+    client = QdrantClient(":memory:")
+    client.create_collection(
+        settings.QDRANT_COLLECTION,
+        vectors_config={"content_vector": VectorParams(size=2, distance=Distance.COSINE)},
+    )
+    payloads = {
+        "doc:1": {"is_public": True, "department": "d1", "access_level": 1},
+        "doc:2": {"is_public": True, "department": "d1", "access_level": 1},
+        "doc:3": {"is_public": False, "department": "d1", "access_level": 3},
+    }
+    client.upsert(
+        settings.QDRANT_COLLECTION,
+        points=[
+            PointStruct(
+                id=chunk_point_id(chunk_id),
+                vector={"content_vector": [0.1, 0.2]},
+                payload={"chunk_id": chunk_id, "content": chunk_id, **payload},
+            )
+            for chunk_id, payload in payloads.items()
+        ],
+    )
+
+    records = fetch_chunks_by_ids(
+        client, ["doc:2", "doc:3", "doc:1", "doc:9"], build_access_filter(AcademicSecurityContext())
+    )
+
+    # doc:3 is private to a guest, doc:9 is not indexed.
+    assert [(record.payload or {})["chunk_id"] for record in records] == ["doc:2", "doc:1"]
+    assert fetch_chunks_by_ids(client, []) == []

@@ -38,8 +38,22 @@ CONVERSION = [
     "điểm chữ của 5.4",
     "đổi ra điểm chữ 7.8",
 ]
+TUITION = {
+    "Học phí học kỳ này bao nhiêu?": "tuition_semester",
+    "tính học phí học kì 2 giúp em": "tuition_semester",
+    "học phí 1 kỳ của em là bao nhiêu": "tuition_semester",
+    "học phí một năm học ngành CNTT": "tuition_year",
+    "Tính học phí mỗi năm cho em": "tuition_year",
+    "tính giúp tôi học phí cả ngành công nghệ thông tin đi": "tuition_program",
+    "học phí toàn khoá học là bao nhiêu": "tuition_program",
+    "học phí cả khóa ngành Kế toán": "tuition_program",
+    "tổng học phí đến khi ra trường": "tuition_program",
+    "kỳ này em học 15 tín lý thuyết 4 tín thực hành, học phí bao nhiêu?": "tuition_semester",
+    "mỗi năm em đóng học phí bao nhiêu": "tuition_year",
+}
 NONE = [
-    "Học phí học kỳ này bao nhiêu?",
+    "15 tín lý thuyết với 4 tín thực hành thì học phí bao nhiêu?",
+    "Học phí khóa 2025 ngành CNTT là bao nhiêu?",
     "Điều kiện tốt nghiệp là gì",
     "Em còn thiếu bao nhiêu tín chỉ để tốt nghiệp",
     "điểm rèn luyện tính như thế nào",
@@ -65,6 +79,11 @@ def test_course_score_questions(question: str) -> None:
 @pytest.mark.parametrize("question", CONVERSION)
 def test_conversion_questions(question: str) -> None:
     assert route_builtin(question) == ["grade_conversion"]
+
+
+@pytest.mark.parametrize(("question", "formula_id"), TUITION.items())
+def test_tuition_questions(question: str, formula_id: str) -> None:
+    assert route_builtin(question) == [formula_id]
 
 
 @pytest.mark.parametrize("question", NONE)

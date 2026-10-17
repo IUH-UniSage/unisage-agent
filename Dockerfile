@@ -27,6 +27,7 @@ ENV TIKTOKEN_CACHE_DIR=/app/.tiktoken_cache
 RUN /app/.venv/bin/python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
 COPY app ./app
+COPY configs ./configs
 COPY tests ./tests
 COPY alembic.ini ./alembic.ini
 COPY migrations ./migrations

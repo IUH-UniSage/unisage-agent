@@ -7,6 +7,7 @@ import httpx2
 import openai
 import pytest
 from pydantic_ai.models.function import FunctionModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors.llm_failure import FailureReason
@@ -14,15 +15,18 @@ from app.core.errors.provider_errors import EmbeddingProviderError
 from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import ModelRegistryError
 from app.core.usage.usage_recorder import UsageRecorder
+from app.database.models import ConversationClarificationState
 from app.database.repositories.clarification_state import ClarificationRoundRepository
 from app.graph.nodes.off_topic import OFF_TOPIC_TEMPLATES
-from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, TokenItem
+from app.graph.queue_items import DoneItem, ErrorItem, QueueItem, StatusItem, TokenItem
 from app.graph.stream_error_codes import LLM_STREAM_INTERRUPTED
 from app.graph.streaming_session import _admin_warnings, _error_item_for, run_and_persist
 from app.graph.streaming_state import AdminWarning, GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient
 from app.schemas.security import AcademicSecurityContext
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
+
+_TRACE_PATH = "/internal/message-traces"
 
 
 def _models(
@@ -57,6 +61,9 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
     def handler(request: httpx.Request) -> httpx.Response:
         import json
 
+        if request.url.path.endswith(_TRACE_PATH):
+            patched["trace"] = json.loads(request.read())
+            return httpx.Response(200, json={})
         patched["method"] = request.method
         patched["body"] = json.loads(request.read())
         return httpx.Response(200, json={"id": "msg-2", "status": "COMPLETED"})
@@ -89,15 +96,28 @@ async def test_run_and_persist_patches_completed_and_signals_queue_end(
     assert patched["body"]["status"] == "COMPLETED"
     assert patched["body"]["content"] in OFF_TOPIC_TEMPLATES
     assert "citations" not in patched["body"]
+    # Even a turn with no retrieval leaves its trace id for the staff ticket.
+    assert patched["trace"] == {
+        "messageId": "msg-2",
+        "traceId": "test-request",
+        "chunks": [],
+        "webSources": [],
+    }
 
     tokens = []
+    stages = []
     while True:
         item = await queue.get()
         if isinstance(item, DoneItem):
             break
+        if isinstance(item, StatusItem):
+            stages.append(item.stage)
+            continue
         assert isinstance(item, TokenItem)
         tokens.append(item.text)
     assert tokens == [patched["body"]["content"]]
+    # Off-topic: classification, then the canned reply (no further status for it).
+    assert stages[:2] == ["thinking", "analyzing"]
 
 
 @pytest.mark.asyncio
@@ -117,6 +137,9 @@ async def test_run_and_persist_patches_error_on_graph_exception(
     def handler(request: httpx.Request) -> httpx.Response:
         import json
 
+        if request.url.path.endswith(_TRACE_PATH):
+            patched["trace"] = json.loads(request.read())
+            return httpx.Response(200, json={})
         patched["body"] = json.loads(request.read())
         return httpx.Response(200, json={"id": "msg-2", "status": "ERROR"})
 
@@ -145,6 +168,8 @@ async def test_run_and_persist_patches_error_on_graph_exception(
     )
 
     assert patched["body"]["status"] == "ERROR"
+    # A failed turn's trace id is what finds the failure in the logs.
+    assert patched["trace"]["traceId"] == "test-request"
     # An error item is pushed immediately before the end-of-stream sentinel
     # whenever the graph raised.
     error_item = await queue.get()
@@ -152,6 +177,15 @@ async def test_run_and_persist_patches_error_on_graph_exception(
     assert error_item.code == LLM_STREAM_INTERRUPTED
     assert error_item.retryable is True
     assert isinstance(await queue.get(), DoneItem)
+
+
+async def _state_row_exists(session: AsyncSession, conversation_id: str) -> bool:
+    result = await session.execute(
+        select(ConversationClarificationState.id).where(
+            ConversationClarificationState.conversation_id == conversation_id
+        )
+    )
+    return result.scalar_one_or_none() is not None
 
 
 @pytest.mark.asyncio
@@ -187,10 +221,11 @@ async def test_run_and_persist_persists_clarification_state_on_success(
         session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
     )
 
-    # off_topic never touches confirmed_metadata, but a row should still
-    # exist (upserted with the empty defaults).
+    # off_topic never computes anything, but a row should still exist (upserted with
+    # the empty defaults).
     state = await ClarificationRoundRepository(db_session).get_round("conv-42")
-    assert state.status is None and state.confirmed_metadata == {}
+    assert state.status is None and state.recent_calculations == []
+    assert await _state_row_exists(db_session, "conv-42")
 
 
 @pytest.mark.asyncio
@@ -251,8 +286,7 @@ async def test_queue_sentinel_still_arrives_when_java_patch_raises_unexpected_er
 
     # The clarification-state write (which runs BEFORE the Java PATCH since
     # UNISAGE-99: state first, projection second) still happened.
-    state = await ClarificationRoundRepository(db_session).get_round("conv-1")
-    assert state.confirmed_metadata == {}
+    assert await _state_row_exists(db_session, "conv-1")
 
 
 @pytest.mark.asyncio
@@ -263,9 +297,16 @@ async def test_run_and_persist_sends_citations_when_graph_produced_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     citation = {"index": 1, "documentId": "doc-1", "title": "Quy chế A"}
+    chunk = {**citation, "chunkId": "c-1", "cited": True, "content": "35 triệu"}
+    page = {"index": None, "kind": "LINK", "url": "https://iuh.edu.vn/a", "cited": False}
 
     async def _fake_graph(*_args: object, **_kwargs: object) -> GraphOutput:
-        return GraphOutput(response_text="Học phí là 35 triệu [1].", citations=[citation])
+        return GraphOutput(
+            response_text="Học phí là 35 triệu [1].",
+            citations=[citation],
+            context_chunks=[chunk],
+            context_web=[page],
+        )
 
     monkeypatch.setattr("app.graph.streaming_session.run_graph", _fake_graph)
 
@@ -274,6 +315,9 @@ async def test_run_and_persist_sends_citations_when_graph_produced_them(
     def handler(request: httpx.Request) -> httpx.Response:
         import json
 
+        if request.url.path.endswith(_TRACE_PATH):
+            patched["trace"] = json.loads(request.read())
+            return httpx.Response(200, json={})
         patched["body"] = json.loads(request.read())
         return httpx.Response(200, json={"id": "msg-2", "status": "COMPLETED"})
 
@@ -302,6 +346,9 @@ async def test_run_and_persist_sends_citations_when_graph_produced_them(
     )
 
     assert patched["body"]["citations"] == [citation]
+    # The uncited context goes only to the staff trace, never into the public message.
+    assert patched["trace"]["chunks"] == [chunk]
+    assert patched["trace"]["webSources"] == [page]
 
 
 @pytest.mark.asyncio

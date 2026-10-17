@@ -1,0 +1,33 @@
+{
+ "language": "vietnamese",
+ "instruction": "Generate a question for the given answer and identify if the answer is noncommittal.\nGive noncommittal as 1 if the answer is noncommittal (evasive, vague, or ambiguous) and 0 if the answer is substantive.\nExamples of noncommittal answers: \"I don't know\", \"I'm not sure\", \"It depends\".",
+ "examples": [
+  [
+   {
+    "response": "Albert Einstein sinh ra ở Đức."
+   },
+   {
+    "question": "Albert Einstein sinh ra ở đâu?",
+    "noncommittal": 0
+   }
+  ],
+  [
+   {
+    "response": "Thủ đô của Pháp là Paris, một thành phố nổi tiếng với kiến trúc và văn hóa."
+   },
+   {
+    "question": "Thủ đô của Pháp là gì?",
+    "noncommittal": 0
+   }
+  ],
+  [
+   {
+    "response": "Tôi không biết về tính năng đột phá của chiếc điện thoại thông minh được phát minh vào năm 2023 vì tôi không biết thông tin sau năm 2022."
+   },
+   {
+    "question": "Tính năng đột phá của chiếc điện thoại thông minh được phát minh vào năm 2023 là gì?",
+    "noncommittal": 1
+   }
+  ]
+ ]
+}

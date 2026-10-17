@@ -26,6 +26,8 @@ template: |
   Nhiệm vụ của bạn:
   1. Tổng hợp thông tin từ các câu hỏi con một cách hệ thống, sử dụng bảng so sánh (nếu có các tiêu chí chênh lệch).
   2. Đảm bảo trả lời trọn vẹn từng vế trong câu hỏi gốc của người dùng.
-  3. Gắn chỉ số trích dẫn `[1]`, `[2]` cho từng ý và liệt kê nguồn ở cuối.
+  3. Gắn chỉ số trích dẫn `[1]`, `[2]` cho từng ý (không viết danh sách nguồn ở cuối).
+
+  Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn.
 
   Câu hỏi gốc: {user_query}

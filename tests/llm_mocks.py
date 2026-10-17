@@ -131,6 +131,8 @@ _NO_ROUTING_MODE_INTENTS = frozenset(
 # `append_recent_history` puts the message first, then this separator and
 # the recent history - everything before it is the user's own message.
 _HISTORY_SEPARATOR = "\n\nLịch sử hội thoại gần đây"
+_CURRENT_TIME_SEPARATOR = "\n\n<current_time>"
+_PROFILE_SEPARATOR = "\n\n<declared_attributes>"
 
 
 def _task_payload(intent: str, query: str, routing_mode: str | None) -> dict[str, object]:
@@ -152,7 +154,9 @@ def make_classification_llm_model(*intents: str, routing_mode: str | None = None
             content = getattr(part, "content", None)
             if isinstance(content, str):
                 prompt = content
-        message = prompt.split(_HISTORY_SEPARATOR, 1)[0]
+        message = prompt
+        for separator in (_HISTORY_SEPARATOR, _PROFILE_SEPARATOR, _CURRENT_TIME_SEPARATOR):
+            message = message.split(separator, 1)[0]
         if len(intents) == 1:
             tasks = [_task_payload(intents[0], message, routing_mode)]
         else:
@@ -178,6 +182,28 @@ class RetrieveManyMixin:
     ) -> list[list[RetrievedChunk]]:
         retrieve = self.retrieve  # type: ignore[attr-defined]
         return [retrieve(query, security=security, limit=limit) for query in queries]
+
+    async def retrieve_many_async(
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+    ) -> list[list[RetrievedChunk]]:
+        return self.retrieve_many(queries, security=security, limit=limit)
+
+    def fetch(
+        self,
+        chunk_ids: list[str],
+        *,
+        security: AcademicSecurityContext,
+    ) -> list[RetrievedChunk]:
+        """The fake's own `chunks` with these ids, in `chunk_ids` order."""
+
+        del security
+        chunks: list[RetrievedChunk] = getattr(self, "chunks", [])
+        by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        return [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -121,10 +121,8 @@ class ConversationClarificationState(Base):
 
     `pending_clarification` holds a `PendingRound`-shaped JSON object
     (see `app/schemas/clarification.py`) or `None` when nothing is pending.
-    `confirmed_metadata` accumulates self-declared student attributes across
-    the whole conversation and never expires on its own - it is only ever
-    read to pick which answer branch to render, never as a Qdrant filter
-    (see tasks/plan.md security boundary note).
+    The asker's declared attributes are not here: they live in
+    `UserProfile`, per user rather than per conversation.
     """
 
     __tablename__ = "conversation_clarification_states"
@@ -134,9 +132,6 @@ class ConversationClarificationState(Base):
     pending_clarification: Mapped[dict[str, Any] | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=True
     )
-    confirmed_metadata: Mapped[dict[str, str]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
-    )
     # Panel v2 state machine (UNISAGE-99): NULL = no round, OPEN, or PROCESSING while
     # one request holds `claim_token` until `claim_expires_at`.
     pending_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -145,10 +140,40 @@ class ConversationClarificationState(Base):
     claim_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # The latest computed calculation (`LastCalculation`), reused by a follow-up
-    # target question ("thế cuối kỳ cần bao nhiêu để được A+").
-    last_calculation: Mapped[dict[str, Any] | None] = mapped_column(
+    # The conversation's latest computed calculations (`LastCalculation` list, oldest
+    # first), each with its own numbers - a follow-up reuses the one it is about.
+    recent_calculations: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class UserProfile(Base):
+    """What the asker declared about themselves, whatever their role (a student's intake
+    and programme, a lecturer's academic degree...), keyed by registry field names
+    (`configs/known_metadata_fields.json`, scope `profile`).
+
+    Owned by the logged-in user (`user_id`, from the gateway JWT) so it carries over
+    to every conversation; a guest has no user id, so theirs is per conversation.
+    Exactly one of the two is set. Only ever read to pick which answer branch to
+    render and to skip questions already answered - never as a Qdrant filter and
+    never for access control (`academic_user_context` alone decides that).
+    """
+
+    __tablename__ = "user_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "(user_id IS NULL) <> (conversation_id IS NULL)", name="ck_user_profiles_one_owner"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    attributes: Mapped[dict[str, str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

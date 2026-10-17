@@ -63,6 +63,37 @@ async def test_search_sends_domain_restricted_request_and_parses_results() -> No
 
 
 @pytest.mark.asyncio
+async def test_advanced_search_asks_for_query_matched_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "TAVILY_SEARCH_DEPTH", "advanced")
+    monkeypatch.setattr(settings, "TAVILY_CHUNKS_PER_SOURCE", 3)
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": []})
+
+    await _client(httpx.MockTransport(handler)).search("học phí", max_results=10)
+
+    assert bodies[0]["search_depth"] == "advanced"
+    assert bodies[0]["chunks_per_source"] == 3
+
+
+@pytest.mark.asyncio
+async def test_basic_search_sends_no_chunks_per_source() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": []})
+
+    await _client(httpx.MockTransport(handler)).search("học phí", max_results=10)
+
+    assert "chunks_per_source" not in bodies[0]
+
+
+@pytest.mark.asyncio
 async def test_missing_api_key_raises_without_calling_tavily(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -175,3 +206,22 @@ async def test_a_runaway_query_is_cut_before_it_reaches_tavily() -> None:
     await _client(httpx.MockTransport(handler)).search("x" * 1000, max_results=2)
 
     assert len(json.loads(captured[0].content)["query"]) == 400
+
+
+@pytest.mark.asyncio
+async def test_httpx_does_not_cut_a_search_before_tavily_timeout_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx defaults to 5s per phase; an advanced search takes 4-7s, so the client must
+    use TAVILY_TIMEOUT_SECONDS instead (the 14-10-2026 "timeout" after 5.7s)."""
+
+    monkeypatch.setattr(settings, "TAVILY_TIMEOUT_SECONDS", 15.0)
+    seen: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.extensions["timeout"]))
+        return httpx.Response(200, json={"results": []})
+
+    await _client(httpx.MockTransport(handler)).search("học phí", max_results=10)
+
+    assert seen == [{"connect": 15.0, "read": 15.0, "write": 15.0, "pool": 15.0}]

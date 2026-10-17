@@ -289,8 +289,9 @@ def _collapse_empty_columns(
     neighbour. Double borders and cell padding make `find_tables()` cut thin
     slivers (`'' | STT | ''` over a data cell spanning all three), which would
     otherwise become phantom columns. A boundary between two grid columns is
-    real only when some row - the header included - has two different cells
-    with text on either side of it; every other boundary is dropped."""
+    real when some row - the header included - has two different cells with
+    text on either side of it, or when both columns are real on their own;
+    every other boundary is dropped."""
 
     edges = [*bounds, right_edge]
     count = len(bounds)
@@ -304,8 +305,41 @@ def _collapse_empty_columns(
             None,
         )
 
+    def owns(row: EvidenceRow, column: int) -> EvidenceCell | None:
+        """The row's cell for this column when it spans no neighbour."""
+
+        cell = owner(row, column)
+        if cell is None:
+            return None
+        if column > 0 and owner(row, column - 1) is cell:
+            return None
+        if column + 1 < count and owner(row, column + 1) is cell:
+            return None
+        return cell
+
+    # In a sparse matrix (marks in a few columns per row) two filled cells may
+    # never sit side by side on a page, so a boundary is also real when some cell
+    # with text ends on it and some cell with text starts on it - in any rows. A
+    # column blank on the whole page counts as filled when it is a cell of its
+    # own in every row and no thinner than half a typical column; slivers are
+    # neither. Folding either kind would shift every mark after it.
+    filled = [cell for row in rows for cell in row.cells if cell is not None and cell.text.strip()]
+    widths = [edges[column + 1] - edges[column] for column in range(count)]
+    typical = sorted(cell.bbox[2] - cell.bbox[0] for cell in filled)
+    min_width = typical[len(typical) // 2] / 2 if typical else float("inf")
+    blank_column = [
+        widths[column] >= min_width and all(owns(row, column) for row in rows)
+        for column in range(count)
+    ]
+
     keep = [True] + [False] * (count - 1)  # keep[i]: a boundary starts column i
     for column in range(1, count):
+        edge = edges[column]
+        text_ends = blank_column[column - 1] or any(abs(c.bbox[2] - edge) < 1 for c in filled)
+        text_starts = blank_column[column] or any(abs(c.bbox[0] - edge) < 1 for c in filled)
+        if text_ends and text_starts:
+            keep[column] = True
+            continue
         for row in rows:
             left, right = owner(row, column - 1), owner(row, column)
             if (

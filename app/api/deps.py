@@ -1,4 +1,7 @@
+import asyncio
 import json
+import logging
+import time
 from dataclasses import dataclass
 
 from fastapi import Depends, Header
@@ -17,6 +20,7 @@ from app.core.registry.errors import NoAvailableCredentialError
 from app.core.registry.model_registry import (
     CredentialConfig,
     ModelRegistryError,
+    ModelRegistrySnapshot,
     active_credentials_for,
     get_current_snapshot,
     require_top_priority_credential,
@@ -26,6 +30,8 @@ from app.database.session import async_session_factory
 from app.graph.streaming_state import GraphModels
 from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.retrieval.service import RetrievalService
+
+logger = logging.getLogger(__name__)
 
 _DOCUMENT_WRITE_PERMISSIONS = {"DOCUMENT_ALL", "DOCUMENT_CREATE"}
 
@@ -68,6 +74,46 @@ async def _starting_credential(purpose: str) -> CredentialConfig:
         return top_priority
 
 
+_retrieval_service: tuple[object, RetrievalService] | None = None
+
+
+def _embedding_setup(snapshot: ModelRegistrySnapshot | None) -> object:
+    """What a resolved embedder depends on: the EMBEDDING credentials and the collection's
+    registered identity. Any other registry change (a chat model, a budget) leaves it."""
+
+    if snapshot is None:
+        return None
+    return (snapshot.credentials_for("EMBEDDING"), snapshot.embedding_index_identity)
+
+
+def _shared_retrieval_service(snapshot: ModelRegistrySnapshot | None) -> RetrievalService:
+    """One `RetrievalService` for every chat request while the embedding setup stays the
+    same, so its embedder's resolved client - and its pooled connection to the embedding API
+    - outlives the request instead of paying a new connection and TLS handshake every turn.
+    Keyed by the embedding setup, not the snapshot version: a fresh service resolves its
+    credential again (identity guard, Qdrant checks, ~2 s), which a swap for an unrelated
+    credential made the next turn pay (16-10-2026)."""
+
+    global _retrieval_service
+    setup = _embedding_setup(snapshot)
+    if _retrieval_service is None or _retrieval_service[0] != setup:
+        _retrieval_service = (setup, RetrievalService())
+    return _retrieval_service[1]
+
+
+async def warm_up_retrieval() -> None:
+    """Resolves the shared retrieval service at startup, off the event loop, so the first chat
+    turn does not. Never raises: a failure here is the first turn's to report, as before."""
+
+    started_at = time.monotonic()
+    try:
+        await asyncio.to_thread(_shared_retrieval_service(get_current_snapshot()).warm_up)
+    except Exception:
+        logger.warning("retrieval warm-up failed - the first chat turn resolves it", exc_info=True)
+        return
+    logger.info("retrieval warm-up done in %d ms", int((time.monotonic() - started_at) * 1000))
+
+
 async def get_graph_models() -> GraphModels:
     """FastAPI dependency: the 3 LLM-backed nodes' models for the streaming graph.
 
@@ -106,7 +152,7 @@ async def get_graph_models() -> GraphModels:
         classification=model,
         query_transformation=model,
         generation=model,
-        retrieval=RetrievalService(),
+        retrieval=_shared_retrieval_service(snapshot),
         generation_credential=credential,
         snapshot_version=snapshot.version if snapshot is not None else None,
         rerank=rerank_model,

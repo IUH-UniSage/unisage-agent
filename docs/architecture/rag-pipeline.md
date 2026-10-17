@@ -68,7 +68,7 @@ flowchart TD
     Barrier --> Q10{"any chunk or web result?"}
     Q10 -->|no| N11["11 TicketFallback (LLM)<br/>suggest a support ticket"]
     Q10 -->|yes| N10["10 GenerationSynthesis (LLM)<br/>answer with [n] citations; ask_user_form<br/>blocks filtered out of the stream"]
-    N07 -->|"calculation only"| Note["checked note (chat_calculation.yaml, not streamed)<br/>or fixed lead when only input is missing"]
+    N07 -->|"calculation only"| Note["review (chat_calculation_review.yaml, not streamed):<br/>checked answer first, then the Python blocks;<br/>or fixed lead when only input is missing"]
     N10 --> Panel["One panel: calculation params + advisory asks<br/>state OPEN → PATCH metadata → event: clarification"]
     Note --> Panel
 ```

@@ -86,6 +86,23 @@ def _split_oversized(sentence: str, max_tokens: int, overlap_tokens: int) -> lis
     return pieces or [sentence]
 
 
+def _without_carried(previous: str, following: str) -> str:
+    """`following` minus the leading sentences it carried over from `previous` as
+    overlap, so gluing the two chunks back together does not repeat them."""
+
+    # carried text is whole sentences, so a cut only falls after sentence punctuation
+    cuts = [
+        index
+        for index, char in enumerate(following)
+        if char == " " and following[index - 1 : index] in (".", "!", "?")
+    ]
+    for cut in reversed(cuts):
+        head = following[:cut]
+        if previous == head or previous.endswith(f" {head}"):
+            return following[cut + 1 :]
+    return following
+
+
 def _heading_prefix(heading_path: list[str]) -> str:
     joined = " > ".join(heading_path)
     return f"{joined}\n\n" if joined else ""
@@ -303,7 +320,11 @@ class SemanticChunker:
 
             if current and (is_semantic_break or exceeds_target):
                 groups.append(current)
-                carried = self._carry_overlap(current, self._overlap_tokens)
+                # Overlap bridges a cut forced by size; at a semantic break the topic
+                # changed, so carrying the old sentence over only repeats it.
+                carried = (
+                    [] if is_semantic_break else self._carry_overlap(current, self._overlap_tokens)
+                )
                 if sum(_token_len(s) for s in carried) + sentence_tokens > usable_max_tokens:
                     carried = []
                 current = carried
@@ -318,13 +339,18 @@ class SemanticChunker:
 
     @staticmethod
     def _carry_overlap(previous_group: list[str], overlap_tokens: int) -> list[str]:
-        """Carry trailing sentences from the previous group up to `overlap_tokens`."""
+        """Carry trailing sentences from the previous group up to `overlap_tokens`.
+
+        Only whole sentences that fit are carried, and never the whole group: a
+        sentence longer than the overlap would repeat most of the previous chunk,
+        and carrying every sentence would make that chunk a prefix of the next.
+        """
 
         carried: list[str] = []
         carried_tokens = 0
-        for sentence in reversed(previous_group):
+        for sentence in reversed(previous_group[1:]):
             sentence_tokens = len(_ENCODING.encode(sentence))
-            if carried and carried_tokens + sentence_tokens > overlap_tokens:
+            if carried_tokens + sentence_tokens > overlap_tokens:
                 break
             carried.insert(0, sentence)
             carried_tokens += sentence_tokens
@@ -362,8 +388,9 @@ class SemanticChunker:
                 and _token_len(previous.content) + _token_len(chunk.content) <= usable_max_tokens
             )
             if can_merge_back and previous is not None:
+                following = _without_carried(previous.content, chunk.content)
                 merged[-1] = previous.model_copy(
-                    update={"content": f"{previous.content} {chunk.content}"}
+                    update={"content": f"{previous.content} {following}"}
                 )
             else:
                 merged.append(chunk)

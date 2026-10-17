@@ -5,34 +5,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from sqlalchemy import CursorResult, select, update
-from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
 from app.database.models import ConversationClarificationState
+from app.database.repositories.dialect import insert_builder
 from app.schemas.clarification import LastCalculation, PendingRound
 
 logger = logging.getLogger(__name__)
 
 PendingStatus = Literal["OPEN", "PROCESSING"]
-
-
-def _insert_builder(session: AsyncSession) -> Any:
-    """Pick the dialect-specific `insert()` constructor for `session`'s bind.
-
-    Production runs on Postgres; this project's default test suite runs
-    against an in-memory SQLite engine (see tests/conftest.py's "no live
-    external service in the default test run" rule) - both dialects expose
-    the same `INSERT ... ON CONFLICT ... DO UPDATE` API shape
-    (`on_conflict_do_update(index_elements=..., set_=...)`), only the
-    entry-point constructor differs, so dispatch on the bind's dialect name
-    rather than hard-coding one.
-    """
-
-    dialect_name = session.get_bind().dialect.name
-    if dialect_name == "sqlite":
-        return sqlite.insert
-    return postgresql.insert
 
 
 @dataclass(frozen=True)
@@ -41,8 +23,7 @@ class RoundState:
 
     status: PendingStatus | None = None
     round: PendingRound | None = None
-    confirmed_metadata: dict[str, str] = field(default_factory=dict)
-    last_calculation: LastCalculation | None = None
+    recent_calculations: list[LastCalculation] = field(default_factory=list)
 
 
 def _now() -> datetime:
@@ -51,14 +32,21 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _last_calculation(raw: dict[str, Any] | None) -> LastCalculation | None:
-    if raw is None:
-        return None
-    try:
-        return LastCalculation.model_validate(raw)
-    except ValueError:
-        logger.warning("clarification.unreadable_last_calculation")
-        return None
+RECENT_CALCULATIONS_MAX = 5
+
+
+def _recent(raw: list[Any] | None) -> list[LastCalculation]:
+    recent: list[LastCalculation] = []
+    for item in raw or []:
+        try:
+            recent.append(LastCalculation.model_validate(item))
+        except ValueError:
+            logger.warning("clarification.unreadable_calculation")
+    return recent
+
+
+def _recent_json(recent: list[LastCalculation]) -> list[dict[str, Any]]:
+    return [item.model_dump(mode="json") for item in recent[-RECENT_CALCULATIONS_MAX:]]
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -113,14 +101,13 @@ class ClarificationRoundRepository:
         row = await self._row(conversation_id)
         if row is None:
             return RoundState()
-        confirmed = dict(row.confirmed_metadata)
-        last = _last_calculation(row.last_calculation)
+        recent = _recent(row.recent_calculations)
         status = row.pending_status
         if status is None or row.pending_clarification is None:
             if row.pending_clarification is not None:
                 # A pre-UNISAGE-99 (v1) round: no longer answerable, ignored until overwritten.
                 logger.info("clarification.legacy_dropped conversation_id=%s", conversation_id)
-            return RoundState(confirmed_metadata=confirmed, last_calculation=last)
+            return RoundState(recent_calculations=recent)
         if (
             status == "PROCESSING"
             and row.claim_expires_at is not None
@@ -138,42 +125,33 @@ class ClarificationRoundRepository:
                 conversation_id,
                 row.pending_panel_id,
             )
-            return RoundState(confirmed_metadata=confirmed, last_calculation=last)
+            return RoundState(recent_calculations=recent)
         try:
             pending = PendingRound.model_validate(row.pending_clarification)
         except ValueError:
             logger.warning("clarification.unreadable_round conversation_id=%s", conversation_id)
-            return RoundState(confirmed_metadata=confirmed, last_calculation=last)
+            return RoundState(recent_calculations=recent)
         state: PendingStatus = "OPEN" if status == "OPEN" else "PROCESSING"
-        return RoundState(
-            status=state, round=pending, confirmed_metadata=confirmed, last_calculation=last
-        )
+        return RoundState(status=state, round=pending, recent_calculations=recent)
 
-    async def save_confirmed_metadata(
-        self,
-        conversation_id: str,
-        confirmed_metadata: dict[str, str],
-        last_calculation: LastCalculation | None = None,
+    async def save_calculations(
+        self, conversation_id: str, recent_calculations: list[LastCalculation] | None = None
     ) -> None:
         """Insert the row if needed; never touches the round columns of an existing row.
-        `last_calculation` is only written when given (a turn without a calculation
-        keeps the previous one)."""
+        `recent_calculations` is only written when given (a turn without a calculation
+        keeps the list as it is)."""
 
-        insert = _insert_builder(self._session)
-        last = last_calculation.model_dump(mode="json") if last_calculation else None
+        insert = insert_builder(self._session)
+        recent = _recent_json(recent_calculations) if recent_calculations else None
         stmt = insert(ConversationClarificationState).values(
             id=uuid.uuid4(),
             conversation_id=conversation_id,
             pending_clarification=None,
-            confirmed_metadata=dict(confirmed_metadata),
-            last_calculation=last,
+            recent_calculations=recent,
         )
-        updates: dict[str, Any] = {
-            "confirmed_metadata": stmt.excluded.confirmed_metadata,
-            "updated_at": func.now(),
-        }
-        if last is not None:
-            updates["last_calculation"] = stmt.excluded.last_calculation
+        updates: dict[str, Any] = {"updated_at": func.now()}
+        if recent is not None:
+            updates["recent_calculations"] = stmt.excluded.recent_calculations
         stmt = stmt.on_conflict_do_update(
             index_elements=[ConversationClarificationState.conversation_id], set_=updates
         )
@@ -183,13 +161,12 @@ class ClarificationRoundRepository:
         self,
         conversation_id: str,
         pending: PendingRound,
-        confirmed_metadata: dict[str, str],
-        last_calculation: LastCalculation | None = None,
+        recent_calculations: list[LastCalculation] | None = None,
     ) -> bool:
         """Open a round on a turn that held no claim. False (and nothing written to the
         round columns) if a round is already OPEN/PROCESSING."""
 
-        await self.save_confirmed_metadata(conversation_id, confirmed_metadata, last_calculation)
+        await self.save_calculations(conversation_id, recent_calculations)
         opened = await self._update(
             conversation_id,
             ConversationClarificationState.pending_status.is_(None),
@@ -253,14 +230,13 @@ class ClarificationRoundRepository:
         conversation_id: str,
         token: uuid.UUID,
         new_round: PendingRound | None,
-        confirmed_metadata: dict[str, str],
-        last_calculation: LastCalculation | None = None,
+        recent_calculations: list[LastCalculation] | None = None,
     ) -> bool:
         """PROCESSING → none, or → OPEN with the next panel of a chain."""
 
         values: dict[str, Any] = dict(_CLEARED)
-        if last_calculation is not None:
-            values["last_calculation"] = last_calculation.model_dump(mode="json")
+        if recent_calculations:
+            values["recent_calculations"] = _recent_json(recent_calculations)
         if new_round is not None:
             values.update(
                 pending_status="OPEN",
@@ -271,7 +247,6 @@ class ClarificationRoundRepository:
             conversation_id,
             ConversationClarificationState.pending_status == "PROCESSING",
             ConversationClarificationState.claim_token == token,
-            confirmed_metadata=dict(confirmed_metadata),
             **values,
         )
         if not completed:

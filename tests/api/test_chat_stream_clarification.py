@@ -20,7 +20,9 @@ from app.api.deps import get_backend_java_client, get_graph_models, get_session_
 from app.core.config import settings
 from app.database.models import Base
 from app.database.repositories.clarification_state import ClarificationRoundRepository
-from app.graph.streaming_state import GraphModels
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
+from app.graph import streaming_session
+from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations import backend_java_client
 from app.integrations.backend_java_client import BackendJavaClient
 from app.main import app
@@ -140,7 +142,10 @@ def _seed(client: TestClient, *, claim: bool = False) -> PendingRound:
             connection = await session.connection()
             await connection.run_sync(Base.metadata.create_all)
             repo = ClarificationRoundRepository(session)
-            await repo.upsert_open(CONVERSATION, pending, {"program": "CNTT"})
+            await repo.upsert_open(CONVERSATION, pending)
+            await UserProfileRepository(session).save(
+                ProfileOwner(conversation_id=CONVERSATION), {"nganh": "CNTT"}
+            )
             if claim:
                 await repo.claim(CONVERSATION, pending.panel.panel_id, uuid.uuid4(), 210)
             await session.commit()
@@ -346,3 +351,48 @@ def test_claimed_turn_past_its_deadline_writes_nothing(
     # start_turn happened before the claim's deadline started mattering; nothing after it.
     assert not any(p.startswith("/messages/") and m == "PATCH" for m, p, _b in java.calls)
     assert _status(client) == "PROCESSING"  # left for the lease to expire
+
+
+# --- student profile across conversations -------------------------------------
+
+
+def test_a_users_profile_carries_over_to_their_next_conversation(
+    client: TestClient, java: _Java, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[GraphInput] = []
+
+    async def fake_graph(graph_input: GraphInput, *_args: object, **_kwargs: object) -> GraphOutput:
+        seen.append(graph_input)
+        declared = {"conv-a": {"nganh_hoc": "CNTT"}, "conv-c": {"hoc_vi": "Tiến sĩ"}}.get(
+            graph_input.conversation_id, {}
+        )
+        return GraphOutput(
+            response_text="x", confirmed_metadata={**graph_input.confirmed_metadata, **declared}
+        )
+
+    monkeypatch.setattr(streaming_session, "run_graph", fake_graph)
+    user = {"X-User-Id": "u1", "X-User-Role": "SINH_VIEN"}
+    lecturer = {"X-User-Id": "u2", "X-User-Role": "GIANG_VIEN"}
+
+    def ask(conversation_id: str, headers: dict[str, str]) -> None:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"conversation_id": conversation_id, "message": "học phí"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    ask("conv-a", user)
+    ask("conv-b", user)
+    ask("conv-b", {})  # a guest in the same conversation has their own (empty) profile
+    # A lecturer's profile is their own too, and follows them the same way.
+    ask("conv-c", lecturer)
+    ask("conv-d", lecturer)
+
+    assert [item.confirmed_metadata for item in seen] == [
+        {},
+        {"nganh_hoc": "CNTT"},
+        {},
+        {},
+        {"hoc_vi": "Tiến sĩ"},
+    ]

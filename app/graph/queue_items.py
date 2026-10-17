@@ -45,6 +45,16 @@ class WarningItem:
 
 
 @dataclass(frozen=True)
+class StatusItem:
+    """One `event: status` - what the turn is doing now (`app/graph/progress.py`), for
+    the "Đang tìm thông tin..." line the client shows until the answer streams in.
+    `url` only with `web_searching`: the web page being read."""
+
+    stage: str
+    url: str | None = None
+
+
+@dataclass(frozen=True)
 class ClarificationItem:
     """One `event: clarification` - the public panel JSON (contracts/chat-sse.md §3).
     Only queued after the round is stored AND projected into the message metadata."""
@@ -67,5 +77,11 @@ class DoneItem:
 
 
 QueueItem = (
-    TokenItem | ErrorItem | WarningItem | ClarificationItem | ClarificationClosedItem | DoneItem
+    TokenItem
+    | StatusItem
+    | ErrorItem
+    | WarningItem
+    | ClarificationItem
+    | ClarificationClosedItem
+    | DoneItem
 )

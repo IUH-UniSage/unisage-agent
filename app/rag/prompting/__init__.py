@@ -4,30 +4,36 @@ Prompt content lives in `prompt_templates/` (`common/` building blocks,
 `main/` per-node frames); this package only contains loading (`loader.py`)
 and dynamic assembly (`builder.py`) logic. Enforces one invariant across
 every prompt built here: the two identity blocks inside `{academic_metadata}`
-(`academic_user_context`, JWT-verified, vs `student_declared_attributes`,
+(`academic_user_context`, JWT-verified, vs `declared_attributes`,
 self-declared) are always rendered separately and never merged - only the
 former may ever be used to make an authorization decision.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from app.schemas.chat_history import HistoryMessage
+from app.schemas.clarification import LastCalculation
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
 
 from .builder import (
+    append_current_time,
     append_recent_history,
     build_ask_user_form_guide,
     build_calculation_results_section,
+    build_current_time_section,
+    build_declared_attributes_section,
     build_history_section,
     build_json_repair_prompt,
     build_known_metadata_fields_section,
     build_metadata_section,
     build_prepared_context_section,
+    build_recent_calculations_section,
     build_task_2_section,
+    build_web_sources_section,
     render_resolved_user_query,
 )
 from .loader import get_templates, reset_templates_cache
@@ -35,14 +41,18 @@ from .schema import PromptTemplates
 
 __all__ = [
     "PromptTemplates",
+    "append_current_time",
     "append_recent_history",
     "build_ask_user_form_guide",
-    "build_calculation_commentary_prompt",
     "build_calculation_llm_prompt",
+    "build_calculation_review_prompt",
+    "build_current_time_section",
+    "build_declared_attributes_section",
     "build_history_section",
     "build_json_repair_prompt",
     "build_known_metadata_fields_section",
     "build_multi_intent_prompt",
+    "build_social_chat_prompt",
     "build_system_prompt",
     "build_ticket_fallback_prompt",
     "get_templates",
@@ -71,7 +81,7 @@ def _base_params(
         "academic_domain_rules": templates.academic_domain_rules,
         "response_style": templates.response_style,
         "citation_rules": templates.citation_rules,
-        "prepared_context": build_prepared_context_section(chunks, web_results),
+        "prepared_context": build_prepared_context_section(chunks, web_results, confirmed_metadata),
         "task_1": templates.task_1,
         "task_2": build_task_2_section(),
     }
@@ -137,10 +147,13 @@ def build_ticket_fallback_prompt(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     history: Sequence[HistoryMessage] = (),
+    web_sources: Sequence[WebSearchResult] = (),
 ) -> str:
     """TicketFallbackNode frame: no `{prepared_context}`/`task_1`/`task_2` -
     the model gets no chunks and no clarification machinery, so it can only
-    write the fallback message, never cite a regulation it has no source for."""
+    write the fallback message, never cite a regulation it has no source for.
+    `web_sources` (official pages the web judge kept whose snippet lacks the answer) are
+    only linked, with their title and academic year - never quoted for figures."""
 
     templates = get_templates()
     return templates.chat_ticket_fallback.format(
@@ -150,6 +163,26 @@ def build_ticket_fallback_prompt(
         security_access_control=templates.security_access_control,
         response_style=templates.response_style,
         ticket_fallback=templates.ticket_fallback,
+        web_sources=build_web_sources_section(web_sources),
+        current_time=build_current_time_section(confirmed_metadata),
+        user_query=user_query,
+    )
+
+
+def build_social_chat_prompt(
+    *,
+    user_query: str,
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+) -> str:
+    """SocialChatNode frame: header, profile and security rules only - no chunks, so
+    the reply can talk about the student's declared attributes but never cite a rule."""
+
+    templates = get_templates()
+    return templates.chat_social.format(
+        header=templates.header,
+        academic_metadata=build_metadata_section(security, confirmed_metadata),
+        security_access_control=templates.security_access_control,
         user_query=user_query,
     )
 
@@ -158,14 +191,22 @@ def render_sub_queries_list(sub_queries: Sequence[str]) -> str:
     return "\n".join(f"SQ{index}. {query}" for index, query in enumerate(sub_queries, 1))
 
 
-def build_calculation_commentary_prompt(*, user_query: str, calculation_payload: str) -> str:
-    """`main/chat_calculation.yaml`: the short note after a calculation-only turn."""
+def build_calculation_review_prompt(
+    *,
+    user_query: str,
+    calculation_payload: str,
+    history: Sequence[HistoryMessage],
+    confirmed_metadata: Mapping[str, str] | None = None,
+) -> str:
+    """`main/chat_calculation_review.yaml`: after a calculation-only turn, check the
+    built-in results answer what was asked and write the opening answer."""
 
     templates = get_templates()
-    return templates.chat_calculation.format(
+    return templates.chat_calculation_review.format(
         header=templates.header,
-        response_style=templates.response_style,
         calculation_payload=calculation_payload,
+        history_message=build_history_section(history),
+        current_time=build_current_time_section(confirmed_metadata),
         user_query=user_query,
     )
 
@@ -177,18 +218,43 @@ def build_calculation_llm_prompt(
     documents: str,
     known_values: str,
     history: Sequence[HistoryMessage],
+    security: AcademicSecurityContext,
+    confirmed_metadata: dict[str, str],
+    original_message: str | None = None,
+    recent_calculations: Sequence[LastCalculation] = (),
 ) -> str:
     """`main/chat_calculation_llm.yaml`: a calculation the LLM does itself (target
     questions, formulas from documents, follow-ups) - everything but the forward
-    calculation of the built-in formulas."""
+    calculation of the built-in formulas. `original_message`: what the student typed
+    this turn, shown under the classifier's normalised question when they differ.
+    It reads the profile and the recent calculations before asking anything, and asks
+    under the registry's field names."""
 
     templates = get_templates()
     return templates.chat_calculation_llm.format(
         header=templates.header,
+        academic_metadata=build_metadata_section(security, confirmed_metadata),
+        security_access_control=templates.security_access_control,
+        academic_domain_rules=templates.academic_domain_rules,
         response_style=templates.response_style,
+        citation_rules=templates.citation_rules,
         builtin_rules=builtin_rules,
         documents=documents or "(không có tài liệu)",
         known_values=known_values,
+        recent_calculations=build_recent_calculations_section(recent_calculations),
+        metadata_fields=build_known_metadata_fields_section(every_scope=True),
         history=build_history_section(history),
+        current_time=build_current_time_section(confirmed_metadata),
         user_query=user_query,
+        original_message=_original_message_line(original_message, user_query),
+    )
+
+
+def _original_message_line(original: str | None, query: str) -> str:
+    if not original or original.strip() == query.strip():
+        return ""
+    return (
+        "\nTin nhắn gốc người dùng gõ ở lượt này (nguyên văn, có thể gồm cả câu hỏi khác; câu "
+        "hỏi ở trên là bản đã chuẩn hoá - khác nghĩa thì tin theo tin nhắn gốc): "
+        f"{original.strip()}"
     )

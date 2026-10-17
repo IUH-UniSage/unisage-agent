@@ -95,7 +95,6 @@ Phải kiểm tra thêm ở server (mục "Khi log không đủ" trong SKILL.md)
 | `CHAT_CLASSIFY_WITH_RETRIEVAL` | true | node 03 viết sẵn HyDE / sub-query cho node 06 |
 | `CHAT_RERANK_SCORE_THRESHOLD` | 0.70 trong code | `.env` local đang để 0.3. Server có thể khác, cần hỏi |
 | `CHAT_LLM_RERANK_ENABLED` | true | |
-| `CHAT_LLM_RERANK_SNIPPET_CHARS` | 800 | rerank chỉ đọc đoạn đầu của chunk |
 | `CHAT_WEB_SEARCH_ENABLED` | false | `.env` local đang để true |
 | `APP_DEBUG` | true | tắt thì mất log phân loại, HyDE và context |
 

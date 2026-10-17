@@ -35,6 +35,7 @@ from __future__ import annotations
 import logging
 import re
 import traceback
+from contextvars import ContextVar, Token
 
 from app.core.config import settings
 from app.core.security.redaction import redact
@@ -55,11 +56,17 @@ _NOISY_PROVIDER_LOGGERS = (
 # obvious which loggers above are there *because* of the redaction rule.
 _OTHER_NOISY_LOGGERS = ("sqlalchemy.engine", "asyncio")
 
-_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+# `trace_id` is the chat turn's request id (`TraceIdFilter`), "-" outside a turn: grep one
+# id to get every line of the turn that produced an answer (shown on its staff ticket).
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s [%(trace_id)s]: %(message)s"
+_NO_TRACE_ID = "-"
+
+_trace_id: ContextVar[str] = ContextVar("log_trace_id", default=_NO_TRACE_ID)
 
 _RESET = "\033[0m"
 _BOLD_CYAN = "\033[1;36m"
 _GREEN = "\033[32m"
+_BOLD_GREEN = "\033[1;32m"
 _BOLD_MAGENTA = "\033[1;35m"
 _BOLD_BLUE = "\033[1;34m"
 _BRIGHT_BLUE = "\033[94m"
@@ -69,6 +76,12 @@ _YELLOW = "\033[33m"
 _BOLD_RED = "\033[1;31m"
 _LEVEL_COLORS = {logging.WARNING: _YELLOW, logging.ERROR: _BOLD_RED, logging.CRITICAL: _BOLD_RED}
 _SLOW_NODE_MS = 2000
+# Green: the web search lines that say whether Tavily was answered from the cache - each
+# lookup with its key (bold on a hit), each search's pages and the turn's summary.
+_WEB_SEARCH_PREFIXES: dict[str, tuple[str, ...]] = {
+    "app.graph.nodes.web_search": ("Tavily cache ", "Web search "),
+    "app.graph.streaming_graph": ("Web search turn:",),
+}
 _ELAPSED_PATTERN = re.compile(r"elapsed_ms=(\d+)")
 
 
@@ -115,9 +128,31 @@ class SecretRedactionFilter(logging.Filter):
         return True
 
 
+def bind_trace_id(trace_id: str) -> Token[str]:
+    """Stamps `trace_id` on every record logged from this task (and the tasks it starts)."""
+
+    return _trace_id.set(trace_id)
+
+
+def unbind_trace_id(token: Token[str]) -> None:
+    _trace_id.reset(token)
+
+
+class TraceIdFilter(logging.Filter):
+    """Sets `record.trace_id` for `_LOG_FORMAT`. On the handler like `SecretRedactionFilter`,
+    so it also covers a record built without the record factory (`makeLogRecord`); a handler
+    runs in the logging call's own context, so the contextvar is the caller's."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "trace_id"):
+            record.trace_id = _trace_id.get()
+        return True
+
+
 class ColorFormatter(logging.Formatter):
     """Highlights the graph trace (`unisage.graph`) so a turn reads at a glance:
-    node starts cyan, node timings green (magenta when slow), debug dumps blue."""
+    node starts cyan, node timings green (magenta when slow), debug dumps blue; and
+    the web search / Tavily cache lines green (a cache hit bold)."""
 
     def format(self, record: logging.LogRecord) -> str:
         line = super().format(record)
@@ -136,6 +171,8 @@ class ColorFormatter(logging.Formatter):
         message = record.getMessage()
         if record.name == "google_genai.models":
             return _DIM
+        if message.startswith(_WEB_SEARCH_PREFIXES.get(record.name, ())):
+            return _BOLD_GREEN if message.startswith("Tavily cache HIT") else _GREEN
         if record.name != "unisage.graph":
             return None
         if message.startswith("node_done="):
@@ -165,6 +202,8 @@ def configure_logging() -> None:
     for handler in logging.getLogger().handlers:
         if not any(isinstance(existing, SecretRedactionFilter) for existing in handler.filters):
             handler.addFilter(SecretRedactionFilter())
+        if not any(isinstance(existing, TraceIdFilter) for existing in handler.filters):
+            handler.addFilter(TraceIdFilter())
         if settings.LOG_COLOR and _writes_to_terminal(handler):
             handler.setFormatter(ColorFormatter(_LOG_FORMAT))
 

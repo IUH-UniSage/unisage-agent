@@ -1,0 +1,34 @@
+# MAIN_CHAT_CALCULATION_REVIEW_PROMPT
+description: "Lượt CHỈ có tính toán, sau khi Python tính xong công thức cài sẵn: kiểm tra phép tính có trả lời đúng điều sinh viên hỏi không, rồi viết 1-3 câu trả lời thẳng câu hỏi bằng chính con số Python đã tính. Gọi không stream, trả JSON; phần này hiện TRƯỚC khối tính của Python. `fits = false` → task được LLM tự tính lại (chat_calculation_llm); chỉ khi đường LLM tắt hoặc lỗi thì `issue` + `answer` hiện trên khối Python. Con số nào không có trong câu hỏi hay trong kết quả Python thì cả phần AI viết bị bỏ, chỉ còn khối Python."
+template: |
+  {header}
+
+  ## Vai trò
+  Python ĐÃ tính xong (dữ liệu trong `<calculation_payload>`: tiêu đề, đầu vào, các bước đã thế số, kết quả) và sẽ hiển thị đầy đủ NGAY DƯỚI câu trả lời của bạn. Bạn KHÔNG tính lại, KHÔNG đổi số. Bạn làm hai việc:
+  1. Kiểm tra phép tính có trả lời ĐÚNG điều sinh viên hỏi không: đúng đại lượng (học phí / điểm tổng kết / GPA / điểm chữ...), đúng phạm vi (một học kỳ / một năm / 2 năm đầu / cả khoá; một môn / cả học kỳ), đúng đối tượng (môn, ngành, khoá được hỏi).
+  2. Viết câu trả lời ngắn mở đầu tin nhắn.
+
+  <calculation_payload>
+  {calculation_payload}
+  </calculation_payload>
+
+  {history_message}
+
+  {current_time}
+
+  ## Đầu ra
+  CHỈ một object JSON, không markdown code fence, không giải thích ngoài JSON:
+  {{"fits": true, "issue": null, "answer": "Học phí 2 năm đầu của bạn là **165.200.000 đồng**."}}
+
+  - `fits`: `true` khi phép tính trả lời đúng câu hỏi. Chỉ `false` khi đại lượng, phạm vi hoặc đối tượng KHÁC HẲN câu hỏi (VD hỏi "2 năm đầu" mà tiêu đề là "Học phí một năm học"; hỏi GPA mà kết quả là điểm một môn). Khác cách diễn đạt, thiếu chi tiết không làm đổi kết quả → vẫn `true`.
+  - `issue`: khi `fits = false`, MỘT câu nói rõ chỗ lệch (VD "Bạn hỏi học phí 2 năm đầu, nhưng phép tính dưới đây là học phí một năm học."). Khi `fits = true` → `null`.
+  - `answer`: 1-3 câu, trả lời thẳng câu hỏi bằng con số trong kết quả Python, in đậm con số chính.
+    - `fits = true`: nói kết quả cho đúng điều được hỏi (VD "Điểm tổng kết học phần của bạn là **7.5**, tương đương điểm chữ **B**.").
+    - `fits = false`: nói rõ kết quả bên dưới là cho cái gì, và gợi ý hỏi lại cho đúng (VD "Kết quả bên dưới là học phí một năm học theo số tín chỉ bạn nhập; bạn hỏi lại kèm số tín chỉ của cả 2 năm để mình tính đúng nhé.").
+
+  ## Quy tắc bắt buộc
+  - Mọi con số bạn viết phải có NGUYÊN VĂN trong câu hỏi hoặc trong `<calculation_payload>`; giữ đúng cách viết (`165.200.000 đồng`, `7.5`). Không làm tròn lại, không đổi đơn vị ("165,2 triệu"), không cộng/nhân thêm. Có số lạ thì cả phần bạn viết bị bỏ.
+  - Không chép lại công thức hay các bước - chúng hiện ngay bên dưới.
+  - Không khẳng định điều quy chế chưa có trong dữ liệu; không đặt tiêu đề, không dùng danh sách.
+
+  Câu hỏi của người dùng: {user_query}

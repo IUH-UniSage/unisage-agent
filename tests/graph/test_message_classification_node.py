@@ -1,6 +1,8 @@
 import json
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -375,7 +377,143 @@ def test_describe_classification_shows_the_retrieval_text_too() -> None:
 
     assert described["tasks"][0]["sub_queries"] == ["a", "b"]
     assert described["tasks"][0]["hyde_text"] is None
+    assert described["tasks"][0]["web"] is None
     assert described["confidence"] == 0.9
+
+
+def test_parse_reads_web_slots_of_an_advisory_task() -> None:
+    task = _task("academic_advisory", "học phí ngành cntt", "SINGLE") | {
+        "web": {
+            "topics": ["hoc_phi", "unknown", "hoc_phi", "lich_thong_bao"],
+            "subject": " mức thu học phí ",
+            "nganh_hoc": "Công nghệ Thông tin",
+            "bac_dao_tao": "null",
+            "nam_hoc": 2026,
+        }
+    }
+
+    (parsed,) = parse_classification(_payload(task), "học phí ngành cntt").tasks
+
+    assert parsed.web is not None
+    assert parsed.web.topics == ["hoc_phi", "lich_thong_bao"]
+    assert parsed.web.subject == "mức thu học phí"
+    assert parsed.web.nganh_hoc == "Công nghệ Thông tin"
+    assert parsed.web.bac_dao_tao is None
+    assert parsed.web.nam_hoc == "2026"
+    assert "web" not in parsed.model_dump()
+
+
+@pytest.mark.parametrize(
+    "web",
+    [None, "hoc_phi", {"topics": ["hoc_phi"]}, {"topics": ["hoc_phi"], "subject": "  "}],
+)
+def test_parse_drops_web_slots_without_a_subject(web: object) -> None:
+    task = _task("academic_advisory", _MESSAGE, "SINGLE") | {"web": web}
+
+    (parsed,) = parse_classification(_payload(task), _MESSAGE).tasks
+
+    assert parsed.web is None
+
+
+def test_parse_maps_web_slots_without_a_known_topic_to_khac() -> None:
+    task = _task("academic_advisory", _MESSAGE, "SINGLE") | {
+        "web": {"topic": "xyz", "subject": "xếp hạng"}
+    }
+
+    (parsed,) = parse_classification(_payload(task), _MESSAGE).tasks
+
+    assert parsed.web is not None
+    assert parsed.web.topics == ["khac"]
+
+
+def test_parse_reads_one_set_of_web_slots_per_multi_sub_query() -> None:
+    """The 14-10-2026 turn: one keyword query for "học phí ... và lịch thi chứng chỉ"
+    found only fee pages, so each sub-query gets its own slots."""
+
+    task = _task("academic_advisory", _MESSAGE, "MULTI") | {
+        "sub_queries": ["Học phí ngành CNTT năm học 2026-2027?", "Lịch thi chứng chỉ CNTT 2026?"],
+        "web": [
+            {"topics": ["hoc_phi"], "subject": "mức thu học phí", "nam_hoc": "2026-2027"},
+            {"topics": ["lich_thong_bao"], "subject": "lịch thi chứng chỉ ứng dụng CNTT"},
+            {"topics": ["khac"], "subject": "thừa, không có câu hỏi con"},
+        ],
+    }
+
+    (parsed,) = parse_classification(_payload(task), _MESSAGE).tasks
+
+    assert parsed.web is None
+    assert parsed.sub_query_web is not None
+    assert [slots.subject if slots else None for slots in parsed.sub_query_web] == [
+        "mức thu học phí",
+        "lịch thi chứng chỉ ứng dụng CNTT",
+    ]
+    assert "sub_query_web" not in parsed.model_dump()
+
+
+def test_parse_gives_a_relative_time_word_its_year_when_the_classifier_left_it_out() -> None:
+    """gpt-5-mini wrote no nam_hoc for "lịch thi chứng chỉ CNTT đợt gần nhất" four turns
+    in a row (14-10-2026); a year the classifier did write is kept."""
+
+    task = _task("academic_advisory", _MESSAGE, "MULTI") | {
+        "sub_queries": ["Học phí năm học 2025-2026?", "Lịch thi chứng chỉ CNTT đợt gần nhất?"],
+        "web": [
+            {"topics": ["hoc_phi"], "subject": "mức thu học phí", "nam_hoc": "2025-2026"},
+            {"topics": ["lich_thong_bao"], "subject": "lịch thi chứng chỉ CNTT"},
+        ],
+    }
+    single = _task("academic_advisory", "học phí kỳ này?", "SINGLE") | {
+        "web": {"topics": ["hoc_phi"], "subject": "mức thu học phí"}
+    }
+
+    with patch(
+        "app.graph.nodes.message_classification.now_ict", return_value=datetime(2026, 10, 14)
+    ):
+        multi_task, single_task = parse_classification(_payload(task, single), _MESSAGE).tasks
+
+    assert multi_task.sub_query_web is not None
+    assert [slots.nam_hoc if slots else None for slots in multi_task.sub_query_web] == [
+        "2025-2026",
+        "2026",
+    ]
+    assert single_task.web is not None and single_task.web.nam_hoc == "2026-2027"
+
+
+def test_parse_pads_missing_sub_query_slots_and_reads_a_list_on_a_single_task() -> None:
+    multi = _task("academic_advisory", _MESSAGE, "MULTI") | {
+        "sub_queries": ["Câu 1?", "Câu 2?"],
+        "web": [{"topics": ["hoc_phi"], "subject": "mức thu học phí"}],
+    }
+    single = _task("academic_advisory", _MESSAGE, "SINGLE") | {
+        "web": [{"topics": ["tuyen_sinh"], "subject": "điểm chuẩn"}]
+    }
+
+    multi_task, single_task = parse_classification(_payload(multi, single), _MESSAGE).tasks
+
+    assert multi_task.sub_query_web is not None
+    assert [slots is not None for slots in multi_task.sub_query_web] == [True, False]
+    assert single_task.web is not None and single_task.web.subject == "điểm chuẩn"
+
+
+def test_parse_ignores_web_slots_outside_advisory_tasks() -> None:
+    task = _task("academic_calculation", "tính GPA", None) | {
+        "web": {"topics": ["khac"], "subject": "GPA"}
+    }
+
+    (parsed,) = parse_classification(_payload(task), "tính GPA").tasks
+
+    assert parsed.web is None
+
+
+def test_classification_prompt_asks_for_web_slots_with_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "CHAT_CLASSIFY_WITH_RETRIEVAL", True)
+    prompt = "".join(build_classification_agent("test")._system_prompts)
+
+    assert "### `web`" in prompt
+    assert "KHÔNG lấy từ `<declared_attributes>`" in prompt
 
 
 @pytest.mark.asyncio
@@ -396,10 +534,10 @@ async def test_classifier_is_told_the_previous_calculation() -> None:
     )
     await classify_intent(agent, "điều kiện tốt nghiệp là gì?")
 
-    assert prompts[0].endswith(
+    assert (
         "<previous_calculation_turn>Điểm tổng kết học phần (lý thuyết + thực hành)"
-        "</previous_calculation_turn>"
-    )
+        "</previous_calculation_turn>\n\n<declared_attributes>"
+    ) in prompts[0]
     assert "<previous_calculation_turn>" not in prompts[1]
 
 
@@ -413,3 +551,26 @@ def test_classifier_prompt_keeps_calculation_follow_ups_as_calculations() -> Non
     assert "NỐI TIẾP PHÉP TÍNH" in prompt
     assert '"đại học chính quy á"' in prompt
     assert "<previous_calculation_turn>" in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_classifier_is_told_who_is_asking() -> None:
+    """A form is for one kind of person: "bổ sung điểm thường kỳ" from a lecturer is not a
+    student's "thi bổ sung" (14-10-2026)."""
+
+    prompts: list[str] = []
+
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        prompts.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        return ModelResponse(
+            parts=[TextPart(content=_payload(_task("academic_advisory", "q", "SINGLE")))]
+        )
+
+    agent = build_classification_agent(FunctionModel(function=respond))
+    await classify_intent(
+        agent, "bổ sung điểm thường kỳ nộp gì?", role="GIANG_VIEN", departments=["KHOA_CNTT"]
+    )
+    await classify_intent(agent, "bổ sung điểm thường kỳ nộp gì?")
+
+    assert "<user_role>GIANG_VIEN (phòng ban: KHOA_CNTT)</user_role>" in prompts[0]
+    assert "<user_role>" not in prompts[1]

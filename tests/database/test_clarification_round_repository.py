@@ -5,11 +5,16 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import JsonValue
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.calculation.formulas import FormulaId
 from app.database.models import ConversationClarificationState
-from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.database.repositories.clarification_state import (
+    RECENT_CALCULATIONS_MAX,
+    ClarificationRoundRepository,
+)
 from app.schemas.clarification import (
     CalculationPlan,
     ClarificationPanel,
@@ -56,10 +61,16 @@ def _round(panel_id: uuid.UUID | None = None) -> PendingRound:
     )
 
 
+def _calculation(
+    formula_id: FormulaId = "grade_conversion", **params: JsonValue
+) -> LastCalculation:
+    return LastCalculation(plan=CalculationPlan(formula_id=formula_id), params=params)
+
+
 async def _open(session: AsyncSession, conversation_id: str = "c1") -> PendingRound:
     pending = _round()
     assert await ClarificationRoundRepository(session).upsert_open(
-        conversation_id, pending, {"program": "CNTT"}
+        conversation_id, pending, [_calculation(score10=8)]
     )
     await session.commit()
     return pending
@@ -68,7 +79,7 @@ async def _open(session: AsyncSession, conversation_id: str = "c1") -> PendingRo
 @pytest.mark.asyncio
 async def test_no_row_means_no_round(db_session: AsyncSession) -> None:
     state = await ClarificationRoundRepository(db_session).get_round("nope")
-    assert state.status is None and state.round is None and state.confirmed_metadata == {}
+    assert state.status is None and state.round is None and state.recent_calculations == []
 
 
 @pytest.mark.asyncio
@@ -77,18 +88,18 @@ async def test_open_then_read_back(db_session: AsyncSession) -> None:
     state = await ClarificationRoundRepository(db_session).get_round("c1")
     assert state.status == "OPEN"
     assert state.round == pending
-    assert state.confirmed_metadata == {"program": "CNTT"}
+    assert state.recent_calculations == [_calculation(score10=8)]
 
 
 @pytest.mark.asyncio
 async def test_open_refuses_to_overwrite_an_existing_round(db_session: AsyncSession) -> None:
     first = await _open(db_session)
     repo = ClarificationRoundRepository(db_session)
-    assert not await repo.upsert_open("c1", _round(), {"program": "KT"})
+    assert not await repo.upsert_open("c1", _round(), [_calculation(score10=9)])
     await db_session.commit()
     state = await repo.get_round("c1")
     assert state.round == first
-    assert state.confirmed_metadata == {"program": "KT"}  # metadata still saved
+    assert state.recent_calculations == [_calculation(score10=9)]  # calculations still saved
 
 
 @pytest.mark.asyncio
@@ -116,7 +127,7 @@ async def test_restore_and_complete_are_fenced_by_token(db_session: AsyncSession
     await repo.claim("c1", pending.panel.panel_id, token, LEASE)
 
     assert not await repo.restore("c1", uuid.uuid4())
-    assert not await repo.complete("c1", uuid.uuid4(), None, {})
+    assert not await repo.complete("c1", uuid.uuid4(), None)
     assert (await repo.get_round("c1")).status == "PROCESSING"
 
     assert await repo.restore("c1", token)
@@ -131,14 +142,14 @@ async def test_complete_clears_or_opens_the_next_panel(db_session: AsyncSession)
     token = uuid.uuid4()
     await repo.claim("c1", pending.panel.panel_id, token, LEASE)
     follow_up = _round()
-    assert await repo.complete("c1", token, follow_up, {"program": "CNTT", "cohort": "k20"})
+    assert await repo.complete("c1", token, follow_up)
     state = await repo.get_round("c1")
     assert state.status == "OPEN" and state.round == follow_up
-    assert state.confirmed_metadata == {"program": "CNTT", "cohort": "k20"}
+    assert state.recent_calculations == [_calculation(score10=8)]  # untouched without new ones
 
     token2 = uuid.uuid4()
     await repo.claim("c1", follow_up.panel.panel_id, token2, LEASE)
-    assert await repo.complete("c1", token2, None, {})
+    assert await repo.complete("c1", token2, None)
     assert (await repo.get_round("c1")).status is None
 
 
@@ -157,7 +168,7 @@ async def test_expired_lease_is_consumed_on_next_read(db_session: AsyncSession) 
 
     assert (await repo.get_round("c1")).status is None
     # The old request is fenced out for good.
-    assert not await repo.complete("c1", token, None, {})
+    assert not await repo.complete("c1", token, None)
     assert not await repo.restore("c1", token)
 
 
@@ -180,15 +191,15 @@ async def test_legacy_v1_row_reads_as_no_round(db_session: AsyncSession) -> None
                 "origin_node": "QueryTransformationNode",
                 "missing_fields": ["x"],
             },
-            confirmed_metadata={"program": "CNTT"},
+            recent_calculations=[_calculation(score10=8).model_dump(mode="json")],
         )
     )
     await db_session.commit()
     repo = ClarificationRoundRepository(db_session)
     state = await repo.get_round("c1")
-    assert state.status is None and state.confirmed_metadata == {"program": "CNTT"}
+    assert state.status is None and state.recent_calculations == [_calculation(score10=8)]
     # ...and a new round may be opened over it.
-    assert await repo.upsert_open("c1", _round(), {})
+    assert await repo.upsert_open("c1", _round())
 
 
 @pytest.mark.asyncio
@@ -211,26 +222,50 @@ async def test_concurrent_claims_have_one_winner(
 
 
 @pytest.mark.asyncio
-async def test_last_calculation_is_kept_until_a_new_one_is_written(
+async def test_recent_calculations_are_kept_until_new_ones_are_written(
     db_session: AsyncSession,
 ) -> None:
     repo = ClarificationRoundRepository(db_session)
-    first = LastCalculation(
-        plan=CalculationPlan(formula_id="grade_conversion"), params={"score10": 8}
-    )
-    await repo.save_confirmed_metadata("c1", {}, first)
+    first = _calculation(score10=8)
+    await repo.save_calculations("c1", [first])
     await db_session.commit()
-    # A turn without a calculation (None) keeps the stored one.
-    await repo.save_confirmed_metadata("c1", {"program": "CNTT"})
+    # A turn without a calculation (None) keeps the stored list.
+    await repo.save_calculations("c1")
     await db_session.commit()
-    state = await repo.get_round("c1")
-    assert state.last_calculation == first and state.confirmed_metadata == {"program": "CNTT"}
+    assert (await repo.get_round("c1")).recent_calculations == [first]
 
     pending = await _open(db_session, "c2")
     token = uuid.uuid4()
     assert await repo.claim("c2", pending.panel.panel_id, token, LEASE)
     await db_session.commit()
-    second = LastCalculation(plan=CalculationPlan(formula_id="course_score"), params={"tclt": 3})
-    assert await repo.complete("c2", token, None, {}, second)
+    second = _calculation("course_score", tclt=3)
+    assert await repo.complete("c2", token, None, [first, second])
     await db_session.commit()
-    assert (await repo.get_round("c2")).last_calculation == second
+    assert (await repo.get_round("c2")).recent_calculations == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_recent_calculations_keep_only_the_latest_five(db_session: AsyncSession) -> None:
+    repo = ClarificationRoundRepository(db_session)
+    calculations = [_calculation(score10=score) for score in range(RECENT_CALCULATIONS_MAX + 2)]
+    await repo.save_calculations("c1", calculations)
+    await db_session.commit()
+    assert (await repo.get_round("c1")).recent_calculations == calculations[
+        -RECENT_CALCULATIONS_MAX:
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_calculation_is_skipped(db_session: AsyncSession) -> None:
+    db_session.add(
+        ConversationClarificationState(
+            conversation_id="c1",
+            recent_calculations=[
+                {"plan": "broken"},
+                _calculation(score10=8).model_dump(mode="json"),
+            ],
+        )
+    )
+    await db_session.commit()
+    state = await ClarificationRoundRepository(db_session).get_round("c1")
+    assert state.recent_calculations == [_calculation(score10=8)]

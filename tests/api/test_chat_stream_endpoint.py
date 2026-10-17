@@ -77,6 +77,8 @@ class _JavaBackend:
         if request.method == "PATCH" and request.url.path.startswith("/messages/"):
             return httpx.Response(200, json={"status": body.get("status")})
 
+        if request.method == "POST" and request.url.path == "/internal/message-traces":
+            return httpx.Response(200, json={"messageId": body.get("messageId")})
         raise AssertionError(f"unexpected call {request.method} {request.url.path}")
 
 
@@ -303,7 +305,7 @@ def test_every_java_call_carries_x_internal_secret(
         assert response.status_code == 200
         list(response.iter_text())
 
-    assert len(java.calls) == 2  # POST turn, PATCH
+    assert len(java.calls) == 3  # POST turn, PATCH, trace push
     assert all(call["x_internal_secret"] == settings.APP_INTERNAL_SECRET_KEY for call in java.calls)
 
 
@@ -341,7 +343,7 @@ def test_x_forwarded_for_is_never_sent_to_java(
         assert response.status_code == 200
         list(response.iter_text())
 
-    assert len(java.calls) == 2  # POST turn, PATCH
+    assert len(java.calls) == 3  # POST turn, PATCH, trace push
     assert all(c["x_forwarded_for"] is None for c in java.calls)
 
 

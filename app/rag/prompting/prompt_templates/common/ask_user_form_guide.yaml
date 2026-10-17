@@ -1,11 +1,11 @@
 # ACADEMIC_PROMPT_ASK_USER_FORM_GUIDE
-description: "Định dạng JSON ask_user_form để thu thập một hoặc nhiều thuộc tính còn thiếu. Hệ thống lọc khối này khỏi câu trả lời (sinh viên không bao giờ thấy JSON) và dựng panel câu hỏi từ nó. Options trích nguyên văn nhãn nhánh trong văn bản."
+description: "Định dạng JSON ask_user_form để thu thập một hoặc nhiều thuộc tính còn thiếu. Hệ thống lọc khối này khỏi câu trả lời (người dùng không bao giờ thấy JSON) và dựng panel câu hỏi từ nó. Options trích nguyên văn nhãn nhánh trong văn bản."
 content: |
   ## ASK_USER_FORM_GUIDE — JSON FORM THU THẬP THUỘC TÍNH
 
   Khi hỏi, thêm ĐÚNG MỘT khối ```json ở CUỐI câu trả lời:
   ```json
-  {"type": "ask_user_form", "fields": [
+  {"type": "ask_user_form", "about": "self", "fields": [
     {"field": "he_dao_tao", "label": "Hệ đào tạo", "options": [
       {"id": "chinh_quy", "label": "Chính quy"},
       {"id": "lien_thong", "label": "Liên thông"}
@@ -17,12 +17,13 @@ content: |
   ```
   Ví dụ trên CHỈ minh hoạ định dạng. Tên field và options phải đến từ văn bản lượt này — viết field mà `<academic_context>` không hề nhắc tới là chép ví dụ, lỗi nghiêm trọng.
 
+  - `about`: hỏi về AI. `"self"` khi câu hỏi áp cho chính người hỏi (câu trả lời được lưu vào hồ sơ của họ). `"other"` khi hỏi về người khác - giảng viên/cán bộ hỏi về một sinh viên, hỏi giúp bạn, trường hợp giả định (câu trả lời chỉ dùng cho câu hỏi này, KHÔNG lưu vào hồ sơ người hỏi).
   - `fields` luôn là mảng; thứ tự mảng là thứ tự hiển thị (thuộc tính quan trọng/dễ trả lời lên đầu).
   - `field`: trùng khái niệm trong bảng dưới PHẢI dùng đúng tên đã liệt kê (tránh cùng khái niệm bị lưu hai tên, VD `nganh_hoc`/`nganh_dao_tao`); không trùng thì tự đặt (chữ thường, không dấu, nối `_`). Bảng không giới hạn field được hỏi; ngoại lệ là quy tắc "HỎI SÂU THÊM MỘT CẤP" ở NHIỆM VỤ 1.
 
     {known_metadata_fields}
 
-  - `label`: nhãn ngắn theo ngôn ngữ người dùng (dùng làm tiêu đề tab và câu hỏi trên panel).
+  - `label`: nhãn ngắn theo ngôn ngữ người dùng (dùng làm tiêu đề tab và câu hỏi trên panel). Nhãn chỉ gọi tên thuộc tính ("Khóa nhập học", "Học vị"), không xưng hô. Câu dẫn trước form xưng hô theo Role và nói rõ hỏi về ai: `"self"` → hỏi về chính người hỏi ("Bạn cho mình biết khóa nhập học nhé", "Thầy/Cô cho em biết học vị của Thầy/Cô ạ"); `"other"` → hỏi về người được nhắc tới ("Thầy/Cô cho em biết sinh viên đó thuộc khóa nào ạ").
   - `options`: BẮT BUỘC ≥ 2 lựa chọn, KHÔNG BAO GIỜ `null` (hệ thống drop field `options: null`). `id` là nhãn nhánh nguyên văn hoặc dạng không dấu của nó, liệt kê ĐỦ mọi nhánh văn bản có, đúng thứ tự (VD văn bản có bảng 10 ngành → đủ 10 ngành); không bịa nhánh. `label` chỉ để hiển thị, backend map theo `id`.
   - Thuộc tính không có tập giá trị hữu hạn (GPA, số tín chỉ, điểm rèn luyện) KHÔNG đưa vào form, không bịa lựa chọn — nêu ngưỡng văn bản quy định ("GPA tối thiểu 2.0 [1]"). Panel luôn tự thêm lựa chọn "Khác" cho sinh viên tự nhập, nên KHÔNG thêm option "Khác" vào JSON.
   - Thuộc tính LỒNG NHAU (VD `loai_hinh_clc` chỉ tồn tại khi `he_dao_tao = chinh_quy_clc`) KHÔNG chung form — hỏi cái gốc trước.

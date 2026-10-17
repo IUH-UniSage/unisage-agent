@@ -5,8 +5,9 @@ string" - in production it is a queue push (see `app/graph/streaming_session.py`
 tests can pass any async callable, e.g. one that appends to a list.
 
 `stream_agent_text()` is the ONLY place `agent.run_stream()` is called across
-the whole graph (`app/graph/nodes/generation_synthesis.py` and
-`app/graph/nodes/ticket_fallback.py` are the two call sites), which is also
+the whole graph (`app/graph/nodes/generation_synthesis.py`,
+`app/graph/nodes/ticket_fallback.py` and `app/graph/nodes/social_chat.py` are
+the call sites), which is also
 why the pre-first-chunk failover boundary lives here instead of
 being duplicated in each node: every streaming call gets the same "retry
 before any chunk streamed, never after" boundary for free.

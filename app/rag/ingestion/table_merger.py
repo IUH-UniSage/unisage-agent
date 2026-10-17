@@ -229,7 +229,9 @@ def decide_merge(
         signals.append((scoring.weight_bounds, bounds))
     if position is not None:
         signals.append((scoring.weight_position, position))
-    if not header_present and position is None:
+    # Without the column-boundary signal (no geometry, or pages drawn with a
+    # different number of rules), the first row's fit stands in for it.
+    if not header_present and (position is None or bounds is None):
         shape = _first_row_fit(first.table, second.table, scoring)
         if shape is not None:
             signals.append((scoring.weight_shape, shape))
@@ -278,6 +280,78 @@ def _is_cell_continuation(cells: list[str], heavy: int | None) -> bool:
     if heavy is None or heavy >= len(cells) or not cells[heavy].strip():
         return False
     return all(not cell.strip() for column, cell in enumerate(cells) if column != heavy)
+
+
+def column_edges(evidence: TableEvidence) -> list[float]:
+    """Left edge of every column plus the table's right edge."""
+
+    return [*evidence.column_bounds, evidence.bbox[2]]
+
+
+def reproject_columns(
+    table: TableBlock, own_edges: list[float], target_edges: list[float]
+) -> TableBlock | None:
+    """`table` re-read against another page's columns: each of its columns goes to
+    the target column it overlaps most along the x axis, and several of its
+    columns landing on one target column are joined. The extractor often draws a
+    continuation page with a column split or two merged (a missing rule), and the
+    pages can only be compared once they share the same columns. Text is moved,
+    never added or dropped. None when a column overlaps no target column."""
+
+    own_count, target_count = len(own_edges) - 1, len(target_edges) - 1
+    if own_count < 1 or target_count < 1 or own_count != len(table.header_row or []):
+        return None
+    mapping: list[int] = []
+    for column in range(own_count):
+        left, right = own_edges[column], own_edges[column + 1]
+        overlaps = [
+            min(right, target_edges[t + 1]) - max(left, target_edges[t])
+            for t in range(target_count)
+        ]
+        best = max(range(target_count), key=lambda t: overlaps[t])
+        if overlaps[best] <= 0:
+            return None
+        mapping.append(best)
+
+    def remap(cells: list[str]) -> list[str]:
+        if len(cells) != own_count:
+            return list(cells)
+        out = [""] * target_count
+        for column, text in enumerate(cells):
+            if text.strip():
+                target = mapping[column]
+                out[target] = f"{out[target]} {text}".strip() if out[target] else text
+        return out
+
+    kind = EventKind.MERGE_CELLS if own_count > target_count else EventKind.PAD_MISSING_CELL
+    detail = f"{own_count} columns re-read against the previous page's {target_count}"
+    rows = [
+        replace(
+            row,
+            cells=remap(row.cells),
+            canonical_cell_count=target_count,
+            signals=None,
+            inherited_cells=sorted({mapping[c] for c in row.inherited_cells if c < own_count}),
+        )
+        for row in table.rows
+    ]
+    sources = [
+        replace(source, cells=remap(source.cells), canonical_row_ids=list(source.canonical_row_ids))
+        for source in table.source_rows
+    ]
+    events = [
+        *table.normalization_events,
+        *(NormalizationEvent(kind, [source.source_row_id], detail) for source in sources),
+    ]
+    return replace(
+        table,
+        header_row=remap(table.header_row or []),
+        header_levels=[remap(tier) for tier in table.header_levels],
+        data_rows=[row.cells for row in rows],
+        rows=rows,
+        source_rows=sources,
+        normalization_events=events,
+    )
 
 
 def merge_page_tables(
@@ -340,20 +414,34 @@ def merge_page_tables(
                 source.logical_row if source.logical_row is not None else source.source_row_id
             )
             by_logical.setdefault(group_key, []).append(source)
-        for group in by_logical.values():
+        for tier, group in enumerate(by_logical.values()):
             if not any(normalize_for_compare(source.raw_text) for source in group):
                 for source in group:
                     source.disposition = RowDisposition.DROPPED_EMPTY  # a blank "header"
                 continue
+            # One markdown row can carry the header tier AND the data row under it
+            # (the extractor glued a cut cell's tail onto the next row); its cells
+            # are then that data row's, already in `second.rows`, and only the
+            # tier's own text is new.
+            also_data = any(source.canonical_row_ids for source in group)
+            cells = (
+                list(second.header_levels[tier])
+                if also_data and tier < len(second.header_levels)
+                else list(group[0].cells)
+            )
             for source in group:
                 source.disposition = (
-                    RowDisposition.MERGED if len(group) > 1 else RowDisposition.DATA
+                    RowDisposition.SPLIT
+                    if source.canonical_row_ids
+                    else RowDisposition.MERGED
+                    if len(group) > 1
+                    else RowDisposition.DATA
                 )
                 lead_ids.add(source.source_row_id)
             incoming.append(
                 _Incoming(
                     TableRow(
-                        cells=list(group[0].cells),
+                        cells=cells,
                         raw_text=" ".join(source.raw_text for source in group),
                         row_index=0,
                         page_start=group[0].page,
@@ -362,7 +450,7 @@ def merge_page_tables(
                         warnings=["headerless_continuation"],
                         source_row_ids=[source.source_row_id for source in group],
                         source_cell_count=sum(source.source_cell_count for source in group),
-                        canonical_cell_count=len(group[0].cells),
+                        canonical_cell_count=len(cells),
                     ),
                     [("lead", source.source_row_id) for source in group],
                 )
@@ -414,7 +502,10 @@ def merge_page_tables(
 
     for source in second_sources:
         if source.source_row_id in lead_ids:
-            source.canonical_row_ids = [key_to_index[("lead", source.source_row_id)]]
+            source.canonical_row_ids = [
+                key_to_index[("lead", source.source_row_id)],
+                *[key_to_index[("row", old)] for old in source.canonical_row_ids],
+            ]
         else:
             source.canonical_row_ids = [
                 key_to_index[("row", old)] for old in source.canonical_row_ids

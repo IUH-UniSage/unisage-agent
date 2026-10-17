@@ -7,6 +7,7 @@ import pytest
 from pydantic import JsonValue
 from pydantic_ai.models.function import FunctionModel
 
+from app.calculation.formulas import route_builtin
 from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
@@ -210,3 +211,23 @@ def test_llm_questions_drop_answered_duplicate_and_malformed_fields() -> None:
     number = questions[0]["number"]
     assert (number["min"], number["max"]) == ("0", "1000000000000")
     assert [o["id"] for o in questions[1]["options"]] == ["o1", "o2"]
+
+
+def test_a_tuition_question_goes_to_its_builtin_formula() -> None:
+    question = "kỳ này em học 15 tín lý thuyết 4 tín thực hành, học phí bao nhiêu?"
+    raw = json.dumps(
+        {"formula_id": "tuition_semester", "params": {"tc_lt": 15, "tc_th": 4}},
+        ensure_ascii=False,
+    )
+    extraction = parse_extraction(raw, allowed=route_builtin(question))
+
+    assert extraction.formula_id == "tuition_semester"
+    assert extraction.params == {"tc_lt": 15, "tc_th": 4}
+
+
+def test_a_reverse_tuition_question_stays_with_the_llm() -> None:
+    question = "Đăng ký tối đa mấy tín để học phí kỳ này không quá 8 triệu?"
+    raw = json.dumps({"formula_id": "llm", "params": {}, "retrieval_query": "mức thu học phí"})
+
+    assert route_builtin(question) == ["tuition_semester"]
+    assert parse_extraction(raw, allowed=route_builtin(question)).formula_id == "llm"

@@ -5,7 +5,9 @@ live network anywhere in this file (matches the project's convention for
 
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.http.models import QueryResponse, ScoredPoint
 
 from app.core.errors.provider_errors import EmbeddingProviderError
@@ -85,18 +87,44 @@ def test_retrieve_many_embeds_all_queries_in_one_call_and_keeps_results_per_quer
     fake_qdrant.query_batch_points.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_retrieve_many_async_matches_retrieve_many() -> None:
+    """Chat's path: embedding awaited on the loop, the same search and per-query results."""
+
+    fake_openai_client = MagicMock()
+    fake_openai_client.embeddings.create.return_value = MagicMock(
+        data=[MagicMock(embedding=[0.1]), MagicMock(embedding=[0.2])]
+    )
+    embedder = OpenAIEmbedder(model="text-embedding-3-small", client=fake_openai_client)
+    fake_qdrant = MagicMock()
+    fake_qdrant.query_batch_points.return_value = [
+        QueryResponse(points=[_scored_point("c1", 0.8)])
+    ] * 3 + [QueryResponse(points=[_scored_point("c2", 0.7)])] * 3
+    service = RetrievalService(client=fake_qdrant, embedder=embedder)
+
+    per_query = await service.retrieve_many_async(
+        ["q1", "q2"], security=AcademicSecurityContext(), limit=4
+    )
+
+    assert [[chunk.chunk_id for chunk in chunks] for chunks in per_query] == [["c1"], ["c2"]]
+    fake_openai_client.embeddings.create.assert_called_once()
+    requests = fake_qdrant.query_batch_points.call_args.kwargs["requests"]
+    assert [request.limit for request in requests] == [4] * 6
+
+
 def test_retrieve_returns_empty_list_when_collection_does_not_exist() -> None:
     """A fresh environment with nothing ingested yet is a normal state, not
     an error - the graph should fall through to ticket fallback, not crash."""
 
     fake_qdrant = MagicMock()
-    fake_qdrant.collection_exists.return_value = False
+    fake_qdrant.query_batch_points.side_effect = UnexpectedResponse(
+        status_code=404, reason_phrase="Not Found", content=b"{}", headers=httpx.Headers()
+    )
     service = RetrievalService(client=fake_qdrant, embedder=_embedder_returning([0.1]))
 
     chunks = service.retrieve("bất kỳ câu hỏi nào", security=AcademicSecurityContext())
 
     assert chunks == []
-    fake_qdrant.query_batch_points.assert_not_called()
 
 
 def test_retrieve_clamps_score_into_the_0_1_range_the_schema_requires() -> None:

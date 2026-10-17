@@ -7,11 +7,27 @@ never a Python-side counter — Python does not own conversation history.
 
 import re
 
+from app.graph.address import STUDENT, address_for
+from app.schemas.security import AcademicSecurityContext
+
 GREETING_TEMPLATE = (
     "Xin chào! Mình là Trợ Lý AI Học Vụ của trường. Mình có thể giúp bạn "
     "tra cứu quy chế học vụ, tính GPA/học phí, hoặc hướng dẫn thủ tục giấy tờ. "
     "Bạn cần hỏi gì hôm nay?"
 )
+# A lecturer or staff member: addressed by role, offered what they look up.
+_STAFF_GREETING = (
+    "Em chào {you}! Em là Trợ Lý AI Học Vụ của trường. Em có thể giúp {you} tra cứu "
+    "quy chế, quy định, thủ tục và văn bản của Nhà trường. {You} cần em hỗ trợ gì ạ?"
+)
+
+
+def greeting_for(security: AcademicSecurityContext) -> str:
+    address = address_for(security)
+    if address == STUDENT:
+        return GREETING_TEMPLATE
+    return _STAFF_GREETING.format(you=address.you, You=address.you_capitalized)
+
 
 # Greeting/lead-in phrases the whole message may consist of. Matched with
 # \b boundaries and stripped out (possibly more than once, e.g. "Bot ơi cho

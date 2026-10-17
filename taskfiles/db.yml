@@ -3,25 +3,93 @@ version: '3'
 tasks:
   migrate:
     desc: "Tạo migration mới (usage: task db:migrate -- 'message')"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic revision --autogenerate -m "{{.CLI_ARGS}}"'
 
   up:
-    desc: "Apply tất cả migrations"
+    desc: "Bật hạ tầng dev: Postgres (5433) + MinIO (backend-java), Redis (6379), Redis cache web (6380) + Qdrant (6333); tạo DB của env nếu thiếu"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      # -f with an absolute path: compose takes that file's folder as the project dir (and reads
+      # its .env), whatever directory `task` was started from.
+      - docker compose -f "{{joinPath .ROOT_DIR .BACKEND_DIR "docker-compose.yml"}}" up -d unisage-db unisage-minio
+      - docker compose -f "{{joinPath .ROOT_DIR ".devcontainer" "docker-compose.yml"}}" up -d redis redis-cache qdrant
+      # The loops/checks run inside the Postgres container (Linux), and Task's own shell
+      # interpreter runs the rest, so this works the same from Windows, macOS or Linux hosts.
+      - docker exec unisage-postgres sh -c 'until pg_isready -U postgres -q; do sleep 1; done'
+      # DB names for this env: the agent's from DB_URL, backend-java's from BACKEND_DB_NAME (set
+      # only in .env.<env>; dev keeps backend-java's own assistant_DB).
+      - |
+        agent_db="${DB_URL##*/}"; agent_db="${agent_db%%\?*}"
+        for db in "${BACKEND_DB_NAME:-assistant_DB}" "$agent_db"; do
+          docker exec unisage-postgres sh -c "psql -U postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='$db'\" | grep -q 1 || createdb -U postgres '$db'"
+          echo "Postgres DB $db: OK"
+        done
+      - echo "env={{.env}} sẵn sàng (Postgres, MinIO, Redis, Qdrant). Tiếp theo - task db:upgrade env={{.env}}"
+
+  web-cache:
+    desc: "Xem kết quả Tavily đang cache trong Redis (vd task db:web-cache env=eval queries=1 | content=1 | query=\"...\" | flush=1)"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} app.tools.web_search_cache{{if .queries}} --queries{{end}}{{if .content}} --content{{end}}{{if .query}} --query "{{.query}}"{{end}}{{if .flush}} --flush{{end}} {{.CLI_ARGS}}'
+
+  upgrade:
+    desc: "Apply tất cả migrations (alembic upgrade head)"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic upgrade head'
 
   down:
     desc: "Rollback 1 migration"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic downgrade -1'
 
   history:
     desc: "Xem lịch sử migrations"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic history'
 
   current:
     desc: "Xem migration hiện tại"
+    dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} alembic current'
+
+  models:export:
+    desc: "Xuất model AI (chat_models + model_prices) của DB backend-java ra storage/model_registry.sql (mặc định từ assistant_DB; đổi bằng from=<db>)"
+    vars:
+      SOURCE_DB: '{{.from | default "assistant_DB"}}'
+      OUT: '{{joinPath .ROOT_DIR "storage" "model_registry.sql"}}'
+    cmds:
+      # The script runs inside the Postgres container; only its stdout comes back to the host file.
+      - docker exec -i unisage-postgres sh -s -- "{{.SOURCE_DB}}" < "{{joinPath .ROOT_DIR "scripts" "model_registry_dump.sh"}}" > "{{.OUT}}"
+      - echo "Đã xuất model của {{.SOURCE_DB}} -> {{.OUT}} (file chứa API key đã mã hoá, đã gitignore)"
+
+  models:import:
+    desc: "Nạp storage/model_registry.sql vào DB backend-java của env (vd task db:models:import env=eval)"
+    dotenv: ['.env.{{.env}}', '.env']
+    vars:
+      IN: '{{joinPath .ROOT_DIR "storage" "model_registry.sql"}}'
+    preconditions:
+      - sh: '[ -f "{{.IN}}" ]'
+        msg: "Chưa có {{.IN}} - chạy task db:models:export trước"
+    cmds:
+      # Target = BACKEND_DB_NAME of .env.<env> (eval: assistant_eval); refuse to import into the
+      # database the file came from. backend-java must have started once on the target (Flyway).
+      - |
+        target="${BACKEND_DB_NAME:-assistant_DB}"
+        read -r header < "{{.IN}}"
+        case "$header" in
+          *"from database $target at"*) echo "Dừng: file được xuất từ chính $target"; exit 1 ;;
+        esac
+        echo "Nạp model vào $target ..."
+        docker exec -i unisage-postgres psql -U postgres -d "$target" -v ON_ERROR_STOP=1 < "{{.IN}}"
+
+  models:copy:
+    desc: "Copy model AI từ dev sang env (vd task db:models:copy env=eval) = export rồi import"
+    cmds:
+      - task: models:export
+      - task: models:import

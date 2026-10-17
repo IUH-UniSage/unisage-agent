@@ -152,3 +152,24 @@ def test_hdsd_terminology_table_evidence_has_no_absorbed_paragraph_row() -> None
         "Điểm tiếp nhận hồ sơ",
         "Điểm TNHS",
     ]
+
+
+def test_sparse_matrix_keeps_columns_whose_marks_never_sit_side_by_side() -> None:
+    # a continuation page of a mark matrix: no header, one mark per row, so no
+    # row has text on both sides of any mark-column boundary
+    doc = pymupdf.open()
+    page = doc.new_page()
+    draw_table(
+        page,
+        [
+            ["1", "Alpha", "I", "", ""],
+            ["2", "Beta", "", "R", ""],
+            ["3", "Gamma", "", "", "E"],
+        ],
+        col_x=(50, 80, 250, 300, 350),
+    )
+
+    table = collect_table_evidence(doc)[1][0]
+
+    assert table.column_count == 5
+    assert [c.text if c else None for c in table.rows[1].cells] == ["2", "Beta", "", "R", ""]

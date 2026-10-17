@@ -1,4 +1,11 @@
-from app.rag.prompting.citations import build_citations, cited_indexes, source_title
+from app.rag.prompting.citations import (
+    build_citations,
+    build_context_trace,
+    cited_indexes,
+    keep_known_links,
+    source_title,
+    strip_source_list,
+)
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.web_search import WebSearchResult
 
@@ -101,3 +108,83 @@ def test_web_only_turn_numbers_pages_from_one_and_drops_out_of_range_markers() -
     citations = build_citations("Theo website [1], còn [2] không có.", [], [_web("lich-thi")])
 
     assert [(c["index"], c["sourceType"]) for c in citations] == [(1, "WEB")]
+
+
+def test_strip_source_list_drops_the_list_the_model_wrote_at_the_end() -> None:
+    """The 14-10-2026 answer: the cited page's address repeated under the reply."""
+
+    text = (
+        "Viên chức được nghỉ lễ Quốc khánh trong 05 ngày [1].\n\n"
+        "[1] https://iuh.edu.vn/upload/files/2026/08/TB-957-2026.pdf"
+    )
+
+    assert strip_source_list(text) == "Viên chức được nghỉ lễ Quốc khánh trong 05 ngày [1]."
+    assert (
+        strip_source_list(
+            "Ý A [1]. Ý B [2].\n\n---\n**Nguồn:**\n- [1]: Thông báo A\n- [2]: Quy chế B"
+        )
+        == "Ý A [1]. Ý B [2]."
+    )
+
+
+def test_strip_source_list_keeps_an_answer_without_one() -> None:
+    text = "Ý A [1].\n\n---\n\nNguồn\n\nBạn có thể tạo ticket để được hỗ trợ."
+    assert strip_source_list(text) == text
+    assert strip_source_list("Ý A [1].\n\n---") == "Ý A [1].\n\n---"
+
+
+def test_a_link_the_model_wrote_must_be_one_of_the_pages_it_was_given() -> None:
+    page = WebSearchResult(
+        title="TB",
+        url="https://iuh.edu.vn/thong-bao/nghi-le-quoc-khanh-2026",
+        content="",
+        score=0.5,
+    )
+    text = (
+        "Xem [thông báo](https://iuh.edu.vn/thong-bao/nghi-le-quoc-khánh-2026), "
+        "[trang lạ](https://iuh.edu.vn/khong-co) và https://iuh.edu.vn/THONG-BAO/nghi-le-quoc-khanh-2026."
+    )
+
+    assert keep_known_links(text, [page]) == (
+        f"Xem [thông báo]({page.url}), trang lạ và {page.url}."
+    )
+
+
+def test_a_web_citation_shows_the_short_title() -> None:
+    page = WebSearchResult(
+        title="Kết quả thi- Trung Tâm Tin Học - Đại học Công Nghiệp TP.HCM:..",
+        url="https://itc.iuh.edu.vn/news@93-Ket-qua-thi.html",
+        content="Kết quả kỳ thi ngày 08,09/10/2026 [1]",
+        score=0.7,
+    )
+
+    (citation,) = build_citations("Kết quả kỳ thi ngày 08,09/10/2026 [1].", [], [page])
+
+    assert citation["title"] == "Kết quả thi"
+
+
+def _page(url: str, title: str = "Thông báo học phí", content: str = "Học phí") -> WebSearchResult:
+    return WebSearchResult(title=title, url=url, content=content, score=0.8)
+
+
+def test_context_trace_keeps_every_source_and_marks_the_cited_ones() -> None:
+    chunks = [_chunk("c-1", score=0.9), _chunk("c-2", score=0.6, content="x" * 5000)]
+    answer_page = _page("https://iuh.edu.vn/hoc-phi")
+    link_page = _page("https://iuh.edu.vn/quy-che", title="Quy chế đào tạo")
+    reply = "Học phí 35 triệu [3]. Xem [Quy chế](https://iuh.edu.vn/quy-che)."
+
+    chunk_items, web_items = build_context_trace(reply, chunks, [answer_page], [link_page])
+
+    assert [(c["index"], c["chunkId"], c["cited"]) for c in chunk_items] == [
+        (1, "c-1", False),
+        (2, "c-2", False),
+    ]
+    assert chunk_items[0]["score"] == 0.9
+    assert chunk_items[0]["documentId"] == "doc-1"
+    assert chunk_items[0]["headingPath"] == ["QUYẾT ĐỊNH", "Khối Công nghệ"]
+    assert len(chunk_items[1]["content"]) == 2001
+    assert [(w["index"], w["kind"], w["cited"]) for w in web_items] == [
+        (3, "CONTENT", True),
+        (None, "LINK", True),
+    ]
+    assert web_items[1]["url"] == "https://iuh.edu.vn/quy-che"

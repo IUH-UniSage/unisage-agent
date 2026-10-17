@@ -1,0 +1,303 @@
+# Từ vựng chuẩn hóa `subject` trước khi dựng câu truy vấn web
+# (app/rag/web_query.py::build_web_query). Đây là tầng BẢO VỆ: prompt phân loại
+# (message_classification_retrieval.yaml, mục `web`) đã yêu cầu model viết `subject` bằng
+# thuật ngữ chuẩn; file này chỉ sửa khi model vẫn viết lệch.
+#
+# Vì sao cần: câu truy vấn là khóa của cache Tavily. "học phí" và "mức thu học phí" của
+# cùng một câu hỏi (16-10-2026) thành hai lần tìm, hai bộ trang khác nhau.
+#
+# NGUYÊN TẮC GỘP: gộp các cách nói của CÙNG MỘT yêu cầu tìm CÙNG MỘT loại văn bản; giữ
+# riêng những yêu cầu dẫn tới văn bản khác nhau:
+#   - mức thu / đơn giá        -> quyết định mức thu học phí
+#   - hạn / lịch đóng          -> thông báo đóng học phí theo học kỳ
+#   - cách / hình thức đóng    -> hướng dẫn nộp tiền
+#   - điều kiện / tiêu chuẩn   -> quy chế, quy định
+#   - thủ tục / hồ sơ          -> thông báo, biểu mẫu
+# Ví dụ "học lại" và "học cải thiện", "bảo lưu" và "thôi học" là các thủ tục khác nhau,
+# không gộp.
+#
+# Thứ tự áp dụng (mọi khóa viết CHỮ THƯỜNG; khớp nguyên từ, không phân biệt hoa thường):
+#   1. spelling       - chính tả và vị trí dấu ("kì" -> "kỳ", "khoá" -> "khóa"), mọi chỗ.
+#   2. abbreviations  - viết tắt và cách ghi học kỳ -> chữ đầy đủ, mọi chỗ ("hk1", "đkhp").
+#   3. phrase_aliases - cụm đồng nghĩa NHIỀU TỪ, thay ở bất kỳ đâu trong subject (subject
+#                       thường kèm học kỳ: "lịch thi cuối kỳ học kỳ I"); chạy sau bước 2 nên
+#                       khóa viết dạng đầy đủ ("thời gian đăng ký học phần", không "đkhp").
+#      Bước 1-3 thay nguyên từ, cụm dài trước, mỗi bước một lượt. Chỉ thêm cụm không thể là
+#      phần đầu của một từ ghép khác: KHÔNG thêm "tiền học" (sẽ phá "tiền học bổng") hay
+#      "đk" (vừa là "đăng ký" vừa là "điều kiện"). Khóa là phần đầu của chính dạng chuẩn
+#      ("tạm dừng học" -> "tạm dừng học tập") cần thêm dạng chuẩn làm khóa của chính nó.
+#   4. (code) bỏ ngành/bậc/hệ/cơ sở đã có ô riêng.
+#   5. subject_aliases - cách gọi trống/mơ hồ, chỉ khi khớp NGUYÊN subject còn lại, theo
+#                        topic rồi `_all`. Khóa viết theo dạng ĐÃ qua bước 1-3 (vd "kỳ", không
+#                        "kì"; "thời khóa biểu", không "tkb").
+# Dạng chuẩn: thuật ngữ văn bản chính thức của Trường dùng (tiêu đề thông báo, quy chế).
+
+# Giá trị mặc định của ô bậc/hệ: KHÔNG ghi vào câu truy vấn. Câu không nêu bậc được hiểu là
+# đại học chính quy (bộ chấm trang web cũng hiểu vậy, trang sau đại học bị lọc riêng), nên
+# model điền "Đại học" hay để trống thì câu truy vấn vẫn như nhau: "ngành công nghệ tt học
+# phí 1 năm" được điền "Đại học" dù người hỏi không nói (16-10-2026), thành entry cache thứ
+# hai "mức thu học phí Đại học IUH". So sánh theo tên chuẩn (`_ALIASES` trong web_query.py).
+default_slots:
+  bac_dao_tao: Đại học
+  he_dao_tao: Chính quy
+
+spelling:
+  kì: kỳ
+  khoá: khóa
+  hoá: hóa
+  hoà: hòa
+  toà: tòa
+  xoá: xóa
+  khoẻ: khỏe
+  huỷ: hủy
+  tuỳ: tùy
+  luỹ: lũy
+  thuỷ: thủy
+  uỷ: ủy
+  đăng kí: đăng ký
+  kí túc xá: ký túc xá
+  chữ kí: chữ ký
+
+abbreviations:
+  # Học kỳ: văn bản của Trường ghi "Học kỳ I/II/III".
+  học kỳ 1: học kỳ I
+  học kỳ 2: học kỳ II
+  học kỳ 3: học kỳ III
+  học kỳ i: học kỳ I
+  học kỳ ii: học kỳ II
+  học kỳ iii: học kỳ III
+  kỳ 1: học kỳ I
+  kỳ 2: học kỳ II
+  kỳ 3: học kỳ III
+  hk1: học kỳ I
+  hk2: học kỳ II
+  hk3: học kỳ III
+  hk 1: học kỳ I
+  hk 2: học kỳ II
+  hk 3: học kỳ III
+  hki: học kỳ I
+  hkii: học kỳ II
+  hkiii: học kỳ III
+  # Viết tắt sinh viên hay dùng.
+  đkhp: đăng ký học phần
+  dkhp: đăng ký học phần
+  tkb: thời khóa biểu
+  ktx: ký túc xá
+  bhyt: bảo hiểm y tế
+  drl: điểm rèn luyện
+  đrl: điểm rèn luyện
+  ctđt: chương trình đào tạo
+  ctdt: chương trình đào tạo
+  cđr: chuẩn đầu ra
+  cdr: chuẩn đầu ra
+  kltn: khóa luận tốt nghiệp
+  đatn: đồ án tốt nghiệp
+  datn: đồ án tốt nghiệp
+  tttn: thực tập tốt nghiệp
+  cvht: cố vấn học tập
+  đtb: điểm trung bình
+  dtb: điểm trung bình
+  gdqp: giáo dục quốc phòng
+  gdtc: giáo dục thể chất
+  nvqs: nghĩa vụ quân sự
+  sv: sinh viên
+  sđt: số điện thoại
+  đt liên hệ: số điện thoại liên hệ
+  # Phòng ban: tên đầy đủ như trên website của Trường.
+  pđt: Phòng Đào tạo
+  pdt: Phòng Đào tạo
+  phòng đt: Phòng Đào tạo
+  ctsv: Phòng Công tác Sinh viên
+  phòng ctsv: Phòng Công tác Sinh viên
+  ptckt: Phòng Tài chính - Kế toán
+  phòng tckt: Phòng Tài chính - Kế toán
+  phòng tài chính kế toán: Phòng Tài chính - Kế toán
+  phòng kế toán: Phòng Tài chính - Kế toán
+  phòng tài chính: Phòng Tài chính - Kế toán
+  phòng tài chính - kế toán: Phòng Tài chính - Kế toán
+
+phrase_aliases:
+  # Học phí: cùng văn bản, khác chữ.
+  nộp học phí: đóng học phí
+  nộp tiền học phí: đóng học phí
+  đóng tiền học phí: đóng học phí
+  đóng tiền học: đóng học phí
+  hạn nộp học phí: hạn đóng học phí
+  thời hạn đóng học phí: hạn đóng học phí
+  hạn chót đóng học phí: hạn đóng học phí
+  thời gian đóng học phí: hạn đóng học phí
+  mức học phí: mức thu học phí
+  mức đóng học phí: mức thu học phí
+  biểu học phí: mức thu học phí
+  hoàn học phí: hoàn trả học phí
+  trả lại học phí: hoàn trả học phí
+  rút học phí: hoàn trả học phí
+  miễn, giảm học phí: miễn giảm học phí
+  # Đăng ký học phần.
+  đăng ký môn học: đăng ký học phần
+  đăng ký môn: đăng ký học phần
+  thời gian đăng ký học phần: lịch đăng ký học phần
+  # Thi cử.
+  # Thi cuối kỳ gộp một chỗ; "lịch thi" trống giữ nguyên (lịch thi từng sinh viên nằm trên
+  # cổng sinh viên, web công khai chỉ có thông báo/kế hoạch thi, chữ hẹp hơn tìm ít trang hơn).
+  lịch thi cuối học kỳ: lịch thi cuối kỳ
+  lịch thi kết thúc học phần: lịch thi cuối kỳ
+  phúc tra: phúc khảo
+  chấm lại bài thi: phúc khảo bài thi
+  # Tuyển sinh.
+  điểm trúng tuyển: điểm chuẩn
+  điểm chuẩn trúng tuyển: điểm chuẩn
+  điểm sàn: ngưỡng đảm bảo chất lượng đầu vào
+  ngưỡng đầu vào: ngưỡng đảm bảo chất lượng đầu vào
+  khối xét tuyển: tổ hợp xét tuyển
+  tổ hợp môn xét tuyển: tổ hợp xét tuyển
+  phương thức tuyển sinh: phương thức xét tuyển
+  hình thức xét tuyển: phương thức xét tuyển
+  # Học vụ.
+  điều kiện ra trường: điều kiện xét tốt nghiệp
+  điều kiện tốt nghiệp: điều kiện xét tốt nghiệp
+  tiêu chuẩn tốt nghiệp: điều kiện xét tốt nghiệp
+  thủ tục tốt nghiệp: thủ tục đăng ký xét tốt nghiệp
+  đăng ký tốt nghiệp: đăng ký xét tốt nghiệp
+  nghỉ học tạm thời: tạm dừng học tập
+  tạm ngừng học tập: tạm dừng học tập
+  tạm ngừng học: tạm dừng học tập
+  # Dạng chuẩn dài hơn khóa ngắn ngay dưới: giữ nguyên nó, không thành "học tập tập".
+  tạm dừng học tập: tạm dừng học tập
+  tạm dừng học: tạm dừng học tập
+  chuẩn tiếng anh: chuẩn đầu ra ngoại ngữ
+  chuẩn đầu ra tiếng anh: chuẩn đầu ra ngoại ngữ
+  chuẩn ngoại ngữ: chuẩn đầu ra ngoại ngữ
+  giấy chứng nhận sinh viên: giấy xác nhận sinh viên
+  khung chương trình đào tạo: chương trình đào tạo
+  khung chương trình: chương trình đào tạo
+  chương trình khung: chương trình đào tạo
+  lộ trình học tập: kế hoạch đào tạo
+  lộ trình học: kế hoạch đào tạo
+
+subject_aliases:
+  hoc_phi:
+    học phí: mức thu học phí
+    mức thu: mức thu học phí
+    biểu phí: mức thu học phí
+    tiền học: mức thu học phí
+    học phí một năm: mức thu học phí
+    học phí 1 năm: mức thu học phí
+    học phí mỗi năm: mức thu học phí
+    học phí toàn khóa: mức thu học phí
+    học phí cả khóa: mức thu học phí
+    học phí tín chỉ: mức thu học phí
+    học phí 1 tín chỉ: mức thu học phí
+    học phí một tín chỉ: mức thu học phí
+    học phí mỗi tín chỉ: mức thu học phí
+    học phí theo tín chỉ: mức thu học phí
+    đơn giá tín chỉ: mức thu học phí
+    giá tín chỉ: mức thu học phí
+    đóng học phí: hạn đóng học phí
+    lịch đóng học phí: hạn đóng học phí
+    cách đóng học phí: hướng dẫn đóng học phí
+    hình thức đóng học phí: hướng dẫn đóng học phí
+    đóng học phí ở đâu: hướng dẫn đóng học phí
+    chuyển khoản học phí: hướng dẫn đóng học phí
+    miễn học phí: miễn giảm học phí
+    giảm học phí: miễn giảm học phí
+    chính sách miễn giảm học phí: miễn giảm học phí
+  tuyen_sinh:
+    tuyển sinh: thông báo tuyển sinh
+    thông tin tuyển sinh: thông báo tuyển sinh
+    chỉ tiêu: chỉ tiêu tuyển sinh
+    số lượng tuyển: chỉ tiêu tuyển sinh
+    điểm đầu vào: điểm chuẩn
+    tổ hợp môn: tổ hợp xét tuyển
+    khối thi: tổ hợp xét tuyển
+    cách xét tuyển: phương thức xét tuyển
+    các phương thức xét tuyển: phương thức xét tuyển
+    thủ tục nhập học: hồ sơ nhập học
+    giấy tờ nhập học: hồ sơ nhập học
+  lich_thong_bao:
+    lịch học: thời khóa biểu
+    đăng ký học phần: lịch đăng ký học phần
+    nghỉ tết: lịch nghỉ tết nguyên đán
+    lịch nghỉ tết: lịch nghỉ tết nguyên đán
+    thời gian nghỉ tết: lịch nghỉ tết nguyên đán
+    lễ tốt nghiệp: lễ trao bằng tốt nghiệp
+    lễ trao bằng: lễ trao bằng tốt nghiệp
+    lễ phát bằng: lễ trao bằng tốt nghiệp
+    lịch năm học: kế hoạch năm học
+    thông báo mới: thông báo
+    thông báo mới nhất: thông báo
+    tin tức mới: thông báo
+  lien_he_co_so:
+    địa chỉ trường: địa chỉ
+    địa chỉ của trường: địa chỉ
+    trường ở đâu: địa chỉ
+    vị trí: địa chỉ
+    điện thoại: số điện thoại
+    hotline: số điện thoại
+    số liên hệ: số điện thoại
+    số điện thoại liên hệ: số điện thoại
+    liên hệ: thông tin liên hệ
+    cách liên hệ: thông tin liên hệ
+    địa chỉ email: email
+    mail: email
+    thư điện tử: email
+    thời gian làm việc: giờ làm việc
+    giờ hành chính: giờ làm việc
+  quy_che_thu_tuc:
+    quy chế học vụ: quy chế đào tạo
+    quy định đào tạo: quy chế đào tạo
+    quy chế đào tạo tín chỉ: quy chế đào tạo
+    quy chế đào tạo theo tín chỉ: quy chế đào tạo
+    điều kiện học bổng: điều kiện xét học bổng
+    tiêu chí học bổng: điều kiện xét học bổng
+    tiêu chí xét học bổng: điều kiện xét học bổng
+    tiêu chuẩn học bổng: điều kiện xét học bổng
+    bảo lưu: thủ tục bảo lưu kết quả học tập
+    xin bảo lưu: thủ tục bảo lưu kết quả học tập
+    thủ tục bảo lưu: thủ tục bảo lưu kết quả học tập
+    xin tạm dừng học tập: thủ tục tạm dừng học tập
+    tạm dừng học tập: thủ tục tạm dừng học tập
+    thôi học: thủ tục thôi học
+    xin thôi học: thủ tục thôi học
+    chuyển ngành: thủ tục chuyển ngành
+    xin chuyển ngành: thủ tục chuyển ngành
+    đổi ngành: thủ tục chuyển ngành
+    học lại: đăng ký học lại
+    học cải thiện: đăng ký học cải thiện
+    học cải thiện điểm: đăng ký học cải thiện
+    học nâng điểm: đăng ký học cải thiện
+    phúc khảo: phúc khảo bài thi
+    phúc khảo điểm: phúc khảo bài thi
+    xin bảng điểm: cấp bảng điểm
+    bảng điểm: cấp bảng điểm
+    xác nhận sinh viên: giấy xác nhận sinh viên
+    xin giấy xác nhận sinh viên: giấy xác nhận sinh viên
+    mất thẻ sinh viên: cấp lại thẻ sinh viên
+    làm lại thẻ sinh viên: cấp lại thẻ sinh viên
+    cách tính điểm rèn luyện: đánh giá điểm rèn luyện
+    quy định điểm rèn luyện: đánh giá điểm rèn luyện
+    chấm điểm rèn luyện: đánh giá điểm rèn luyện
+  chuong_trinh_dao_tao:
+    chương trình học: chương trình đào tạo
+    môn học: chương trình đào tạo
+    các môn học: chương trình đào tạo
+    danh sách môn học: chương trình đào tạo
+    học những môn gì: chương trình đào tạo
+    chuẩn đầu ra ngành: chuẩn đầu ra
+    số tín chỉ: tổng số tín chỉ
+    bao nhiêu tín chỉ: tổng số tín chỉ
+    số tín chỉ tốt nghiệp: tổng số tín chỉ
+    thời gian học: thời gian đào tạo
+    học mấy năm: thời gian đào tạo
+    kế hoạch học tập: kế hoạch đào tạo
+  # Mọi topic, xét sau topic của task: chủ đề hay được xếp vào nhiều topic khác nhau.
+  _all:
+    phí ký túc xá: phí ký túc xá
+    giá ký túc xá: phí ký túc xá
+    tiền ký túc xá: phí ký túc xá
+    đăng ký ở ký túc xá: đăng ký ký túc xá
+    xin vào ký túc xá: đăng ký ký túc xá
+    tiền bảo hiểm y tế: thu tiền bảo hiểm y tế
+    phí bảo hiểm y tế: thu tiền bảo hiểm y tế
+    mức thu bảo hiểm y tế: thu tiền bảo hiểm y tế
+    đóng bảo hiểm y tế: thu tiền bảo hiểm y tế

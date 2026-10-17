@@ -52,6 +52,10 @@ class HierarchyScoring:
     ordinal_column_min_share: float = 0.6
     ordinal_column_min_count: int = 2
     ordinal_column_max_length: int = 8
+    # A number repeated down consecutive rows (`1, 1, 1, 2, 2`) groups rows - a
+    # semester, a category - it does not number them; past this share of
+    # repeats the column is not an ordinal column.
+    ordinal_column_max_repeat_share: float = 0.5
     ordinal_prefix_min_share: float = 0.3
     ordinal_prefix_min_count: int = 3
     # Group rows (a label in a column LEFT of the label column while the label
@@ -162,6 +166,17 @@ def _detect_layout(
         if any(len(cell) > scoring.ordinal_column_max_length for cell in cells):
             continue
         matches = sum(1 for cell in cells if _parse_ordinal(cell) is not None)
+        # cells copied down from a merged cell repeat by construction
+        own = [
+            row.cells[index].strip()
+            for row in rows
+            if index < len(row.cells)
+            and index not in row.inherited_cells
+            and row.cells[index].strip()
+        ]
+        repeats = sum(1 for before, after in zip(own, own[1:]) if before == after)
+        if own[1:] and repeats / len(own[1:]) > scoring.ordinal_column_max_repeat_share:
+            continue
         if matches / len(cells) >= scoring.ordinal_column_min_share:
             ordinal_col = index
             break
@@ -317,7 +332,7 @@ def _mask_feature(
     return result
 
 
-def _label_offset(row: TableRow, label_col: int) -> float | None:
+def _label_offset(row: TableRow, label_col: int, tolerance: float) -> float | None:
     """How far the label text starts from the left edge of its OWN cell. Using
     the offset rather than the absolute x keeps a column that merely sits
     further right on part of a page from reading as a deeper level."""
@@ -329,11 +344,14 @@ def _label_offset(row: TableRow, label_col: int) -> float | None:
     if x0 is None:
         return None
     left = signals.cell_left[label_col] if label_col < len(signals.cell_left) else None
-    return x0 - (left or 0.0)
+    offset = x0 - (left or 0.0)
+    # text cannot start left of its own cell: that cell's box is wrong, and an
+    # indentation read from it would invent a parent row
+    return None if offset < -tolerance else offset
 
 
 def _indent_ranks(rows: list[TableRow], label_col: int, tolerance: float) -> list[int | None]:
-    x0s = [_label_offset(row, label_col) for row in rows]
+    x0s = [_label_offset(row, label_col, tolerance) for row in rows]
     known = sorted(value for value in x0s if value is not None)
     clusters: list[float] = []
     for value in known:

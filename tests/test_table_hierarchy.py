@@ -400,3 +400,38 @@ def test_sample_pdf_rows_carry_the_full_ancestor_stack_across_pages() -> None:
     # section B restarts the stack
     b_row = next(row for row in table.rows if row.cells[0] == "B")
     assert b_row.ancestors == []
+
+
+def test_a_number_repeated_down_the_rows_groups_them_and_is_not_an_ordinal_column() -> None:
+    table = _table(
+        ["Semester", "Course", "Code"],
+        [
+            ["1", "Calculus", "111"],
+            ["1", "Physics", "112"],
+            ["2", "Statistics", "113"],
+            ["2", "Thesis", "114"],
+            ["", "IT certificate", ""],
+        ],
+    )
+
+    assert _ancestors(table) == [[], [], [], [], []]
+
+
+def test_text_starting_left_of_its_own_cell_is_not_read_as_indentation() -> None:
+    # two rows whose cell box was read wrongly (text 38pt left of the cell edge)
+    # must not become parents of the rows after them
+    table = _table(
+        ["Code", "Outcome"],
+        [[f"O{i}", f"Outcome text {i}"] for i in range(1, 7)],
+    )
+    x0s = [105.0, 105.0, 62.0, 105.0, 62.0, 105.0]
+    table = _with_signals(table, x0s)
+    table = replace(
+        table,
+        rows=[
+            replace(row, signals=replace(row.signals, cell_left=[None, 100.0]))
+            for row in table.rows
+        ],
+    )
+
+    assert _ancestors(table) == [[]] * 6

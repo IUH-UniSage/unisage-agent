@@ -14,7 +14,8 @@ class PromptTemplates:
     chat_academic_advisory: str
     chat_multi_intent_synthesis: str
     chat_ticket_fallback: str
-    chat_calculation: str
+    chat_social: str
+    chat_calculation_review: str
     chat_calculation_llm: str
     json_repair: str
 
@@ -24,23 +25,28 @@ class PromptTemplates:
     agent_message_classification_retrieval: str
     agent_multi_query_decomposer: str
     agent_calculation_extractor: str
+    agent_calculation_value_extractor: str
     agent_reranker_compressor: str
+    agent_web_result_judge: str
     agent_multi_representation_enricher: str
 
     # Common components
     header: str
     academic_metadata: str
+    declared_attributes: str
     history_message: str
     security_access_control: str
     academic_domain_rules: str
     response_style: str
     citation_rules: str
     prepared_context: str
+    current_time: str
     web_search_context: str
     task_1: str
     task_2: str
     ask_user_form_guide: str
     ticket_fallback: str
+    web_candidate_sources: str
 
     # sha256[:12] of each template's text, by attribute name - the prompt version
     # recorded in calculation traces.

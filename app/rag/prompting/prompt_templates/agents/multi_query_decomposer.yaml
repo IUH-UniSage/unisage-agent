@@ -12,11 +12,16 @@ template: |
   ## Requirements
   - Mỗi câu hỏi con phải chứa đầy đủ thực thể và ngữ cảnh hành chính (không dùng đại từ thay thế "nó", "ngành đó").
   - GIỮ PHẠM VI CỦA CẢ CÂU TRONG MỌI CÂU HỎI CON: mỗi tiêu chí phạm vi người dùng nêu — ngành/khối, bậc/hệ đào tạo (chính quy, cao học...), cơ sở/phân hiệu (Quảng Ngãi, Thanh Hóa...), khóa/năm học — PHẢI được chép vào MỌI câu hỏi con, dù người dùng chỉ nói một lần, ở đầu hay cuối tin nhắn. Chỉ bỏ khi chính câu hỏi con đó nêu một giá trị khác thay thế (VD câu so sánh hai ngành: mỗi câu hỏi con giữ ngành của nó; vế sau nói rõ "ở trụ sở chính").
+  - Người thực hiện thủ tục: đơn, thủ tục dành cho MỘT đối tượng - câu hỏi về thủ tục/hồ sơ ghi rõ người thực hiện theo câu hỏi ("cho sinh viên", "lớp tôi dạy" → giảng viên; "tôi muốn thi lại", "điểm của tôi" → sinh viên); KHÔNG viết "sinh viên hoặc giảng viên".
+  - MỐC THỜI GIAN TƯƠNG ĐỐI (chép vào mọi câu hỏi con): trạng từ thời gian tương đối → mốc cụ thể theo `<current_time>`: "mới nhất", "gần nhất", "gần đây", "dạo gần đây", "vừa rồi", "vừa qua", "sắp tới", "hiện nay", "hiện tại", "năm nay" → năm hiện tại; "tháng này/trước/sau" → tháng/năm tương ứng; "học kỳ này", "kỳ này", "năm học này" → học kỳ/năm học hiện tại; "năm ngoái/trước" → năm -1, "năm sau/tới" → năm +1. Không có trạng từ như vậy thì KHÔNG tự thêm năm.
   - Thừa một tiêu chí phạm vi chỉ làm tìm kiếm hẹp hơn một chút; THIẾU tiêu chí làm tìm ra số liệu của ngành/hệ/cơ sở khác. Không chắc tiêu chí có áp dụng cho vế đó không → vẫn chép.
   - KHÔNG LÀM RƠI TỪ KHÓA: giữ nguyên chữ người dùng dùng cho chủ đề và tiêu chí, không thay bằng từ đồng nghĩa.
   - Trả về JSON chứa mảng `sub_queries: List[str]`.
   - CHỈ trả về đúng một object JSON, không thêm chữ, giải thích hay markdown code fence.
   - Nếu tin nhắn có kèm lịch sử hội thoại, chỉ dùng lịch sử để hiểu câu hỏi nối tiếp; không tạo câu hỏi con cho nội dung của lượt trước.
+  - Hồ sơ người hỏi đã khai (phần "hồ sơ người hỏi đã khai" trong ngoặc sau câu hỏi, nếu có - thuộc tính của CHÍNH người hỏi, mọi vai trò) CHỈ bổ sung tiêu chí mà câu hỏi VÀ lịch sử đều không nêu:
+    - Câu hỏi đã nêu một ngành/khối, khóa/năm học, bậc/hệ hay cơ sở → GIỮ giá trị của câu hỏi, TUYỆT ĐỐI không thay bằng giá trị trong hồ sơ (VD hỏi "học phí ngành điện tử" mà hồ sơ là Công nghệ thông tin → vẫn là ngành điện tử).
+    - Câu hỏi không áp cho chính người hỏi (giảng viên/cán bộ hỏi về một sinh viên, phụ huynh hay bạn bè hỏi giúp, giả định) hoặc nội dung không phụ thuộc thuộc tính của người hỏi (mật khẩu, địa chỉ, liên hệ, quy trình chung) → KHÔNG thêm thông tin hồ sơ.
 
   ## Examples
   Input: "Điều kiện học song hành CNTT và Du lịch là gì, học phí chênh thế nào?"

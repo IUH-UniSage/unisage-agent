@@ -1,0 +1,574 @@
+{
+  "_comment": "Sổ đăng ký tên field DUY NHẤT cho mọi giá trị người dùng khai hoặc nhập trên form (app/graph/metadata_fields.py). Mỗi field: `scope` = `profile` (thuộc tính ổn định của CHÍNH người dùng - sinh viên: khóa, ngành...; giảng viên/cán bộ: học vị, chức danh... - lưu vào hồ sơ student_profiles theo người dùng) hoặc `calculation` (số liệu của MỘT phép tính, lưu theo phép tính đó trong recent_calculations của hội thoại); `key_aliases` = các tên khoá khác cùng nghĩa, luôn được quy về `field` trước khi dùng. Không phải whitelist đóng: field lạ vẫn dùng được, nhưng khái niệm nào có ở đây thì BẮT BUỘC dùng đúng `field`. Mọi tên tham số `ParamSpec` của app/calculation/formulas.py phải có ở đây (test). Bảng cho node 10 (ask_user_form_guide.yaml) chỉ render field `profile`.",
+  "fields": [
+    {
+      "field": "he_dao_tao",
+      "scope": "profile",
+      "key_aliases": [
+        "training_type",
+        "loai_hinh_dao_tao",
+        "he"
+      ],
+      "concept": "Hệ đào tạo",
+      "aliases": [
+        "hệ đào tạo",
+        "loại hình đào tạo",
+        "hệ"
+      ],
+      "example_options": [
+        "Chính quy",
+        "Liên thông",
+        "Vừa làm vừa học"
+      ],
+      "priority": "high",
+      "description": "Hình thức đào tạo (chính quy/liên thông...)."
+    },
+    {
+      "field": "bac_dao_tao",
+      "scope": "profile",
+      "key_aliases": [
+        "trinh_do_dao_tao",
+        "bac",
+        "bac_hoc"
+      ],
+      "concept": "Bậc đào tạo",
+      "aliases": [
+        "bậc đào tạo",
+        "trình độ đào tạo"
+      ],
+      "example_options": [
+        "Đại học",
+        "Cao đẳng",
+        "Sau đại học"
+      ],
+      "priority": "medium",
+      "description": "Cấp học (đại học/cao đẳng/sau đại học) - KHÁC he_dao_tao, không gộp."
+    },
+    {
+      "field": "nganh_hoc",
+      "scope": "profile",
+      "key_aliases": [
+        "nganh_dao_tao",
+        "nganh",
+        "chuyen_nganh",
+        "chuong_trinh_dao_tao"
+      ],
+      "concept": "Ngành học / ngành đào tạo",
+      "aliases": [
+        "ngành học",
+        "ngành đào tạo",
+        "chuyên ngành",
+        "chương trình đào tạo",
+        "program"
+      ],
+      "example_options": [
+        "Công nghệ Thông tin",
+        "Kỹ thuật Phần mềm",
+        "Quản trị Kinh doanh"
+      ],
+      "priority": "high",
+      "description": "Options copy nguyên văn danh sách ngành trong văn bản."
+    },
+    {
+      "field": "khoi_nganh",
+      "scope": "profile",
+      "key_aliases": [
+        "khoi",
+        "khoi_nganh_hoc_phi"
+      ],
+      "concept": "Khối ngành trong biểu học phí",
+      "aliases": [
+        "khối ngành",
+        "khối"
+      ],
+      "example_options": [
+        "Khối Công nghệ",
+        "Khối Kinh tế"
+      ],
+      "priority": "medium",
+      "description": "Nhóm ngành mà biểu học phí chia mức thu (VD Khối Công nghệ) - KHÁC nganh_hoc."
+    },
+    {
+      "field": "khoa_nhap_hoc",
+      "scope": "profile",
+      "key_aliases": [
+        "khoa_tuyen_sinh",
+        "nam_nhap_hoc",
+        "khoa",
+        "cohort",
+        "academic_year"
+      ],
+      "concept": "Khóa nhập học / khóa tuyển sinh / năm nhập học",
+      "aliases": [
+        "khóa nhập học",
+        "khóa tuyển sinh",
+        "năm nhập học",
+        "academic_year",
+        "khóa"
+      ],
+      "example_options": [
+        "2022",
+        "2023",
+        "2024"
+      ],
+      "priority": "high",
+      "description": "Lưu NĂM nhập học 4 chữ số (option id = năm, VD 2022); khóa N của IUH = năm 2004+N (K20 = 2024). Hỏi theo hướng dẫn trong <current_time> (một câu, option kèm học kỳ thứ mấy). KHÁC nam_thu_may."
+    },
+    {
+      "field": "dieu_kien_hoc_bong",
+      "scope": "profile",
+      "key_aliases": [
+        "dien_hoc_bong",
+        "loai_hoc_bong"
+      ],
+      "concept": "Điều kiện / diện xét học bổng",
+      "aliases": [
+        "điều kiện học bổng",
+        "diện học bổng",
+        "loại học bổng"
+      ],
+      "example_options": [],
+      "priority": "medium",
+      "description": "Options lấy nguyên văn từ văn bản học bổng."
+    },
+    {
+      "field": "khoa_quan_ly",
+      "scope": "profile",
+      "key_aliases": [
+        "don_vi_dao_tao",
+        "department"
+      ],
+      "concept": "Khoa / đơn vị đào tạo quản lý ngành",
+      "aliases": [
+        "khoa quản lý",
+        "đơn vị đào tạo",
+        "department"
+      ],
+      "example_options": [],
+      "priority": "low",
+      "description": "Hiếm khi hợp lệ - chỉ khi văn bản chia nhánh theo khoa."
+    },
+    {
+      "field": "lop",
+      "scope": "profile",
+      "key_aliases": [
+        "class",
+        "lop_sinh_hoat"
+      ],
+      "concept": "Lớp sinh hoạt",
+      "aliases": [
+        "lớp",
+        "class"
+      ],
+      "example_options": [],
+      "priority": "low",
+      "description": "Hiếm khi hợp lệ - chỉ khi văn bản chia nhánh theo lớp."
+    },
+    {
+      "field": "co_so_hoc",
+      "scope": "profile",
+      "key_aliases": [
+        "co_so",
+        "campus",
+        "co_so_dao_tao"
+      ],
+      "concept": "Cơ sở học / campus",
+      "aliases": [
+        "cơ sở",
+        "campus",
+        "cơ sở đào tạo"
+      ],
+      "example_options": [],
+      "priority": "low",
+      "description": "Chỉ khi văn bản quy định khác nhau theo cơ sở."
+    },
+    {
+      "field": "nam_thu_may",
+      "scope": "profile",
+      "key_aliases": [
+        "current_year",
+        "sinh_vien_nam"
+      ],
+      "concept": "Năm học hiện tại của sinh viên (năm 1/2/3/4...)",
+      "aliases": [
+        "năm mấy",
+        "sinh viên năm thứ",
+        "current_year"
+      ],
+      "example_options": [
+        "Năm 1",
+        "Năm 2",
+        "Năm 3",
+        "Năm 4"
+      ],
+      "priority": "medium",
+      "description": "Năm học hiện tại (năm 1/2/3/4) - KHÁC khoa_nhap_hoc."
+    },
+    {
+      "field": "ma_so_sinh_vien",
+      "scope": "profile",
+      "key_aliases": [
+        "mssv",
+        "student_id",
+        "ma_sinh_vien"
+      ],
+      "concept": "Mã số sinh viên",
+      "aliases": [
+        "mã sinh viên",
+        "MSSV",
+        "student_id"
+      ],
+      "example_options": [],
+      "priority": "low",
+      "description": "KHÔNG hỏi qua form (không có tập giá trị, không phân nhánh quy định)."
+    },
+    {
+      "field": "ho_ten",
+      "scope": "profile",
+      "key_aliases": [
+        "ten",
+        "name"
+      ],
+      "concept": "Họ tên người dùng",
+      "aliases": [
+        "tên",
+        "họ tên",
+        "name"
+      ],
+      "example_options": [],
+      "priority": "low",
+      "description": "KHÔNG hỏi qua form (không phải thuộc tính quy chế)."
+    },
+    {
+      "field": "hoc_vi",
+      "scope": "profile",
+      "key_aliases": [
+        "trinh_do",
+        "trinh_do_chuyen_mon",
+        "academic_degree",
+        "bang_cap"
+      ],
+      "concept": "Học vị (của giảng viên, cán bộ)",
+      "aliases": [
+        "học vị",
+        "trình độ",
+        "trình độ chuyên môn",
+        "bằng cấp"
+      ],
+      "example_options": [
+        "Cử nhân/Kỹ sư",
+        "Thạc sĩ",
+        "Tiến sĩ"
+      ],
+      "priority": "medium",
+      "description": "Học vị của chính giảng viên/cán bộ - KHÁC bac_dao_tao (bậc của chương trình sinh viên theo học)."
+    },
+    {
+      "field": "hoc_ham",
+      "scope": "profile",
+      "key_aliases": [
+        "academic_rank"
+      ],
+      "concept": "Học hàm (phó giáo sư, giáo sư)",
+      "aliases": [
+        "học hàm",
+        "phó giáo sư",
+        "giáo sư"
+      ],
+      "example_options": [
+        "Không có",
+        "Phó giáo sư",
+        "Giáo sư"
+      ],
+      "priority": "low",
+      "description": "Học hàm của giảng viên - KHÁC chuc_danh (chức danh nghề nghiệp)."
+    },
+    {
+      "field": "chuc_danh",
+      "scope": "profile",
+      "key_aliases": [
+        "chuc_danh_nghe_nghiep",
+        "hang_giang_vien",
+        "ngach"
+      ],
+      "concept": "Chức danh nghề nghiệp (giảng viên, giảng viên chính, giảng viên cao cấp)",
+      "aliases": [
+        "chức danh",
+        "chức danh nghề nghiệp",
+        "hạng giảng viên",
+        "ngạch"
+      ],
+      "example_options": [
+        "Giảng viên",
+        "Giảng viên chính",
+        "Giảng viên cao cấp"
+      ],
+      "priority": "medium",
+      "description": "Chức danh nghề nghiệp của giảng viên - KHÁC hoc_ham và hoc_vi."
+    },
+    {
+      "field": "hinh_thuc_cong_tac",
+      "scope": "profile",
+      "key_aliases": [
+        "loai_giang_vien",
+        "loai_hop_dong",
+        "hinh_thuc_hop_dong",
+        "hop_dong"
+      ],
+      "concept": "Hình thức công tác (cơ hữu/thỉnh giảng; viên chức/hợp đồng)",
+      "aliases": [
+        "cơ hữu",
+        "thỉnh giảng",
+        "loại hợp đồng",
+        "hình thức hợp đồng"
+      ],
+      "example_options": [
+        "Giảng viên cơ hữu",
+        "Giảng viên thỉnh giảng",
+        "Viên chức",
+        "Hợp đồng lao động"
+      ],
+      "priority": "medium",
+      "description": "Giảng viên cơ hữu hay thỉnh giảng, viên chức hay hợp đồng lao động."
+    },
+    {
+      "field": "chuc_vu_quan_ly",
+      "scope": "profile",
+      "key_aliases": [
+        "chuc_vu",
+        "kiem_nhiem"
+      ],
+      "concept": "Chức vụ quản lý, kiêm nhiệm",
+      "aliases": [
+        "chức vụ",
+        "chức vụ quản lý",
+        "kiêm nhiệm"
+      ],
+      "example_options": [
+        "Không giữ chức vụ",
+        "Trưởng/Phó trưởng khoa",
+        "Trưởng/Phó trưởng bộ môn",
+        "Trưởng/Phó phòng"
+      ],
+      "priority": "low",
+      "description": "Chỉ khi văn bản chia định mức/chế độ theo chức vụ (VD giảm giờ chuẩn cho người giữ chức vụ)."
+    },
+    {
+      "field": "don_vi_cong_tac",
+      "scope": "profile",
+      "key_aliases": [
+        "noi_cong_tac",
+        "don_vi_cong_tac_cua_toi"
+      ],
+      "concept": "Đơn vị công tác của giảng viên, cán bộ (khoa, phòng, trung tâm)",
+      "aliases": [
+        "đơn vị công tác",
+        "nơi công tác"
+      ],
+      "example_options": [],
+      "priority": "low",
+      "description": "Đơn vị nơi chính giảng viên/cán bộ làm việc - KHÁC khoa_quan_ly (khoa quản lý ngành của sinh viên). Không phải quyền truy cập."
+    },
+    {
+      "field": "tc_lt",
+      "scope": "calculation",
+      "key_aliases": [
+        "so_tc_lt",
+        "tin_chi_ly_thuyet",
+        "so_tin_chi_ly_thuyet",
+        "tc_ly_thuyet"
+      ],
+      "concept": "Số tín chỉ lý thuyết đăng ký/của phạm vi học phí",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Tín chỉ lý thuyết dùng tính học phí - KHÁC tclt (tín chỉ lý thuyết của một học phần)."
+    },
+    {
+      "field": "tc_th",
+      "scope": "calculation",
+      "key_aliases": [
+        "so_tc_th",
+        "tin_chi_thuc_hanh",
+        "so_tin_chi_thuc_hanh",
+        "tc_thuc_hanh"
+      ],
+      "concept": "Số tín chỉ thực hành đăng ký/của phạm vi học phí",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Tín chỉ thực hành dùng tính học phí - KHÁC tcth."
+    },
+    {
+      "field": "don_gia_lt",
+      "scope": "calculation",
+      "key_aliases": [
+        "don_gia_ly_thuyet",
+        "hoc_phi_1_tc_lt",
+        "muc_thu_lt"
+      ],
+      "concept": "Đơn giá 1 tín chỉ lý thuyết (đồng)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Số nguyên đồng."
+    },
+    {
+      "field": "don_gia_th",
+      "scope": "calculation",
+      "key_aliases": [
+        "don_gia_thuc_hanh",
+        "hoc_phi_1_tc_th",
+        "muc_thu_th"
+      ],
+      "concept": "Đơn giá 1 tín chỉ thực hành (đồng)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Số nguyên đồng."
+    },
+    {
+      "field": "pham_vi",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Phạm vi học phí người dùng nêu (VD 2 năm đầu)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Chỉ đặt tên tiêu đề/nhãn, không vào phép tính."
+    },
+    {
+      "field": "tclt",
+      "scope": "calculation",
+      "key_aliases": [
+        "tc_lt_hoc_phan"
+      ],
+      "concept": "Số tín chỉ lý thuyết của một học phần",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Dùng cho điểm tổng kết học phần."
+    },
+    {
+      "field": "tcth",
+      "scope": "calculation",
+      "key_aliases": [
+        "tc_th_hoc_phan"
+      ],
+      "concept": "Số tín chỉ thực hành của một học phần",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Dùng cho điểm tổng kết học phần."
+    },
+    {
+      "field": "tbtx",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_tx",
+        "diem_thuong_xuyen",
+        "tx"
+      ],
+      "concept": "Điểm thường xuyên (một số hoặc các cột TX)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Thang 10."
+    },
+    {
+      "field": "gk",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_gk",
+        "diem_giua_ky",
+        "giua_ky"
+      ],
+      "concept": "Điểm giữa kỳ",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Thang 10."
+    },
+    {
+      "field": "ck",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_ck",
+        "diem_cuoi_ky",
+        "cuoi_ky"
+      ],
+      "concept": "Điểm cuối kỳ",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Thang 10."
+    },
+    {
+      "field": "th",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_th",
+        "diem_thuc_hanh",
+        "thuc_hanh"
+      ],
+      "concept": "Các cột điểm thực hành",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Thang 10."
+    },
+    {
+      "field": "courses",
+      "scope": "calculation",
+      "key_aliases": [
+        "cac_mon",
+        "danh_sach_mon"
+      ],
+      "concept": "Danh sách môn: tín chỉ và điểm",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Bảng tính GPA."
+    },
+    {
+      "field": "score10",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_thang_10",
+        "diem_10"
+      ],
+      "concept": "Điểm thang 10 cần quy đổi",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Thang 10."
+    },
+    {
+      "field": "so_tien_da_nop",
+      "scope": "calculation",
+      "key_aliases": [
+        "da_nop",
+        "tien_da_nop",
+        "so_tien_da_dong"
+      ],
+      "concept": "Số tiền học phí đã nộp (đồng)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Số nguyên đồng."
+    },
+    {
+      "field": "tong_hoc_phi",
+      "scope": "calculation",
+      "key_aliases": [
+        "hoc_phi_tong",
+        "tong_tien_hoc_phi"
+      ],
+      "concept": "Tổng học phí của phạm vi được hỏi (đồng)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Số nguyên đồng."
+    }
+  ]
+}

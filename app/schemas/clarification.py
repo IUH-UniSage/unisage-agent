@@ -21,6 +21,10 @@ LETTER_GRADES = ("A+", "A", "B+", "B", "C+", "C", "D+", "D", "F")
 
 QuestionKind = Literal["choice", "number", "number_list", "number_or_list", "text", "course_table"]
 QuestionOrigin = Literal["advisory", "calculation"]
+# Whom an advisory question asks about: the caller ("self" - the answer joins their
+# profile) or someone else ("other" - a student a lecturer deals with, a friend, a
+# hypothetical case - the answer serves that one question and is never saved).
+QuestionAbout = Literal["self", "other"]
 
 
 class _Strict(BaseModel):
@@ -94,10 +98,12 @@ class Question(_QuestionBody):
     origin: QuestionOrigin
     task_id: str = Field(pattern=TASK_ID_PATTERN)
     field: str = Field(min_length=1, max_length=64)
+    # Default "self": a round stored before this field existed reads as it behaved then.
+    about: QuestionAbout = "self"
 
     def public(self) -> PublicQuestion:
         return PublicQuestion.model_validate(
-            self.model_dump(exclude={"origin", "task_id", "field"})
+            self.model_dump(exclude={"origin", "task_id", "field", "about"})
         )
 
 
@@ -134,8 +140,19 @@ class CalculationPlan(_Strict):
     by Python (forward only), or `llm` - the LLM computes it (target questions, formulas
     from documents, follow-ups), retrieving with `retrieval_query` when set."""
 
-    formula_id: Literal["gpa", "course_score", "grade_conversion", "llm"]
+    formula_id: Literal[
+        "gpa",
+        "course_score",
+        "grade_conversion",
+        "tuition_semester",
+        "tuition_year",
+        "tuition_program",
+        "llm",
+    ]
     retrieval_query: str | None = Field(default=None, max_length=500)
+    # `llm` only: the documents the LLM saw when it asked, reused on resume by id - no
+    # second search + rerank for the same question.
+    chunk_ids: list[str] | None = Field(default=None, max_length=20)
 
     @model_validator(mode="after")
     def _query_only_for_llm(self) -> "CalculationPlan":

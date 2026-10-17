@@ -96,7 +96,7 @@ def test_missing_practice_scores_then_answer_computes_the_course_score(
             "formula_id": "course_score",
             "params": {"tclt": 2, "tcth": 1, "tbtx": 8, "gk": 7, "ck": 6.5},
         },
-        "Điểm chữ B nghĩa là bạn đã qua học phần.",
+        {"fits": True, "issue": None, "answer": "Điểm tổng kết của bạn là **7.5** (điểm chữ B)."},
     )
     app.dependency_overrides[get_graph_models] = lambda: GraphModels(
         classification=llm.model(),
@@ -126,8 +126,8 @@ def test_missing_practice_scores_then_answer_computes_the_course_score(
     assert (
         "Kết quả: ĐTKHP **7.5** thuộc khoảng [7.0; 8.0) → điểm chữ **B** → thang 4 **3.0**" in text
     )
-    assert "Điểm chữ B nghĩa là bạn đã qua học phần." in text
-    assert llm.calls == 3  # only the note - no second classification or extraction
+    assert text.startswith("Điểm tổng kết của bạn là **7.5** (điểm chữ B).\n\n**Điểm tổng kết")
+    assert llm.calls == 3  # only the review - no second classification or extraction
     assert not any(name == "clarification" for name, _ in second)
 
     turn = [body for _m, path, body in java.calls if path == "/messages/turn"][-1]

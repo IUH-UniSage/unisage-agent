@@ -30,6 +30,7 @@ from app.core.registry.model_registry import (
 )
 from app.core.security.redaction import safe_error_message
 from app.core.usage.usage_recorder import UsageRecorder
+from app.rag.embeddings.timing import EmbedTiming
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,26 @@ class GoogleEmbedder:
             client, model, texts, usage_recorder, budget_tracker
         )
 
+    async def embed_async(self, texts: list[str]) -> list[list[float]]:
+        """`embed()` for a caller already on an event loop - see `OpenAIEmbedder.embed_async()`.
+        Here it also keeps the client's async connections on one loop, so an instance shared
+        across chat requests never touches a connection opened by another loop."""
+
+        if not texts:
+            return []
+
+        model, client = await asyncio.to_thread(self._ensure_resolved)
+        credential = self._resolved.get("credential")
+        if credential is None:
+            return await asyncio.to_thread(self._call_provider, client, model, texts)
+        return await self._embed_recorded(client, model, texts, credential)
+
+    def warm_up(self) -> None:
+        """Resolves the credential now (client, identity guard, Qdrant checks) so the first
+        chat turn does not pay for it - see `app.api.deps.warm_up_retrieval`."""
+
+        self._ensure_resolved()
+
     def _ensure_resolved(self) -> tuple[str, Client]:
         model = self.model
         client = self.client
@@ -185,12 +206,14 @@ class GoogleEmbedder:
             request_id=str(uuid.uuid4()), purpose="EMBEDDING", budget_tracker=budget_tracker
         )
         status = "ERROR"
+        timing = EmbedTiming(len(texts))
         try:
             reserve_result = await budget_tracker.reserve_request(
                 request_id=recorder.request_id,
                 purpose="EMBEDDING",
                 estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
             )
+            timing.mark("budget_reserve_ms")
             if reserve_result != "OK":
                 raise EmbeddingBudgetRejectedError(
                     f"EMBEDDING budget reservation rejected: {reserve_result}",
@@ -200,12 +223,15 @@ class GoogleEmbedder:
             vectors = await self._call_provider_tracked(
                 client, model, texts, recorder, budget_tracker
             )
+            timing.mark("provider_ms")
             status = "SUCCESS"
             return vectors
         finally:
             try:
                 await recorder.close(status=status)
             finally:
+                timing.mark("recorder_close_ms")
+                timing.log(status)
                 try:
                     await redis_client.aclose()
                 except Exception:

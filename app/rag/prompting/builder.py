@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
+from app.core.academic_calendar import (
+    INTAKE_FIELD,
+    cohort_label,
+    describe_current_term,
+    describe_student_term,
+    parse_intake_year,
+)
 from app.core.timezone import now_ict
+from app.graph.address import address_for
 from app.schemas.chat_history import HistoryMessage
+from app.schemas.clarification import LastCalculation
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
@@ -28,11 +38,12 @@ _JSON_BLOCK_PATTERN = re.compile(r"```json.*?```", re.DOTALL)
 # different question, and would otherwise be copied into this turn's output.
 _AMOUNT_PATTERN = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
 # The tags that frame retrieved text in `prepared_context.yaml` /
-# `web_search_context.yaml`. Text from a document or a web page that contains
-# one of them could close the frame early and have what follows read as
-# prompt rather than data.
+# `web_search_context.yaml` / `web_candidate_sources.yaml`. Text from a document
+# or a web page that contains one of them could close the frame early and have
+# what follows read as prompt rather than data.
 _CONTEXT_FRAME_TAG_PATTERN = re.compile(
-    r"<\s*(/?)\s*(academic_context|websearch|current_date)\s*>", re.IGNORECASE
+    r"<\s*(/?)\s*(academic_context|websearch|web_sources|current_date|current_time)\s*>",
+    re.IGNORECASE,
 )
 
 
@@ -41,8 +52,13 @@ def build_metadata_section(
     confirmed_metadata: dict[str, str],
 ) -> str:
     """Build `{academic_metadata}` - two separate XML tags, JWT-verified identity
-    (`academic_user_context`) vs self-declared attributes (`student_declared_attributes`).
-    Never merged: authorization must only ever be based on the former."""
+    (`academic_user_context`) vs self-declared attributes (`declared_attributes`).
+    Never merged: authorization must only ever be based on the former. The form of
+    address is worked out here from the role, not left to the model: told only the
+    role-to-address rule, a model reading a student-like profile under SUPER_ADMIN
+    went back to "mình/bạn" (16-10-2026)."""
+
+    address = address_for(security)
 
     department_access_lines = (
         "\n".join(
@@ -51,28 +67,54 @@ def build_metadata_section(
         )
         or _NO_DEPARTMENT_ACCESS
     )
-    confirmed_metadata_text = (
-        "\n".join(f"    - {field}: {value}" for field, value in confirmed_metadata.items())
-        or f"    {_NO_DECLARED_ATTRIBUTES}"
-    )
     return get_templates().academic_metadata.format(
         user_id=security.user_id or "(khách vãng lai)",
         role=security.role,
+        address_me=address.me,
+        address_you=address.you,
         department_access_lines=department_access_lines,
-        confirmed_metadata=confirmed_metadata_text,
+        declared_attributes=build_declared_attributes_section(confirmed_metadata),
     )
 
 
-def build_known_metadata_fields_section() -> str:
+def build_declared_attributes_section(confirmed_metadata: Mapping[str, str]) -> str:
+    """`<declared_attributes>`: what the student declared about themselves. The
+    same block in the answering prompts (inside `{academic_metadata}`) and in the message
+    to the classifier, so both read the profile under one tag and in one format."""
+
+    declared_lines = (
+        "\n".join(
+            f"- {field}: {_declared_value(field, value)}"
+            for field, value in confirmed_metadata.items()
+        )
+        or _NO_DECLARED_ATTRIBUTES
+    )
+    return get_templates().declared_attributes.format(declared_lines=declared_lines).strip()
+
+
+def _declared_value(field: str, value: str) -> str:
+    """The intake year carries its cohort ("2022 (khóa K18)"), so the model never
+    names the cohort after the year ("K2022")."""
+
+    if field != INTAKE_FIELD:
+        return value
+    year = parse_intake_year(value, now_ict().date())
+    return f"{value} (khóa {cohort_label(year)})" if year is not None else value
+
+
+def build_known_metadata_fields_section(*, every_scope: bool = False) -> str:
     """Render `known_metadata_fields.json` as the markdown table
     `ask_user_form_guide.yaml` embeds via `{known_metadata_fields}` - see
     that file for the field-name-reuse rule this backs. Static data (doesn't
     vary per conversation), but kept as a JSON file rather than hardcoded in
-    the YAML prose so it stays easy to extend/audit as its own artifact."""
+    the YAML prose so it stays easy to extend/audit as its own artifact.
+    Node 10 only asks profile fields; the LLM calculation (`every_scope`) also
+    names a calculation's numbers."""
 
     rows = "\n".join(
         f"    | {entry['concept']} | `{entry['field']}` | {entry['description']} |"
         for entry in get_known_metadata_fields()
+        if every_scope or entry.get("scope", "profile") == "profile"
     )
     return (
         "| Khái niệm (mọi cách diễn đạt tương đương) | Tên field bắt buộc dùng lại | Ghi chú |\n"
@@ -165,13 +207,13 @@ def _page_suffix(chunk: RetrievedChunk) -> str:
 
 
 def build_prepared_context_section(
-    chunks: Sequence[RetrievedChunk], web_results: Sequence[WebSearchResult] = ()
+    chunks: Sequence[RetrievedChunk],
+    web_results: Sequence[WebSearchResult] = (),
+    confirmed_metadata: Mapping[str, str] | None = None,
 ) -> str:
     """Build `{prepared_context}` - the `<academic_context>` block, chunks numbered
     to match the `[1][2]` citation indices the generation prompt asks the model to use,
-    plus the `<current_date>` block (today, ICT/GMT+7) so the model has a real-world
-    time anchor for questions like "học phí năm 2025-2026" without nêu rõ mốc thời gian,
-    or for checking whether a document's stated effective date has passed.
+    plus the `<current_time>` block (`build_current_time_section`).
 
     Each chunk's source is suffixed with its page number(s) when available
     (`_page_suffix`); `citation_rules.yaml` tells the LLM to cite them.
@@ -189,12 +231,31 @@ def build_prepared_context_section(
         )
         or _NO_RETRIEVED_CONTEXT
     )
-    current_date = now_ict().strftime("%d/%m/%Y")
     return get_templates().prepared_context.format(
         context_chunks=context_chunks,
         web_search_context=_build_web_search_context(web_results, first_index=len(chunks) + 1),
-        current_date=current_date,
+        current_time=build_current_time_section(confirmed_metadata),
     )
+
+
+def build_current_time_section(confirmed_metadata: Mapping[str, str] | None = None) -> str:
+    """`<current_time>`: today (ICT), the current term of the provisional school
+    calendar and the student's own term number (from `khoa_nhap_hoc`) - one block,
+    given to every chat flow."""
+
+    today = now_ict().date()
+    intake = parse_intake_year((confirmed_metadata or {}).get(INTAKE_FIELD), today)
+    return get_templates().current_time.format(
+        current_date=today.strftime("%d/%m/%Y"),
+        current_term=describe_current_term(today),
+        student_term=describe_student_term(today, intake),
+    )
+
+
+def append_current_time(prompt: str, confirmed_metadata: Mapping[str, str] | None = None) -> str:
+    """For agents whose system prompt is static: the block goes into the message."""
+
+    return f"{prompt}\n\n{build_current_time_section(confirmed_metadata)}"
 
 
 def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_index: int) -> str:
@@ -204,11 +265,27 @@ def _build_web_search_context(web_results: Sequence[WebSearchResult], *, first_i
     if not web_results:
         return ""
     entries = "\n".join(
-        f"  [{index}] ({_neutralize_frame_tags(result.title)} — "
-        f"{_neutralize_frame_tags(result.url)}) {_neutralize_frame_tags(result.content)}"
+        f"  [{index}] ({_page_label(result)}) {_neutralize_frame_tags(result.content)}"
         for index, result in enumerate(web_results, first_index)
     )
     return "\n" + get_templates().web_search_context.format(web_results=entries) + "\n"
+
+
+def build_web_sources_section(sources: Sequence[WebSearchResult]) -> str:
+    """The `<web_sources>` block of the ticket fallback, or nothing: official pages on the
+    asked topic the web judge kept although their snippet lacks the answer."""
+
+    if not sources:
+        return ""
+    entries = "\n".join(
+        f"  - {_page_label(source)}: {_neutralize_frame_tags(source.content)}" for source in sources
+    )
+    return get_templates().web_candidate_sources.format(web_sources=entries)
+
+
+def _page_label(result: WebSearchResult) -> str:
+    year = f"; năm học {result.academic_year}" if result.academic_year else ""
+    return f"{_neutralize_frame_tags(result.title)} — {_neutralize_frame_tags(result.url)}{year}"
 
 
 def build_json_repair_prompt(
@@ -226,7 +303,7 @@ def build_json_repair_prompt(
     verbatim from the text" rule has no text to copy from, and the repaired
     field falls back to `options: null` (free-text) even when the source
     document actually lists a finite set of options. `security`/
-    `confirmed_metadata` are ALSO needed - without `<student_declared_attributes>`
+    `confirmed_metadata` are ALSO needed - without `<declared_attributes>`
     this call has no way to know a field was already answered in an earlier
     turn, and can re-ask it (observed live: repair re-emitted a form for
     `he_dao_tao` already present in `confirmed_metadata`). Reuses
@@ -236,7 +313,7 @@ def build_json_repair_prompt(
     templates = get_templates()
     return templates.json_repair.format(
         previous_response=previous_response,
-        academic_context=build_prepared_context_section(chunks, web_results),
+        academic_context=build_prepared_context_section(chunks, web_results, confirmed_metadata),
         academic_metadata=build_metadata_section(security, confirmed_metadata),
         ask_user_form_guide=build_ask_user_form_guide(),
     )
@@ -267,6 +344,19 @@ def build_task_2_section() -> str:
     `confirmed_metadata`, so the model never re-reads a pending form."""
 
     return get_templates().task_2.format(ask_user_form_guide=build_ask_user_form_guide())
+
+
+def build_recent_calculations_section(recent: Sequence[LastCalculation]) -> str:
+    """`{recent_calculations}`: the conversation's latest calculations, newest last,
+    each with its own values under registry names - for the LLM calculation only
+    (node 10 never sees a number)."""
+
+    if not recent:
+        return NOTHING
+    return "\n".join(
+        f"- {item.title or item.plan.formula_id}: {json.dumps(item.params, ensure_ascii=False)}"
+        for item in recent
+    )
 
 
 def build_calculation_results_section(titles: Sequence[str]) -> str:

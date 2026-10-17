@@ -1,14 +1,24 @@
 version: '3'
 
 vars:
-  # Python environment runner (uses project .venv)
-  UV_RUN: '.venv/Scripts/python -m'
+  # Môi trường chạy: dev (mặc định) | eval | prod. Mọi task chạy app/worker/migration nạp
+  # `.env.<env>` trước rồi `.env`: file đứng trước thắng, biến đã có trong shell thắng cả hai.
+  # Vd `task be:dev env=eval`. Quy ước tên DB/bucket/collection: changes/.../spec.md §12.7 (backend).
+  env: '{{.env | default "dev"}}'
+
+  # Python environment runner (uses project .venv) - the venv layout differs per OS.
+  UV_RUN: '{{if eq OS "windows"}}.venv/Scripts/python{{else}}.venv/bin/python{{end}} -m'
 
   # Host & Port defaults for Windows/POSIX compatibility - sourced from
   # .env's APP_HOST/APP_PORT (see taskfiles/backend.yml's dotenv), not
   # Settings: no code in app/ needs to know its own bind address.
   HOST: '{{.APP_HOST | default "127.0.0.1"}}'
   PORT: '{{.APP_PORT | default "8402"}}'
+
+  # backend-java checkout next to this repo (named backend-java or unisage-backend); override
+  # with BACKEND_DIR=... when it lives elsewhere. Used by `task db:up` for Postgres + MinIO.
+  BACKEND_DIR:
+    sh: 'if [ -n "$BACKEND_DIR" ]; then echo "$BACKEND_DIR"; elif [ -d ../backend-java ]; then echo ../backend-java; else echo ../unisage-backend; fi'
 
   # ANSI Color Codes
   COLOR_RESET: '\033[0m'
@@ -47,6 +57,14 @@ includes:
 
   usage:
     taskfile: ./taskfiles/usage.yml
+    optional: false
+
+  env:
+    taskfile: ./taskfiles/env.yml
+    optional: false
+
+  eval:
+    taskfile: ./taskfiles/eval.yml
     optional: false
 
 tasks:

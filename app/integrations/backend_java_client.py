@@ -268,9 +268,12 @@ class BackendJavaClient:
         citations: list[dict[str, Any]] | None = None,
         retrieval_score: float | None = None,
         metadata: dict[str, Any] | None = None,
+        response_time_ms: int | None = None,
         authorization: str | None = None,
     ) -> dict[str, Any]:
         """`PATCH /messages/{id}` — finalizes a `STREAMING` assistant message.
+
+        `response_time_ms`: the turn's total time, stored in `messages.response_time_ms`.
 
         Contract: only the message's own `conversation_id`, only
         `role=ASSISTANT`, only `STREAMING -> COMPLETED|ERROR`, idempotent on
@@ -298,6 +301,8 @@ class BackendJavaClient:
             body["retrievalScore"] = retrieval_score
         if metadata is not None:
             body["metadata"] = metadata
+        if response_time_ms is not None:
+            body["responseTimeMs"] = response_time_ms
 
         result = await self._request(
             "PATCH",
@@ -330,6 +335,30 @@ class BackendJavaClient:
             "/internal/calculation-traces",
             authorization=None,
             json_body={"messageId": message_id, "items": items},
+        )
+
+    async def push_message_trace(
+        self,
+        *,
+        message_id: str,
+        trace_id: str,
+        chunks: list[dict[str, Any]],
+        web_sources: list[dict[str, Any]],
+    ) -> None:
+        """`POST /internal/message-traces` - the staff-only retrieval trace of an assistant
+        message: the trace id of its log lines and every chunk / web page given to the LLM.
+        Upserted by message, so a retry is safe."""
+
+        await self._request(
+            "POST",
+            "/internal/message-traces",
+            authorization=None,
+            json_body={
+                "messageId": message_id,
+                "traceId": trace_id,
+                "chunks": chunks,
+                "webSources": web_sources,
+            },
         )
 
     async def get_model_registry_version(self) -> int:

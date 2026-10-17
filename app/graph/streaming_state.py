@@ -54,6 +54,12 @@ class GraphInput:
     resume: ResumeInput | None = None
     # The conversation's latest computed calculation (follow-up target questions).
     last_calculation: LastCalculation | None = None
+    # The conversation's latest calculations, oldest first, each with its own numbers.
+    recent_calculations: list[LastCalculation] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.last_calculation is None and self.recent_calculations:
+            self.last_calculation = self.recent_calculations[-1]
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,10 @@ class GraphOutput:
     # LLM rerank failing, ...) - sent to AI admins only, as `event: warning`.
     admin_warnings: list[AdminWarning] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
+    # Staff-only retrieval trace: every chunk / web page given to the LLM, cited or not
+    # (`build_context_trace`), pushed to Java apart from the public `citations`.
+    context_chunks: list[dict[str, Any]] = field(default_factory=list)
+    context_web: list[dict[str, Any]] = field(default_factory=list)
     # The clarification panel this turn raises (stored, projected, then sent as
     # `event: clarification` by run_and_persist), or None.
     pending_round: PendingRound | None = None
@@ -80,5 +90,10 @@ class GraphOutput:
     # metadata.calculation items (public) and the staff-only traces (SPEC-calculation-node §7.2).
     calculation_items: list[dict[str, Any]] = field(default_factory=list)
     calculation_traces: list[dict[str, Any]] = field(default_factory=list)
-    # This turn's latest computed calculation, stored for the next turn (None = keep).
-    last_calculation: LastCalculation | None = None
+    # This turn's computed calculations, oldest first, appended to the conversation's
+    # `recent_calculations` (empty = keep the list as it is).
+    calculations: list[LastCalculation] = field(default_factory=list)
+
+    @property
+    def last_calculation(self) -> LastCalculation | None:
+        return self.calculations[-1] if self.calculations else None

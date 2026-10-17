@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -50,6 +51,10 @@ async def dispatch(
     `purpose="SEMANTIC_CHUNKING"` `UsageRecorder` via `SemanticChunker.split_tracked()`,
     keyed by `document_id`/`user_id` - every other chunker's plain sync `.split()` is
     called as-is, no behavior change.
+
+    Parsing and the sync chunkers are CPU-bound (a long PDF takes a minute) and run
+    in a worker thread: on the event loop they would stall every other request the
+    service is serving until the document is done.
     """
 
     extension = get_extension(filename)
@@ -60,7 +65,9 @@ async def dispatch(
         excel_chunker = _with_valid_params(
             lambda: ExcelRowChunker(rows_per_chunk=int(params.get("rows_per_chunk", 1)))
         )
-        return parse_or_raise(lambda: excel_chunker.split(content), filename)
+        return await asyncio.to_thread(
+            parse_or_raise, lambda: excel_chunker.split(content), filename
+        )
 
     if extension == "xlsx":
         raise StrategyFileTypeMismatchException(strategy, filename)
@@ -74,18 +81,20 @@ async def dispatch(
     )
     chunker: _RegionChunker = _with_valid_params(lambda: _build_text_chunker(strategy, params))
 
-    regions = parse_or_raise(lambda: split_regions(content, filename, extension), filename)
+    regions = await asyncio.to_thread(
+        parse_or_raise, lambda: split_regions(content, filename, extension), filename
+    )
     table_regions = [region for region in regions if region.region_type == RegionType.TABLE]
     text_regions = [region for region in regions if region.region_type != RegionType.TABLE]
 
-    table_chunks = table_chunker.split(table_regions)
+    table_chunks = await asyncio.to_thread(table_chunker.split, table_regions)
 
     if isinstance(chunker, SemanticChunker):
         text_chunks = await chunker.split_tracked(
             text_regions, document_id=document_id, user_id=user_id
         )
     else:
-        text_chunks = chunker.split(text_regions)
+        text_chunks = await asyncio.to_thread(chunker.split, text_regions)
 
     merged = sorted(
         [*table_chunks, *text_chunks],

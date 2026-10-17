@@ -69,7 +69,9 @@ include = ["app*"]
 # this a non-editable install (wheel) would ship the packages without them.
 [tool.setuptools.package-data]
 "app.core.budget" = ["lua/*.lua"]
-"app.rag.prompting" = ["*.json", "prompt_templates/**/*.yaml"]
+"app.rag.prompting" = ["prompt_templates/**/*.yaml"]
+# configs/ (web search vocabulary, metadata field registry) sits outside the package and is
+# read from the checkout: the Dockerfile copies it next to app/.
 
 [tool.ruff]
 target-version = "py312"
@@ -100,5 +102,10 @@ module = [
     "app.rag.ingestion.parser",
     "app.rag.ingestion.table_aware_parser",
     "tests.fixtures.documents",
+    "evals.dataset.crawl.download",
+    "evals.dataset.crawl.triage",
+    "evals.questions.plan",
+    "evals.dataset.titles",
+    "tests.evals.test_titles",
 ]
 disallow_untyped_calls = false

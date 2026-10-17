@@ -6,7 +6,7 @@ template: |
 
   ## Đầu vào
   - Danh sách câu hỏi con `SQ1`, `SQ2`, ...
-  - Danh sách đoạn văn bản `[C1]`, `[C2]`, ... đã truy xuất, kèm tên tài liệu. Nội dung có thể bị cắt ngắn; khi đó dòng "Mục có trong đoạn" liệt kê MỌI mục/nhánh của đoạn, kể cả phần bị cắt — dùng nó để biết đoạn có chứa nhánh được hỏi hay không.
+  - Danh sách đoạn văn bản `[C1]`, `[C2]`, ... đã truy xuất, kèm tên tài liệu và NGUYÊN VĂN nội dung đoạn.
 
   ## Cách chấm (làm cho TỪNG cặp câu hỏi con - đoạn)
   1. Câu hỏi con hỏi CHỦ ĐỀ gì? Đoạn văn bản thuộc loại nội dung gì? Hai cái phải là MỘT. Trùng tên ngành, tên khoa, tên cơ sở KHÔNG làm đoạn trở nên liên quan.
@@ -15,17 +15,24 @@ template: |
      - Nội dung VỐN KHÁC NHAU theo ngành/bậc (chương trình khung, học phần theo học kỳ, chuẩn đầu ra, tuyển sinh, chuẩn ngoại ngữ đầu vào, học phí, chỉ tiêu) mà câu hỏi nêu ngành/bậc cụ thể, còn tên tài liệu, "Mục" lẫn nội dung đoạn đều KHÔNG ghi ngành/bậc đó → KHÔNG giữ: không suy ngành/bậc từ tên học phần hay từ câu chữ trùng với văn bản của bậc khác.
      - Quy định/thủ tục CHUNG không ghi ngành hay bậc nào (bảo lưu, thi bổ sung, đơn từ, quy chế đào tạo...) → vẫn giữ: nó áp dụng cho mọi ngành/bậc, trừ khi đoạn ghi rõ phạm vi khác.
   3. Chỉ giữ đoạn khi viết được một lý do CỤ THỂ, chỉ ra đúng thông tin trong đoạn trả lời câu hỏi (VD "có dòng học phí Đại học chính quy khóa 2025-2026 Khối Công nghệ"). Lý do chung chung kiểu "có nhắc tới ngành CNTT", "liên quan tới học phí" là CHƯA đủ → không giữ.
-  4. Đoạn bị cắt ngắn nhưng phần đang thấy hoặc "Mục có trong đoạn" cho thấy đúng chủ đề và phạm vi → vẫn giữ. KHÔNG loại một đoạn chỉ vì dòng cần tìm không nằm trong phần nội dung đang thấy.
-  5. Câu hỏi KHÔNG nêu khóa/năm học → giữ MỌI đoạn chứa bất kỳ khóa nào của đúng nhánh được hỏi, nhất là khóa mới nhất; không chỉ giữ khóa đầu tiên nhìn thấy. Câu hỏi KHÔNG nêu cơ sở → đoạn của Trụ sở chính là đoạn chính; đoạn chỉ có Phân hiệu/cơ sở khác vẫn giữ được nhưng ghi rõ trong lý do.
+  4. Câu hỏi KHÔNG nêu khóa/năm học → giữ MỌI đoạn chứa bất kỳ khóa nào của đúng nhánh được hỏi, nhất là khóa mới nhất; không chỉ giữ khóa đầu tiên nhìn thấy. Câu hỏi KHÔNG nêu cơ sở → đoạn của Trụ sở chính là đoạn chính; đoạn chỉ có Phân hiệu/cơ sở khác vẫn giữ được nhưng ghi rõ trong lý do.
 
   ## Chủ đề hay bị nhầm
   - Chương trình khung / chương trình đào tạo: danh sách học phần/môn học, khối kiến thức, số tín chỉ, kế hoạch học tập theo học kỳ, chuẩn đầu ra. KHÔNG phải: bảng mã ngành, tổ hợp/môn xét tuyển, chỉ tiêu tuyển sinh, biểu học phí.
   - Học phí: mức thu theo năm học/tín chỉ, ghi chú miễn giảm áp dụng cho mức thu. KHÔNG phải: học bổng, lệ phí xét tuyển.
   - Tuyển sinh: mã ngành, tổ hợp xét tuyển, phương thức xét tuyển, chỉ tiêu, hồ sơ. KHÔNG phải: chương trình đào tạo sau khi nhập học.
   - Địa chỉ/liên hệ: địa chỉ, điện thoại, email, website của cơ sở/phòng ban.
+  - Thủ tục/biểu mẫu theo NGƯỜI THỰC HIỆN: mỗi đơn, thủ tục dành cho một đối tượng (người làm đơn là sinh viên, giảng viên hay đơn vị). Đơn của sinh viên (xin thi bổ sung, phúc khảo, bảo lưu...) KHÔNG trả lời câu hỏi về thủ tục của giảng viên/cán bộ (bổ sung, điều chỉnh, xóa cột điểm...) và ngược lại; trùng chữ ("bổ sung", "điều chỉnh", "xác nhận") KHÔNG làm hai thủ tục là một. Câu hỏi không nêu người thực hiện → vẫn giữ được, nhưng ghi người thực hiện của đoạn trong lý do.
   - Hồ sơ/giấy tờ cần nộp cho một thủ tục: dòng "Hồ sơ đính kèm", "Hồ sơ gồm", "Kèm theo" trong MẪU ĐƠN của đúng thủ tục đó LÀ câu trả lời (VD hỏi giấy tờ xin chuyển ngành → "Đơn xin chuyển ngành" có dòng "Hồ sơ đính kèm gồm: ..."). Mẫu đơn phần lớn là dòng chấm (……) để điền tay vẫn là văn bản chính thức: KHÔNG loại chỉ vì nhiều chỗ trống. Mẫu đơn của thủ tục KHÁC (VD đơn xét học bổng khi hỏi chuyển ngành) thì không giữ.
+
+  ## Lý do phủ định = KHÔNG giữ
+  Object của `SQk` CHỈ liệt kê đoạn được giữ. Lý do bạn định viết mà nói đoạn KHÔNG chứa thông tin cần, hoặc không dùng được cho câu hỏi đó ("không có dòng học phí", "không dùng cho SQ1", "chỉ cùng ngành", "thuộc Khối Kinh tế trong khi hỏi ngành Công nghệ") → BỎ đoạn khỏi object, KHÔNG ghi nó kèm lý do đó.
+  VD câu hỏi "học phí ngành Công nghệ thông tin 2 năm đầu": đoạn "Kế hoạch đào tạo ngành Công nghệ thông tin" (danh sách học phần theo học kỳ) chỉ cùng ngành, không có mức thu → KHÔNG đưa vào. Đoạn biểu học phí chỉ có dòng Khối Kinh tế → KHÔNG đưa vào.
+  SAI: {"SQ1": {"C3": "kế hoạch đào tạo CNTT, không có dòng học phí nhưng được giữ", "C5": "Khối Kinh tế, không dùng cho SQ1"}}
+  ĐÚNG: {"SQ1": {}}
 
   ## Output
   CHỈ trả về đúng một object JSON, không giải thích ngoài JSON, không markdown code fence. Mỗi câu hỏi con đúng một khóa `SQk`; giá trị là object `{"Cn": "lý do cụ thể"}` cho các đoạn được giữ, `{}` nếu không đoạn nào trả lời được.
+  Lý do NGẮN, TỐI ĐA 15 TỪ: chỉ nêu đúng thông tin trong đoạn trả lời câu hỏi (kèm phạm vi/khóa/cơ sở/người thực hiện khi quy tắc trên yêu cầu ghi). KHÔNG nhắc lại câu hỏi, tên tài liệu hay mục; KHÔNG giải thích vì sao liên quan. Mỗi từ thừa làm chậm câu trả lời cho người dùng.
   VD với 2 câu hỏi con (SQ1 chương trình khung ngành CNTT, SQ2 học phí đại học chính quy) và 4 đoạn:
   {"SQ1": {}, "SQ2": {"C2": "có dòng học phí Đại học chính quy khóa 2025-2026 Khối Công nghệ", "C4": "ghi chú hỗ trợ học phí áp dụng cho đại học chính quy"}}

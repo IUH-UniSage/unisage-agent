@@ -1,0 +1,64 @@
+version: '3'
+
+vars:
+  # Which evaluation set: demo (106 documents, default) or official (every `selected` document).
+  # `task eval:ingest set=official env=eval`
+  SET: '{{.set | default "demo"}}'
+  # Folder holding manifest.csv (the gateway repo's dataset/official). Priority:
+  # `task ... dataset=<path>` > EVAL_DATASET_DIR in .env.<env>/.env (paste a full path, Windows
+  # backslashes are fine) > first of ../unisage-gateway or ../api-gateway that exists.
+  DATASET_GUESS:
+    sh: 'for d in ../unisage-gateway ../api-gateway; do if [ -f "$d/dataset/official/manifest.csv" ]; then echo "$d/dataset/official"; exit 0; fi; done; echo ../unisage-gateway/dataset/official'
+  # Shell prelude shared by the tasks: resolves $dataset and $only (the demo list, or none).
+  RESOLVE: |
+    dataset="{{.dataset}}"; dataset="${dataset:-${EVAL_DATASET_DIR:-{{.DATASET_GUESS}}}}"
+    case "{{.SET}}" in
+      demo) only="--only=$dataset/../demo/demo_manifest.csv" ;;
+      official) only="" ;;
+      *) echo "set must be demo or official, got '{{.SET}}'"; exit 1 ;;
+    esac
+    echo "set: {{.SET}}  dataset: $dataset"
+
+tasks:
+  ingest:
+    desc: "Nạp tài liệu qua luồng upload thật; set=demo|official (mặc định demo). Vd task eval:ingest env=eval -- --limit 1"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - |
+        {{.RESOLVE}}
+        {{.UV_RUN}} evals.dataset.ingest --dataset "$dataset" $only {{.CLI_ARGS}}
+
+  link:
+    desc: "Sau khi ingest tay trên web: ghép tài liệu theo tiêu đề, ghi document_id/ingest_status vào manifest; set=demo|official"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - |
+        {{.RESOLVE}}
+        {{.UV_RUN}} evals.dataset.ingest --dataset "$dataset" $only --link {{.CLI_ARGS}}
+
+  ingest:demo:
+    desc: "(cũ) = task eval:ingest set=demo"
+    cmds:
+      - task: ingest
+        vars: { set: demo, env: '{{.env}}', dataset: '{{.dataset}}', CLI_ARGS: '{{.CLI_ARGS}}' }
+
+  qdrant:titles:
+    desc: "Đặt tên citation (object_key = <tiêu đề>.pdf) cho chunk đã có trong Qdrant, không ingest lại; set=demo|official (thêm -- --dry-run)"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - |
+        {{.RESOLVE}}
+        {{.UV_RUN}} evals.dataset.qdrant_titles --dataset "$dataset" $only {{.CLI_ARGS}}
+
+  run:
+    desc: "Chạy bộ câu hỏi qua graph (in-process) và chấm phần không cần LLM; set=demo|official. Vd task eval:run env=eval -- --limit 20 --variant both"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - |
+        {{.RESOLVE}}
+        {{.UV_RUN}} evals.run --dataset "$dataset" --set "{{.SET}}" {{.CLI_ARGS}}
+
+  judge:
+    desc: "Chấm RAGAS các lượt đã chạy (môi trường riêng, key GEMINI_API_KEYS trong .env.eval). Vd task eval:judge -- --out runs/<run> --limit 20 (thêm --dry-run để chỉ ước tính chi phí)"
+    cmds:
+      - uv run --isolated --no-project --with-requirements evals/judge/requirements.txt python -m evals.judge --env-file .env.eval {{.CLI_ARGS}}

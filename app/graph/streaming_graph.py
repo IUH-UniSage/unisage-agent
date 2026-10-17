@@ -14,8 +14,11 @@ mocks.
 """
 
 import asyncio
+import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
+from typing import Any
 
 from pydantic import JsonValue
 from pydantic_ai.models import Model
@@ -24,13 +27,20 @@ from app.calculation.formulas import FORMULAS
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
+from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
+from app.graph.address import address_for
 from app.graph.calculation_turn import (
+    REVIEW_ISSUE_KEY,
     CalculationTask,
+    Review,
     calculation_titles,
-    commentary,
+    known_fields,
     needs_input_parts,
+    number_citations,
+    redo_with_llm,
     render_outcomes,
+    review,
     trace_items,
 )
 from app.graph.clarification_round import (
@@ -38,6 +48,16 @@ from app.graph.clarification_round import (
     advisory_questions,
     advisory_task,
     build_round,
+)
+from app.graph.metadata_fields import (
+    Scope,
+    apply_updates,
+    canonical_field,
+    concept,
+    field_scope,
+    normalize_value,
+    registered_name,
+    update_notice,
 )
 from app.graph.nodes.calculation import (
     CalculationDeps,
@@ -48,9 +68,13 @@ from app.graph.nodes.calculation import (
     run_calculation_task,
 )
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
-from app.graph.nodes.greeting import GREETING_TEMPLATE, detect_greeting
+from app.graph.nodes.greeting import detect_greeting, greeting_for
 from app.graph.nodes.intent_routing import plan_route
-from app.graph.nodes.llm_rerank import build_llm_rerank_agent, llm_rerank
+from app.graph.nodes.llm_rerank import (
+    LLM_RERANK_SKIPPED,
+    build_llm_rerank_agent,
+    llm_rerank,
+)
 from app.graph.nodes.message_classification import (
     build_classification_agent,
     classify_intent,
@@ -59,15 +83,22 @@ from app.graph.nodes.message_classification import (
 from app.graph.nodes.off_topic import off_topic_reply
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
 from app.graph.nodes.query_transformation import (
+    SubQuery,
     build_decomposer_agent,
     build_query_transformation_agent,
     extract_standalone_question,
     transform_tasks,
 )
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
-from app.graph.nodes.social_chat import social_chat_reply
+from app.graph.nodes.social_chat import build_social_chat_agent, run_social_chat
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
-from app.graph.nodes.web_search import search_web
+from app.graph.nodes.web_judge import WebJudgement, build_web_judge_agent, judge_web_results
+from app.graph.nodes.web_search import (
+    WebSearchOutcome,
+    WebSearchRequest,
+    search_web,
+    select_without_judge,
+)
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
 from app.graph.streaming_state import (
     AdminWarning,
@@ -76,16 +107,37 @@ from app.graph.streaming_state import (
     GraphOutput,
     ResumeInput,
 )
-from app.rag.prompting.citations import build_citations
+from app.rag.prompting.citations import (
+    build_citations,
+    build_context_trace,
+    keep_known_links,
+    source_links_block,
+    strip_source_list,
+)
+from app.rag.web_query import build_web_query, is_postgraduate
 from app.schemas.clarification import LastCalculation, PendingCalculationTask, PendingRound
-from app.schemas.intent import ClassifiedTask, RoutingMode
-from app.schemas.web_search import WebSearchResult
+from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
+from app.schemas.web_search import WebSearchResult, WebSlots
+
+logger = logging.getLogger(__name__)
 
 # Prefixes of the AI-admin warnings (`event: warning`) this module raises.
-_LLM_RERANK_SKIPPED = "Bỏ qua bước lọc độ liên quan của tài liệu (mô hình Extraction): "
 _WEB_SEARCH_FAILED = (
     "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
 )
+_WEB_JUDGE_SKIPPED = (
+    "Bỏ qua bước chấm trang web (mô hình Rerank/Extraction), trang web được giữ theo điểm Tavily: "
+)
+_WEB_SOURCE_USED = (
+    "Lượt này dùng trang trên website Trường vì kho văn bản không có; cân nhắc nạp các văn "
+    "bản này vào kho: "
+)
+
+# Speculative web searches a turn turned out not to need keep running so their results
+# land in the cache for the next turn, and a web judge started alongside rerank keeps
+# running if the turn ends before it is awaited; held here so they are not
+# garbage-collected, and a failure is logged rather than lost.
+_background_searches: set[asyncio.Task[Any]] = set()
 
 
 def _make_failover_applier(models: GraphModels) -> FailoverCallback:
@@ -107,6 +159,11 @@ def _make_failover_applier(models: GraphModels) -> FailoverCallback:
     return _apply
 
 
+# Saves the student's profile the moment the turn changes it (the graph never calls
+# the database itself), so a correction is kept even if the rest of the turn fails.
+ProfileSaver = Callable[[dict[str, str]], Awaitable[None]]
+
+
 async def run_graph(
     graph_input: GraphInput,
     models: GraphModels,
@@ -114,13 +171,20 @@ async def run_graph(
     trace: GraphTrace,
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None = None,
+    on_profile_change: ProfileSaver | None = None,
 ) -> GraphOutput:
     # Bound for the whole run so a failover deep inside an LLM helper can log which
     # model/credential the node moved to (see `GraphTrace.model_switch`).
     token = bind_trace(trace)
     try:
         return await _run_graph(
-            graph_input, models, token_sink, trace, usage_recorder, budget=budget
+            graph_input,
+            models,
+            token_sink,
+            trace,
+            usage_recorder,
+            budget=budget,
+            on_profile_change=on_profile_change,
         )
     finally:
         unbind_trace(token)
@@ -133,6 +197,7 @@ async def _run_graph(
     trace: GraphTrace,
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None = None,
+    on_profile_change: ProfileSaver | None = None,
 ) -> GraphOutput:
     # A panel-submit turn resumes the claimed round - never a greeting or a new question.
     if graph_input.resume is not None:
@@ -143,9 +208,10 @@ async def _run_graph(
     # GreetingDetectionNode: fast path, no LLM.
     trace.node("01_GreetingDetectionNode")
     if detect_greeting(graph_input.user_message, first_turn=graph_input.is_first_turn):
-        await token_sink(GREETING_TEMPLATE)
+        greeting = greeting_for(graph_input.security)
+        await token_sink(greeting)
         return GraphOutput(
-            response_text=GREETING_TEMPLATE,
+            response_text=greeting,
             confirmed_metadata=graph_input.confirmed_metadata,
         )
 
@@ -170,17 +236,73 @@ async def _run_graph(
         on_attempt=usage_recorder.bind("MessageClassificationNode"),
         budget=budget,
         previous_calculation=calculation_title(graph_input.last_calculation),
+        profile=confirmed_metadata,
+        role=graph_input.security.role,
+        departments=[entry.department_id for entry in graph_input.security.department_access],
     )
     trace.prompt("03_MessageClassificationNode", describe_classification(classification))
+
+    # A correction of the profile applies at once: saved now, used by every later step.
+    confirmed_metadata, changed = apply_updates(
+        confirmed_metadata, classification.metadata_updates, now_ict().date()
+    )
+    notice = ""
+    if changed:
+        logger.info("profile.updated fields=%s", sorted(changed))
+        if on_profile_change is not None:
+            await on_profile_change(dict(confirmed_metadata))
+        notice = f"{update_notice(changed, address_for(graph_input.security))}\n\n"
+        await token_sink(notice)
+    output = await _classified_turn(
+        graph_input,
+        models,
+        token_sink,
+        trace,
+        usage_recorder,
+        budget,
+        classification=classification,
+        confirmed_metadata=confirmed_metadata,
+    )
+    return replace(output, response_text=notice + output.response_text) if notice else output
+
+
+async def _classified_turn(
+    graph_input: GraphInput,
+    models: GraphModels,
+    token_sink: TokenSink,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    budget: BudgetContext | None,
+    *,
+    classification: IntentClassification,
+    confirmed_metadata: dict[str, str],
+) -> GraphOutput:
 
     # IntentRoutingNode (deterministic).
     trace.node("04_IntentRoutingNode")
     route_plan = plan_route(classification)
 
     if route_plan.end == "SOCIAL_CHAT":
-        trace.node("04_IntentRouting_SocialChat")
-        social_text = social_chat_reply(graph_input.user_message)
-        await token_sink(social_text)
+        # SocialChatNode (streaming).
+        social_agent = build_social_chat_agent(models.generation)
+        trace.node(
+            "04_IntentRouting_SocialChat",
+            agent=social_agent,
+            credential=models.generation_credential,
+        )
+        social_text = await run_social_chat(
+            social_agent,
+            graph_input.user_message,
+            security=graph_input.security,
+            confirmed_metadata=confirmed_metadata,
+            token_sink=token_sink,
+            purpose="CHAT",
+            credential=models.generation_credential,
+            snapshot_version=models.snapshot_version,
+            on_failover=_make_failover_applier(models),
+            on_attempt=usage_recorder.bind("SocialChatNode"),
+            budget=budget,
+        )
         return GraphOutput(
             response_text=social_text,
             confirmed_metadata=confirmed_metadata,
@@ -206,7 +328,9 @@ async def _run_graph(
         CalculationTask(task_id=f"T{index}", query=task.query)
         for index, task in enumerate(route_plan.calculation_tasks, start=1)
     ]
-    deps = _calculation_deps(graph_input, models, usage_recorder, budget)
+    deps = _calculation_deps(
+        graph_input, models, usage_recorder, budget, trace, confirmed_metadata=confirmed_metadata
+    )
     advisory: AdvisoryPart | None = None
     if route_plan.advisory_tasks:
         advisory = AdvisoryPart(
@@ -241,24 +365,46 @@ async def _run_resume(
     budget: BudgetContext | None,
 ) -> GraphOutput:
     """A panel-submit turn: run only the tasks the panel was asked for, with the
-    answers already validated against the stored panel. Advisory answers become
-    confirmed_metadata and the original question is re-answered; calculation answers
-    complete the stored parameters - no extractor call, no retrieval."""
+    answers already validated against the stored panel. Every answer goes under its
+    registry name; one for a profile field (or an advisory field the registry does not
+    know) also goes into the profile, normalised. Calculation answers complete the
+    stored parameters - no extractor call, no retrieval - and the original advisory
+    question is re-answered."""
 
     trace.node("02_ClarificationResume")
     pending = resume.pending_round
     confirmed_metadata = dict(graph_input.confirmed_metadata)
     answers_by_task: dict[str, dict[str, JsonValue]] = {}
+    # Answers about someone else: part of the re-answered question, never the profile.
+    case_answers: list[str] = []
+    today = now_ict().date()
     for answer in resume.answers.values():
         question = answer.question
-        answers_by_task.setdefault(question.task_id, {})[question.field] = answer.value
-        if question.origin == "advisory" and isinstance(answer.value, str):
-            confirmed_metadata[question.field] = answer.value
+        name = canonical_field(question.field)
+        # A calculation's choice goes on as its label: the LLM never saw the "o1".."o12"
+        # ids the panel gave its options, so an id alone would make it ask again.
+        value = (
+            answer.display
+            if question.origin == "calculation" and question.kind == "choice"
+            else answer.value
+        )
+        answers_by_task.setdefault(question.task_id, {})[name] = value
+        if question.origin == "advisory" and question.about == "other":
+            case_answers.append(f"{concept(name)}: {answer.display}")
+            continue
+        default_scope: Scope = "profile" if question.origin == "advisory" else "calculation"
+        if field_scope(name, default_scope) == "profile":
+            # The intake is kept as a year: "kỳ 9" would be wrong next term.
+            normalized = normalize_value(name, value, today)
+            if normalized is not None:
+                confirmed_metadata[name] = normalized
 
     outcomes: list[TaskOutcome] = []
     queries: dict[str, str] = {}
     advisory: AdvisoryPart | None = None
-    deps = _calculation_deps(graph_input, models, usage_recorder, budget)
+    deps = _calculation_deps(
+        graph_input, models, usage_recorder, budget, trace, confirmed_metadata=confirmed_metadata
+    )
     for task in pending.tasks:
         if isinstance(task, PendingCalculationTask):
             queries[task.task_id] = task.query
@@ -276,7 +422,7 @@ async def _run_resume(
             advisory = AdvisoryPart(
                 task_id=task.task_id,
                 tasks=[(origin, origin.routing_mode or "SINGLE") for origin in task.origin_tasks],
-                question=pending.original_query,
+                question=_with_case_answers(pending.original_query, case_answers),
             )
 
     return await _turn_with_calculations(
@@ -296,6 +442,18 @@ async def _run_resume(
     )
 
 
+def _with_case_answers(question: str, case_answers: Sequence[str]) -> str:
+    """The question with what the user just answered about the person it asks about -
+    their attributes belong to this question, not to `<declared_attributes>`, which
+    holds only the caller's own."""
+
+    if not case_answers:
+        return question
+    return (
+        f"{question}\n(Về trường hợp được hỏi, người dùng vừa cho biết: {'; '.join(case_answers)})"
+    )
+
+
 @dataclass(frozen=True)
 class AdvisoryPart:
     task_id: str
@@ -308,6 +466,9 @@ def _calculation_deps(
     models: GraphModels,
     usage_recorder: UsageRecorder,
     budget: BudgetContext | None,
+    trace: GraphTrace,
+    *,
+    confirmed_metadata: dict[str, str] | None = None,
 ) -> CalculationDeps:
     return CalculationDeps(
         models=models,
@@ -317,6 +478,12 @@ def _calculation_deps(
         budget=budget,
         previous=graph_input.last_calculation,
         history=graph_input.history,
+        recent_calculations=graph_input.recent_calculations,
+        confirmed_metadata=(
+            confirmed_metadata if confirmed_metadata is not None else graph_input.confirmed_metadata
+        ),
+        trace=trace,
+        user_message=graph_input.user_message if graph_input.resume is None else None,
     )
 
 
@@ -330,17 +497,31 @@ def calculation_title(last: LastCalculation | None) -> str | None:
     return FORMULAS[last.plan.formula_id].title if last.plan.formula_id != "llm" else None
 
 
-def _last_calculation(outcomes: Sequence[TaskOutcome]) -> LastCalculation | None:
-    """The turn's last computed calculation: a built-in one with its parameters (forward
-    follow-ups reuse them), an LLM one by name only (its numbers stay in the chat)."""
+def _computed_calculations(outcomes: Sequence[TaskOutcome]) -> list[LastCalculation]:
+    """The turn's computed calculations, each with its own numbers (a follow-up reuses
+    them instead of asking again): a built-in one's parameters, an LLM one's inputs."""
 
-    done = [outcome for outcome in outcomes if isinstance(outcome, Computed | LlmAnswered)]
-    if not done:
-        return None
-    last = done[-1]
-    if isinstance(last, Computed):
-        return LastCalculation(plan=last.plan, params=last.params, title=last.result.title)
-    return LastCalculation(plan=last.plan, title=last.query[:200])
+    calculations: list[LastCalculation] = []
+    for outcome in outcomes:
+        if isinstance(outcome, Computed):
+            calculations.append(
+                LastCalculation(
+                    plan=outcome.plan, params=outcome.params, title=outcome.result.title
+                )
+            )
+        elif isinstance(outcome, LlmAnswered):
+            calculations.append(
+                LastCalculation(
+                    plan=outcome.plan,
+                    params={
+                        registered_name(name): value
+                        for name, value in outcome.known_params.items()
+                        if name != REVIEW_ISSUE_KEY
+                    },
+                    title=outcome.query[:200],
+                )
+            )
+    return calculations
 
 
 def _start_calculations(
@@ -387,20 +568,31 @@ async def _turn_with_calculations(
     previous_round: PendingRound | None,
 ) -> GraphOutput:
     """Stream order: calculation blocks (Python) → advisory answer (node 10, which only
-    starts after the blocks were sent) or, for a calculation-only turn, the checked
-    note → one panel for everything still missing."""
+    starts after the blocks were sent) → one panel for everything still missing. A
+    calculation-only turn instead opens with the checked review, so its blocks wait for
+    that call; a built-in result that does not answer what was asked is redone by the
+    LLM, or - LLM path off or failing - shown under "Lưu ý"."""
 
     outcomes: list[TaskOutcome] = []
     shown: list[str] = []
+    calculation_citations: list[dict[str, Any]] = []
+    checked: Review | None = None
+    redone: dict[str, str] = {}
 
-    async def show_calculations() -> list[str]:
-        if calculations is not None:
-            outcomes.extend(await calculations)
-        text = render_outcomes(outcomes)
+    def collect(done: Sequence[TaskOutcome], first_citation: int) -> None:
+        numbered, cited = number_citations(done, first_citation)
+        outcomes.extend(numbered)
+        calculation_citations.extend(cited)
+
+    async def emit(text: str) -> None:
         if text:
-            text += "\n\n" if advisory is not None else ""
             shown.append(text)
             await token_sink(text)
+
+    async def show_calculations(first_citation: int = 1) -> list[str]:
+        collect(await calculations if calculations is not None else [], first_citation)
+        text = render_outcomes(outcomes)
+        await emit(f"{text}\n\n" if text else "")
         return calculation_titles(outcomes)
 
     try:
@@ -417,29 +609,47 @@ async def _turn_with_calculations(
                 budget=budget,
                 before_generation=show_calculations,
             )
-            output = replace(output, response_text="".join(shown) + output.response_text)
+            output = replace(
+                output,
+                response_text="".join(shown) + output.response_text,
+                citations=output.citations + calculation_citations,
+            )
         else:
-            await show_calculations()
-            text = "".join(shown)
-            results = [o.result for o in outcomes if isinstance(o, Computed)]
-            if results:
-                note = await commentary(results, graph_input.user_message, deps)
-                if note:
-                    note = f"\n\n{note}"
-                    await token_sink(note)
-                    text += note
-            output = GraphOutput(response_text=text, confirmed_metadata=confirmed_metadata)
+            done = await calculations if calculations is not None else []
+            computed = [o for o in done if isinstance(o, Computed) and not o.chosen_by_llm]
+            checked = await review(computed, original_query, deps)
+            if checked is not None:
+                done, redone = await redo_with_llm(done, queries, checked, deps)
+            collect(done, 1)
+            lead = checked.lead() if checked is not None and not redone else ""
+            await emit("\n\n".join(text for text in (lead, render_outcomes(outcomes)) if text))
+            output = GraphOutput(
+                response_text="".join(shown),
+                confirmed_metadata=confirmed_metadata,
+                citations=calculation_citations,
+            )
     finally:
         if calculations is not None and not calculations.done():
             calculations.cancel()
 
+    if deps.warnings:
+        known = {warning.code for warning in output.admin_warnings}
+        output = replace(
+            output,
+            admin_warnings=[
+                *output.admin_warnings,
+                *(warning for warning in deps.warnings if warning.code not in known),
+            ],
+        )
     parts = needs_input_parts(outcomes, queries)
     if advisory is not None:
         parts.append(
             TaskQuestions(
                 task=advisory_task(advisory.task_id, [task for task, _mode in advisory.tasks]),
                 questions=advisory_questions(
-                    output.ask_forms, confirmed_metadata=output.confirmed_metadata
+                    output.ask_forms,
+                    confirmed_metadata=output.confirmed_metadata,
+                    known_fields=known_fields(outcomes),
                 ),
             )
         )
@@ -456,12 +666,14 @@ async def _turn_with_calculations(
             queries=queries,
             run_id=budget.request_id if budget is not None else usage_recorder.request_id,
             deps=deps,
+            review=checked,
+            redone=redone,
         )
         output = replace(
             output,
             calculation_items=public,
             calculation_traces=private,
-            last_calculation=_last_calculation(outcomes),
+            calculations=_computed_calculations(outcomes),
         )
     return output
 
@@ -478,6 +690,302 @@ def _with_follow_up_round(
     return replace(output, pending_round=follow_up)
 
 
+@dataclass(frozen=True)
+class _WebGroup:
+    """One web search and whom it is for: all of a task's sub-queries (`sub_index` None)
+    or the one MULTI sub-query the classifier wrote its own slots for."""
+
+    request: WebSearchRequest
+    task_index: int
+    sub_index: int | None
+    # A fast-changing topic: searched from the start of the advisory branch.
+    dynamic: bool
+
+
+def _web_groups(advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]]) -> list[_WebGroup]:
+    """A MULTI task's sub-queries are searched one by one when the classifier wrote slots
+    for each (one keyword query for "học phí ... và lịch thi chứng chỉ" found only fee
+    pages, 14-10-2026); any other task by its own slots, once."""
+
+    speculative = set(settings.CHAT_WEB_SEARCH_SPECULATIVE_TOPICS)
+    groups: list[_WebGroup] = []
+    for task_index, (task, _mode) in enumerate(advisory_tasks):
+        if task.sub_query_web and task.sub_queries:
+            for sub_index, (question, slots) in enumerate(
+                zip(task.sub_queries, task.sub_query_web, strict=False)
+            ):
+                groups.append(
+                    _WebGroup(
+                        _web_request(slots, question),
+                        task_index,
+                        sub_index,
+                        dynamic=slots is not None and bool(set(slots.topics) & speculative),
+                    )
+                )
+        elif task.web is not None:
+            groups.append(
+                _WebGroup(
+                    _web_request(task.web, task.query),
+                    task_index,
+                    None,
+                    dynamic=bool(set(task.web.topics) & speculative),
+                )
+            )
+    return groups
+
+
+def _web_request(slots: WebSlots | None, question: str) -> WebSearchRequest:
+    """By the slots' keyword query; without slots, by the question itself."""
+
+    if slots is None:
+        return WebSearchRequest(query=question, postgraduate=is_postgraduate(question))
+    return WebSearchRequest(
+        query=build_web_query(slots),
+        topic=slots.topics[0],
+        co_so=slots.co_so,
+        postgraduate=is_postgraduate(f"{slots.bac_dao_tao or ''} {slots.subject} {question}"),
+    )
+
+
+def _group_questions(
+    groups: Sequence[_WebGroup],
+    sub_queries: Sequence[SubQuery],
+    advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
+) -> list[list[int]]:
+    """Per group, the indexes of the sub-queries (after query transformation) it serves.
+    When transformation did not keep the classifier's sub-queries, a per-sub-query group
+    serves the whole task."""
+
+    served: list[list[int]] = []
+    for group in groups:
+        indexes = [i for i, sub in enumerate(sub_queries) if sub.task_index == group.task_index]
+        task = advisory_tasks[group.task_index][0]
+        if group.sub_index is not None and len(indexes) == len(task.sub_query_web or ()):
+            indexes = [indexes[group.sub_index]]
+        served.append(indexes)
+    return served
+
+
+def _start_speculative_search(
+    groups: Sequence[_WebGroup],
+) -> tuple[asyncio.Task[WebSearchOutcome], list[int]] | None:
+    """The fast-changing topics' searches, started now; with the positions (in `groups`)
+    of the groups searched, in request order."""
+
+    if not settings.CHAT_WEB_SEARCH_ENABLED or settings.CHAT_WEB_SEARCH_MODE != "speculative":
+        return None
+    dynamic = [position for position, group in enumerate(groups) if group.dynamic]
+    if not dynamic:
+        return None
+    task = asyncio.create_task(search_web([groups[position].request for position in dynamic]))
+    return task, dynamic
+
+
+def _page_reference(page: WebSearchResult) -> str:
+    return f"{page.url} (năm học {page.academic_year})" if page.academic_year else page.url
+
+
+def _finish_in_background(task: asyncio.Task[Any]) -> None:
+    _background_searches.add(task)
+    task.add_done_callback(_discard_background_search)
+
+
+def _discard_background_search(task: asyncio.Task[Any]) -> None:
+    _background_searches.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("Background web search failed", exc_info=task.exception())
+
+
+async def _judge_web_results(
+    models: GraphModels,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    questions: Sequence[str],
+    candidates: Sequence[WebSearchResult],
+    *,
+    budget: BudgetContext | None,
+    alongside: str | None = None,
+) -> WebJudgement:
+    """`alongside`: the node this judge runs next to - it is then logged as a step of
+    it, neither ending that node's timing nor sending a status."""
+
+    if not candidates:
+        return WebJudgement(answers=[])
+    if models.rerank is None:
+        return WebJudgement(
+            answers=select_without_judge(
+                candidates, limit=settings.CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB * len(questions)
+            ),
+            failure=models.rerank_unavailable or "chưa cấu hình mô hình Rerank/Extraction.",
+        )
+    agent = build_web_judge_agent(models.rerank)
+    if alongside is None:
+        trace.node("09c_WebJudgeNode", agent=agent, credential=models.rerank_credential)
+    else:
+        trace.step(
+            "09c_WebJudgeNode",
+            parent=alongside,
+            agent=agent,
+            credential=models.rerank_credential,
+        )
+    return await judge_web_results(
+        agent,
+        questions,
+        candidates,
+        credential=models.rerank_credential,
+        purpose=models.rerank_purpose,
+        snapshot_version=models.snapshot_version,
+        on_attempt=usage_recorder.bind("WebJudgeNode"),
+        budget=budget,
+    )
+
+
+# One judge call: the sub-queries (indexes into the turn's questions) and their pages.
+_JudgeJob = tuple[list[int], list[WebSearchResult]]
+
+
+async def _judge_jobs(
+    models: GraphModels,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    questions: Sequence[str],
+    jobs: Sequence[_JudgeJob],
+    *,
+    budget: BudgetContext | None,
+    alongside: str,
+) -> list[tuple[list[int], WebJudgement]]:
+    """Each search's pages judged for the sub-queries it was for, all calls at once: a
+    sub-query is judged on its own pages, so its at most ANSWERS_PER_SUB pages are the
+    judge's pick among them."""
+
+    judged = await asyncio.gather(
+        *(
+            _judge_web_results(
+                models,
+                trace,
+                usage_recorder,
+                [questions[index] for index in indexes],
+                pages,
+                budget=budget,
+                alongside=alongside,
+            )
+            for indexes, pages in jobs
+        )
+    )
+    return [(indexes, judgement) for (indexes, _pages), judgement in zip(jobs, judged, strict=True)]
+
+
+def _merge_judgements(judged: Sequence[tuple[list[int], WebJudgement]]) -> WebJudgement:
+    """Answers in sub-query order without repeating a page; sources after them, capped."""
+
+    answers: list[WebSearchResult] = []
+    sources: list[WebSearchResult] = []
+    seen: set[str] = set()
+    for _indexes, judgement in judged:
+        for page in judgement.answers:
+            if page.url not in seen:
+                answers.append(page)
+                seen.add(page.url)
+    for _indexes, judgement in judged:
+        for page in judgement.sources:
+            if page.url not in seen:
+                sources.append(page)
+                seen.add(page.url)
+    return WebJudgement(
+        answers=answers,
+        sources=sources[: settings.CHAT_WEB_SEARCH_MAX_SOURCES],
+        failure=next((j.failure for _i, j in judged if j.failure is not None), None),
+    )
+
+
+@dataclass(frozen=True)
+class _JudgedSearch:
+    outcome: WebSearchOutcome
+    judged: list[tuple[list[int], WebJudgement]]
+
+
+async def _search_then_judge(
+    models: GraphModels,
+    trace: GraphTrace,
+    usage_recorder: UsageRecorder,
+    questions: Sequence[str],
+    search: asyncio.Task[WebSearchOutcome],
+    served: Sequence[list[int]],
+    *,
+    budget: BudgetContext | None,
+) -> _JudgedSearch:
+    """The speculative searches' pages judged for every sub-query they were for, while
+    retrieval and rerank run: needs only the questions and the pages, not the chunks.
+    `served[k]`: the sub-queries of the k-th searched request."""
+
+    outcome = await search
+    jobs = [
+        (indexes, pages)
+        for indexes, pages in zip(served, outcome.per_request, strict=False)
+        if indexes and pages
+    ]
+    judged = await _judge_jobs(
+        models,
+        trace,
+        usage_recorder,
+        questions,
+        jobs,
+        budget=budget,
+        alongside="08_RetrievalFilteringNode",
+    )
+    return _JudgedSearch(outcome=outcome, judged=judged)
+
+
+async def _search_for_failed(
+    groups: Sequence[_WebGroup],
+    served: Sequence[list[int]],
+    failed: set[int],
+    questions: Sequence[str],
+    speculative: tuple[asyncio.Task[WebSearchOutcome], list[int]] | None,
+) -> tuple[list[_JudgeJob], list[WebSearchOutcome]]:
+    """Pages for the sub-queries left without a chunk: the speculative searches' for those
+    they cover, a search now for the other groups serving one, and a search by the
+    question itself for one no group serves."""
+
+    jobs: list[_JudgeJob] = []
+    outcomes: list[WebSearchOutcome] = []
+    covered: set[int] = set()
+    searched: set[int] = set()
+    if speculative is not None:
+        task, positions = speculative
+        outcome = await task
+        outcomes.append(outcome)
+        searched.update(positions)
+        for position, pages in zip(positions, outcome.per_request, strict=False):
+            covered.update(served[position])
+            indexes = [index for index in served[position] if index in failed]
+            if indexes and pages:
+                jobs.append((indexes, pages))
+    owners: list[list[int]] = []
+    requests: list[WebSearchRequest] = []
+    for position, group in enumerate(groups):
+        indexes = [index for index in served[position] if index in failed]
+        if position in searched or not indexes:
+            continue
+        owners.append(indexes)
+        requests.append(group.request)
+        covered.update(served[position])
+    for index in sorted(failed - covered):
+        owners.append([index])
+        requests.append(
+            WebSearchRequest(query=questions[index], postgraduate=is_postgraduate(questions[index]))
+        )
+    if requests:
+        outcome = await search_web(requests)
+        outcomes.append(outcome)
+        jobs.extend(
+            (indexes, pages)
+            for indexes, pages in zip(owners, outcome.per_request, strict=False)
+            if pages
+        )
+    return jobs, outcomes
+
+
 async def _run_advisory_flow(
     graph_input: GraphInput,
     models: GraphModels,
@@ -489,14 +997,24 @@ async def _run_advisory_flow(
     advisory_tasks: Sequence[tuple[ClassifiedTask, RoutingMode]],
     question: str | None = None,
     budget: BudgetContext | None = None,
-    before_generation: Callable[[], Awaitable[list[str]]] | None = None,
+    # Called with the first citation index the advisory answer leaves free.
+    before_generation: Callable[[int], Awaitable[list[str]]] | None = None,
 ) -> GraphOutput:
     """Advisory branch: query transformation → retrieval → rerank → web search
     for the sub-queries rerank left empty → generation (or ticket fallback
-    when neither found anything). `question` is what gets answered; `None`
-    means the whole user message."""
+    when neither found anything). A task on a fast-changing topic (speculative
+    search) has its pages judged for every sub-query alongside retrieval and
+    rerank instead (`CHAT_WEB_JUDGE_WITH_CHUNKS`), and generation gets them next
+    to the chunks. `question` is what gets answered; `None` means the whole user
+    message."""
 
     question = question or graph_input.user_message
+
+    # WebSearchNode, early: a task about something posted on the website first (fees,
+    # admission, notices, contacts) starts its search now, alongside query transformation,
+    # retrieval and rerank.
+    web_groups = _web_groups(advisory_tasks)
+    speculative = _start_speculative_search(web_groups)
 
     # QueryTransformationNode: HyDE per SINGLE task, decomposer per MULTI task.
     query_transformation_agent = build_query_transformation_agent(models.query_transformation)
@@ -522,6 +1040,27 @@ async def _run_advisory_flow(
     )
     for sub_query in sub_queries:
         trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
+    # The standalone question of each sub-query (HyDE's rewrite, or the decomposed
+    # question itself) - what the LLM rerank and the web judge judge against.
+    questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]
+    served = _group_questions(web_groups, sub_queries, advisory_tasks)
+    judged_search = (
+        asyncio.create_task(
+            _search_then_judge(
+                models,
+                trace,
+                usage_recorder,
+                questions,
+                speculative[0],
+                [served[position] for position in speculative[1]],
+                budget=budget,
+            )
+        )
+        if speculative is not None and settings.CHAT_WEB_JUDGE_WITH_CHUNKS
+        else None
+    )
+    if judged_search is not None:
+        _finish_in_background(judged_search)
     # The standalone rewrite only applies to a single HyDE question.
     resolved_query = (
         extract_standalone_question(sub_queries[0].retrieval_text)
@@ -540,9 +1079,6 @@ async def _run_advisory_flow(
     # PostRetrievalRerankNode (per sub-query, then merged).
     trace.node("09_PostRetrievalRerankNode")
     rerank_result = rerank_chunks(per_query_chunks)
-    # The standalone question of each sub-query (HyDE's rewrite, or the decomposed
-    # question itself) - what the LLM rerank judges against and what web search looks up.
-    questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]
     admin_warnings: list[AdminWarning] = []
 
     # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
@@ -565,36 +1101,113 @@ async def _run_advisory_flow(
                 admin_warnings.append(
                     AdminWarning(
                         code="LLM_RERANK_FAILED",
-                        message=f"{_LLM_RERANK_SKIPPED}{llm_rerank_outcome.failure}",
+                        message=f"{LLM_RERANK_SKIPPED}{llm_rerank_outcome.failure}",
                     )
                 )
         elif models.rerank_unavailable is not None:
             admin_warnings.append(
                 AdminWarning(
                     code="LLM_RERANK_UNAVAILABLE",
-                    message=f"{_LLM_RERANK_SKIPPED}{models.rerank_unavailable}",
+                    message=f"{LLM_RERANK_SKIPPED}{models.rerank_unavailable}",
                 )
             )
 
-    # WebSearchNode: only the sub-queries left with no chunk.
-    failed_sub_queries = [questions[index] for index in rerank_result.failed_query_indexes]
+    # WebSearchNode + WebJudgeNode: judged alongside rerank for every sub-query (fast-
+    # changing topic), else only for the sub-queries left with no chunk.
+    failed = set(rerank_result.failed_query_indexes)
     web_results: list[WebSearchResult] = []
-    if failed_sub_queries and settings.CHAT_WEB_SEARCH_ENABLED:
+    web_sources: list[WebSearchResult] = []
+    outcomes: list[WebSearchOutcome] = []
+    judged: list[tuple[list[int], WebJudgement]] = []
+    mode = ""
+    if judged_search is not None:
+        waited_at = time.perf_counter()
+        parallel = await judged_search
+        wait_ms = (time.perf_counter() - waited_at) * 1000
+        outcomes = [parallel.outcome]
+        for indexes, verdict in parallel.judged:
+            if verdict.failure is not None and not failed & set(indexes):
+                # Those sub-queries have chunks: no page picked by score alone goes next to
+                # them. Without a RERANK model at all, LLM_RERANK_UNAVAILABLE already says so.
+                verdict = WebJudgement(
+                    answers=[], failure=verdict.failure if models.rerank is not None else None
+                )
+            judged.append((indexes, verdict))
+        mode = f"parallel wait_ms={wait_ms:.0f}"
+    elif failed and settings.CHAT_WEB_SEARCH_ENABLED:
         trace.node("09b_WebSearchNode")
-        web_outcome = await search_web(failed_sub_queries)
-        web_results = web_outcome.results
-        if web_outcome.failure is not None:
+        jobs, outcomes = await _search_for_failed(
+            web_groups, served, failed, questions, speculative
+        )
+        for outcome in outcomes:
+            for result in outcome.results:
+                # The user sees each page the web judge is about to read.
+                trace.web_page(result.url)
+        trace.node("09c_WebJudgeNode")
+        judged = await _judge_jobs(
+            models,
+            trace,
+            usage_recorder,
+            questions,
+            jobs,
+            budget=budget,
+            alongside="09c_WebJudgeNode",
+        )
+        mode = "speculative" if speculative is not None else "fallback"
+    elif speculative is not None:
+        _finish_in_background(speculative[0])
+
+    if outcomes:
+        judgement = _merge_judgements(judged)
+        web_results, web_sources = judgement.answers, judgement.sources
+        if judged_search is not None and (web_results or web_sources):
+            # Judged while rerank ran (no status then, it would interleave with
+            # retrieval's): the user sees the pages the answer uses.
+            trace.node("09b_WebSearchNode")
+            for page in [*web_results, *web_sources]:
+                trace.web_page(page.url)
+        search_failure = next((o.failure for o in outcomes if o.failure is not None), None)
+        if search_failure is not None:
             admin_warnings.append(
                 AdminWarning(
-                    code=web_outcome.failure.code,
-                    message=f"{_WEB_SEARCH_FAILED}{web_outcome.failure}",
+                    code=search_failure.code,
+                    message=f"{_WEB_SEARCH_FAILED}{search_failure}",
                 )
             )
-        for result in web_results:
-            trace.prompt("09b_WebSearchNode", f"{result.score:.2f} {result.url}\n{result.content}")
+        if judgement.failure is not None:
+            admin_warnings.append(
+                AdminWarning(
+                    code="WEB_JUDGE_FAILED", message=f"{_WEB_JUDGE_SKIPPED}{judgement.failure}"
+                )
+            )
+        if web_results or web_sources:
+            admin_warnings.append(
+                AdminWarning(
+                    code="WEB_SOURCE_USED",
+                    message=_WEB_SOURCE_USED
+                    + "; ".join(_page_reference(page) for page in [*web_results, *web_sources]),
+                )
+            )
+        logger.info(
+            "Web search turn: mode=%s topics=%s requests=%d cache_hits=%d candidates=%d "
+            "answers=%d sources=%d sub_queries_with_chunks=%d/%d",
+            mode,
+            [group.request.topic for group in web_groups],
+            sum(len(outcome.per_request) for outcome in outcomes),
+            sum(outcome.cache_hits for outcome in outcomes),
+            sum(len(outcome.results) for outcome in outcomes),
+            len(web_results),
+            len(web_sources),
+            len(questions) - len(failed),
+            len(questions),
+        )
 
     # Barrier: the calculation blocks go out before any advisory token.
-    calculation_titles_shown = await before_generation() if before_generation else []
+    calculation_titles_shown = (
+        await before_generation(len(rerank_result.chunks) + len(web_results) + 1)
+        if before_generation
+        else []
+    )
 
     if not rerank_result.has_valid_context and not web_results:
         # TicketFallbackNode (streaming).
@@ -608,6 +1221,7 @@ async def _run_advisory_flow(
             security=graph_input.security,
             confirmed_metadata=confirmed_metadata,
             history=graph_input.history,
+            web_sources=web_sources,
             token_sink=token_sink,
             purpose="CHAT",
             credential=models.generation_credential,
@@ -616,11 +1230,13 @@ async def _run_advisory_flow(
             on_attempt=usage_recorder.bind("TicketFallbackNode"),
             budget=budget,
         )
+        _, fallback_web = build_context_trace(fallback_text, [], [], web_sources)
         return GraphOutput(
             response_text=fallback_text,
             confirmed_metadata=confirmed_metadata,
             used_ticket_fallback=True,
             admin_warnings=admin_warnings,
+            context_web=fallback_web,
         )
 
     # GenerationSynthesisNode (streaming).
@@ -653,13 +1269,25 @@ async def _run_advisory_flow(
         on_attempt=usage_recorder.bind("GenerationSynthesisNode"),
         budget=budget,
     )
+    response_text = keep_known_links(
+        strip_source_list(generation_result.response_text), [*web_results, *web_sources]
+    )
+    # Official pages the judge kept only as links: listed after the answer, as the
+    # fallback lists them, instead of being lost because another page answered.
+    links = source_links_block(web_sources, response_text)
+    if links:
+        await token_sink(links)
+        response_text += links
+    context_chunks, context_web = build_context_trace(
+        response_text, rerank_result.chunks, web_results, web_sources
+    )
     return GraphOutput(
-        response_text=generation_result.response_text,
+        response_text=response_text,
         confirmed_metadata=confirmed_metadata,
         ask_forms=generation_result.ask_forms,
-        citations=build_citations(
-            generation_result.response_text, rerank_result.chunks, web_results
-        ),
+        citations=build_citations(response_text, rerank_result.chunks, web_results),
+        context_chunks=context_chunks,
+        context_web=context_web,
         used_web_search=bool(web_results),
         admin_warnings=admin_warnings,
     )

@@ -7,6 +7,12 @@ template: |
   Câu phản hồi/khẳng định/làm rõ không chứa nội dung hỏi (VD: "thì đúng là thông tin học vụ mà", "ý tôi là...", "sao không trả lời?") nghĩa là người dùng đang hỏi lại câu hỏi gần nhất của chính họ trong lịch sử: viết lại đúng câu hỏi đó, KHÔNG dùng câu phản hồi làm chủ đề. Chỉ lấy câu hỏi của người dùng từ lịch sử; lời từ chối/trả lời của trợ lý KHÔNG phải nguồn nội dung, tuyệt đối không chép hay diễn lại.
   TUYỆT ĐỐI KHÔNG tự bịa hoặc suy diễn một khóa/năm học, bậc/hệ đào tạo, khối/ngành hay cơ sở cụ thể nào nếu câu hỏi hiện tại VÀ lịch sử hội thoại đều không nhắc tới - giữ câu hỏi ở mức chung chung đúng như người dùng đã hỏi, không thêm tiêu chí mà không ai đề cập.
 
+  Người thực hiện thủ tục: đơn, thủ tục dành cho MỘT đối tượng - câu hỏi về thủ tục/hồ sơ ghi rõ người thực hiện theo câu hỏi ("cho sinh viên", "lớp tôi dạy" → giảng viên; "tôi muốn thi lại", "điểm của tôi" → sinh viên); KHÔNG viết "sinh viên hoặc giảng viên".
+  Mốc thời gian tương đối: trạng từ thời gian tương đối → mốc cụ thể theo `<current_time>`: "mới nhất", "gần nhất", "gần đây", "dạo gần đây", "vừa rồi", "vừa qua", "sắp tới", "hiện nay", "hiện tại", "năm nay" → năm hiện tại; "tháng này/trước/sau" → tháng/năm tương ứng; "học kỳ này", "kỳ này", "năm học này" → học kỳ/năm học hiện tại; "năm ngoái/trước" → năm -1, "năm sau/tới" → năm +1. Không có trạng từ như vậy thì KHÔNG tự thêm năm.
+  Hồ sơ người hỏi đã khai (phần "hồ sơ người hỏi đã khai" trong ngoặc sau câu hỏi, nếu có - thuộc tính của CHÍNH người hỏi, mọi vai trò) CHỈ bổ sung tiêu chí mà câu hỏi VÀ lịch sử đều không nêu:
+  - Câu hỏi đã nêu một ngành/khối, khóa/năm học, bậc/hệ hay cơ sở → GIỮ giá trị của câu hỏi, TUYỆT ĐỐI không thay bằng giá trị trong hồ sơ (VD hỏi "học phí ngành điện tử" mà hồ sơ là Công nghệ thông tin → vẫn là ngành điện tử).
+  - Câu hỏi không áp cho chính người hỏi (giảng viên/cán bộ hỏi về một sinh viên, phụ huynh hay bạn bè hỏi giúp, giả định) hoặc nội dung không phụ thuộc thuộc tính của người hỏi (mật khẩu, địa chỉ, liên hệ, quy trình chung) → KHÔNG thêm thông tin hồ sơ.
+
   Bước 2 - Văn bản giả định: viết MỘT câu ngắn (tối đa 30 từ) theo văn phong văn bản hành chính của Nhà trường, nêu thông tin mà câu hỏi đầy đủ ở Bước 1 cần tìm. Chỉ dựa vào câu hỏi ở Bước 1; không xin lỗi, không từ chối, không hướng dẫn người dùng, không nhắc tới trợ lý hay hội thoại.
 
   Ràng buộc từ khóa (quan trọng nhất):

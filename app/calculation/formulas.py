@@ -620,15 +620,160 @@ def gpa(params: Mapping[str, object]) -> CalculationResult:
 
 
 # ---------------------------------------------------------------------------
+# Tuition (học phí theo tín chỉ)
+# ---------------------------------------------------------------------------
+
+TUITION_CREDITS_MAX = 300
+TUITION_PRICE_MAX = Decimal(100_000_000)
+TuitionScope = Literal["tuition_semester", "tuition_year", "tuition_program"]
+TUITION_SCOPES: dict[TuitionScope, str] = {
+    "tuition_semester": "một học kỳ",
+    "tuition_year": "một năm học",
+    "tuition_program": "cả khoá học",
+}
+TUITION_FORMULA_TEXT = (
+    f"Học phí = TC lý thuyết {TIMES} đơn giá 1 TC lý thuyết"
+    f" + TC thực hành {TIMES} đơn giá 1 TC thực hành",
+    "Đơn giá theo khoá tuyển sinh và giữ nguyên suốt khoá học; chỉ khoá mới có đơn giá khác",
+)
+TUITION_WARNINGS = ("Chưa gồm học phần Giáo dục quốc phòng - an ninh (đơn giá riêng), nếu có.",)
+TUITION_PERIOD_MAX = 60
+
+
+def money(value: Decimal) -> str:
+    """Whole đồng with dot thousands: 38350000 -> "38.350.000 đồng"."""
+
+    whole = int(round_half_up(value, 0))
+    return f"{whole:,}".replace(",", ".") + " đồng"
+
+
+_MONEY_TEXT = re.compile(r"(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(đồng|đ|vnđ|vnd)?", re.IGNORECASE)
+
+
+def parse_money(value: object, field: str, errors: list[FieldError]) -> Decimal | None:
+    """An amount in whole đồng. Text must be written out ("980000", "980.000 đ"): a dot
+    or comma is a thousands separator, and "1,6 triệu" is refused rather than misread."""
+
+    if isinstance(value, str):
+        match = _MONEY_TEXT.fullmatch(value.strip())
+        number = Decimal(re.sub(r"\D", "", match.group(1))) if match else None
+    else:
+        number = to_decimal(value)
+    if number is None or number != number.to_integral_value():
+        errors.append(FieldError(field, "số tiền phải là số nguyên (đồng)"))
+        return None
+    if not Decimal(0) <= number <= TUITION_PRICE_MAX:
+        errors.append(FieldError(field, f"số tiền phải từ 0 đến {money(TUITION_PRICE_MAX)}"))
+        return None
+    return number
+
+
+def tuition_period(scope: TuitionScope, params: Mapping[str, object]) -> str:
+    """The period in the student's own words ("2 năm đầu") when the extractor copied
+    one, else the formula's default ("một năm học"). No formula covers "N năm", so the
+    student enters the credits of the whole period and the title has to say so."""
+
+    raw = params.get("pham_vi")
+    if not isinstance(raw, str):
+        return TUITION_SCOPES[scope]
+    # `*` would break the bold title it is rendered into.
+    text = " ".join(raw.replace("*", "").split())[:TUITION_PERIOD_MAX]
+    return text or TUITION_SCOPES[scope]
+
+
+def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], CalculationResult]:
+    def compute(params: Mapping[str, object]) -> CalculationResult:
+        errors: list[FieldError] = []
+        credits: dict[str, int | None] = {}
+        prices: dict[str, Decimal | None] = {}
+        for name in ("tc_lt", "tc_th"):
+            raw = params.get(name)
+            if raw is None:
+                _missing(name, errors)
+                credits[name] = None
+            else:
+                credits[name] = parse_credits(
+                    raw, name, errors, minimum=0, maximum=TUITION_CREDITS_MAX
+                )
+        for name in ("don_gia_lt", "don_gia_th"):
+            raw = params.get(name)
+            if raw is None:
+                _missing(name, errors)
+                prices[name] = None
+            else:
+                prices[name] = parse_money(raw, name, errors)
+        lt, th = credits["tc_lt"], credits["tc_th"]
+        price_lt, price_th = prices["don_gia_lt"], prices["don_gia_th"]
+        if not errors and lt == 0 and th == 0:
+            errors.append(FieldError("tc_lt", "tổng tín chỉ lý thuyết và thực hành phải lớn hơn 0"))
+        if errors or lt is None or th is None or price_lt is None or price_th is None:
+            raise CalculationInputError(errors)
+
+        theory = lt * price_lt
+        practice = th * price_th
+        total = theory + practice
+        title = f"Học phí {tuition_period(scope, params)}"
+        return CalculationResult(
+            formula_id=scope,
+            title=title,
+            formula_text=TUITION_FORMULA_TEXT,
+            inputs=(
+                ("TC lý thuyết", str(lt)),
+                ("TC thực hành", str(th)),
+                ("Đơn giá 1 TC lý thuyết", money(price_lt)),
+                ("Đơn giá 1 TC thực hành", money(price_th)),
+            ),
+            steps=(
+                Step(
+                    label="Học phí lý thuyết",
+                    symbolic=f"TC lý thuyết {TIMES} đơn giá lý thuyết",
+                    substituted=f"{lt} {TIMES} {money(price_lt)} = {money(theory)}",
+                    value=theory,
+                    display=money(theory),
+                ),
+                Step(
+                    label="Học phí thực hành",
+                    symbolic=f"TC thực hành {TIMES} đơn giá thực hành",
+                    substituted=f"{th} {TIMES} {money(price_th)} = {money(practice)}",
+                    value=practice,
+                    display=money(practice),
+                ),
+                Step(
+                    label="Tổng",
+                    symbolic="Học phí lý thuyết + học phí thực hành",
+                    substituted=f"{money(theory)} + {money(practice)} = {money(total)}",
+                    value=total,
+                    display=money(total),
+                ),
+            ),
+            outputs=((title, money(total)),),
+            warnings=TUITION_WARNINGS,
+        )
+
+    return compute
+
+
+# ---------------------------------------------------------------------------
 # Parameters per formula, and dispatch
 # ---------------------------------------------------------------------------
 
-ParamKind = Literal["number", "number_list", "number_or_list", "course_table"]
-FormulaId = Literal["gpa", "course_score", "grade_conversion"]
+ParamKind = Literal["number", "number_list", "number_or_list", "course_table", "text"]
+FormulaId = Literal[
+    "gpa",
+    "course_score",
+    "grade_conversion",
+    "tuition_semester",
+    "tuition_year",
+    "tuition_program",
+]
 
 
 def _always(_: Mapping[str, object]) -> bool:
     return True
+
+
+def _never(_: Mapping[str, object]) -> bool:
+    return False
 
 
 def _unless_zero(credit_field: str) -> Callable[[Mapping[str, object]], bool]:
@@ -654,6 +799,11 @@ class ParamSpec:
     step: Decimal | None = None
     unit: str | None = None
     max_items: int | None = None
+    # What to search the documents for before the student is asked; None = the
+    # student's own value (their scores, the credits they registered).
+    lookup: str | None = None
+    # The label once other params are known (see `label_for`); None = always `label`.
+    label_from: Callable[[Mapping[str, object]], str] | None = None
 
 
 def _score_spec(name: str, label: str, tab_label: str, credit_field: str) -> ParamSpec:
@@ -680,6 +830,82 @@ def _credit_spec(name: str, label: str, tab_label: str) -> ParamSpec:
         step=Decimal(1),
         unit="TC",
     )
+
+
+def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
+    """Theory and practice credits are always two separate questions. Credits of a whole
+    programme come from its curriculum document; those of a semester or a year are the
+    student's own. The unit prices come from the fee schedule. `khoa_nhap_hoc` and
+    `khoi_nganh` are not computed with: they pick the fee schedule row, and are asked
+    only when the documents hold several rows. `pham_vi` is never asked nor computed
+    with: it only names the period in the labels and the title."""
+
+    credit_lookup = (
+        "tổng số tín chỉ lý thuyết, thực hành của chương trình đào tạo"
+        if scope == "tuition_program"
+        else None
+    )
+
+    def credit_label(kind: str) -> Callable[[Mapping[str, object]], str]:
+        return lambda known: f"Số tín chỉ {kind} của {tuition_period(scope, known)}"
+
+    period = TUITION_SCOPES[scope]
+    credits = [
+        ParamSpec(
+            name=name,
+            label=f"Số tín chỉ {kind} của {period}",
+            label_from=credit_label(kind),
+            tab_label=f"TC {kind}",
+            kind="number",
+            min=Decimal(0),
+            max=Decimal(TUITION_CREDITS_MAX),
+            step=Decimal(1),
+            unit="TC",
+            lookup=credit_lookup,
+        )
+        for name, kind in (("tc_lt", "lý thuyết"), ("tc_th", "thực hành"))
+    ]
+    prices = [
+        ParamSpec(
+            name=name,
+            label=f"Đơn giá 1 tín chỉ {kind} (đồng)",
+            tab_label=f"Đơn giá {short_kind}",
+            kind="number",
+            min=Decimal(0),
+            max=TUITION_PRICE_MAX,
+            step=Decimal(1),
+            unit="đồng",
+            lookup="mức thu học phí 01 tín chỉ môn lý thuyết, môn thực hành",
+        )
+        for name, kind, short_kind in (
+            ("don_gia_lt", "lý thuyết", "LT"),
+            ("don_gia_th", "thực hành", "TH"),
+        )
+    ]
+    context = [
+        ParamSpec(
+            name="khoa_nhap_hoc",
+            label="Bạn nhập học năm nào (VD 2025)",
+            tab_label="Năm nhập học",
+            kind="text",
+            required=_never,
+        ),
+        ParamSpec(
+            name="khoi_nganh",
+            label="Ngành của bạn thuộc khối nào (VD Khối Công nghệ)",
+            tab_label="Khối ngành",
+            kind="text",
+            required=_never,
+        ),
+        ParamSpec(
+            name="pham_vi",
+            label="Phạm vi học phí đúng như người dùng nói (VD 2 năm đầu)",
+            tab_label="Phạm vi",
+            kind="text",
+            required=_never,
+        ),
+    ]
+    return (*credits, *prices, *context)
 
 
 @dataclass(frozen=True)
@@ -758,11 +984,29 @@ FORMULAS: dict[FormulaId, Formula] = {
         ),
         compute=grade_conversion,
     ),
+    **{
+        scope: Formula(
+            formula_id=scope,
+            title=f"Học phí {period}",
+            description=(
+                f"Học phí {period} từ số tín chỉ lý thuyết, thực hành và đơn giá 1 tín chỉ"
+            ),
+            params=_tuition_params(scope),
+            compute=_tuition(scope),
+        )
+        for scope, period in TUITION_SCOPES.items()
+    },
 }
 
 
 def param_spec(formula_id: FormulaId, name: str) -> ParamSpec | None:
     return next((spec for spec in FORMULAS[formula_id].params if spec.name == name), None)
+
+
+def label_for(spec: ParamSpec, known: Mapping[str, object]) -> str:
+    """What the student is asked, worded for the params already known."""
+
+    return spec.label_from(known) if spec.label_from is not None else spec.label
 
 
 def missing_params(formula_id: FormulaId, params: Mapping[str, object]) -> list[ParamSpec]:
@@ -804,17 +1048,31 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
         re.compile(r"(là|được|ra) (điểm )?(chữ )?[abcdf]\+?(\s|$|\?|,|\.)"),
         re.compile(r"điểm chữ"),
     ),
+    # Tuition triggers name only the period; route_builtin requires "học phí" too.
+    "tuition_semester": (re.compile(r"học kỳ|học kì|\bkỳ\b|\bkì\b"),),
+    "tuition_year": (re.compile(r"năm học|một năm|\b1 năm|mỗi năm|cả năm"),),
+    "tuition_program": (
+        re.compile(
+            r"(cả|toàn|trọn) (khoá|khóa|ngành|chương trình)"
+            r"|(đến khi|tới khi|cho tới lúc) (ra trường|tốt nghiệp)"
+        ),
+    ),
 }
+_TUITION = re.compile(r"học phí")
 
 
 def route_builtin(question: str) -> list[FormulaId]:
-    """Built-in formulas whose trigger matches the (lower-cased, NFC) question."""
+    """Built-in formulas whose trigger matches the (lower-cased, NFC) question. A
+    question about tuition is only ever routed to a tuition formula: "15 tín lý thuyết
+    4 tín thực hành, học phí bao nhiêu" names credits, not a course score."""
 
     text = unicodedata.normalize("NFC", question).lower()
+    tuition = _TUITION.search(text) is not None
     return [
         formula_id
         for formula_id, patterns in BUILTIN_TRIGGERS.items()
-        if any(pattern.search(text) for pattern in patterns)
+        if (formula_id in TUITION_SCOPES) == tuition
+        and any(pattern.search(text) for pattern in patterns)
     ]
 
 
@@ -847,5 +1105,9 @@ def describe_builtin_rules() -> str:
             "",
             "### Bảng quy đổi (điểm thang 10 đã làm tròn đến 0.1)",
             scale,
+            "",
+            "### Học phí (một học kỳ, một năm học hoặc cả khoá)",
+            *(f"- {line}" for line in TUITION_FORMULA_TEXT),
+            "- Đơn giá lấy theo đúng khoá tuyển sinh, khối/ngành, hệ và cơ sở trong biểu phí",
         ]
     )

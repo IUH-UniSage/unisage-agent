@@ -37,6 +37,7 @@ never has a chance to arrive after `event: done`.
 
 import asyncio
 import logging
+import time
 import uuid
 from asyncio import Queue
 from collections.abc import Awaitable, Callable
@@ -55,14 +56,18 @@ from app.core.errors.public_errors import (
     short_reference,
 )
 from app.core.observability.graph_trace import GraphTrace
+from app.core.observability.logging_config import bind_trace_id, unbind_trace_id
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
 from app.database.session import async_session_factory
+from app.graph.progress import status_reporter
 from app.graph.queue_items import (
     ClarificationItem,
     DoneItem,
     ErrorItem,
     QueueItem,
+    StatusItem,
     TokenItem,
     WarningItem,
 )
@@ -163,38 +168,52 @@ class ClaimContext:
     deadline: float | None = None
 
 
+def _profile_saver(
+    session_factory: async_sessionmaker[AsyncSession],
+    owner: ProfileOwner,
+) -> Callable[[dict[str, str]], Awaitable[None]]:
+    """Writes a profile correction the moment node 03 makes it - kept even if the rest
+    of the turn fails. A failed write is only logged: the end-of-turn write (same
+    values) runs again when the turn completes."""
+
+    async def save(attributes: dict[str, str]) -> None:
+        try:
+            async with session_factory() as session:
+                await UserProfileRepository(session).save(owner, attributes)
+                await session.commit()
+        except Exception:
+            logger.exception("profile.save_failed")
+
+    return save
+
+
 async def _store_round_state(
     session_factory: async_sessionmaker[AsyncSession],
     conversation_id: str,
     claim: ClaimContext | None,
     pending_round: PendingRound | None,
-    confirmed_metadata: dict[str, str],
-    last_calculation: LastCalculation | None = None,
+    recent_calculations: list[LastCalculation] | None = None,
+    profile: tuple[ProfileOwner, dict[str, str]] | None = None,
 ) -> object:
     """True when written, False when the write failed or was refused, `_LOST_CLAIM`
-    when a submit turn no longer owns its claim."""
+    when a submit turn no longer owns its claim. `profile` (owner, attributes) is
+    written in the same transaction when the turn changed it."""
 
     try:
         async with session_factory() as session:
             repo = ClarificationRoundRepository(session)
+            if profile is not None:
+                await UserProfileRepository(session).save(*profile)
             if claim is not None:
                 done = await repo.complete(
-                    conversation_id,
-                    claim.token,
-                    pending_round,
-                    confirmed_metadata,
-                    last_calculation,
+                    conversation_id, claim.token, pending_round, recent_calculations
                 )
                 await session.commit()
                 return True if done else _LOST_CLAIM
             if pending_round is not None:
-                opened = await repo.upsert_open(
-                    conversation_id, pending_round, confirmed_metadata, last_calculation
-                )
+                opened = await repo.upsert_open(conversation_id, pending_round, recent_calculations)
             else:
-                await repo.save_confirmed_metadata(
-                    conversation_id, confirmed_metadata, last_calculation
-                )
+                await repo.save_calculations(conversation_id, recent_calculations)
                 opened = True
             await session.commit()
             return opened
@@ -239,8 +258,12 @@ async def run_and_persist(
     session_factory: async_sessionmaker[AsyncSession] = async_session_factory,
     budget: BudgetContext | None = None,
     claim: ClaimContext | None = None,
+    started_at: float | None = None,
 ) -> None:
     """Run the graph, stream tokens into `queue`, always finalize.
+
+    `started_at` (`time.perf_counter()` when the request arrived) starts the turn's clock;
+    a completed answer stores the total as the message's `responseTimeMs`.
 
     Uses its own database session (via `session_factory`, defaulting to the
     module-level `async_session_factory` - NOT the request's session)
@@ -255,17 +278,23 @@ async def run_and_persist(
     """
 
     accumulated: list[str] = []
+    turn_started_at = started_at if started_at is not None else time.perf_counter()
 
     async def sink(token: str) -> None:
         trace.first_token()
         accumulated.append(token)
         await queue.put(TokenItem(token))
 
+    def put_status(stage: str, url: str | None) -> None:
+        # Unbounded queue: never blocks, so a sync trace callback can put on it.
+        queue.put_nowait(StatusItem(stage=stage, url=url))
+
     trace = GraphTrace(
         conversation_id=conversation_id,
         message_id=assistant_message_id,
         user_id=graph_input.security.user_id,
         client_ip=client_ip,
+        on_status=status_reporter(put_status),
     )
 
     # Bound up front (not just declared) so `finally` below can always read it, even
@@ -276,6 +305,8 @@ async def run_and_persist(
     response_text: str
     graph_output = None
     error_item: ErrorItem | None = None
+    # Every log line of this turn carries its request id, the trace id on the staff ticket.
+    trace_id_token = bind_trace_id(usage_recorder.request_id)
     try:
         # A submit turn holds the panel claim: past its deadline it is cancelled
         # before any further Java or state write (the lease outlives the deadline).
@@ -298,7 +329,15 @@ async def run_and_persist(
                         raise RequestBudgetRejectedError(usage_recorder.purpose, reserve_result)
                 try:
                     graph_output = await run_graph(
-                        graph_input, models, sink, trace, usage_recorder, budget=budget
+                        graph_input,
+                        models,
+                        sink,
+                        trace,
+                        usage_recorder,
+                        budget=budget,
+                        on_profile_change=_profile_saver(
+                            session_factory, ProfileOwner.of(graph_input.security, conversation_id)
+                        ),
                     )
                 finally:
                     trace.finish()
@@ -333,6 +372,12 @@ async def run_and_persist(
                 if graph_output is not None
                 else graph_input.confirmed_metadata
             )
+            profile = (
+                (ProfileOwner.of(graph_input.security, conversation_id), dict(confirmed))
+                if confirmed != graph_input.confirmed_metadata
+                else None
+            )
+            computed = graph_output.calculations if status == "COMPLETED" and graph_output else []
             # State first, projection second, event last: a client that receives
             # `event: clarification` can always reload and submit that panel.
             persisted = await _store_round_state(
@@ -340,8 +385,8 @@ async def run_and_persist(
                 conversation_id,
                 claim,
                 pending_round,
-                confirmed,
-                graph_output.last_calculation if status == "COMPLETED" and graph_output else None,
+                [*graph_input.recent_calculations, *computed] if computed else None,
+                profile,
             )
             if persisted is _LOST_CLAIM:
                 # Our claim was taken over (lease expired): another request owns the
@@ -380,6 +425,10 @@ async def run_and_persist(
                     if graph_output is not None
                     else None,
                     metadata=metadata or None,
+                    # Shown next to the answer's actions, after a reload too.
+                    response_time_ms=round((time.perf_counter() - turn_started_at) * 1000)
+                    if status == "COMPLETED"
+                    else None,
                     authorization=authorization,
                 ),
                 what=f"finalize message {assistant_message_id}",
@@ -391,6 +440,18 @@ async def run_and_persist(
                     conversation_id,
                     assistant_message_id,
                     status,
+                )
+            if finalized:
+                # Diagnostics for staff (the ticket detail) - never blocks the turn. Pushed on
+                # an ERROR turn too: its trace id is what finds the failure in the logs.
+                await _finalize_safely(
+                    lambda: java_client.push_message_trace(
+                        message_id=assistant_message_id,
+                        trace_id=usage_recorder.request_id,
+                        chunks=graph_output.context_chunks if graph_output is not None else [],
+                        web_sources=graph_output.context_web if graph_output is not None else [],
+                    ),
+                    what="message.trace_push",
                 )
             if round_stored and pending_round is not None:
                 if finalized:
@@ -422,3 +483,4 @@ async def run_and_persist(
         if error_item is not None:
             await queue.put(error_item)
         await queue.put(DoneItem())
+        unbind_trace_id(trace_id_token)

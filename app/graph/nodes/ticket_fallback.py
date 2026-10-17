@@ -3,7 +3,11 @@
 Activates when retrieval reports `has_valid_context = False`. The model is
 given no chunks and no clarification-form machinery, so it structurally
 cannot cite a regulation it has no source for - it can only write the
-fallback message defined by `common/ticket_fallback.yaml`.
+fallback message defined by `common/ticket_fallback.yaml`, plus links to the
+official pages the web judge kept without an answer in their snippet
+(`common/web_candidate_sources.yaml`). A link the model writes is pointed back at
+the page's exact URL (it once retyped one with diacritics, a 404), and the pages it
+did not link are listed after the reply, so a page the judge kept is never lost.
 """
 
 from collections.abc import Sequence
@@ -21,8 +25,10 @@ from app.graph.streaming import (
     stream_agent_text,
 )
 from app.rag.prompting import build_ticket_fallback_prompt
+from app.rag.prompting.citations import keep_known_links, source_links_block
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.security import AcademicSecurityContext
+from app.schemas.web_search import WebSearchResult
 
 
 def build_ticket_fallback_agent(model: Model | str) -> Agent[None, str]:
@@ -36,6 +42,7 @@ async def run_ticket_fallback(
     security: AcademicSecurityContext,
     confirmed_metadata: dict[str, str],
     history: Sequence[HistoryMessage] = (),
+    web_sources: Sequence[WebSearchResult] = (),
     token_sink: TokenSink,
     purpose: str | None = None,
     credential: CredentialConfig | None = None,
@@ -49,8 +56,9 @@ async def run_ticket_fallback(
         security=security,
         confirmed_metadata=confirmed_metadata,
         history=history,
+        web_sources=web_sources,
     )
-    return await stream_agent_text(
+    text = await stream_agent_text(
         agent,
         prompt,
         token_sink,
@@ -62,3 +70,8 @@ async def run_ticket_fallback(
         on_attempt=on_attempt,
         budget=budget,
     )
+    text = keep_known_links(text, web_sources)
+    links = source_links_block(web_sources, text)
+    if links:
+        await token_sink(links)
+    return text + links

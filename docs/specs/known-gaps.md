@@ -234,12 +234,49 @@ that isn't part of this project's dependencies. If `.doc` uploads need to
 work, this requires either adding such a converter or asking users to
 re-save as `.docx` before upload.
 
+### A form laid out in boxes can be cut mid-word into table cells (2026-10)
+
+Found by the RAG evaluation (run `20261011-1334-demo-user-weboff`, question d0020).
+`pymupdf4llm` reads the addressee block of a form ("Kính gửi: - Khoa/Viện… - Phòng Khảo
+thí…") as a pipe table and cuts the words at its column borders: the chunk holds
+`Phòng Kh | ảo thí và Đảm bảo ch | ất lượng`, `Phòng Tà | i chính Kế toán`,
+`Phòng Đà | o tạo`. No department name survives whole, so retrieval and the answer can
+miss one (the answer to d0020 dropped "Phòng Đào tạo"; RAGAS context recall 0). The same
+extractor fault garbled a merged header of the master's description
+(`Ch | uẩn | đầu | ra`). A fix would join the cells of a "table" whose cells end and begin
+mid-word; nothing does this yet.
+
 ## Graph / Retrieval
 
 See `RAG_Graph/KLTN/nodes/` for the full node-by-node design these gaps
 belong to, and `backend-java`'s `changes/24-09-2026-GraphFlowAlignment/`
 (`plan.md`'s Architecture Decisions, `todo.md`) for the implementation
 decisions behind each one.
+
+### A job posting from a faculty is rejected as off-topic (2026-10)
+
+Found by the RAG evaluation (run `20261011-1334-demo-user-weboff`, question d0011:
+"Bên NGS tuyển fresher tư vấn SAP Logistic bao nhiêu người, lương khởi điểm nhiêu ạ?").
+`03_MessageClassificationNode` labels it `off_topic` (confidence 0.95), so the turn ends
+in `05_OffTopicRejectNode` without retrieval, although the knowledge base holds the
+faculty's recruitment notice that answers it (10 people, up to 7 million VND). The
+classifier treats "company hiring" as outside the school's scope; internship and
+recruitment notices published by faculties are in scope.
+
+### A question naming a regulation's year can get another version of it (2026-10)
+
+Found by the RAG evaluation (question d0017: "Quy chế tiến sĩ 2017, NCS có thạc sĩ và
+chỉ có bằng ĐH học tối thiểu bao nhiêu tín?"). Two PhD regulations share most of their
+title (Decision 3177/2017 and a later one); retrieval returned only chunks of the later
+decision, the 2017 chunk with "90 / 120 tín chỉ" never reached the context, and the
+answer stated the opposite of the 2017 rule. Nothing in retrieval or rerank favours a
+year or a decision number the question names.
+
+### Counting rows of a long list is left to the model (2026-10)
+
+Found by the RAG evaluation (question d0009): asked how many students missed a test, the
+answer said 3 where the list holds 4. Like the calculation gap above, a count over table
+rows is done by the LLM reading the chunks, not computed.
 
 ### No hybrid search, RRF, or cross-encoder rerank (2026-09)
 
@@ -352,6 +389,20 @@ a process stopped entirely (SIGSTOP, VM pause) past the lease (`CHAT_CLARIFICATI
 can wake up after another request took the conversation over. Every state write is fenced by
 `claim_token` and the finalize PATCH is skipped when the claim was lost, so only SSE tokens to
 the long-disconnected old client could leak.
+
+### A guest's profile does not follow them after they log in (2026-10)
+
+A guest's declared attributes are kept per conversation (`user_profiles.conversation_id`);
+once the same person logs in, their user profile starts empty and is not merged with what they
+declared as a guest. Profiles migrated from the old per-conversation `confirmed_metadata` are
+conversation-owned too, even for logged-in users (the table cannot tell which user a
+conversation belongs to). Downgrading migration `b5c6d7e8f9a0` drops user-owned profiles.
+
+### The classifier decides what is a profile correction (2026-10)
+
+`metadata_updates` comes from node 03: it can mistake a question about another cohort for a
+correction, or miss one. Only registry `profile` fields are applied, and the reply opens with a
+fixed line naming what was saved, so the student sees it and can correct it.
 
 ### At most 3 tasks per message
 

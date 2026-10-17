@@ -1,4 +1,5 @@
 import logging
+import threading
 from collections.abc import Callable
 from pathlib import PurePosixPath
 
@@ -14,6 +15,10 @@ from app.core.errors.exceptions import (
 logger = logging.getLogger(__name__)
 
 _FITZ_SUPPORTED_EXTENSIONS = {"pdf", "docx"}
+
+# Callers run parsers in worker threads to keep the event loop free, and PyMuPDF
+# must not be used from two threads at once: one document is parsed at a time.
+_PARSE_LOCK = threading.Lock()
 
 
 def get_extension(filename: str) -> str:
@@ -56,7 +61,8 @@ def parse_or_raise[T](parse: Callable[[], T], filename: str) -> T:
     422 instead of a generic 500. Our own `UniSageException`s pass through untouched."""
 
     try:
-        return parse()
+        with _PARSE_LOCK:
+            return parse()
     except UniSageException:
         raise
     except Exception as exc:

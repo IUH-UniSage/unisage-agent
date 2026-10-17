@@ -8,6 +8,7 @@ cooling down, falling back to the top-priority one when every credential is.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from typing import Any
 
 import pytest
@@ -15,7 +16,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 
 import app.core.registry.model_registry as model_registry
 import app.core.registry.model_router as model_router_module
-from app.api.deps import get_graph_models
+from app.api.deps import get_graph_models, warm_up_retrieval
 from app.core.config import settings
 from app.core.errors.error_codes import ErrorCode
 from app.core.errors.llm_failure import LLMCallException
@@ -125,6 +126,54 @@ def test_registry_enabled_shares_one_model_across_the_three_nodes(
     assert graph_models.classification is graph_models.query_transformation
     assert graph_models.classification is graph_models.generation
     assert isinstance(graph_models.retrieval, RetrievalService)
+
+
+def test_retrieval_service_is_shared_until_the_snapshot_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
+    first = parse_snapshot(_snapshot_payload([_chat_credential()]))
+    monkeypatch.setattr(model_registry, "_current_snapshot", first)
+
+    retrieval = asyncio.run(get_graph_models()).retrieval
+    assert asyncio.run(get_graph_models()).retrieval is retrieval
+
+    # A swap that leaves the embedding setup alone keeps the resolved service...
+    second = dataclasses.replace(first, version=first.version + 1)
+    monkeypatch.setattr(model_registry, "_current_snapshot", second)
+    assert asyncio.run(get_graph_models()).retrieval is retrieval
+
+    # ...a new EMBEDDING credential gets a fresh one.
+    payload = _snapshot_payload([_chat_credential()])
+    payload["version"] = second.version + 1
+    payload["purposes"]["EMBEDDING"] = [
+        _chat_credential(id="22222222-2222-2222-2222-222222222222", modelName="emb")
+    ]
+    monkeypatch.setattr(model_registry, "_current_snapshot", parse_snapshot(payload))
+    assert asyncio.run(get_graph_models()).retrieval is not retrieval
+
+
+def test_warm_up_resolves_the_shared_service_and_never_raises(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_REGISTRY_ENABLED", True)
+    monkeypatch.setattr(
+        model_registry, "_current_snapshot", parse_snapshot(_snapshot_payload([_chat_credential()]))
+    )
+    warmed: list[RetrievalService] = []
+    monkeypatch.setattr(RetrievalService, "warm_up", lambda self: warmed.append(self))
+
+    asyncio.run(warm_up_retrieval())
+
+    assert warmed == [asyncio.run(get_graph_models()).retrieval]
+
+    def _fail(self: RetrievalService) -> None:
+        raise ConnectionError("qdrant down")
+
+    monkeypatch.setattr(RetrievalService, "warm_up", _fail)
+    with caplog.at_level("WARNING", logger="app.api.deps"):
+        asyncio.run(warm_up_retrieval())
+    assert "retrieval warm-up failed" in caplog.text
 
 
 def test_registry_enabled_with_no_chat_credential_raises(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -126,8 +126,11 @@ class Settings(BaseSettings):
     # Comma-separated in .env. Only these sites (and their subdomains) are searched - the
     # answer must come from the university's own pages, never a forum or another school.
     TAVILY_INCLUDE_DOMAINS: Annotated[list[str], NoDecode] = ["iuh.edu.vn"]
-    # `basic` costs 1 credit per search, `advanced` 2 but returns longer, more relevant snippets.
+    # `basic` costs 1 credit per search, `advanced` 2 but returns longer, more relevant snippets:
+    # up to TAVILY_CHUNKS_PER_SOURCE passages of each page that match the query, picked by
+    # Tavily, instead of one short excerpt.
     TAVILY_SEARCH_DEPTH: Literal["basic", "advanced"] = "basic"
+    TAVILY_CHUNKS_PER_SOURCE: int = Field(default=3, ge=1, le=3)
     # Deadline for the whole search call. Tavily usually answers in ~3s but has spikes
     # past 10s; a timeout only drops web results, the turn still ends in the ticket fallback.
     TAVILY_TIMEOUT_SECONDS: float = 15.0
@@ -137,7 +140,14 @@ class Settings(BaseSettings):
     INGEST_MULTI_REP_QUESTION_COUNT: int = 3
     INGEST_SEMANTIC_MAX_TOKEN_FACTOR: float = 1.5
     INGEST_TABLE_CHUNK_MAX_TOKENS: int = 800
+    # A PDF heading candidate longer than this stays body text - it is prefixed into every
+    # chunk under it, so an over-long one (a form's fill-in line) would overflow chunk_size.
+    INGEST_MAX_HEADING_CHARS: int = 200
     INGEST_CHUNKING_VERSION: str = "2026-09-structural-v2"
+    # Tesseract language(s) for scanned PDF pages (pymupdf4llm OCRs pages with no text layer).
+    # Vietnamese needs the `vie` traineddata; a language whose data is missing is dropped (with a
+    # warning) rather than failing the ingest, so "vie+eng" falls back to "eng" on such a machine.
+    INGEST_OCR_LANGUAGE: str = "vie+eng"
     # Minimum seconds between the START of two consecutive extraction calls in one embed job.
     # Free-tier keys allow ~15 requests/minute, but a sequential job easily goes faster than
     # that; 0 disables the pause. A call that already took longer than this adds no extra wait.
@@ -188,9 +198,8 @@ class Settings(BaseSettings):
     # LLMRerankNode: one call to the RERANK model (EXTRACTION if none) per turn checks
     # which reranked chunks actually answer which sub-query - the score threshold alone
     # lets a chunk through on shared keywords. A sub-query left with none goes to
-    # WebSearchNode. Each chunk is shown to the model cut to SNIPPET_CHARS.
+    # WebSearchNode. Each chunk is shown to the model whole.
     CHAT_LLM_RERANK_ENABLED: bool = True
-    CHAT_LLM_RERANK_SNIPPET_CHARS: int = Field(default=800, ge=100)
     # When the LLM rerank keeps nothing for any sub-query, each sub-query whose best
     # chunk reached RESCUE_MIN_SCORE keeps its top RESCUE_KEEP by score: a small model
     # drops e.g. a fill-in form full of dot leaders whose "Hồ sơ đính kèm" line is the
@@ -202,16 +211,49 @@ class Settings(BaseSettings):
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),
     # however long the question or however many sub-queries it split into.
     CHAT_WEB_SEARCH_ENABLED: bool = False
-    # Tavily bills per search, not per result, so asking for more candidates is free;
-    # MIN_SCORE and PER_TURN still bound what reaches the prompt.
-    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=5, ge=1, le=20)
-    CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN: int = Field(default=2, ge=1)
-    # Searches per turn: a message with several tasks can leave many sub-queries without
-    # chunks, but only PER_TURN pages reach the prompt, so the rest would be paid-for
-    # searches thrown away. The worst-missed sub-queries are searched first.
-    CHAT_WEB_SEARCH_MAX_QUERIES: int = Field(default=2, ge=1)
+    # `speculative`: for a task whose topic is in SPECULATIVE_TOPICS (fees, admission,
+    # notices, contacts - what changes every year and is posted on the website first),
+    # the search starts with the advisory branch, alongside query transformation, retrieval
+    # and rerank. `fallback`: searched only after rerank left a sub-query empty.
+    CHAT_WEB_SEARCH_MODE: Literal["fallback", "speculative"] = "speculative"
+    # With a speculative search, its pages are judged for EVERY sub-query alongside
+    # retrieval and rerank, and generation gets them next to the kept chunks: a kept chunk
+    # can be related yet stale (the 2022 exam results kept for "the latest exam date",
+    # 14-10-2026). Off: judged only when a sub-query is left without a chunk.
+    CHAT_WEB_JUDGE_WITH_CHUNKS: bool = True
+    CHAT_WEB_SEARCH_SPECULATIVE_TOPICS: Annotated[list[str], NoDecode] = [
+        "hoc_phi",
+        "tuyen_sinh",
+        "lich_thong_bao",
+        "lien_he_co_so",
+    ]
+    # Tavily bills per search, not per result, so asking for more candidates is free; every
+    # page left after the junk filters goes to the web judge, and ANSWERS_PER_SUB /
+    # MAX_SOURCES bound what reaches the prompt.
+    CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB: int = Field(default=10, ge=1, le=20)
+    # Pages with the answer kept per sub-query - the web judge picks them, best first (not
+    # Tavily's score order).
+    CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB: int = Field(default=2, ge=1)
+    # Official pages the web judge kept although their snippet lacks the answer (a scanned
+    # fee decision): at most this many are linked by the ticket fallback.
+    CHAT_WEB_SEARCH_MAX_SOURCES: int = Field(default=3, ge=0)
+    # Searches per turn: a MULTI task searches each sub-query with web slots on its own (up
+    # to CHAT_MAX_SUB_QUERIES), each one billed by Tavily. The first ones are searched.
+    CHAT_WEB_SEARCH_MAX_QUERIES: int = Field(default=3, ge=1)
+    # Tavily's score depends on how the query is worded far more than on relevance (a
+    # question-form query scores the right page 0.08, a keyword query scores an off-topic
+    # page 0.90), so it only drops junk (SCORE_FLOOR); the web judge decides relevance.
+    CHAT_WEB_SEARCH_SCORE_FLOOR: float = Field(default=0.05, ge=0.0, le=1.0)
+    # Only used when the judge can't run (no RERANK/EXTRACTION model, or it failed):
+    # pages at or above this score are used as they are, the rule before the judge existed.
     CHAT_WEB_SEARCH_MIN_SCORE: float = Field(default=0.5, ge=0.0, le=1.0)
     CHAT_WEB_SEARCH_RESULT_MAX_CHARS: int = Field(default=1500, ge=100)
+    # Redis cache of raw search results, keyed by the query and Tavily's parameters; its
+    # TTL depends on the topic (app/rag/web_query.py). Its own Redis instance (`redis-cache`
+    # in .devcontainer/docker-compose.yml: maxmemory + volatile-lru), since eviction covers a
+    # whole instance and would otherwise reach the budget/Celery keys on REDIS_URL that also
+    # carry a TTL. Empty URL = no cache.
+    WEB_SEARCH_CACHE_REDIS_URL: str = "redis://localhost:6380/0"
 
     # GenerationSynthesisNode's JSON-repair follow-up call (see
     # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
@@ -256,7 +298,7 @@ class Settings(BaseSettings):
     # budget should have caught.
     BUDGET_ESTIMATE_MAX_OUTPUT_TOKENS: int = 2000
 
-    @field_validator("TAVILY_INCLUDE_DOMAINS", mode="before")
+    @field_validator("TAVILY_INCLUDE_DOMAINS", "CHAT_WEB_SEARCH_SPECULATIVE_TOPICS", mode="before")
     @classmethod
     def _split_domains(cls, value: object) -> object:
         if isinstance(value, str):

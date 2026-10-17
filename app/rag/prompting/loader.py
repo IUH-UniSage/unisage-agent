@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from app.core.configs import CONFIGS_DIR
+
 from .schema import PromptTemplates
 
 _templates_dir: Path | None = None
@@ -25,7 +27,7 @@ def reset_templates_cache() -> None:
 
 
 def get_known_metadata_fields() -> list[dict[str, Any]]:
-    """Load `known_metadata_fields.json` (lazy load with caching) - the
+    """Load `configs/known_metadata_fields.json` (lazy load with caching) - the
     common-concept-to-canonical-field-name vocabulary rendered into
     `ask_user_form_guide.yaml` (see `builder.build_known_metadata_fields_section`).
     Not part of `PromptTemplates`: it's structured data, not a format-string
@@ -33,7 +35,7 @@ def get_known_metadata_fields() -> list[dict[str, Any]]:
 
     global _known_metadata_fields_cache
     if _known_metadata_fields_cache is None:
-        path = Path(__file__).parent / "known_metadata_fields.json"
+        path = CONFIGS_DIR / "known_metadata_fields.json"
         data = json.loads(path.read_text(encoding="utf-8"))
         _known_metadata_fields_cache = data["fields"]
     return _known_metadata_fields_cache
@@ -81,7 +83,8 @@ def _load_all_templates() -> PromptTemplates:
         chat_academic_advisory=_load_yaml_template(main / "chat_academic_advisory.yaml"),
         chat_multi_intent_synthesis=_load_yaml_template(main / "chat_multi_intent_synthesis.yaml"),
         chat_ticket_fallback=_load_yaml_template(main / "chat_ticket_fallback.yaml"),
-        chat_calculation=_load_yaml_template(main / "chat_calculation.yaml"),
+        chat_social=_load_yaml_template(main / "chat_social.yaml"),
+        chat_calculation_review=_load_yaml_template(main / "chat_calculation_review.yaml"),
         chat_calculation_llm=_load_yaml_template(main / "chat_calculation_llm.yaml"),
         json_repair=_load_yaml_template(main / "json_repair.yaml"),
         agent_hyde_generator=_load_yaml_template(agents / "hyde_generator.yaml"),
@@ -91,23 +94,30 @@ def _load_all_templates() -> PromptTemplates:
         ),
         agent_multi_query_decomposer=_load_yaml_template(agents / "multi_query_decomposer.yaml"),
         agent_calculation_extractor=_load_yaml_template(agents / "calculation_extractor.yaml"),
+        agent_calculation_value_extractor=_load_yaml_template(
+            agents / "calculation_value_extractor.yaml"
+        ),
         agent_reranker_compressor=_load_yaml_template(agents / "reranker_compressor.yaml"),
+        agent_web_result_judge=_load_yaml_template(agents / "web_result_judge.yaml"),
         agent_multi_representation_enricher=_load_yaml_template(
             agents / "multi_representation_enricher.yaml"
         ),
         header=_load_yaml_template(common / "header.yaml"),
         academic_metadata=_load_yaml_template(common / "academic_metadata.yaml"),
+        declared_attributes=_load_yaml_template(common / "declared_attributes.yaml"),
         history_message=_load_yaml_template(common / "history_message.yaml"),
         security_access_control=_load_yaml_template(common / "security_access_control.yaml"),
         academic_domain_rules=_load_yaml_template(common / "academic_domain_rules.yaml"),
         response_style=_load_yaml_template(common / "response_style.yaml"),
         citation_rules=_load_yaml_template(common / "citation_rules.yaml"),
         prepared_context=_load_yaml_template(common / "prepared_context.yaml"),
+        current_time=_load_yaml_template(common / "current_time.yaml"),
         web_search_context=_load_yaml_template(common / "web_search_context.yaml"),
         task_1=_load_yaml_template(common / "task_1.yaml"),
         task_2=_load_yaml_template(common / "task_2.yaml"),
         ask_user_form_guide=_load_yaml_template(common / "ask_user_form_guide.yaml"),
         ticket_fallback=_load_yaml_template(common / "ticket_fallback.yaml"),
+        web_candidate_sources=_load_yaml_template(common / "web_candidate_sources.yaml"),
     )
     versions = {
         item.name: hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]

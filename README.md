@@ -42,6 +42,16 @@ task be:worker
 task be:beat
 ```
 
+`be:worker` consumes both queues. Embedding (`embed_chunks`) runs in its own
+`<CELERY_QUEUE_PREFIX>-ingestion` queue, so for a long ingest run split the
+workers and credential verification never waits behind embeddings:
+
+```powershell
+task be:worker:default env=eval -- --pool=solo -n default@%h
+task be:worker:ingest env=eval -- --pool=solo -n ingest1@%h
+task be:worker:ingest env=eval -- --pool=solo -n ingest2@%h
+```
+
 Replay usage-log payloads that landed in the dead-letter queue (after fixing
 whatever made backend-java reject them):
 
@@ -116,8 +126,11 @@ task code:check
 task code:check-strict
 task code:fix
 
-# Database
-task db:up
+# Database / infrastructure (add env=eval|prod for another environment, default dev)
+task db:up                 # Postgres + MinIO (backend-java) + Redis + Qdrant; creates this env's DBs if missing
+task db:upgrade            # alembic upgrade head
+task db:models:copy env=eval   # copy AI models (chat_models, model_prices) from the dev backend DB; SQL goes to storage/ (gitignored)
+task env:show env=eval     # which DB / bucket / collection / Redis an env points at
 task db:current
 task db:history
 task db:migrate -- "migration message"

@@ -29,10 +29,8 @@ FORM = {
 
 def test_ask_form_becomes_choice_questions() -> None:
     questions = advisory_questions([FORM, FORM], confirmed_metadata={})
-    assert [q["field"] for q in questions] == [
-        "nganh",
-        "he",
-    ]  # duplicates and 1-option field dropped
+    # Registry names; duplicates and the 1-option field dropped.
+    assert [q["field"] for q in questions] == ["nganh_hoc", "he_dao_tao"]
     nganh = questions[0]
     assert nganh["kind"] == "choice" and nganh["allow_other"] is True
     assert [(o.id, o.label) for o in nganh["options"]] == [
@@ -44,8 +42,8 @@ def test_ask_form_becomes_choice_questions() -> None:
 
 def test_confirmed_fields_are_not_asked_again() -> None:
     assert [
-        q["field"] for q in advisory_questions([FORM], confirmed_metadata={"nganh": "cntt"})
-    ] == ["he"]
+        q["field"] for q in advisory_questions([FORM], confirmed_metadata={"nganh_hoc": "cntt"})
+    ] == ["he_dao_tao"]
 
 
 def _task(task_id: str) -> TaskQuestions:

@@ -7,14 +7,21 @@ prompt, hay một trường trong `known_metadata_fields.json`.
 
 Mẫu chuẩn cho service trong hệ UniSage có ba loại (bí mật/theo môi trường → biến môi trường; ngưỡng
 vận hành sửa tay → YAML trong `configs/`; dữ liệu máy sinh → JSON có số phiên bản cạnh code nạp nó).
-`unisage-agent` hôm nay chỉ có **hai loại đầu tiên**, và loại hai không nằm trong một thư mục
-`configs/` riêng như mẫu — nó là chính nội dung prompt LLM. Đừng suy diễn có một `configs/` đang ẩn
-đâu đó; không có.
+`unisage-agent` hôm nay chỉ có **hai loại đầu tiên**. Loại hai là nội dung prompt LLM, giữ cạnh code
+nạp nó ở `app/rag/prompting/prompt_templates/`, và các file YAML khác trong `configs/` ở gốc repo,
+đọc qua `app/core/configs.py`:
+
+- `configs/web_query.yaml` — từ vựng dựng câu truy vấn web (`subject_aliases`).
+- `configs/known_metadata_fields.json` — sổ đăng ký tên field của hồ sơ người dùng và form hỏi lại.
+- `configs/evals/label_map.yaml` — bảng gán phòng ban/quyền cho bộ eval.
+
+File YAML mà công cụ đòi đúng chỗ vẫn ở chỗ cũ: `Taskfile.yml` và `taskfiles/` (Task),
+`.devcontainer/` và `tests/e2e/` (docker compose), `.github/workflows/` (GitHub Actions).
 
 | Loại | Ví dụ | Giữ ở đâu | Định dạng | Ai sửa | Đổi có cần build lại image? |
 |---|---|---|---|---|---|
 | Bí mật và thứ đổi theo môi trường | `OPENAI_API_KEY`, `DB_URL`, `CHAT_RERANK_SCORE_THRESHOLD` | biến môi trường, `.env` khi chạy máy dev | `KEY=value`, đọc qua `Settings` (Pydantic) | người triển khai | Không |
-| Nội dung prompt LLM, cùng vòng đời với code | system prompt từng node, quy tắc bảo mật, từ vựng field | `app/rag/prompting/prompt_templates/`, `known_metadata_fields.json` | YAML (`template`/`content`), JSON | người viết/tinh chỉnh prompt | Có — nạp lúc import, không đọc lại khi chạy |
+| Nội dung prompt LLM, cùng vòng đời với code | system prompt từng node, quy tắc bảo mật, từ vựng field, từ đồng nghĩa của câu truy vấn web | `app/rag/prompting/prompt_templates/`, `configs/web_query.yaml`, `configs/known_metadata_fields.json` | YAML (`template`/`content`), JSON | người viết/tinh chỉnh prompt | Có — nạp lúc import, không đọc lại khi chạy |
 | Dữ liệu máy sinh có số phiên bản | *(chưa có trong repo này)* | — | — | — | — |
 
 Không trộn hai loại đang có. Một khoá API không bao giờ nằm trong YAML prompt; một câu quy tắc
@@ -131,7 +138,8 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `TAVILY_API_KEY` | rỗng | Khoá Tavily cho WebSearchNode. Rỗng thì bỏ qua web search (log warning), luồng đi thẳng tới TicketFallbackNode |
 | `TAVILY_BASE_URL` | `https://api.tavily.com` | Host cố định do người triển khai đặt — không qua SSRF guard, cùng mức tin cậy với `SLACK_APIKEY_ALERT_WEBHOOK_URL` |
 | `TAVILY_INCLUDE_DOMAINS` | `iuh.edu.vn` | Danh sách domain phân tách bằng dấu phẩy, gửi làm `include_domains` — chỉ tìm trên trang chính thức của trường (và subdomain), không bao giờ diễn đàn hay trường khác |
-| `TAVILY_SEARCH_DEPTH` | `basic` | `basic` tốn 1 credit/lần tìm, `advanced` 2 credit nhưng snippet dài và sát hơn |
+| `TAVILY_SEARCH_DEPTH` | `basic` | `basic` tốn 1 credit/lần tìm, `advanced` 2 credit nhưng trả về tối đa `TAVILY_CHUNKS_PER_SOURCE` đoạn khớp câu hỏi của mỗi trang thay vì một đoạn trích ngắn |
+| `TAVILY_CHUNKS_PER_SOURCE` | `3` | Chỉ dùng với `advanced`: số đoạn (1-3) của mỗi trang mà Tavily chọn theo câu hỏi |
 | `TAVILY_TIMEOUT_SECONDS` | `15` | Hạn chót cho **cả** lần gọi (không phải từng giai đoạn kết nối/đọc như timeout của httpx). Tavily thường trả lời trong ~3 giây nhưng có lúc vọt quá 10 giây; quá hạn thì coi như không có kết quả web, lượt chat vẫn đi tiếp tới TicketFallbackNode |
 
 **Hệ ngoài chỉ một biến**
@@ -167,15 +175,20 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `CHAT_RERANK_SCORE_THRESHOLD` | `0.70` | Ngưỡng lọc ở PostRetrievalRerankNode. **Đang áp lên điểm cosine của `text-embedding-3-small`**, không phải điểm cross-encoder như thiết kế gốc (chưa có cross-encoder) — xem rủi ro ở `docs/specs/known-gaps.md` |
 | `CHAT_MAX_SUB_QUERIES` | `3` | Số câu hỏi con tối đa khi decomposer tách một câu so sánh (task `MULTI`); tối thiểu 2. Mỗi câu hỏi con tốn thêm một lần embedding + tìm Qdrant, và chia nhỏ quota chunk của RetrievalFilteringNode |
 | `CHAT_LLM_RERANK_ENABLED` | `True` | Bật LLMRerankNode (09a): sau ngưỡng điểm, gọi **model Rerank** (purpose `RERANK` ở trang Cấu hình AI; chưa có thì dùng model Extraction) một lần mỗi lượt để giữ lại đúng các chunk trả lời từng câu hỏi con — ngưỡng điểm cosine để lọt chunk chỉ trùng từ khóa (VD bảng tổ hợp xét tuyển có chữ "Công nghệ thông tin" cho câu hỏi chương trình khung). Câu hỏi con không còn chunk nào → WebSearchNode. Lỗi/thiếu cả model Rerank lẫn Extraction → giữ kết quả theo điểm và báo AI admin |
-| `CHAT_LLM_RERANK_SNIPPET_CHARS` | `800` | Mỗi chunk đưa cho model Extraction bị cắt còn ngần này ký tự |
 | `CHAT_LLM_RERANK_RESCUE_MIN_SCORE` | `0.75` | Chốt an toàn: khi LLM rerank loại hết chunk ở **mọi** câu hỏi con, câu hỏi con nào có chunk tốt nhất điểm ≥ ngưỡng này được giữ lại top `RESCUE_KEEP` chunk theo điểm thay vì rơi xuống web search / TicketFallback (VD mẫu đơn nhiều dòng chấm bị model nhỏ coi là biểu mẫu trống) |
 | `CHAT_LLM_RERANK_RESCUE_KEEP` | `2` | Số chunk giữ lại khi chốt an toàn kích hoạt; `0` tắt chốt |
-| `CHAT_WEB_SEARCH_ENABLED` | `False` | Bật WebSearchNode: tìm web (Tavily) cho mỗi câu hỏi con mà rerank không còn chunk nào, trước khi rơi xuống TicketFallbackNode |
-| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB` | `5` | `max_results` gửi Tavily cho mỗi câu hỏi con trượt. Tavily tính credit theo lượt tìm, không theo số kết quả, nên lấy nhiều ứng viên không tốn thêm — trang đúng thường không nằm ở top 2 với câu hỏi tiếng Việt |
-| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN` | `2` | Tổng số trang web tối đa đưa vào `<websearch>` một lượt — chia round-robin: mỗi câu hỏi con trượt được trang tốt nhất trước, phần còn lại theo điểm. Lấy `PER_SUB` ứng viên rồi chỉ giữ ngần này trang điểm cao nhất |
-| `CHAT_WEB_SEARCH_MAX_QUERIES` | `2` | Số lần tìm Tavily tối đa một lượt. Tin nhắn nhiều task có thể có nhiều câu hỏi con trượt, nhưng chỉ `PER_TURN` trang vào prompt nên tìm thêm chỉ tốn credit. Ưu tiên câu hỏi con trượt nặng nhất (chunk tốt nhất có điểm thấp nhất) |
-| `CHAT_WEB_SEARCH_MIN_SCORE` | `0.5` | Bỏ kết quả có điểm liên quan của Tavily dưới ngưỡng này |
+| `CHAT_WEB_SEARCH_ENABLED` | `False` | Bật WebSearchNode: tìm trên website của Trường (Tavily) cho các câu hỏi con mà rerank không còn chunk nào, trước khi rơi xuống TicketFallbackNode. Từ khóa tìm kiếm do code ghép từ các field `web` mà bước classify điền (`app/rag/web_query.py`); không có thì dùng câu hỏi con |
+| `CHAT_WEB_SEARCH_MODE` | `speculative` | `speculative`: task thuộc `SPECULATIVE_TOPICS` bắt đầu tìm ngay đầu nhánh advisory, song song với query transformation + retrieval + rerank. `fallback`: chỉ tìm sau rerank, khi có câu hỏi con không còn chunk |
+| `CHAT_WEB_JUDGE_WITH_CHUNKS` | `true` | Chỉ với `speculative`: trang web được chấm (09c) cho **mọi** câu hỏi con, song song với retrieval + rerank, và generation nhận trang được giữ **cạnh** các chunk (quy định theo văn bản, thông tin theo đợt/năm theo nguồn mới hơn - `common/web_search_context.yaml`). Lý do: rerank chấm "liên quan" chứ không chấm "trả lời được" - kết quả thi 2022 được giữ cho câu "lịch thi đợt gần nhất" và chặn trang lịch thi 2026. Tốn thêm một lần gọi model Rerank cho lượt chủ đề động; bộ chấm lỗi khi mọi câu hỏi con đều có chunk thì không thêm trang web. `false`: chỉ chấm khi có câu hỏi con không còn chunk |
+| `CHAT_WEB_SEARCH_SPECULATIVE_TOPICS` | `hoc_phi,tuyen_sinh,lich_thong_bao,lien_he_co_so` | Các topic được tìm trước: thông tin đổi theo năm học/học kỳ và thường đăng trên website trước khi vào kho văn bản |
+| `CHAT_WEB_SEARCH_MAX_RESULTS_PER_SUB` | `10` | `max_results` gửi Tavily mỗi lần tìm. Tavily tính credit theo lượt tìm, không theo số kết quả. Mọi trang còn lại sau khi bỏ trang chủ/trang danh sách/trang cơ sở khác/trang sau đại học (thạc sĩ, tiến sĩ, cao học - trừ khi câu hỏi hỏi bậc đó)/trang dưới ngưỡng điểm đều được đưa cho bộ chấm trang web (09c), xếp website của topic lên trước, năm học mới trước, rồi theo điểm |
+| `CHAT_WEB_SEARCH_MAX_ANSWERS_PER_SUB` | `2` | Số trang web tối đa có câu trả lời được đưa vào `<websearch>` cho **mỗi câu hỏi con**. Bộ chấm trang web chọn và xếp trang tốt nhất trước; code giữ đúng thứ tự đó, không theo điểm Tavily (thay cho `CHAT_WEB_SEARCH_MAX_RESULTS_PER_TURN`, giới hạn cả lượt) |
+| `CHAT_WEB_SEARCH_MAX_SOURCES` | `3` | Số văn bản chính thức tối đa mà TicketFallback dẫn link (`<web_sources>`): bộ chấm giữ vì đúng chủ đề nhưng đoạn trích không có số liệu. `0` = không dẫn link |
+| `CHAT_WEB_SEARCH_MAX_QUERIES` | `3` | Số lần tìm Tavily tối đa một lượt. Câu hỏi nhiều ý (`MULTI`) tìm riêng cho từng câu hỏi con có web slots, nên bằng `CHAT_MAX_SUB_QUERIES` |
+| `CHAT_WEB_SEARCH_SCORE_FLOOR` | `0.05` | Chỉ bỏ trang rác, và **không áp cho trang thuộc website của chủ đề** (`TOPIC_DOMAINS` trong `app/rag/web_query.py`, VD `ptckt`/`pdt` với học phí): quyết định học phí mới nhất chỉ được Tavily chấm 0.05-0.07. Điểm Tavily phụ thuộc cách viết câu hỏi hơn là độ liên quan (câu hỏi dạng "là bao nhiêu?" chấm trang đúng 0.08, câu từ khóa chấm bài học bổng 0.90), nên việc chọn trang là của **bộ chấm trang web** (WebJudgeNode 09c, model Rerank/Extraction, prompt `agents/web_result_judge.yaml`): trang có câu trả lời → `<websearch>`; văn bản chính thức đúng chủ đề nhưng đoạn trích không có số liệu → TicketFallback dẫn link (`<web_sources>`), không nêu số |
+| `CHAT_WEB_SEARCH_MIN_SCORE` | `0.5` | Chỉ dùng khi bộ chấm trang web không chạy được (thiếu model Rerank/Extraction hoặc lỗi): giữ trang có điểm từ ngưỡng này, kèm cảnh báo `WEB_JUDGE_FAILED` cho AI admin |
 | `CHAT_WEB_SEARCH_RESULT_MAX_CHARS` | `1500` | Cắt nội dung mỗi kết quả — cùng `PER_TURN` giới hạn phần web trong system prompt ở khoảng 3000 ký tự, bất kể câu hỏi dài hay tách thành bao nhiêu câu hỏi con |
+| `WEB_SEARCH_CACHE_REDIS_URL` | `redis://localhost:6380/0` (eval: `/1`) | Redis cache kết quả thô của Tavily, chạy trên instance riêng `redis-cache` (`task db:up`, giới hạn 256 MB, `volatile-lru`: đầy thì xoá entry ít dùng nhất). Không dùng chung instance với `REDIS_URL` vì `maxmemory` áp cho cả instance, sẽ xoá nhầm key budget/Celery có TTL. Key theo câu hỏi đã chuẩn hóa + tham số Tavily; TTL theo topic: học phí 24h, tuyển sinh 6h (tháng 6-8: 1h), lịch/thông báo 3h, liên hệ 7 ngày, còn lại 24h; kết quả rỗng 30 phút; lỗi không cache. Rỗng = không cache. Redis lỗi thì tìm như không có cache |
 | `CHAT_ALLOW_REPAIR_JSON` | `True` | Bật/tắt lệnh gọi LLM sửa lỗi lần 2 khi câu trả lời quên khối `ask_user_form` bắt buộc (`generation_synthesis.py::_repair_missing_ask_form`). Heuristic phát hiện có lỗ hổng biết trước (câu mời đặt điều kiện ở cuối câu, kiểu "..., nếu bạn cần...", không bị nhận diện là câu không ràng buộc) khiến lần gọi sửa đôi khi bịa ra một form không ai hỏi. Tắt thì bỏ hẳn lần gọi sửa: một form thật sự bị quên sẽ không được vá, nhưng không bao giờ bịa form giả |
 
 ### Ví dụ thêm một biến mới
@@ -209,7 +222,7 @@ INGEST_CHUNKING_PREVIEW_MAX_CHUNKS=200
 - `loader.get_templates()` nạp và cache toàn bộ trong bộ nhớ tiến trình **một lần**, lúc gọi đầu
   tiên — sửa file YAML rồi **phải khởi động lại tiến trình** (hoặc gọi
   `reset_templates_cache()` — chỉ dùng trong test) mới thấy hiệu lực, không có hot-reload.
-- `known_metadata_fields.json` (cạnh `loader.py`) là từ vựng khái niệm → tên field chuẩn, render vào
+- `configs/known_metadata_fields.json` là từ vựng khái niệm → tên field chuẩn, render vào
   `ask_user_form_guide.yaml` qua `builder.build_known_metadata_fields_section()`. **Không phải
   whitelist đóng** — LLM vẫn được tự đặt tên field mới cho khái niệm chưa liệt kê; file chỉ ép dùng
   lại đúng tên khi khái niệm trùng một dòng đã có, để tránh một khái niệm bị phân mảnh thành hai tên

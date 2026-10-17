@@ -1,7 +1,6 @@
 """RetrievalFilteringNode - searches every retrieval text of the turn with
 the caller's permission filter, one ranked chunk list per query."""
 
-import asyncio
 import math
 from collections.abc import Sequence
 
@@ -17,13 +16,12 @@ async def retrieve_chunks(
     security: AcademicSecurityContext,
 ) -> list[list[RetrievedChunk]]:
     """Results stay per query (in query order) so rerank can tell which
-    sub-query found nothing; `rerank_chunks` merges them afterwards. The
-    embedding/Qdrant clients are synchronous, hence the worker thread."""
+    sub-query found nothing; `rerank_chunks` merges them afterwards."""
 
     # A per-query quota keeps one sub-query from filling the whole top-k.
     limit = (
         None if len(queries) == 1 else math.ceil(settings.CHAT_RETRIEVAL_MAX_CHUNKS / len(queries))
     )
-    return await asyncio.to_thread(
-        retrieval_service.retrieve_many, list(queries), security=security, limit=limit
+    return await retrieval_service.retrieve_many_async(
+        list(queries), security=security, limit=limit
     )

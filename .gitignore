@@ -24,11 +24,16 @@ wheels/
 .installed.cfg
 *.egg
 
-# Environment variables
+# Environment variables (.env.dev / .env.eval / .env.prod per environment; only examples are committed)
 .env
+.env.*
+!.env.example
+!.env.*.example
 
 # Private ingestion corpus (academic PDFs) - data, not code; keep out of the repo
 storage/private/
+# task db:models:export output: model registry with encrypted API keys
+storage/*.sql
 
 # IDEs
 .vscode/
@@ -49,3 +54,5 @@ htmlcov/
 
 # Celery Beat's local schedule state (shelve DB) - runtime artifact, not code
 celerybeat-schedule*
+# evals.run output (answers, retrieved chunks)
+runs/

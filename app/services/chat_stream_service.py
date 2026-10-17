@@ -18,6 +18,7 @@ disconnect):
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -36,15 +37,19 @@ from app.core.errors.exceptions import (
     UsageLimitExceededException,
 )
 from app.core.security.sanitizer import detect_prompt_injection, sanitize_input_text
+from app.core.timezone import now_ict
 from app.core.usage.cost_calculator import estimate as estimate_cost
 from app.core.usage.usage_recorder import UsageRecorder
 from app.database.repositories.clarification_state import ClarificationRoundRepository
+from app.database.repositories.user_profile import ProfileOwner, UserProfileRepository
+from app.graph.metadata_fields import canonical_profile
 from app.graph.queue_items import (
     ClarificationClosedItem,
     ClarificationItem,
     DoneItem,
     ErrorItem,
     QueueItem,
+    StatusItem,
     TokenItem,
     WarningItem,
 )
@@ -189,6 +194,11 @@ async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenera
             break
         if isinstance(item, TokenItem):
             yield f"event: token\ndata: {json.dumps(item.text, ensure_ascii=False)}\n\n"
+        elif isinstance(item, StatusItem):
+            status: dict[str, str] = {"stage": item.stage}
+            if item.url is not None:
+                status["url"] = item.url
+            yield f"event: status\ndata: {json.dumps(status, ensure_ascii=False)}\n\n"
         elif isinstance(item, ErrorItem):
             payload = {"code": item.code, "message": item.message, "retryable": item.retryable}
             yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -246,11 +256,17 @@ class ChatStreamService:
     ) -> AsyncGenerator[str, None]:
         """Run every check, start the turn, and return the SSE event stream."""
 
+        # The turn's clock starts here, before the Java calls that create the messages, so
+        # the stored total is close to what the user saw count up from sending.
+        started_at = time.perf_counter()
         if body_size > CHAT_REQUEST_MAX_BYTES:
             raise RequestTooLargeException()
 
         conversation_id = request.conversation_id
         round_state = await ClarificationRoundRepository(self._db).get_round(conversation_id)
+        profile = await UserProfileRepository(self._db).get(
+            ProfileOwner.of(caller.security, conversation_id)
+        )
         await self._db.commit()  # get_round may have consumed an expired lease
         pending_round = gate_clarification(round_state, request)
 
@@ -266,7 +282,6 @@ class ChatStreamService:
                     conversation_id=conversation_id,
                     pending=pending_round,
                     action=action,
-                    confirmed_metadata=round_state.confirmed_metadata,
                 )
             assert isinstance(action, ClarificationSubmit)
             prepared = await prepare_submit(
@@ -306,10 +321,11 @@ class ChatStreamService:
             conversation_id=conversation_id,
             message=message,
             caller=caller,
-            confirmed_metadata=round_state.confirmed_metadata,
-            last_calculation=round_state.last_calculation,
+            confirmed_metadata=canonical_profile(profile, now_ict().date()),
+            recent_calculations=round_state.recent_calculations,
             resume=resume,
             claim=claim,
+            started_at=started_at,
         )
 
     def _run_turn(
@@ -320,9 +336,10 @@ class ChatStreamService:
         message: str,
         caller: ChatCaller,
         confirmed_metadata: dict[str, str],
-        last_calculation: LastCalculation | None,
+        recent_calculations: list[LastCalculation],
         resume: ResumeInput | None,
         claim: ClaimContext | None,
+        started_at: float,
     ) -> AsyncGenerator[str, None]:
         assistant_message_id = str(turn["assistantMessage"]["id"])
         user_message_id = str(turn["userMessage"]["id"])
@@ -354,7 +371,7 @@ class ChatStreamService:
             confirmed_metadata=confirmed_metadata,
             history=_history_from_context(turn.get("context") or []),
             resume=resume,
-            last_calculation=last_calculation,
+            recent_calculations=list(recent_calculations),
         )
 
         queue: asyncio.Queue[QueueItem] = asyncio.Queue()
@@ -372,6 +389,7 @@ class ChatStreamService:
                 session_factory=self._session_factory,
                 budget=budget,
                 claim=claim,
+                started_at=started_at,
             )
         )
         _background_tasks.add(task)

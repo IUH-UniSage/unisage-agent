@@ -7,12 +7,13 @@ around `_call_provider` is what's under test here."""
 
 import json
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import app.core.usage.usage_outbox as usage_outbox_module
 from app.core.registry.model_registry import CredentialConfig
+from app.rag.embeddings.google_embedder import GoogleEmbedder
 from app.rag.embeddings.openai_embedder import OpenAIEmbedder
 
 
@@ -141,3 +142,57 @@ async def test_embed_called_from_a_running_event_loop_still_records_usage(
     assert len(captured_outbox) == 1
     assert captured_outbox[0]["status"] == "SUCCESS"
     assert captured_outbox[0]["lines"][0]["inputTokens"] == 7
+
+
+@pytest.mark.asyncio
+async def test_embed_async_records_the_same_one_line_request_as_embed(
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    """Chat retrieval's path: awaited on the server's loop, same usage record as `embed()`."""
+
+    client = _mock_client([[0.3, 0.4]], prompt_tokens=7)
+    embedder = _resolved_embedder(client)
+
+    vectors = await embedder.embed_async(["học phí là bao nhiêu"])
+
+    assert vectors == [[0.3, 0.4]]
+    assert len(captured_outbox) == 1
+    payload = captured_outbox[0]
+    assert payload["purpose"] == "EMBEDDING"
+    assert payload["status"] == "SUCCESS"
+    assert [line["inputTokens"] for line in payload["lines"]] == [7]
+
+
+@pytest.mark.asyncio
+async def test_embed_async_with_injected_client_and_no_credential_records_nothing(
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    client = _mock_client([[0.1, 0.2]])
+    embedder = OpenAIEmbedder(model="text-embedding-3-small", client=client)
+
+    assert await embedder.embed_async(["some chunk text"]) == [[0.1, 0.2]]
+    assert await embedder.embed_async([]) == []
+    assert captured_outbox == []
+
+
+@pytest.mark.asyncio
+async def test_google_embed_async_records_one_line_via_the_async_client(
+    captured_outbox: list[dict[str, Any]],
+) -> None:
+    client = MagicMock()
+    client.aio.models.embed_content = AsyncMock(
+        return_value=MagicMock(embeddings=[MagicMock(values=[0.5, 0.6])])
+    )
+    embedder = GoogleEmbedder()
+    embedder._resolved["model"] = "gemini-embedding-001"
+    embedder._resolved["client"] = client
+    embedder._resolved["credential"] = _credential()
+
+    vectors = await embedder.embed_async(["học phí là bao nhiêu"])
+
+    assert vectors == [[0.5, 0.6]]
+    client.aio.models.embed_content.assert_awaited_once()
+    client.models.embed_content.assert_not_called()
+    assert len(captured_outbox) == 1
+    assert captured_outbox[0]["purpose"] == "EMBEDDING"
+    assert captured_outbox[0]["status"] == "SUCCESS"

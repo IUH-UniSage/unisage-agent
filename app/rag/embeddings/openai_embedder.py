@@ -24,6 +24,7 @@ from app.core.registry.model_registry import (
 )
 from app.core.security.redaction import safe_error_message
 from app.core.usage.usage_recorder import UsageRecorder
+from app.rag.embeddings.timing import EmbedTiming
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +102,7 @@ class OpenAIEmbedder:
         if not texts:
             return []
 
-        model = self.model
-        client = self.client
-        if model is None or client is None:
-            if "model" not in self._resolved:
-                self._resolve_from_registry()
-            model = self._resolved["model"]
-            client = self._resolved["client"]
-
+        model, client = self._ensure_resolved()
         credential = self._resolved.get("credential")
         if credential is None:
             return self._call_provider(client, model, texts)
@@ -141,6 +135,33 @@ class OpenAIEmbedder:
         if not texts:
             return []
 
+        model, client = self._ensure_resolved()
+        return await self._call_provider_tracked(
+            client, model, texts, usage_recorder, budget_tracker
+        )
+
+    async def embed_async(self, texts: list[str]) -> list[list[float]]:
+        """`embed()` for a caller already on an event loop (chat retrieval): the same
+        self-contained recorder and budget, awaited on the caller's loop instead of a fresh
+        loop in a worker thread. The first call resolves the credential (which may probe the
+        provider and Qdrant, synchronously) in a worker thread."""
+
+        if not texts:
+            return []
+
+        model, client = await asyncio.to_thread(self._ensure_resolved)
+        credential = self._resolved.get("credential")
+        if credential is None:
+            return await asyncio.to_thread(self._call_provider, client, model, texts)
+        return await self._embed_recorded(client, model, texts, credential)
+
+    def warm_up(self) -> None:
+        """Resolves the credential now (client, identity guard, Qdrant checks) so the first
+        chat turn does not pay for it - see `app.api.deps.warm_up_retrieval`."""
+
+        self._ensure_resolved()
+
+    def _ensure_resolved(self) -> tuple[str, OpenAI]:
         model = self.model
         client = self.client
         if model is None or client is None:
@@ -148,10 +169,7 @@ class OpenAIEmbedder:
                 self._resolve_from_registry()
             model = self._resolved["model"]
             client = self._resolved["client"]
-
-        return await self._call_provider_tracked(
-            client, model, texts, usage_recorder, budget_tracker
-        )
+        return model, client
 
     async def _embed_recorded(
         self, client: OpenAI, model: str, texts: list[str], credential: CredentialConfig
@@ -165,12 +183,14 @@ class OpenAIEmbedder:
             request_id=str(uuid.uuid4()), purpose="EMBEDDING", budget_tracker=budget_tracker
         )
         status = "ERROR"
+        timing = EmbedTiming(len(texts))
         try:
             reserve_result = await budget_tracker.reserve_request(
                 request_id=recorder.request_id,
                 purpose="EMBEDDING",
                 estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)),
             )
+            timing.mark("budget_reserve_ms")
             if reserve_result != "OK":
                 # Reuses `EmbeddingProviderError` (not `RequestBudgetRejectedError`) so
                 # `app.worker.tasks.ingestion.embed_chunks`'s existing "abort the whole job"
@@ -184,12 +204,15 @@ class OpenAIEmbedder:
             vectors = await self._call_provider_tracked(
                 client, model, texts, recorder, budget_tracker
             )
+            timing.mark("provider_ms")
             status = "SUCCESS"
             return vectors
         finally:
             try:
                 await recorder.close(status=status)
             finally:
+                timing.mark("recorder_close_ms")
+                timing.log(status)
                 try:
                     await redis_client.aclose()
                 except Exception:
