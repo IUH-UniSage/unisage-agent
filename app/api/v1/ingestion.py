@@ -27,11 +27,13 @@ from app.core.errors.exceptions import (
     EmbeddingChunkSetMismatchException,
     EmbeddingDraftLegacyException,
     EmbeddingDraftMismatchException,
+    EmbeddingReindexInProgressException,
     EmptyDocumentTextException,
     IngestionJobNotFoundException,
     UniSageException,
 )
 from app.core.observability.events import ingestion_event_stream
+from app.core.registry.model_registry import open_reindex
 from app.core.security.security import verify_internal_secret
 from app.database.models import DocumentProcessStep
 from app.database.repositories.ingestion_job import (
@@ -170,6 +172,8 @@ async def embed_document(
     """
 
     _require_department_access_within_grant(request, context)
+    if open_reindex() is not None:
+        raise EmbeddingReindexInProgressException()
 
     draft = await get_draft(db_session, request.document_id)
     merged_chunks = _merge_canonical_chunks(request, draft)

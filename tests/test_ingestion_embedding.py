@@ -519,3 +519,35 @@ def test_events_ws_rejects_a_connection_without_the_internal_secret() -> None:
             "/api/v1/ingestion/events", headers=_TRUSTED_HEADERS
         ) as ws:
             ws.receive_json()
+
+
+def test_embedding_returns_409_while_an_embedding_reindex_is_open(client: TestClient) -> None:
+    """Points embedded now would only reach the live collection and be missing after the
+    re-index cutover (changes/17-10-2026-Embedding-Reindex D4)."""
+
+    from app.core.registry import model_registry
+
+    previous = model_registry._current_snapshot
+    model_registry._current_snapshot = model_registry.parse_snapshot(
+        {
+            "version": 7,
+            "generatedAt": "2026-10-17T03:00:00Z",
+            "purposes": {},
+            "embeddingIndexIdentity": None,
+            "embeddingCollection": "unisage_chunks",
+            "embeddingReindex": {
+                "runId": "run-1",
+                "status": "RUNNING",
+                "targetCollection": "unisage_chunks__20261017030000",
+            },
+        }
+    )
+    try:
+        response = client.post(
+            "/api/v1/ingestion/embedding", json=_EMBEDDING_PAYLOAD, headers=_TRUSTED_HEADERS
+        )
+    finally:
+        model_registry._current_snapshot = previous
+
+    assert response.status_code == 409
+    assert response.json()["code"] == 4016

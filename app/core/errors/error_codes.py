@@ -81,6 +81,12 @@ class ErrorCode(Enum):
         "viên để đăng ký lại danh tính embedding hoặc embedding lại toàn bộ dữ liệu trước khi "
         "tiếp tục.",
     )
+    EMBEDDING_REINDEX_IN_PROGRESS = (
+        409,
+        4016,
+        "Hệ thống đang re-index toàn bộ dữ liệu sang mô hình Embedding mới, vui lòng embed lại "
+        "sau khi re-index xong.",
+    )
 
     # 404x Not Found Errors
     OBJECT_NOT_FOUND = (404, 4041, "Không tìm thấy file gốc của tài liệu này.")

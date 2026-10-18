@@ -540,6 +540,75 @@ class BackendJavaClient:
         )
         return list(result) if result else []
 
+    async def claim_embedding_reindex(self, *, limit: int = 1) -> list[dict[str, Any]]:
+        """`POST /internal/embedding-reindex/claim?limit=N` - claims a queued (or lease-expired)
+        embedding re-index run under a fresh `leaseToken`. Each entry carries the target
+        model's credential in plaintext - never log or repr the raw list."""
+
+        result = await self._request(
+            "POST",
+            "/internal/embedding-reindex/claim",
+            authorization=None,
+            params={"limit": limit},
+        )
+        return list(result) if result else []
+
+    async def post_embedding_reindex_progress(
+        self,
+        *,
+        run_id: str,
+        lease_token: str,
+        total_points: int | None,
+        processed_points: int,
+        failed_points: int,
+    ) -> str:
+        """`POST /internal/embedding-reindex/{runId}/progress` - renews the lease and returns
+        the run's status (`CANCELLED` means stop and drop the target collection). A lost lease
+        is `BackendJavaHTTPError` 409."""
+
+        result = await self._request(
+            "POST",
+            f"/internal/embedding-reindex/{run_id}/progress",
+            authorization=None,
+            json_body={
+                "leaseToken": lease_token,
+                "totalPoints": total_points,
+                "processedPoints": processed_points,
+                "failedPoints": failed_points,
+            },
+        )
+        return str((result or {}).get("status", ""))
+
+    async def post_embedding_reindex_result(
+        self,
+        *,
+        run_id: str,
+        lease_token: str,
+        succeeded: bool,
+        total_points: int | None,
+        processed_points: int,
+        failed_points: int,
+        error_message: str | None = None,
+    ) -> str:
+        """`POST /internal/embedding-reindex/{runId}/result` - ends the run; a success makes
+        Java cut over to the target collection. Returns the run's final status. `error_message`
+        must already be redacted."""
+
+        result = await self._request(
+            "POST",
+            f"/internal/embedding-reindex/{run_id}/result",
+            authorization=None,
+            json_body={
+                "leaseToken": lease_token,
+                "succeeded": succeeded,
+                "totalPoints": total_points,
+                "processedPoints": processed_points,
+                "failedPoints": failed_points,
+                "errorMessage": error_message,
+            },
+        )
+        return str((result or {}).get("status", ""))
+
     async def post_verification_result(
         self,
         *,

@@ -117,7 +117,15 @@ class Settings(BaseSettings):
     # --- QDRANT_: the vector store ---
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
+    # Base collection of this environment. The live one starts as this and moves to
+    # `<base>__<timestamp>` after an embedding re-index; the registry snapshot names it.
     QDRANT_COLLECTION: str = "unisage_chunks"
+    # --- EMBEDDING_REINDEX_: re-embedding the live collection into a new model's collection
+    # (changes/17-10-2026-Embedding-Reindex in unisage-backend). Beat polls for a queued run;
+    # each batch of points is one embedding call (3 texts per point). ---
+    EMBEDDING_REINDEX_POLL_INTERVAL_SECONDS: float = 15.0
+    EMBEDDING_REINDEX_BATCH_SIZE: int = 32
+    EMBEDDING_REINDEX_MAX_ATTEMPTS: int = 3
 
     # --- TAVILY_: web search API used by WebSearchNode when retrieval finds nothing for a
     # sub-query (see app/graph/nodes/web_search.py). Empty key = web search is skipped. ---

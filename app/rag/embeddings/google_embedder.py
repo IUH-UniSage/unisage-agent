@@ -93,6 +93,19 @@ async def request_embeddings_async(
     return vectors, _estimate_input_tokens(texts)
 
 
+def _build_client(credential: CredentialConfig) -> Client:
+    connection_info = ProviderConnectionInfo(api_base_url=credential.api_base_url or "")
+    return Client(
+        vertexai=False,
+        api_key=credential.api_key,
+        http_options=HttpOptions(
+            base_url=credential.api_base_url or None,
+            httpx_client=build_provider_http_client_sync(connection_info),
+            httpx_async_client=build_provider_http_client(connection_info),
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class GoogleEmbedder:
     """Embedding provider backed by Google's native `embedContent` API (`google-genai`), for an
@@ -237,6 +250,21 @@ class GoogleEmbedder:
                 except Exception:
                     logger.debug("GoogleEmbedder: closing the Redis client failed", exc_info=True)
 
+    @classmethod
+    def for_credential(cls, credential: CredentialConfig, identity_key: str) -> "GoogleEmbedder":
+        """An embedder for a credential that is not (yet) the ACTIVE one - an embedding re-index
+        target. Skips the registry and the live collection's identity guard: the caller has
+        registered `identity_key`'s identity on the collection it writes to."""
+
+        embedder = cls()
+        embedder._resolved.update(
+            credential=credential,
+            model=credential.model_name or "",
+            client=_build_client(credential),
+            identity_key=identity_key,
+        )
+        return embedder
+
     def _resolve_from_registry(self) -> None:
         embedding_credentials = active_credentials_for("EMBEDDING")
         if len(embedding_credentials) > 1:
@@ -256,16 +284,7 @@ class GoogleEmbedder:
             raise EmbeddingProviderError("no model registry snapshot loaded", credential=credential)
 
         model = credential.model_name or ""
-        connection_info = ProviderConnectionInfo(api_base_url=credential.api_base_url or "")
-        client = Client(
-            vertexai=False,
-            api_key=credential.api_key,
-            http_options=HttpOptions(
-                base_url=credential.api_base_url or None,
-                httpx_client=build_provider_http_client_sync(connection_info),
-                httpx_async_client=build_provider_http_client(connection_info),
-            ),
-        )
+        client = _build_client(credential)
 
         def _embed_probe(probe_texts: list[str]) -> list[list[float]]:
             return self._call_provider(client, model, probe_texts)

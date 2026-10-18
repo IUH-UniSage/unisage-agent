@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Protocol
 
 from app.core.budget.tracker import BudgetTracker
-from app.core.registry.model_registry import get_current_snapshot
+from app.core.registry.model_registry import CredentialConfig, get_current_snapshot
 
 if TYPE_CHECKING:
     from app.core.usage.usage_recorder import UsageRecorder
@@ -55,3 +55,15 @@ def build_embedder() -> EmbeddingProvider:
     if provider == "google":
         return GoogleEmbedder()
     return OpenAIEmbedder()
+
+
+def build_embedder_for(credential: CredentialConfig, identity_key: str) -> EmbeddingProvider:
+    """`build_embedder()` for an explicit, not-yet-ACTIVE credential (an embedding re-index
+    target), whose points carry `identity_key`."""
+
+    from app.rag.embeddings.google_embedder import GoogleEmbedder
+    from app.rag.embeddings.openai_embedder import OpenAIEmbedder
+
+    if credential.provider == "google":
+        return GoogleEmbedder.for_credential(credential, identity_key)
+    return OpenAIEmbedder.for_credential(credential, identity_key)

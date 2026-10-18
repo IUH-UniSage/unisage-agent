@@ -9,6 +9,7 @@ from app.worker.tasks.periodic import (
     refresh_budget_snapshot_task,
     refresh_pricing_snapshot_task,
     release_expired_reservations,
+    run_embedding_reindex,
     verify_pending_credentials,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "refresh_budget_snapshot_task",
     "refresh_pricing_snapshot_task",
     "release_expired_reservations",
+    "run_embedding_reindex",
     "verify_pending_credentials",
 ]
