@@ -73,6 +73,17 @@ class EmbeddingIndexIdentity:
 
 
 @dataclass(frozen=True)
+class EmbeddingReindexRun:
+    """The open (QUEUED/RUNNING) re-index of this environment's index - changes/
+    17-10-2026-Embedding-Reindex (unisage-backend). While it is open, new embeds are refused and
+    payload edits/deletes go to `target_collection` too."""
+
+    run_id: str
+    status: str
+    target_collection: str
+
+
+@dataclass(frozen=True)
 class ModelRegistrySnapshot:
     """The full registry snapshot for one process's lifetime. `version` is the registry's own
     monotonic counter (plan.md "Hot-reload consistency") — carried here, alongside each
@@ -84,6 +95,11 @@ class ModelRegistrySnapshot:
     generated_at: datetime
     purposes: dict[str, tuple[CredentialConfig, ...]]
     embedding_index_identity: EmbeddingIndexIdentity | None
+    # The live Qdrant collection (`embedding_index_identity` is its identity); None from a
+    # backend that predates re-index, which means `settings.QDRANT_COLLECTION`. Defaulted so
+    # existing constructions keep working.
+    embedding_collection: str | None = None
+    embedding_reindex: EmbeddingReindexRun | None = None
 
     def credentials_for(self, purpose: str) -> tuple[CredentialConfig, ...]:
         return self.purposes.get(purpose, ())
@@ -127,6 +143,16 @@ def _parse_identity(raw: dict[str, Any] | None) -> EmbeddingIndexIdentity | None
     )
 
 
+def _parse_reindex(raw: dict[str, Any] | None) -> EmbeddingReindexRun | None:
+    if not raw:
+        return None
+    return EmbeddingReindexRun(
+        run_id=str(raw["runId"]),
+        status=str(raw["status"]),
+        target_collection=str(raw["targetCollection"]),
+    )
+
+
 def parse_snapshot(payload: dict[str, Any]) -> ModelRegistrySnapshot:
     """Pure parse of the raw `GET /snapshot` JSON — no I/O, no startup-gate check, so it's cheap
     to unit test against a hand-built payload."""
@@ -141,6 +167,8 @@ def parse_snapshot(payload: dict[str, Any]) -> ModelRegistrySnapshot:
         generated_at=datetime.fromisoformat(str(payload["generatedAt"]).replace("Z", "+00:00")),
         purposes=purposes,
         embedding_index_identity=_parse_identity(payload.get("embeddingIndexIdentity")),
+        embedding_collection=payload.get("embeddingCollection") or None,
+        embedding_reindex=_parse_reindex(payload.get("embeddingReindex")),
     )
 
 
@@ -153,6 +181,35 @@ def get_current_snapshot() -> ModelRegistrySnapshot | None:
     before `init_model_registry()` has run."""
 
     return _current_snapshot
+
+
+def active_collection() -> str:
+    """The Qdrant collection retrieval and ingestion use: the snapshot's live collection, or
+    `settings.QDRANT_COLLECTION` (the base collection) before a snapshot is loaded / from a
+    backend that predates re-index."""
+
+    snapshot = get_current_snapshot()
+    if snapshot is not None and snapshot.embedding_collection:
+        return snapshot.embedding_collection
+    return settings.QDRANT_COLLECTION
+
+
+def open_reindex() -> EmbeddingReindexRun | None:
+    """The open re-index run, if any - new embeds must wait for it to finish."""
+
+    snapshot = get_current_snapshot()
+    return snapshot.embedding_reindex if snapshot is not None else None
+
+
+def index_collections() -> tuple[str, ...]:
+    """Every collection a payload edit or delete must reach: the live one, plus the target of an
+    open re-index so the cutover does not bring stale points back."""
+
+    collections = [active_collection()]
+    run = open_reindex()
+    if run is not None and run.target_collection not in collections:
+        collections.append(run.target_collection)
+    return tuple(collections)
 
 
 def active_credentials_for(purpose: str) -> tuple[CredentialConfig, ...]:

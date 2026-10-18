@@ -96,10 +96,14 @@ def _patch_qdrant_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.rag.vectorstore import qdrant_store
 
     monkeypatch.setattr(
-        qdrant_store, "collection_has_points", lambda client: client._fake_has_points
+        qdrant_store,
+        "collection_has_points",
+        lambda client, collection=None: client._fake_has_points,
     )
     monkeypatch.setattr(
-        qdrant_store, "get_collection_dimension", lambda client: client._fake_dimension
+        qdrant_store,
+        "get_collection_dimension",
+        lambda client, collection=None: client._fake_dimension,
     )
 
 

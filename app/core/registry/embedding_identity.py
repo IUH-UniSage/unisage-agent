@@ -114,7 +114,7 @@ def ensure_embedding_identity(
     backend_client: BackendJavaClient | None = None,
 ) -> str:
     """Verifies (or, for an empty collection with no identity yet, establishes) that
-    `credential` matches the vector space currently in `settings.QDRANT_COLLECTION`.
+    `credential` matches the vector space currently in the snapshot's live collection.
 
     Returns the `embedding_identity_key` to attach to every point written with this credential.
     Raises `EmbeddingIdentityMismatchError` on any mismatch (never falls back), and
@@ -126,9 +126,10 @@ def ensure_embedding_identity(
     if cached is not None:
         return cached
 
+    collection = snapshot.embedding_collection or settings.QDRANT_COLLECTION
     client = qdrant_client or qdrant_store.get_client()
-    collection_dimension = qdrant_store.get_collection_dimension(client)
-    has_points = qdrant_store.collection_has_points(client)
+    collection_dimension = qdrant_store.get_collection_dimension(client, collection)
+    has_points = qdrant_store.collection_has_points(client, collection)
     identity = snapshot.embedding_index_identity
     bj_client = backend_client or BackendJavaClient()
 
@@ -139,14 +140,14 @@ def ensure_embedding_identity(
                 "embedding identity is registered - refusing to embed. Run "
                 "`python -m app.tools.register_embedding_index_identity` before enabling the "
                 "registry for embedding (no automatic alert wired up yet).",
-                settings.QDRANT_COLLECTION,
+                collection,
             )
             raise EmbeddingIdentityMismatchError(
-                f"collection '{settings.QDRANT_COLLECTION}' already has vectors but no embedding "
+                f"collection '{collection}' already has vectors but no embedding "
                 "identity is registered yet",
                 credential=credential,
             )
-        key = _bootstrap_identity(credential, embed_probe, bj_client)
+        key = _bootstrap_identity(credential, embed_probe, bj_client, collection)
         _verified[cache_key] = key
         return key
 
@@ -174,7 +175,7 @@ def ensure_embedding_identity(
             "embedding identity guard: registered identity dimension=%s does not match "
             "collection '%s''s actual configured dimension=%s (no automatic alert wired up yet).",
             identity.dimension,
-            settings.QDRANT_COLLECTION,
+            collection,
             collection_dimension,
         )
         raise EmbeddingIdentityMismatchError(
@@ -194,7 +195,7 @@ def ensure_embedding_identity(
                 "credential does not match collection '%s''s registered fingerprint - the "
                 "provider may have silently swapped models behind the same name/dimension "
                 "(no automatic alert wired up yet).",
-                settings.QDRANT_COLLECTION,
+                collection,
             )
             raise EmbeddingIdentityMismatchError(
                 "measured embedding fingerprint does not match the collection's registered "
@@ -218,6 +219,7 @@ def _bootstrap_identity(
     credential: CredentialConfig,
     embed_probe: Callable[[list[str]], list[list[float]]],
     bj_client: BackendJavaClient,
+    collection: str,
 ) -> str:
     """Collection is empty and no identity is registered yet — the first ingest batch of the
     currently-running job establishes it itself (plan.md "Khởi tạo danh tính index"): measure
@@ -230,7 +232,7 @@ def _bootstrap_identity(
     try:
         _run_async(
             bj_client.put_embedding_index_identity(
-                collection=settings.QDRANT_COLLECTION,
+                collection=collection,
                 provider=credential.provider or "",
                 model_name=credential.model_name or "",
                 model_source_ref=None,
@@ -252,7 +254,7 @@ def _bootstrap_identity(
             raise EmbeddingProviderError(
                 f"failed to register embedding identity: {exc}", credential=credential
             ) from exc
-        return _reconcile_after_lost_race(credential, fingerprint, bj_client, exc)
+        return _reconcile_after_lost_race(credential, fingerprint, bj_client, exc, collection)
 
 
 def _reconcile_after_lost_race(
@@ -260,10 +262,9 @@ def _reconcile_after_lost_race(
     fingerprint: EmbeddingFingerprint,
     bj_client: BackendJavaClient,
     cause: Exception,
+    collection: str,
 ) -> str:
-    existing = _run_async(
-        bj_client.get_embedding_index_identity(collection=settings.QDRANT_COLLECTION)
-    )
+    existing = _run_async(bj_client.get_embedding_index_identity(collection=collection))
     if existing is None:
         raise EmbeddingProviderError(
             "embedding identity PUT returned 409 but a follow-up GET found none",
@@ -290,7 +291,7 @@ def _reconcile_after_lost_race(
             "embedding identity guard: lost the race to establish collection '%s''s embedding "
             "identity, and the winner used a different provider/model (provider=%s, model=%s) "
             "than this credential (provider=%s, model=%s).",
-            settings.QDRANT_COLLECTION,
+            collection,
             registered.provider,
             registered.model_name,
             credential.provider,
@@ -308,7 +309,7 @@ def _reconcile_after_lost_race(
         logger.error(
             "embedding identity guard: lost the race to establish collection '%s''s embedding "
             "identity, and the winner's fingerprint does not match this credential's.",
-            settings.QDRANT_COLLECTION,
+            collection,
         )
         raise EmbeddingIdentityMismatchError(
             "lost the race to establish the collection's embedding identity, and the winner's "

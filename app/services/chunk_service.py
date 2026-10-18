@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from qdrant_client import QdrantClient
 
 from app.core.errors.exceptions import DocumentChunksNotFoundException
+from app.core.registry.model_registry import index_collections
 from app.database.repositories.chunk import ChunkPageDTO, ChunkRepository
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import IndexedChunk
@@ -87,10 +88,12 @@ class ChunkService:
         return IndexedChunkPageDTO(department_id=department_id, total=total, chunks=chunks)
 
     def delete_indexed_chunk(self, client: QdrantClient, document_id: str, chunk_id: str) -> None:
-        """Remove one chunk's point from the live Qdrant index.
+        """Remove one chunk's point from the live Qdrant index (and from an open re-index's
+        target, so the cutover does not bring it back).
 
         Does not touch the Postgres chunking draft - this only affects what
         is actually retrievable by the RAG pipeline.
         """
 
-        qdrant_store.delete_chunk_point(client, document_id, chunk_id)
+        for collection in index_collections():
+            qdrant_store.delete_chunk_point(client, document_id, chunk_id, collection=collection)
