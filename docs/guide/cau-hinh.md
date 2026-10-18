@@ -117,7 +117,7 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 |---|---|---|
 | `OPENAI_API_KEY` | rỗng | Bắt buộc phải điền để chạy bất kỳ node LLM nào |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Model cho 4 node LLM của graph (classification, HyDE, generation — xem `GraphModels`) |
-| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Model embed cho cả ingest lẫn truy vấn — đổi model này **phải** re-index toàn bộ collection Qdrant vì chiều vector đổi |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Model embed cho cả ingest lẫn truy vấn — đổi model này **phải** re-index toàn bộ collection Qdrant vì chiều vector đổi (Cấu hình AI → Chỉ mục embedding → Re-index, UNISAGE-103) |
 
 **`MINIO_`**
 
@@ -130,6 +130,10 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | Biến | Mặc định | Dùng ở đâu / vì sao |
 |---|---|---|
 | `QDRANT_HOST`/`QDRANT_PORT`/`QDRANT_COLLECTION` | `localhost:6333`, `unisage_chunks` | Vector DB duy nhất (không dùng pgvector) |
+| `QDRANT_COLLECTION` (ý nghĩa) | `unisage_chunks` | **Collection gốc** của môi trường. Collection đang dùng do snapshot model registry trả về (`embeddingCollection`); sau một lượt re-index embedding nó chuyển sang `<gốc>__<yyyyMMddHHmmss>` — không sửa biến này khi đổi model |
+| `EMBEDDING_REINDEX_POLL_INTERVAL_SECONDS` | `15` | Beat hỏi backend có lượt re-index nào đang chờ (task `run_embedding_reindex`, queue ingestion) |
+| `EMBEDDING_REINDEX_BATCH_SIZE` | `32` | Số point embed lại mỗi lần gọi API embedding (3 text/point) |
+| `EMBEDDING_REINDEX_MAX_ATTEMPTS` | `3` | Số lần thử lại một lô bị lỗi (backoff 2s, 4s, ...) trước khi lượt re-index thất bại |
 
 **`TAVILY_`**
 
