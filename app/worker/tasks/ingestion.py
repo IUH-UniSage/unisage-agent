@@ -22,7 +22,7 @@ from app.core.observability.alerting import alert_credential_failure
 from app.core.observability.events import publish_ingestion_event
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.errors import NoAvailableCredentialError
-from app.core.registry.model_registry import get_current_snapshot
+from app.core.registry.model_registry import get_current_snapshot, index_collections
 from app.core.security.redaction import safe_error_message
 from app.core.usage.usage_recorder import UsageRecorder
 from app.integrations.backend_java_client import BackendJavaClient
@@ -201,6 +201,29 @@ async def _enrich_waiting_for_credentials(
             await asyncio.sleep(settings.INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS)
 
 
+def _drop_stale_points(qdrant_client: Any, document_id: str, chunks: list[dict[str, Any]]) -> None:
+    """After re-chunking, the document's points of chunks this set no longer has (a higher
+    `chunk_index`, or one removed in the wizard) would keep answering with the old text: drop
+    them. A chunk that failed this run keeps its previous point (same id). Best effort - the new
+    points are already in, so a failure here is logged, not raised."""
+
+    keep = {f"{document_id}:{Chunk.model_validate(raw).chunk_index}" for raw in chunks}
+    try:
+        for collection in index_collections():
+            dropped = qdrant_store.delete_document_points(
+                qdrant_client, document_id, collection=collection, keep_chunk_ids=keep
+            )
+            if dropped:
+                logger.info(
+                    "document %s: dropped %d stale point(s) from %s",
+                    document_id,
+                    dropped,
+                    collection,
+                )
+    except Exception:
+        logger.warning("document %s: dropping stale points failed", document_id, exc_info=True)
+
+
 async def _run_embed_chunks(
     *,
     embedder: EmbeddingProvider,
@@ -324,6 +347,8 @@ async def _run_embed_chunks(
             percent = round((position + 1) / total * 100)
             update_state(state="PROGRESS", meta={"percent": percent})
             publish({"type": "progress", "percent": percent})
+
+        _drop_stale_points(qdrant_client, document_id, chunks)
 
         failed_chunk_count = sum(1 for r in results if r["status"] == "FAILED")
         if failed_chunk_count > 0:

@@ -132,3 +132,25 @@ async def get_draft(session: AsyncSession, document_id: str) -> DraftDTO | None:
             for chunk in sorted(log.chunks, key=lambda chunk: chunk.chunk_index)
         ],
     )
+
+
+async def delete_draft(session: AsyncSession, document_id: str) -> bool:
+    """Drop the document's process log and its chunks, so its next ingest starts from preview.
+    Returns whether there was one."""
+
+    result = await session.execute(
+        delete(DocumentProcessLog).where(DocumentProcessLog.document_id == document_id)
+    )
+    await session.commit()
+    return bool(getattr(result, "rowcount", 0))
+
+
+async def set_draft_department(session: AsyncSession, document_id: str, department_id: str) -> None:
+    """Move the draft to the document's new department, so resuming the embed after a department
+    change still matches it (`_merge_canonical_chunks` refuses a draft of another department)."""
+
+    log = await _load_log(session, document_id)
+    if log is None or log.department_id == department_id:
+        return
+    log.department_id = department_id
+    await session.commit()
