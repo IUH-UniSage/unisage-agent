@@ -28,6 +28,7 @@ template: |
   - Khai mới (sinh viên: "em là sinh viên khoá 2023 ngành CNTT"; giảng viên, cán bộ: "tôi là tiến sĩ, giảng viên cơ hữu khoa CNTT") hoặc SỬA ("tôi nhầm, khoá 2023 mới đúng") → `{"<field>": "<giá trị mới>"}`; nói giá trị cũ không còn đúng mà không nêu giá trị mới → `{"<field>": null}`.
   - KHÔNG ghi khi hỏi về người/trường hợp khác hoặc giả định ("khoá 2021 thì học phí bao nhiêu?", "nếu học Kế toán thì sao?", "bạn tôi học ngành X", giảng viên/cán bộ hỏi "sinh viên khóa 2022 lớp tôi…"), hay khi giá trị giống hồ sơ. Thuộc tính của người khác thuộc về câu hỏi, không phải hồ sơ của người hỏi.
   - Tên field CHỈ lấy trong bảng dưới; giá trị viết như người dùng nói (đã sửa chính tả).
+  - KHÓA CỦA IUH đánh số từ 2004: "K<N>", "khóa <N>", "khoá <N>" (N có 1-2 chữ số) = NĂM NHẬP HỌC 2004 + N. K17 = 2021, K18 = 2022, K19 = 2023, K20 = 2024, K21 = 2025. TUYỆT ĐỐI KHÔNG đọc K18 thành 2018 hay "khóa 2018". `khoa_nhap_hoc` luôn ghi năm 4 chữ số đã quy đổi ("tôi K18" → "2022"); "khóa 2023" đã là năm thì giữ nguyên.
 
   {profile_fields}
 
@@ -122,6 +123,13 @@ template: |
   User: "à tôi nhầm, khoá 2023 mới đúng, tính lại học phí kỳ này giúp tôi"
   Output: {"tasks": [{"intent": "academic_calculation", "query": "Tính lại học phí học kỳ này giúp tôi, khoá 2023", "routing_mode": null}], "confidence": 0.9, "metadata_updates": {"khoa_nhap_hoc": "2023"}}
   (Sinh viên sửa khoá của chính mình → cập nhật hồ sơ, và vẫn phân loại phần còn lại như bình thường.)
+
+  Lịch sử:
+  "- Người dùng: Làm sao đăng ký học lại?
+  - Trợ lý: Bạn vui lòng cho biết bạn nhập học năm nào (khóa mấy) để mình hướng dẫn thủ tục đăng ký học lại."
+  User: "tôi K18"
+  Output: {"tasks": [{"intent": "academic_advisory", "query": "Thủ tục đăng ký học lại cho sinh viên khóa K18 (nhập học 2022) là gì?", "routing_mode": "SINGLE"}], "confidence": 0.9, "metadata_updates": {"khoa_nhap_hoc": "2022"}}
+  (K18 = 2004 + 18 = 2022, KHÔNG phải 2018. Người dùng trả lời câu hỏi của trợ lý về chính mình → ghép lại câu hỏi đang dở với khóa vừa nêu, và lưu năm nhập học đã quy đổi vào hồ sơ.)
 
   <declared_attributes>
   - khoa_nhap_hoc: 2022 (khóa K18)

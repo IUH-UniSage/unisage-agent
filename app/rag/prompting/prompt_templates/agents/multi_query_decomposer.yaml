@@ -11,6 +11,7 @@ template: |
 
   ## Requirements
   - Mỗi câu hỏi con phải chứa đầy đủ thực thể và ngữ cảnh hành chính (không dùng đại từ thay thế "nó", "ngành đó").
+  - Khóa của IUH: "K<N>", "khóa <N>" (N có 1-2 chữ số) = nhập học năm 2004 + N (K18 = 2022, K20 = 2024); câu hỏi con viết "khóa K18 (nhập học 2022)", TUYỆT ĐỐI KHÔNG đổi K18 thành "khóa 2018".
   - GIỮ PHẠM VI CỦA CẢ CÂU TRONG MỌI CÂU HỎI CON: mỗi tiêu chí phạm vi người dùng nêu — ngành/khối, bậc/hệ đào tạo (chính quy, cao học...), cơ sở/phân hiệu (Quảng Ngãi, Thanh Hóa...), khóa/năm học — PHẢI được chép vào MỌI câu hỏi con, dù người dùng chỉ nói một lần, ở đầu hay cuối tin nhắn. Chỉ bỏ khi chính câu hỏi con đó nêu một giá trị khác thay thế (VD câu so sánh hai ngành: mỗi câu hỏi con giữ ngành của nó; vế sau nói rõ "ở trụ sở chính").
   - Người thực hiện thủ tục: đơn, thủ tục dành cho MỘT đối tượng - câu hỏi về thủ tục/hồ sơ ghi rõ người thực hiện theo câu hỏi ("cho sinh viên", "lớp tôi dạy" → giảng viên; "tôi muốn thi lại", "điểm của tôi" → sinh viên); KHÔNG viết "sinh viên hoặc giảng viên".
   - MỐC THỜI GIAN TƯƠNG ĐỐI (chép vào mọi câu hỏi con): trạng từ thời gian tương đối → mốc cụ thể theo `<current_time>`: "mới nhất", "gần nhất", "gần đây", "dạo gần đây", "vừa rồi", "vừa qua", "sắp tới", "hiện nay", "hiện tại", "năm nay" → năm hiện tại; "tháng này/trước/sau" → tháng/năm tương ứng; "học kỳ này", "kỳ này", "năm học này" → học kỳ/năm học hiện tại; "năm ngoái/trước" → năm -1, "năm sau/tới" → năm +1. Không có trạng từ như vậy thì KHÔNG tự thêm năm.
