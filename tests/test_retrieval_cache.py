@@ -47,8 +47,14 @@ def test_normalize_question_ignores_punctuation_the_classifier_varies() -> None:
     """Measured 20/10/2026: the same standalone question came back with and without
     parentheses, quotes or a colon - none of that changes what is asked."""
 
-    with_parens = 'Ngành CNKT máy tính (chương trình chất lượng cao 2022): học phần "Hệ thống máy tính" học trước môn nào?'
-    without = "ngành cnkt máy tính chương trình chất lượng cao 2022 học phần hệ thống máy tính học trước môn nào"
+    with_parens = (
+        "Ngành CNKT máy tính (chương trình chất lượng cao 2022): "
+        'học phần "Hệ thống máy tính" học trước môn nào?'
+    )
+    without = (
+        "ngành cnkt máy tính chương trình chất lượng cao 2022 "
+        "học phần hệ thống máy tính học trước môn nào"
+    )
     assert rc.normalize_question(with_parens) == without
     assert rc.normalize_question("học kỳ 1") != rc.normalize_question("học kỳ 2")
 
