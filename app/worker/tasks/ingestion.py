@@ -22,7 +22,11 @@ from app.core.observability.alerting import alert_credential_failure
 from app.core.observability.events import publish_ingestion_event
 from app.core.registry.embedding_identity import EmbeddingIdentityMismatchError
 from app.core.registry.errors import NoAvailableCredentialError
-from app.core.registry.model_registry import get_current_snapshot, index_collections
+from app.core.registry.model_registry import (
+    active_collection,
+    get_current_snapshot,
+    index_collections,
+)
 from app.core.security.redaction import safe_error_message
 from app.core.usage.usage_recorder import UsageRecorder
 from app.integrations.backend_java_client import BackendJavaClient
@@ -201,6 +205,60 @@ async def _enrich_waiting_for_credentials(
             await asyncio.sleep(settings.INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS)
 
 
+def _unchanged_chunk_indexes(
+    qdrant_client: Any,
+    document_id: str,
+    chunks: list[dict[str, Any]],
+    *,
+    identity_key: str,
+    department_id: str,
+    access_level: int,
+    is_public: bool,
+    category: str,
+) -> set[int]:
+    """The `chunk_index`es whose live point already holds exactly this content, embedded by
+    the same model, under the same access payload - re-embedding them would spend EXTRACTION
+    and EMBEDDING calls to write back identical vectors, so `embed_chunks` keeps their points
+    as they are. A chunk is only "unchanged" when every one of those fields matches; a point
+    that is missing, was embedded by another model, or differs in any way is embedded again.
+    Best effort: when the lookup fails, every chunk counts as changed."""
+
+    point_ids: dict[str, int] = {}
+    expected: dict[int, str] = {}
+    for raw in chunks:
+        chunk = Chunk.model_validate(raw)
+        point_ids[qdrant_store.chunk_point_id(f"{document_id}:{chunk.chunk_index}")] = (
+            chunk.chunk_index
+        )
+        expected[chunk.chunk_index] = chunk.content
+    try:
+        records = qdrant_store.retrieve_points(qdrant_client, active_collection(), list(point_ids))
+    except Exception:
+        logger.warning(
+            "document %s: reading existing points failed - embedding every chunk",
+            document_id,
+            exc_info=True,
+        )
+        return set()
+
+    unchanged: set[int] = set()
+    for record in records:
+        chunk_index = point_ids.get(str(record.id))
+        payload = record.payload or {}
+        if chunk_index is None:
+            continue
+        if (
+            payload.get("content") == expected[chunk_index]
+            and payload.get("embedding_identity_key") == identity_key
+            and payload.get("department") == department_id
+            and payload.get("access_level") == access_level
+            and bool(payload.get("is_public", False)) == is_public
+            and payload.get("category") == category
+        ):
+            unchanged.add(chunk_index)
+    return unchanged
+
+
 def _drop_stale_points(qdrant_client: Any, document_id: str, chunks: list[dict[str, Any]]) -> None:
     """After re-chunking, the document's points of chunks this set no longer has (a higher
     `chunk_index`, or one removed in the wizard) would keep answering with the old text: drop
@@ -253,11 +311,38 @@ async def _run_embed_chunks(
     total = len(chunks)
     results: list[dict[str, Any]] = []
     overall_status = "SUCCESS"
+
+    def _progress(position: int) -> None:
+        percent = round((position + 1) / total * 100)
+        update_state(state="PROGRESS", meta={"percent": percent})
+        publish({"type": "progress", "percent": percent})
+
     try:
+        # Chunks whose live point is already exactly this (same text, same model, same
+        # access payload) are kept as they are - only the rest costs an EXTRACTION and an
+        # EMBEDDING call. Decided up front so the budget reservation covers only those.
+        unchanged = _unchanged_chunk_indexes(
+            qdrant_client,
+            document_id,
+            chunks,
+            identity_key=embedder.identity_key,
+            department_id=department_id,
+            access_level=access_level,
+            is_public=is_public,
+            category=category,
+        )
+        if unchanged:
+            logger.info(
+                "document %s: %d of %d chunk(s) unchanged - keeping their points",
+                document_id,
+                len(unchanged),
+                total,
+            )
         reserve_result = await budget_tracker.reserve_request(
             request_id=recorder.request_id,
             purpose="INGEST",
-            estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD)) * max(total, 1),
+            estimate_usd=Decimal(str(settings.BUDGET_RESERVATION_FALLBACK_USD))
+            * max(total - len(unchanged), 1),
         )
         if reserve_result != "OK":
             raise RequestBudgetRejectedError("INGEST", reserve_result)
@@ -265,6 +350,10 @@ async def _run_embed_chunks(
         last_extraction_started: float | None = None
         for position, raw_chunk in enumerate(chunks):
             chunk = Chunk.model_validate(raw_chunk)
+            if chunk.chunk_index in unchanged:
+                results.append({"chunk_index": chunk.chunk_index, "status": "UNCHANGED"})
+                _progress(position)
+                continue
             try:
                 last_extraction_started = await _pause_between_extractions(last_extraction_started)
                 enriched = await _enrich_waiting_for_credentials(
@@ -344,9 +433,7 @@ async def _run_embed_chunks(
                     }
                 )
 
-            percent = round((position + 1) / total * 100)
-            update_state(state="PROGRESS", meta={"percent": percent})
-            publish({"type": "progress", "percent": percent})
+            _progress(position)
 
         _drop_stale_points(qdrant_client, document_id, chunks)
 
@@ -364,14 +451,23 @@ async def _run_embed_chunks(
                     "message": partial_failure_message(results, total),
                     "failed_chunk_count": failed_chunk_count,
                     "total_chunk_count": total,
+                    "unchanged_chunk_count": len(unchanged),
                 }
             )
         else:
-            publish({"type": "completed", "state": "SUCCESS"})
+            publish(
+                {
+                    "type": "completed",
+                    "state": "SUCCESS",
+                    "unchanged_chunk_count": len(unchanged),
+                    "total_chunk_count": total,
+                }
+            )
         return {
             "percent": 100,
             "results": results,
             "failed_chunk_count": failed_chunk_count,
+            "unchanged_chunk_count": len(unchanged),
             "total_chunk_count": total,
         }
     except JOB_FATAL_ERRORS as exc:

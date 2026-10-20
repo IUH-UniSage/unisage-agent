@@ -188,7 +188,13 @@ async def embed_document(
         request.is_public,
         user_id=security.user_id,
     )
-    await mark_embedding(db_session, document_id=request.document_id, celery_task_id=task.id)
+    # The draft now mirrors what was dispatched: edited content kept, removed chunks gone.
+    await mark_embedding(
+        db_session,
+        document_id=request.document_id,
+        celery_task_id=task.id,
+        chunks=merged_chunks,
+    )
     return ApiResponse.success(EmbeddingAcceptedResponse(task_id=task.id))
 
 

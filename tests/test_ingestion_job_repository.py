@@ -201,3 +201,61 @@ async def test_get_draft_defaults_chunking_version_to_legacy_for_pre_migration_r
     assert draft.chunks[0].chunking_version == "legacy"
     assert draft.chunks[0].source_type is None
     assert draft.chunks[0].block_index is None
+
+
+@pytest.mark.asyncio
+async def test_mark_embedding_with_chunks_replaces_the_draft_with_what_was_dispatched(
+    db_session: AsyncSession,
+) -> None:
+    """The embed dispatch passes the merged list (edited content, removed chunks
+    gone): the draft must read back exactly that, so the detail page and a later
+    "Chunk & embed lại" see what the index holds, not the pre-edit text."""
+
+    await upsert_chunking_draft(
+        db_session,
+        document_id="doc-1",
+        object_key="docs/handbook.pdf",
+        department_id="CNTT",
+        strategy="recursive",
+        params={},
+        chunks=[_chunk(0, "original 0"), _chunk(1, "original 1"), _chunk(2, "original 2")],
+    )
+
+    await mark_embedding(
+        db_session,
+        document_id="doc-1",
+        celery_task_id="task-abc",
+        chunks=[_chunk(0, "edited 0"), _chunk(2, "original 2")],
+    )
+
+    draft = await get_draft(db_session, "doc-1")
+    assert draft is not None
+    assert draft.current_step == DocumentProcessStep.EMBEDDING
+    assert draft.celery_task_id == "task-abc"
+    assert [(c.chunk_index, c.content) for c in draft.chunks] == [
+        (0, "edited 0"),
+        (2, "original 2"),
+    ]
+    count_result = await db_session.execute(select(func.count()).select_from(DocumentChunk))
+    assert count_result.scalar_one() == 2
+
+
+@pytest.mark.asyncio
+async def test_mark_embedding_without_chunks_leaves_the_draft_chunks_alone(
+    db_session: AsyncSession,
+) -> None:
+    await upsert_chunking_draft(
+        db_session,
+        document_id="doc-1",
+        object_key="docs/handbook.pdf",
+        department_id="CNTT",
+        strategy="recursive",
+        params={},
+        chunks=[_chunk(0, "original 0")],
+    )
+
+    await mark_embedding(db_session, document_id="doc-1", celery_task_id="task-abc")
+
+    draft = await get_draft(db_session, "doc-1")
+    assert draft is not None
+    assert [c.content for c in draft.chunks] == ["original 0"]
