@@ -89,6 +89,17 @@ from app.graph.nodes.query_transformation import (
     extract_standalone_question,
     transform_tasks,
 )
+from app.graph.nodes.retrieval_cache import (
+    CachedTurn,
+    L1Pending,
+    TurnCacheContext,
+    l1_storable,
+    lookup_l1,
+    lookup_l2,
+    open_turn_cache,
+    store_l1,
+    store_l2,
+)
 from app.graph.nodes.retrieval_filtering import retrieve_chunks
 from app.graph.nodes.social_chat import build_social_chat_agent, run_social_chat
 from app.graph.nodes.ticket_fallback import build_ticket_fallback_agent, run_ticket_fallback
@@ -217,30 +228,51 @@ async def _run_graph(
 
     confirmed_metadata = graph_input.confirmed_metadata
 
-    # MessageClassificationNode.
-    classification_agent = build_classification_agent(models.classification)
-    trace.node(
-        "03_MessageClassificationNode",
-        agent=classification_agent,
-        credential=models.generation_credential,
-    )
-    classification = await classify_intent(
-        classification_agent,
-        graph_input.user_message,
-        history=graph_input.history,
-        purpose="CHAT",
-        credential=models.generation_credential,
-        snapshot_version=models.snapshot_version,
-        agent_factory=build_classification_agent,
-        on_failover=_make_failover_applier(models),
-        on_attempt=usage_recorder.bind("MessageClassificationNode"),
-        budget=budget,
-        previous_calculation=calculation_title(graph_input.last_calculation),
-        profile=confirmed_metadata,
-        role=graph_input.security.role,
-        departments=[entry.department_id for entry in graph_input.security.department_access],
-    )
-    trace.prompt("03_MessageClassificationNode", describe_classification(classification))
+    # RetrievalCacheNode, L1: a turn with no history whose question was asked before
+    # under the same scope replays the classifier's tasks and the reranked chunks
+    # (docs/specs/SPEC-retrieval-cache.md) - nodes 03, 06, 08, 09 and 09a are skipped.
+    cache_ctx = await open_turn_cache(graph_input, models)
+    cached_turn: CachedTurn | None = None
+    l1_pending: L1Pending | None = None
+    if cache_ctx is not None and cache_ctx.l1_eligible:
+        cached_turn, l1_pending = await lookup_l1(
+            cache_ctx, graph_input, confirmed_metadata, models.retrieval
+        )
+
+    if cached_turn is not None:
+        trace.node("03_MessageClassificationNode", cached=True)
+        classification = cached_turn.classification
+    else:
+        # MessageClassificationNode.
+        classification_agent = build_classification_agent(models.classification)
+        trace.node(
+            "03_MessageClassificationNode",
+            agent=classification_agent,
+            credential=models.generation_credential,
+        )
+        classification = await classify_intent(
+            classification_agent,
+            graph_input.user_message,
+            history=graph_input.history,
+            purpose="CHAT",
+            credential=models.generation_credential,
+            snapshot_version=models.snapshot_version,
+            agent_factory=build_classification_agent,
+            on_failover=_make_failover_applier(models),
+            on_attempt=usage_recorder.bind("MessageClassificationNode"),
+            budget=budget,
+            previous_calculation=calculation_title(graph_input.last_calculation),
+            profile=confirmed_metadata,
+            role=graph_input.security.role,
+            departments=[entry.department_id for entry in graph_input.security.department_access],
+        )
+        trace.prompt("03_MessageClassificationNode", describe_classification(classification))
+        if l1_pending is not None:
+            l1_pending = (
+                replace(l1_pending, confidence=classification.confidence)
+                if l1_storable(classification)
+                else None
+            )
 
     # A correction of the profile applies at once: saved now, used by every later step.
     confirmed_metadata, changed = apply_updates(
@@ -262,6 +294,9 @@ async def _run_graph(
         budget,
         classification=classification,
         confirmed_metadata=confirmed_metadata,
+        cache_ctx=cache_ctx,
+        cached_turn=cached_turn,
+        l1_pending=l1_pending,
     )
     return replace(output, response_text=notice + output.response_text) if notice else output
 
@@ -276,6 +311,9 @@ async def _classified_turn(
     *,
     classification: IntentClassification,
     confirmed_metadata: dict[str, str],
+    cache_ctx: TurnCacheContext | None = None,
+    cached_turn: CachedTurn | None = None,
+    l1_pending: L1Pending | None = None,
 ) -> GraphOutput:
 
     # IntentRoutingNode (deterministic).
@@ -348,6 +386,9 @@ async def _classified_turn(
         confirmed_metadata=confirmed_metadata,
         calculations=_start_calculations(calculation_tasks, deps, trace),
         queries={task.task_id: task.query for task in calculation_tasks},
+        cache_ctx=cache_ctx,
+        cached_turn=cached_turn,
+        l1_pending=l1_pending if not calculation_tasks else None,
         deps=deps,
         advisory=advisory,
         original_query=advisory_question or graph_input.user_message,
@@ -566,6 +607,9 @@ async def _turn_with_calculations(
     advisory: AdvisoryPart | None,
     original_query: str,
     previous_round: PendingRound | None,
+    cache_ctx: TurnCacheContext | None = None,
+    cached_turn: CachedTurn | None = None,
+    l1_pending: L1Pending | None = None,
 ) -> GraphOutput:
     """Stream order: calculation blocks (Python) → advisory answer (node 10, which only
     starts after the blocks were sent) → one panel for everything still missing. A
@@ -608,6 +652,9 @@ async def _turn_with_calculations(
                 question=advisory.question,
                 budget=budget,
                 before_generation=show_calculations,
+                cache_ctx=cache_ctx,
+                cached_turn=cached_turn,
+                l1_pending=l1_pending,
             )
             output = replace(
                 output,
@@ -999,6 +1046,9 @@ async def _run_advisory_flow(
     budget: BudgetContext | None = None,
     # Called with the first citation index the advisory answer leaves free.
     before_generation: Callable[[int], Awaitable[list[str]]] | None = None,
+    cache_ctx: TurnCacheContext | None = None,
+    cached_turn: CachedTurn | None = None,
+    l1_pending: L1Pending | None = None,
 ) -> GraphOutput:
     """Advisory branch: query transformation → retrieval → rerank → web search
     for the sub-queries rerank left empty → generation (or ticket fallback
@@ -1017,29 +1067,33 @@ async def _run_advisory_flow(
     speculative = _start_speculative_search(web_groups)
 
     # QueryTransformationNode: HyDE per SINGLE task, decomposer per MULTI task.
-    query_transformation_agent = build_query_transformation_agent(models.query_transformation)
-    trace.node(
-        "06_QueryTransformationNode",
-        agent=query_transformation_agent,
-        credential=models.generation_credential,
-    )
-    sub_queries = await transform_tasks(
-        query_transformation_agent,
-        advisory_tasks,
-        decomposer_agent=build_decomposer_agent(models.query_transformation),
-        confirmed_metadata=confirmed_metadata,
-        history=graph_input.history,
-        purpose="CHAT",
-        credential=models.generation_credential,
-        snapshot_version=models.snapshot_version,
-        hyde_agent_factory=build_query_transformation_agent,
-        decomposer_agent_factory=build_decomposer_agent,
-        on_failover=_make_failover_applier(models),
-        on_attempt=usage_recorder.bind("QueryTransformationNode"),
-        budget=budget,
-    )
-    for sub_query in sub_queries:
-        trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
+    if cached_turn is not None:
+        trace.node("06_QueryTransformationNode", cached=True)
+        sub_queries = cached_turn.sub_queries
+    else:
+        query_transformation_agent = build_query_transformation_agent(models.query_transformation)
+        trace.node(
+            "06_QueryTransformationNode",
+            agent=query_transformation_agent,
+            credential=models.generation_credential,
+        )
+        sub_queries = await transform_tasks(
+            query_transformation_agent,
+            advisory_tasks,
+            decomposer_agent=build_decomposer_agent(models.query_transformation),
+            confirmed_metadata=confirmed_metadata,
+            history=graph_input.history,
+            purpose="CHAT",
+            credential=models.generation_credential,
+            snapshot_version=models.snapshot_version,
+            hyde_agent_factory=build_query_transformation_agent,
+            decomposer_agent_factory=build_decomposer_agent,
+            on_failover=_make_failover_applier(models),
+            on_attempt=usage_recorder.bind("QueryTransformationNode"),
+            budget=budget,
+        )
+        for sub_query in sub_queries:
+            trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
     # The standalone question of each sub-query (HyDE's rewrite, or the decomposed
     # question itself) - what the LLM rerank and the web judge judge against.
     questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]
@@ -1068,21 +1122,40 @@ async def _run_advisory_flow(
         else None
     )
 
-    # RetrievalFilteringNode (permission pre-filter on every query).
-    trace.node("08_RetrievalFilteringNode")
-    per_query_chunks = await retrieve_chunks(
-        [sub_query.retrieval_text for sub_query in sub_queries],
-        models.retrieval,
-        graph_input.security,
-    )
-
-    # PostRetrievalRerankNode (per sub-query, then merged).
-    trace.node("09_PostRetrievalRerankNode")
-    rerank_result = rerank_chunks(per_query_chunks)
+    # RetrievalCacheNode, L2: the same standalone questions under the same scope were
+    # retrieved and reranked before - replay the chunk ids (fetched again with the
+    # caller's filter) and skip nodes 08, 09 and 09a.
     admin_warnings: list[AdminWarning] = []
+    l2_lookup = None
+    cached_result = cached_turn.rerank_result if cached_turn is not None else None
+    if cached_result is None and cache_ctx is not None and graph_input.resume is None:
+        l2_lookup = await lookup_l2(cache_ctx, questions, models.retrieval, graph_input.security)
+        cached_result = l2_lookup.result
+
+    if cached_result is not None:
+        trace.node("08_RetrievalFilteringNode", cached=True)
+        rerank_result = cached_result
+        rerank_ok = False  # nothing new to store
+    else:
+        # RetrievalFilteringNode (permission pre-filter on every query).
+        trace.node("08_RetrievalFilteringNode")
+        per_query_chunks = await retrieve_chunks(
+            [sub_query.retrieval_text for sub_query in sub_queries],
+            models.retrieval,
+            graph_input.security,
+        )
+
+        # PostRetrievalRerankNode (per sub-query, then merged).
+        trace.node("09_PostRetrievalRerankNode")
+        rerank_result = rerank_chunks(per_query_chunks)
+        rerank_ok = True
 
     # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
-    if settings.CHAT_LLM_RERANK_ENABLED and rerank_result.has_valid_context:
+    if (
+        cached_result is None
+        and settings.CHAT_LLM_RERANK_ENABLED
+        and rerank_result.has_valid_context
+    ):
         if models.rerank is not None:
             rerank_agent = build_llm_rerank_agent(models.rerank)
             trace.node("09a_LLMRerankNode", agent=rerank_agent, credential=models.rerank_credential)
@@ -1098,6 +1171,7 @@ async def _run_advisory_flow(
             )
             rerank_result = llm_rerank_outcome.result
             if llm_rerank_outcome.failure is not None:
+                rerank_ok = False
                 admin_warnings.append(
                     AdminWarning(
                         code="LLM_RERANK_FAILED",
@@ -1105,10 +1179,31 @@ async def _run_advisory_flow(
                     )
                 )
         elif models.rerank_unavailable is not None:
+            rerank_ok = False
             admin_warnings.append(
                 AdminWarning(
                     code="LLM_RERANK_UNAVAILABLE",
                     message=f"{LLM_RERANK_SKIPPED}{models.rerank_unavailable}",
+                )
+            )
+
+    # RetrievalCacheNode, store: a fully successful miss is written in the background
+    # (write-on-second-sighting applies inside the cache); nothing waits on Redis.
+    if cache_ctx is not None and rerank_ok and rerank_result.has_valid_context:
+        if l2_lookup is not None:
+            _finish_in_background(
+                asyncio.create_task(store_l2(cache_ctx, l2_lookup, rerank_result))
+            )
+        if l1_pending is not None:
+            _finish_in_background(
+                asyncio.create_task(
+                    store_l1(
+                        cache_ctx,
+                        l1_pending,
+                        [task for task, _mode in advisory_tasks],
+                        sub_queries,
+                        rerank_result,
+                    )
                 )
             )
 

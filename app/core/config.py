@@ -263,6 +263,25 @@ class Settings(BaseSettings):
     # carry a TTL. Empty URL = no cache.
     WEB_SEARCH_CACHE_REDIS_URL: str = "redis://localhost:6380/0"
 
+    # Retrieval cache (docs/specs/SPEC-retrieval-cache.md): two exact-match layers that keep
+    # the chunk ids a turn's retrieval + rerank ended with, keyed by the student's question
+    # (L1, no-history turns) or by the standalone questions the classifier wrote (L2). Same
+    # `redis-cache` instance as the web search cache, its own logical DB (2 dev, 3 eval).
+    # Empty URL = no cache; tests and eval run with it empty.
+    RETRIEVAL_CACHE_REDIS_URL: str = "redis://localhost:6380/2"
+    # Absolute TTL (no refresh on hit), +/-10% jitter at write. Event-driven invalidation
+    # (document reverse index, per-department generation) is the real staleness guard;
+    # this is the backstop.
+    RETRIEVAL_CACHE_TTL_SECONDS: int = Field(default=21600, ge=60)
+    # Socket + connect timeout of every cache call: a lookup must never cost more than this.
+    RETRIEVAL_CACHE_TIMEOUT_MS: int = Field(default=50, ge=5)
+    # Bump by hand when the key or value layout changes (the config/prompt fingerprint
+    # already changes the key on its own).
+    RETRIEVAL_CACHE_KEY_VERSION: str = "1"
+    # Write an entry only when the same key missed twice within the TTL: one-off questions
+    # (most follow-ups) then never take space; a repeated one is cached from its 3rd sighting.
+    RETRIEVAL_CACHE_WRITE_ON_SECOND_SIGHTING: bool = True
+
     # GenerationSynthesisNode's JSON-repair follow-up call (see
     # generation_synthesis.py::_repair_missing_ask_form) - a cheap regex
     # heuristic fires a second LLM call when a response reads like it forgot

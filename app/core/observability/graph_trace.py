@@ -121,18 +121,22 @@ class GraphTrace:
         *,
         agent: Agent[None, str] | None = None,
         credential: CredentialConfig | None = None,
+        cached: bool = False,
     ) -> None:
+        """`cached=True`: the node's outcome came from the retrieval cache (no model ran)."""
+
         self._end_current_node()
         self._current = (name, time.perf_counter())
         if self._on_status is not None:
             self._on_status(name, None)
         logger.info(
-            "node=%s model=%s thinking=%s credential=%s conversation_id=%s message_id=%s "
-            "user_id=%s ip=%s",
+            "node=%s model=%s thinking=%s credential=%s cached=%s conversation_id=%s "
+            "message_id=%s user_id=%s ip=%s",
             name,
             _model_name(agent.model if agent is not None else None),
             _thinking_label(agent),
             _credential_label(credential),
+            cached,
             self._conversation_id,
             self._message_id,
             self._user_id,
