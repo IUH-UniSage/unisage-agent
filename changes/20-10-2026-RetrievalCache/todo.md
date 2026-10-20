@@ -64,7 +64,7 @@ sadd/smembers/expire/exists/scan_iter/pipeline tối thiểu). `default_cache()`
 ## Task 3: Đo độ ổn định câu độc lập (cổng cho L2)
 
 > Script và task đã có (`app/tools/retrieval_cache_stability.py`, `task db:retrieval-cache-stability`).
-> Chưa chạy: cần gọi model CHAT thật (50 câu x 3 lần). Chạy xong ghi kết quả vào plan.md.
+> Đã chạy 20/10: 47,9 % ổn định hoàn toàn, 79,2 % ổn định 2/3 → giữ L2, xem plan.md.
 
 **Description:** Script `app/tools/retrieval_cache_stability.py`: đọc bộ câu hỏi eval, gọi
 classifier N lần (mặc định 3) cho mỗi câu, chuẩn hoá câu độc lập, in tỷ lệ câu có N lần
@@ -72,12 +72,12 @@ ra cùng khoá, và top câu không ổn định. Thêm `task db:retrieval-cache
 
 **Acceptance criteria:**
 
-- [ ] In: tổng câu, % ổn định hoàn toàn, % ổn định ≥ 2/3, 10 ví dụ lệch.
-- [ ] Ghi kết quả vào `plan.md` mục Open Questions kèm quyết định giữ/cắt L2.
+- [x] In: tổng câu, % ổn định hoàn toàn, % ổn định ≥ 2/3, 10 ví dụ lệch.
+- [x] Ghi kết quả vào `plan.md` mục Open Questions kèm quyết định giữ/cắt L2.
 
 **Verification:**
 
-- [ ] Chạy tay `task db:retrieval-cache-stability env=eval -- --limit 50`
+- [x] Chạy tay `task db:retrieval-cache-stability env=eval -- --limit 50`
 
 **Dependencies:** Task 1
 

@@ -54,7 +54,11 @@ STATS_TTL_SECONDS = 30 * 24 * 3600
 LOCK_TTL_MS = 10_000
 TTL_JITTER = 0.10
 
-_TRAILING_PUNCTUATION = "?!.,;:…\"'`"
+# Every punctuation mark goes (not only the trailing ones): the classifier writes the same
+# standalone question with or without parentheses, quotes or a colon from one call to the
+# next (measured 20/10/2026, changes/20-10-2026-RetrievalCache/plan.md), and none of them
+# changes what is asked. Letters, digits and spaces are all that is left.
+_PUNCTUATION = re.compile(r"[^\w\s]+", re.UNICODE)
 
 
 # --------------------------------------------------------------------------- pure helpers
@@ -62,13 +66,13 @@ _TRAILING_PUNCTUATION = "?!.,;:…\"'`"
 
 def normalize_question(text: str) -> str:
     """The exact-match form of a question. NFC first: Vietnamese typed on different
-    devices arrives composed or decomposed and must hash the same. Then casefold, one
-    space between words, no leading/trailing punctuation. Digits, course codes and
-    years stay as they are - "học kỳ 1" and "học kỳ 2" are different questions."""
+    devices arrives composed or decomposed and must hash the same. Then casefold, every
+    punctuation mark dropped, one space between words. Digits, course codes and years
+    stay as they are - "học kỳ 1" and "học kỳ 2" are different questions."""
 
     text = unicodedata.normalize("NFC", text).casefold()
-    text = re.sub(r"\s+", " ", text).strip()
-    return text.strip(_TRAILING_PUNCTUATION + " ")
+    text = _PUNCTUATION.sub(" ", text).replace("_", " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def canonical_json(value: Any) -> str:

@@ -39,8 +39,18 @@ def test_normalize_question_is_nfc_casefolded_and_punctuation_free() -> None:
 def test_normalize_question_keeps_digits_and_codes() -> None:
     assert (
         rc.normalize_question("Môn 2101234 học kỳ 2 năm 2025-2026.")
-        == "môn 2101234 học kỳ 2 năm 2025-2026"
+        == "môn 2101234 học kỳ 2 năm 2025 2026"
     )
+
+
+def test_normalize_question_ignores_punctuation_the_classifier_varies() -> None:
+    """Measured 20/10/2026: the same standalone question came back with and without
+    parentheses, quotes or a colon - none of that changes what is asked."""
+
+    with_parens = 'Ngành CNKT máy tính (chương trình chất lượng cao 2022): học phần "Hệ thống máy tính" học trước môn nào?'
+    without = "ngành cnkt máy tính chương trình chất lượng cao 2022 học phần hệ thống máy tính học trước môn nào"
+    assert rc.normalize_question(with_parens) == without
+    assert rc.normalize_question("học kỳ 1") != rc.normalize_question("học kỳ 2")
 
 
 def _parts(**overrides: object) -> dict[str, object]:

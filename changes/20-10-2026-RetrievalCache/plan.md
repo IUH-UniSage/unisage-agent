@@ -124,9 +124,15 @@ T1 settings + schemas + normalize/key (thuần)
 
 ## Open Questions
 
-- **Task 3 chưa chạy** (20/10): cần model CHAT thật. Lệnh: `task db:retrieval-cache-stability env=eval -- --limit 50 --runs 3`.
-  Kết quả "fully stable" dưới 50 % → cắt L2 (xoá nhánh `lookup_l2`/`store_l2` trong
-  `_run_advisory_flow`, giữ L1). Hiện L2 đang bật vì chi phí vận hành của nó bằng 0 khi miss.
+- **Task 3 đã chạy** (20/10, `gpt-5-mini`, 50 câu eval có dấu x 3 lần, 48 câu học vụ):
+  **23/48 = 47,9 % cho cùng khoá cả 3 lần; 38/48 = 79,2 % trùng ít nhất 2/3.** Lệch chủ yếu
+  do dấu câu (ngoặc, hai chấm, ngoặc kép), model tự chèn "khóa K13 (nhập học 2016)", đồng
+  nghĩa ("phải học trước"/"tiền quyết"), lỗi gõ của model ("vàphải"), và tách SINGLE/MULTI.
+  Quyết định: **giữ L2**, vì (a) sát ngưỡng 50 % và một phần lệch là dấu câu đã được
+  `normalize_question` bỏ hết sau lần đo này, (b) miss L2 chỉ tốn một GET Redis, không tốn
+  LLM. Đo lại bằng `stats` thật sau 2 tuần; hit rate L2 dưới 5 % thì cắt. Chưa đo
+  `--field question_user` (câu không dấu, kiểu sinh viên gõ) - 5 câu đầu của lần chạy
+  trước đều lệch, dự đoán thấp hơn nhiều.
 - **Kiểm tra tay** còn lại (checkpoint L2, Invalidation, L1): chạy với
   `RETRIEVAL_CACHE_REDIS_URL=redis://localhost:6380/3` trong `.env.eval`, xem log
   `retrieval_cache layer=... outcome=...` và `task db:retrieval-cache env=eval -- stats`.
