@@ -229,8 +229,9 @@ nhiều, hoặc chunk đúng lấy được nhưng xếp sai thứ hạng), ph�
 - Không có kho lưu trữ hội thoại lâu dài riêng của mình.
 - Không tạo phòng ban/quyền hạn — đọc từ `department_access` do Gateway bơm, không tự định nghĩa.
 - Không tự đăng ký hay sửa cấu hình model LLM — đó là việc của Super Admin qua `unisage-backend`.
-- Không tự động đổi embedding model dưới bất kỳ hình thức nào — luôn cần re-index có chủ đích, ngoài
-  scope của registry.
+- Không tự động đổi embedding model dưới bất kỳ hình thức nào — luôn cần re-index có chủ đích: Super
+  Admin bắt đầu re-index trên trang Cấu hình AI, agent embed lại toàn bộ sang collection mới, backend
+  cutover khi xong (UNISAGE-103).
 
 ## Open
 

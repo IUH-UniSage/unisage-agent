@@ -15,6 +15,7 @@ from app.worker.budget_reconciliation_tasks import (
     release_expired_reservations_once,
 )
 from app.worker.celery_app import celery_app
+from app.worker.embedding_reindex import run_embedding_reindex_once
 from app.worker.usage_outbox_tasks import drain_usage_outbox_once
 from app.worker.verification_tasks import run_verification_batch, try_acquire_verification_lock
 
@@ -60,6 +61,18 @@ def verify_pending_credentials() -> None:
         asyncio.run(run_verification_batch())
     except Exception:
         logger.exception("verify_pending_credentials: run_verification_batch failed")
+
+
+@celery_app.task(name="run_embedding_reindex", ignore_result=True)
+def run_embedding_reindex() -> None:
+    """Beat-scheduled on the ingestion queue: claims and runs a queued embedding re-index
+    (`app.worker.embedding_reindex`). No arguments, so the target credential never crosses the
+    broker; Java's lease makes a second worker's claim come back empty while one runs."""
+
+    try:
+        asyncio.run(run_embedding_reindex_once())
+    except Exception:
+        logger.exception("run_embedding_reindex: run_embedding_reindex_once failed")
 
 
 @celery_app.task(name="drain_usage_outbox", ignore_result=True)

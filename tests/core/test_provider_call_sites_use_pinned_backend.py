@@ -89,8 +89,12 @@ def _empty_qdrant_collection_no_identity(monkeypatch: pytest.MonkeyPatch) -> Non
     exactly the call this file's `connect_tcp` spies are watching for."""
 
     monkeypatch.setattr(qdrant_store, "get_client", lambda: MagicMock())
-    monkeypatch.setattr(qdrant_store, "collection_has_points", lambda client: False)
-    monkeypatch.setattr(qdrant_store, "get_collection_dimension", lambda client: None)
+    monkeypatch.setattr(
+        qdrant_store, "collection_has_points", lambda client, collection=None: False
+    )
+    monkeypatch.setattr(
+        qdrant_store, "get_collection_dimension", lambda client, collection=None: None
+    )
     # The guard's "already verified" cache is process-global and keyed by
     # (credential.id, revision, snapshot.version) - this file reuses the same ids/version
     # across runs, so a prior test (in this file or elsewhere in the suite) having already

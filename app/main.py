@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 
 from app.api.errors import register_exception_handlers
-from app.api.v1 import chat, documents, health, ingestion
+from app.api.v1 import chat, document_index, documents, health, ingestion
 from app.core.config import settings
 from app.core.lifespan import lifespan
 from app.core.observability.logging_config import configure_logging
@@ -38,6 +38,7 @@ app.include_router(health.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(ingestion.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(document_index.router, prefix="/api/v1")
 
 
 @app.get("/")

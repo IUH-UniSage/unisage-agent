@@ -519,3 +519,240 @@ def test_events_ws_rejects_a_connection_without_the_internal_secret() -> None:
             "/api/v1/ingestion/events", headers=_TRUSTED_HEADERS
         ) as ws:
             ws.receive_json()
+
+
+def test_embedding_returns_409_while_an_embedding_reindex_is_open(client: TestClient) -> None:
+    """Points embedded now would only reach the live collection and be missing after the
+    re-index cutover (changes/17-10-2026-Embedding-Reindex D4)."""
+
+    from app.core.registry import model_registry
+
+    previous = model_registry._current_snapshot
+    model_registry._current_snapshot = model_registry.parse_snapshot(
+        {
+            "version": 7,
+            "generatedAt": "2026-10-17T03:00:00Z",
+            "purposes": {},
+            "embeddingIndexIdentity": None,
+            "embeddingCollection": "unisage_chunks",
+            "embeddingReindex": {
+                "runId": "run-1",
+                "status": "RUNNING",
+                "targetCollection": "unisage_chunks__20261017030000",
+            },
+        }
+    )
+    try:
+        response = client.post(
+            "/api/v1/ingestion/embedding", json=_EMBEDDING_PAYLOAD, headers=_TRUSTED_HEADERS
+        )
+    finally:
+        model_registry._current_snapshot = previous
+
+    assert response.status_code == 409
+    assert response.json()["code"] == 4016
+
+
+# --- UNCHANGED chunks: points already holding exactly this content are kept, not re-embedded ---
+
+_IDENTITY_KEY = "openai:text-embedding-3-small:1536"
+
+
+def _live_point(document_id: str, chunk: dict[str, Any], **payload_overrides: Any) -> Any:
+    """What `retrieve_points` returns for `chunk`'s point when it was embedded as-is
+    under `_EMBEDDING_PAYLOAD`'s access fields by the `_IDENTITY_KEY` model."""
+
+    from types import SimpleNamespace
+
+    from app.rag.vectorstore.qdrant_store import chunk_point_id
+
+    payload = {
+        "content": chunk["content"],
+        "embedding_identity_key": _IDENTITY_KEY,
+        "department": _EMBEDDING_PAYLOAD["department_id"],
+        "access_level": _EMBEDDING_PAYLOAD["access_level"],
+        "is_public": False,
+        "category": "HOC_VU",
+        **payload_overrides,
+    }
+    return SimpleNamespace(
+        id=chunk_point_id(f"{document_id}:{chunk['chunk_index']}"), payload=payload
+    )
+
+
+def _mock_embedding_stack(
+    mock_embedder_cls: MagicMock, mock_enricher_cls: MagicMock, mock_qdrant_store: MagicMock
+) -> None:
+    from app.rag.vectorstore.qdrant_store import chunk_point_id
+
+    mock_embedder_cls.return_value.identity_key = _IDENTITY_KEY
+    mock_embedder_cls.return_value.embed_tracked = AsyncMock(return_value=[[0.1], [0.2], [0.3]])
+    mock_enricher_cls.return_value.enrich_tracked = AsyncMock(
+        return_value=MagicMock(summary="a summary", questions=["Q1?", "Q2?"])
+    )
+    mock_qdrant_store.get_client.return_value = MagicMock()
+    # The task derives point ids through the (patched) module - keep the real function.
+    mock_qdrant_store.chunk_point_id.side_effect = chunk_point_id
+
+
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
+def test_embedding_keeps_points_of_unchanged_chunks(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    client: TestClient,
+) -> None:
+    """Re-embedding a document whose chunks were not edited spends no EXTRACTION or
+    EMBEDDING call: every point already holds that content from the same model."""
+
+    from celery.result import AsyncResult
+
+    _mock_embedding_stack(mock_embedder_cls, mock_enricher_cls, mock_qdrant_store)
+    document_id = "doc-embed-unchanged"
+    draft_chunks = _create_chunking_draft(client, document_id)
+    mock_qdrant_store.retrieve_points.return_value = [
+        _live_point(document_id, chunk) for chunk in draft_chunks
+    ]
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": document_id, "chunks": draft_chunks},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 202, response.text
+    mock_enricher_cls.return_value.enrich_tracked.assert_not_called()
+    mock_embedder_cls.return_value.embed_tracked.assert_not_called()
+    mock_qdrant_store.upsert_chunk.assert_not_called()
+    # The stale-point sweep still runs and keeps every chunk of the request.
+    keep = mock_qdrant_store.delete_document_points.call_args.kwargs["keep_chunk_ids"]
+    assert keep == {f"{document_id}:{chunk['chunk_index']}" for chunk in draft_chunks}
+    result = AsyncResult(response.json()["data"]["task_id"], app=celery_app).result
+    assert result["unchanged_chunk_count"] == len(draft_chunks)
+    assert {entry["status"] for entry in result["results"]} == {"UNCHANGED"}
+    assert result["percent"] == 100
+
+
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
+def test_embedding_re_embeds_a_chunk_whose_content_changed(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    client: TestClient,
+) -> None:
+    from celery.result import AsyncResult
+
+    _mock_embedding_stack(mock_embedder_cls, mock_enricher_cls, mock_qdrant_store)
+    document_id = "doc-embed-edited"
+    draft_chunks = _create_chunking_draft(client, document_id)
+    mock_qdrant_store.retrieve_points.return_value = [
+        _live_point(document_id, chunk) for chunk in draft_chunks
+    ]
+    edited = [{**chunk, "content": "EDITED BY USER"} for chunk in draft_chunks]
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": document_id, "chunks": edited},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 202, response.text
+    assert mock_embedder_cls.return_value.embed_tracked.call_count == len(draft_chunks)
+    assert mock_qdrant_store.upsert_chunk.call_count == len(draft_chunks)
+    result = AsyncResult(response.json()["data"]["task_id"], app=celery_app).result
+    assert result["unchanged_chunk_count"] == 0
+    assert {entry["status"] for entry in result["results"]} == {"SUCCESS"}
+
+
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
+def test_embedding_re_embeds_when_the_live_point_came_from_another_model(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    client: TestClient,
+) -> None:
+    """Same text is not enough: a point embedded by a different model must be redone."""
+
+    _mock_embedding_stack(mock_embedder_cls, mock_enricher_cls, mock_qdrant_store)
+    document_id = "doc-embed-other-model"
+    draft_chunks = _create_chunking_draft(client, document_id)
+    mock_qdrant_store.retrieve_points.return_value = [
+        _live_point(document_id, chunk, embedding_identity_key="google:gemini-embedding:768")
+        for chunk in draft_chunks
+    ]
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": document_id, "chunks": draft_chunks},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 202, response.text
+    assert mock_embedder_cls.return_value.embed_tracked.call_count == len(draft_chunks)
+
+
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
+def test_embedding_treats_every_chunk_as_changed_when_the_lookup_fails(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    client: TestClient,
+) -> None:
+    _mock_embedding_stack(mock_embedder_cls, mock_enricher_cls, mock_qdrant_store)
+    document_id = "doc-embed-lookup-fails"
+    draft_chunks = _create_chunking_draft(client, document_id)
+    mock_qdrant_store.retrieve_points.side_effect = RuntimeError("qdrant down")
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": document_id, "chunks": draft_chunks},
+        headers=_TRUSTED_HEADERS,
+    )
+
+    assert response.status_code == 202, response.text
+    assert mock_embedder_cls.return_value.embed_tracked.call_count == len(draft_chunks)
+
+
+@patch("app.worker.tasks.ingestion.qdrant_store")
+@patch("app.worker.tasks.ingestion.MultiRepresentationEnricher")
+@patch("app.worker.tasks.ingestion.build_embedder")
+def test_embedding_dispatch_writes_the_edited_chunks_back_to_the_draft(
+    mock_embedder_cls: MagicMock,
+    mock_enricher_cls: MagicMock,
+    mock_qdrant_store: MagicMock,
+    client: TestClient,
+) -> None:
+    """After an embed, the job (and the detail page's chunk list behind it) must show
+    the content that was embedded - not the pre-edit draft."""
+
+    _mock_embedding_stack(mock_embedder_cls, mock_enricher_cls, mock_qdrant_store)
+    document_id = "doc-embed-writeback"
+    draft_chunks = _create_chunking_draft(client, document_id)
+    edited = [{**chunk, "content": "Chương trình khung aaaaaaaaaaaaaa"} for chunk in draft_chunks]
+
+    response = client.post(
+        "/api/v1/ingestion/embedding",
+        json={**_EMBEDDING_PAYLOAD, "document_id": document_id, "chunks": edited},
+        headers=_TRUSTED_HEADERS,
+    )
+    assert response.status_code == 202, response.text
+
+    job = client.get(f"/api/v1/ingestion/jobs/{document_id}", headers=_TRUSTED_HEADERS)
+    assert job.status_code == 200
+    body = job.json()["data"]
+    assert body["current_step"] == "embedding"
+    assert [chunk["content"] for chunk in body["chunks"]] == [
+        "Chương trình khung aaaaaaaaaaaaaa" for _ in draft_chunks
+    ]
+    # Structural metadata still comes from the canonical draft, untouched by the edit.
+    assert [chunk["block_index"] for chunk in body["chunks"]] == [
+        chunk["block_index"] for chunk in draft_chunks
+    ]

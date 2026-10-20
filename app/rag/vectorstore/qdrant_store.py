@@ -1,6 +1,6 @@
 import os
 import threading
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -9,10 +9,12 @@ from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.core.config import settings
+from app.core.registry.model_registry import active_collection, get_current_snapshot
 from app.schemas.security import AcademicSecurityContext
 
-# Dimension of OpenAI's `text-embedding-3-small`, the configured default model.
-_EMBEDDING_DIMENSIONS = 1536
+# Dimension of OpenAI's `text-embedding-3-small` - only used to create the live collection
+# before any identity is registered; a re-index target is created with its model's dimension.
+_DEFAULT_EMBEDDING_DIMENSIONS = 1536
 
 _VECTOR_NAMES = ("content_vector", "summary_vector", "questions_vector")
 
@@ -50,46 +52,61 @@ def _is_missing_collection(exc: UnexpectedResponse) -> bool:
     return exc.status_code == 404
 
 
-def ensure_collection(client: QdrantClient) -> None:
-    """Create the collection (3 named vectors + permission payload indexes) if
-    absent. An existing collection is never migrated - drop and recreate it."""
+def _name(collection: str | None) -> str:
+    """`collection`, or the live collection (the snapshot's, else `QDRANT_COLLECTION`)."""
 
-    if client.collection_exists(settings.QDRANT_COLLECTION):
+    return collection or active_collection()
+
+
+def _default_dimension() -> int:
+    snapshot = get_current_snapshot()
+    identity = snapshot.embedding_index_identity if snapshot is not None else None
+    if identity is not None and identity.dimension:
+        return int(identity.dimension)
+    return _DEFAULT_EMBEDDING_DIMENSIONS
+
+
+def ensure_collection(
+    client: QdrantClient, collection: str | None = None, dimension: int | None = None
+) -> None:
+    """Create the collection (3 named vectors + payload indexes) if absent. An existing
+    collection is never migrated - re-index into a new one instead.
+
+    `dimension` defaults to the live identity's (1536 before one is registered)."""
+
+    name = _name(collection)
+    if client.collection_exists(name):
         return
+    size = dimension or _default_dimension()
     client.create_collection(
-        collection_name=settings.QDRANT_COLLECTION,
+        collection_name=name,
         vectors_config={
-            name: models.VectorParams(size=_EMBEDDING_DIMENSIONS, distance=models.Distance.COSINE)
-            for name in _VECTOR_NAMES
+            vector_name: models.VectorParams(size=size, distance=models.Distance.COSINE)
+            for vector_name in _VECTOR_NAMES
         },
     )
-    client.create_payload_index(
-        collection_name=settings.QDRANT_COLLECTION,
-        field_name="department",
-        field_schema=models.PayloadSchemaType.KEYWORD,
-    )
-    client.create_payload_index(
-        collection_name=settings.QDRANT_COLLECTION,
-        field_name="access_level",
-        field_schema=models.PayloadSchemaType.INTEGER,
-    )
-    client.create_payload_index(
-        collection_name=settings.QDRANT_COLLECTION,
-        field_name="is_public",
-        field_schema=models.PayloadSchemaType.BOOL,
-    )
+    for field_name, schema in (
+        ("department", models.PayloadSchemaType.KEYWORD),
+        ("access_level", models.PayloadSchemaType.INTEGER),
+        ("is_public", models.PayloadSchemaType.BOOL),
+        ("document_id", models.PayloadSchemaType.KEYWORD),
+    ):
+        client.create_payload_index(
+            collection_name=name, field_name=field_name, field_schema=schema
+        )
 
 
-def get_collection_dimension(client: QdrantClient) -> int | None:
+def get_collection_dimension(client: QdrantClient, collection: str | None = None) -> int | None:
     """The configured vector size of the collection's named vectors, or `None` if the
     collection doesn't exist yet. All 3 named vectors (`_VECTOR_NAMES`) are always created with
     the same size (`ensure_collection`), so reading `content_vector`'s is representative — used
     by the embedding identity guard (`app.core.registry.embedding_identity`) to sanity-check a
     registered identity's `dimension` against what the collection is actually configured with."""
 
-    if not client.collection_exists(settings.QDRANT_COLLECTION):
+    name = _name(collection)
+    if not client.collection_exists(name):
         return None
-    info = client.get_collection(settings.QDRANT_COLLECTION)
+    info = client.get_collection(name)
     vectors_config = info.config.params.vectors
     if isinstance(vectors_config, dict):
         content_params = vectors_config.get(_VECTOR_NAMES[0])
@@ -99,14 +116,15 @@ def get_collection_dimension(client: QdrantClient) -> int | None:
     return vectors_config.size if vectors_config is not None else None
 
 
-def collection_has_points(client: QdrantClient) -> bool:
+def collection_has_points(client: QdrantClient, collection: str | None = None) -> bool:
     """True if the collection exists and already holds at least one point — used by the
     embedding identity guard to decide whether an empty collection may self-bootstrap its
     identity, or whether a collection with vectors but no registered identity must be refused."""
 
-    if not client.collection_exists(settings.QDRANT_COLLECTION):
+    name = _name(collection)
+    if not client.collection_exists(name):
         return False
-    info = client.get_collection(settings.QDRANT_COLLECTION)
+    info = client.get_collection(name)
     return bool(info.points_count)
 
 
@@ -185,6 +203,7 @@ def search_chunks(
     query_vector: list[float],
     limit: int,
     query_filter: models.Filter | None = None,
+    collection: str | None = None,
 ) -> list[models.ScoredPoint]:
     """Nearest-neighbor search across all 3 named vectors (content/summary/
     questions - see app/rag/enrichment/multi_representation.py), keeping the
@@ -209,7 +228,11 @@ def search_chunks(
     """
 
     return search_chunks_batch(
-        client, query_vectors=[query_vector], limits=[limit], query_filter=query_filter
+        client,
+        query_vectors=[query_vector],
+        limits=[limit],
+        query_filter=query_filter,
+        collection=collection,
     )[0]
 
 
@@ -219,6 +242,7 @@ def search_chunks_batch(
     query_vectors: list[list[float]],
     limits: list[int],
     query_filter: models.Filter | None = None,
+    collection: str | None = None,
 ) -> list[list[models.ScoredPoint]]:
     """`search_chunks` for several queries at once: every query x named
     vector goes out in one `query_batch_points` round trip."""
@@ -235,9 +259,7 @@ def search_chunks_batch(
         for vector_name in _VECTOR_NAMES
     ]
     try:
-        responses = client.query_batch_points(
-            collection_name=settings.QDRANT_COLLECTION, requests=requests
-        )
+        responses = client.query_batch_points(collection_name=_name(collection), requests=requests)
     except UnexpectedResponse as exc:
         # No collection yet (nothing ingested) is a normal state, not a failure. Checked
         # here rather than with a `collection_exists` call first, which would cost every
@@ -264,6 +286,7 @@ def fetch_chunks_by_ids(
     client: QdrantClient,
     chunk_ids: Sequence[str],
     query_filter: models.Filter | None = None,
+    collection: str | None = None,
 ) -> list[models.Record]:
     """The points of `chunk_ids` (payload only), looked up by point id - no embedding
     and no vector search - with `query_filter` (the caller's permissions) still applied.
@@ -278,7 +301,7 @@ def fetch_chunks_by_ids(
         must.append(query_filter)
     try:
         records, _ = client.scroll(
-            collection_name=settings.QDRANT_COLLECTION,
+            collection_name=_name(collection),
             scroll_filter=models.Filter(must=must),
             limit=len(chunk_ids),
             with_payload=True,
@@ -295,7 +318,9 @@ def fetch_chunks_by_ids(
     )
 
 
-def scroll_chunks_by_document(client: QdrantClient, document_id: str) -> list[models.Record]:
+def scroll_chunks_by_document(
+    client: QdrantClient, document_id: str, collection: str | None = None
+) -> list[models.Record]:
     """Return every indexed point (payload only, no vectors) for `document_id`,
     ordered by `chunk_id` (which sorts numerically-by-suffix since it's built
     as f"{document_id}:{chunk_index}").
@@ -312,21 +337,16 @@ def scroll_chunks_by_document(client: QdrantClient, document_id: str) -> list[mo
     Returns an empty list if the collection doesn't exist yet.
     """
 
-    if not client.collection_exists(settings.QDRANT_COLLECTION):
+    name = _name(collection)
+    if not client.collection_exists(name):
         return []
 
     records: list[models.Record] = []
     next_offset = None
     while True:
         batch, next_offset = client.scroll(
-            collection_name=settings.QDRANT_COLLECTION,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="document_id", match=models.MatchValue(value=document_id)
-                    )
-                ]
-            ),
+            collection_name=name,
+            scroll_filter=_document_filter(document_id),
             limit=200,
             offset=next_offset,
             with_payload=True,
@@ -340,7 +360,9 @@ def scroll_chunks_by_document(client: QdrantClient, document_id: str) -> list[mo
     return records
 
 
-def delete_chunk_point(client: QdrantClient, document_id: str, chunk_id: str) -> None:
+def delete_chunk_point(
+    client: QdrantClient, document_id: str, chunk_id: str, collection: str | None = None
+) -> None:
     """Delete one indexed point by its `chunk_id` payload field.
 
     Filtered by `document_id` too so a caller can never delete a point
@@ -348,8 +370,11 @@ def delete_chunk_point(client: QdrantClient, document_id: str, chunk_id: str) ->
     `chunk_id` string for it.
     """
 
+    name = _name(collection)
+    if not client.collection_exists(name):
+        return
     client.delete(
-        collection_name=settings.QDRANT_COLLECTION,
+        collection_name=name,
         points_selector=models.FilterSelector(
             filter=models.Filter(
                 must=[
@@ -363,11 +388,11 @@ def delete_chunk_point(client: QdrantClient, document_id: str, chunk_id: str) ->
     )
 
 
-def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:
+def upsert_chunk(client: QdrantClient, point: ChunkPoint, collection: str | None = None) -> None:
     """Upsert one chunk's point, with its named vectors and resolved payload."""
 
     client.upsert(
-        collection_name=settings.QDRANT_COLLECTION,
+        collection_name=_name(collection),
         points=[
             models.PointStruct(
                 id=point.point_id,
@@ -405,3 +430,144 @@ def upsert_chunk(client: QdrantClient, point: ChunkPoint) -> None:
             )
         ],
     )
+
+
+def _document_filter(document_id: str) -> models.Filter:
+    return models.Filter(
+        must=[models.FieldCondition(key="document_id", match=models.MatchValue(value=document_id))]
+    )
+
+
+def count_points(
+    client: QdrantClient, collection: str | None = None, query_filter: models.Filter | None = None
+) -> int:
+    """Exact number of points (matching `query_filter`); 0 when the collection doesn't exist."""
+
+    name = _name(collection)
+    if not client.collection_exists(name):
+        return 0
+    return client.count(collection_name=name, count_filter=query_filter, exact=True).count
+
+
+def delete_document_points(
+    client: QdrantClient,
+    document_id: str,
+    *,
+    collection: str | None = None,
+    keep_chunk_ids: Collection[str] | None = None,
+) -> int:
+    """Delete every point of `document_id` except those of `keep_chunk_ids` (after a re-embed:
+    the chunks the new set no longer has). Returns how many points were deleted."""
+
+    name = _name(collection)
+    if not client.collection_exists(name):
+        return 0
+    selector = _document_filter(document_id)
+    if keep_chunk_ids:
+        selector = models.Filter(
+            must=selector.must,
+            must_not=[
+                models.HasIdCondition(
+                    has_id=[chunk_point_id(chunk_id) for chunk_id in keep_chunk_ids]
+                )
+            ],
+        )
+    stale = client.count(collection_name=name, count_filter=selector, exact=True).count
+    if stale:
+        client.delete(collection_name=name, points_selector=models.FilterSelector(filter=selector))
+    return stale
+
+
+def set_document_payload(
+    client: QdrantClient,
+    document_id: str,
+    payload: dict[str, Any],
+    *,
+    collection: str | None = None,
+) -> int:
+    """Overwrite `payload`'s keys on every point of `document_id` (vectors untouched). Returns
+    how many points it touched."""
+
+    name = _name(collection)
+    if not client.collection_exists(name):
+        return 0
+    selector = _document_filter(document_id)
+    touched = client.count(collection_name=name, count_filter=selector, exact=True).count
+    if touched:
+        client.set_payload(collection_name=name, payload=payload, points=selector)
+    return touched
+
+
+PointOffset = str | int | UUID | None
+
+
+def scroll_points(
+    client: QdrantClient,
+    collection: str,
+    *,
+    limit: int,
+    offset: PointOffset = None,
+    with_payload: bool = True,
+) -> tuple[list[models.Record], PointOffset]:
+    """One page of `collection` (no vectors) in point id order, and the offset of the next page
+    (None after the last one)."""
+
+    records, next_offset = client.scroll(
+        collection_name=collection,
+        limit=limit,
+        offset=offset,
+        with_payload=with_payload,
+        with_vectors=False,
+    )
+    return list(records), next_offset
+
+
+def point_ids(client: QdrantClient, collection: str, page_size: int = 1000) -> set[str]:
+    """Every point id of `collection`, as strings; empty when it doesn't exist."""
+
+    if not client.collection_exists(collection):
+        return set()
+    ids: set[str] = set()
+    offset: PointOffset = None
+    while True:
+        records, offset = scroll_points(
+            client, collection, limit=page_size, offset=offset, with_payload=False
+        )
+        ids.update(str(record.id) for record in records)
+        if offset is None:
+            return ids
+
+
+def retrieve_points(
+    client: QdrantClient, collection: str, ids: Sequence[str]
+) -> list[models.Record]:
+    """The points `ids` of `collection` with their payload (no vectors)."""
+
+    if not ids:
+        return []
+    return list(
+        client.retrieve(
+            collection_name=collection, ids=list(ids), with_payload=True, with_vectors=False
+        )
+    )
+
+
+def upsert_points(
+    client: QdrantClient, collection: str, points: Sequence[models.PointStruct]
+) -> None:
+    if points:
+        client.upsert(collection_name=collection, points=list(points))
+
+
+def delete_points(client: QdrantClient, collection: str, ids: Sequence[str]) -> None:
+    if ids:
+        client.delete(
+            collection_name=collection, points_selector=models.PointIdsList(points=list(ids))
+        )
+
+
+def delete_collection(client: QdrantClient, collection: str) -> None:
+    """Drop `collection` if it exists - only ever a cancelled or failed re-index target."""
+
+    if client.collection_exists(collection):
+        client.delete_collection(collection_name=collection)

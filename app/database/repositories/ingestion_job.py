@@ -75,24 +75,25 @@ async def upsert_chunking_draft(
         log.celery_task_id = None
         await session.execute(delete(DocumentChunk).where(DocumentChunk.process_log_id == log.id))
 
-    session.add_all(
-        DocumentChunk(
-            id=uuid4(),
-            process_log_id=log.id,
-            chunk_index=chunk.chunk_index,
-            content=chunk.content,
-            region_type=chunk.region_type.value,
-            chunk_metadata=chunk.model_dump(
-                mode="json", exclude={"chunk_index", "content", "region_type"}
-            ),
-        )
-        for chunk in chunks
-    )
+    session.add_all(_chunk_rows(log.id, chunks))
     await session.commit()
 
 
-async def mark_embedding(session: AsyncSession, *, document_id: str, celery_task_id: str) -> None:
+async def mark_embedding(
+    session: AsyncSession,
+    *,
+    document_id: str,
+    celery_task_id: str,
+    chunks: list[Chunk] | None = None,
+) -> None:
     """Flip an existing draft to `EMBEDDING` and record the dispatched task's id.
+
+    `chunks`, when given, is the list that was actually sent to embed (the
+    canonical draft merged with the client's edits, minus the chunks the user
+    removed): it replaces the draft's rows so that what the draft says and what
+    the index holds stay the same thing - the document detail page, the
+    "Chunk & embed lại" flow and the unchanged-chunk check all read the draft
+    back. Without it only the step and task id change.
 
     A no-op if no draft row exists for `document_id` - shouldn't happen in
     practice (embedding always follows a chunking call, which upserts the
@@ -105,7 +106,26 @@ async def mark_embedding(session: AsyncSession, *, document_id: str, celery_task
 
     log.current_step = DocumentProcessStep.EMBEDDING
     log.celery_task_id = celery_task_id
+    if chunks is not None:
+        await session.execute(delete(DocumentChunk).where(DocumentChunk.process_log_id == log.id))
+        session.add_all(_chunk_rows(log.id, chunks))
     await session.commit()
+
+
+def _chunk_rows(process_log_id: Any, chunks: list[Chunk]) -> list[DocumentChunk]:
+    return [
+        DocumentChunk(
+            id=uuid4(),
+            process_log_id=process_log_id,
+            chunk_index=chunk.chunk_index,
+            content=chunk.content,
+            region_type=chunk.region_type.value,
+            chunk_metadata=chunk.model_dump(
+                mode="json", exclude={"chunk_index", "content", "region_type"}
+            ),
+        )
+        for chunk in chunks
+    ]
 
 
 async def get_draft(session: AsyncSession, document_id: str) -> DraftDTO | None:
@@ -132,3 +152,25 @@ async def get_draft(session: AsyncSession, document_id: str) -> DraftDTO | None:
             for chunk in sorted(log.chunks, key=lambda chunk: chunk.chunk_index)
         ],
     )
+
+
+async def delete_draft(session: AsyncSession, document_id: str) -> bool:
+    """Drop the document's process log and its chunks, so its next ingest starts from preview.
+    Returns whether there was one."""
+
+    result = await session.execute(
+        delete(DocumentProcessLog).where(DocumentProcessLog.document_id == document_id)
+    )
+    await session.commit()
+    return bool(getattr(result, "rowcount", 0))
+
+
+async def set_draft_department(session: AsyncSession, document_id: str, department_id: str) -> None:
+    """Move the draft to the document's new department, so resuming the embed after a department
+    change still matches it (`_merge_canonical_chunks` refuses a draft of another department)."""
+
+    log = await _load_log(session, document_id)
+    if log is None or log.department_id == department_id:
+        return
+    log.department_id = department_id
+    await session.commit()

@@ -40,7 +40,11 @@ celery_app.conf.task_queues = (
     Queue(_default_queue, routing_key=_default_queue),
     Queue(INGESTION_QUEUE, routing_key=INGESTION_QUEUE),
 )
-celery_app.conf.task_routes = {"embed_chunks": {"queue": INGESTION_QUEUE}}
+celery_app.conf.task_routes = {
+    "embed_chunks": {"queue": INGESTION_QUEUE},
+    # Runs for as long as re-embedding the whole collection takes - with the embedding jobs.
+    "run_embedding_reindex": {"queue": INGESTION_QUEUE},
+}
 # Embedding tasks run for minutes: a worker takes one task at a time so the
 # others pick up the rest instead of idling while it holds a prefetched batch.
 celery_app.conf.worker_prefetch_multiplier = 1
@@ -74,6 +78,13 @@ celery_app.conf.beat_schedule = {
     "pricing-snapshot-refresh": {
         "task": "refresh_pricing_snapshot",
         "schedule": settings.MODEL_PRICING_SNAPSHOT_REFRESH_SECONDS,
+    },
+    # Embedding re-index claim loop. `expires`: a tick queued behind a running re-index (or
+    # an embed job) is dropped instead of piling up - the next tick claims just as well.
+    "embedding-reindex-claim": {
+        "task": "run_embedding_reindex",
+        "schedule": settings.EMBEDDING_REINDEX_POLL_INTERVAL_SECONDS,
+        "options": {"expires": settings.EMBEDDING_REINDEX_POLL_INTERVAL_SECONDS},
     },
     "budget-release-expired-reservations": {
         "task": "release_expired_reservations",

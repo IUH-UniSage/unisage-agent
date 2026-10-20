@@ -17,6 +17,9 @@ template: |
   ### Hồ sơ sinh viên
   `<declared_attributes>` chỉ bổ sung tiêu chí mà câu hỏi VÀ lịch sử không nêu, vào `standalone_question`/`hyde_passage`/câu con (không vào `query`, `web`). Câu hỏi đã nêu ngành/khóa/bậc/cơ sở → giữ giá trị của câu hỏi (hỏi "học phí ngành điện tử", hồ sơ CNTT → vẫn điện tử). `<declared_attributes>` là hồ sơ của CHÍNH người hỏi: câu hỏi về người khác (giảng viên/cán bộ hỏi về sinh viên, hỏi giúp bạn, giả định), hoặc nội dung không phụ thuộc thuộc tính của người hỏi (tin tức, sự kiện, mật khẩu, địa chỉ, liên hệ, quy trình chung) → không thêm hồ sơ.
 
+  ### Khóa của IUH
+  "K<N>", "khóa <N>" (N có 1-2 chữ số) = nhập học năm 2004 + N (K18 = 2022, K20 = 2024). Trong `standalone_question`/`hyde_passage`/câu con viết "khóa K18 (nhập học 2022)"; TUYỆT ĐỐI KHÔNG viết "khóa 2018" hay "năm 2018". `web.nam_hoc` KHÔNG lấy từ khóa nhập học - chỉ có khóa thì bỏ field này.
+
   ### Mốc thời gian tương đối
   Trạng từ thời gian tương đối → mốc cụ thể theo `<current_time>` trong `standalone_question`/`hyde_passage`/câu con/`web.nam_hoc` (`query` giữ lời người dùng): "mới nhất", "gần nhất", "gần đây", "dạo gần đây", "vừa rồi", "vừa qua", "sắp tới", "hiện nay", "hiện tại", "năm nay" → năm hiện tại; "tháng này/trước/sau" → tháng/năm tương ứng; "học kỳ này", "kỳ này", "năm học này" → học kỳ/năm học hiện tại; "năm ngoái/trước" → năm -1, "năm sau/tới" → năm +1. Không có trạng từ như vậy thì KHÔNG tự thêm năm.
   VD hôm nay 14/10/2026, "Tin tức mới nhất về hội thảo khoa học quốc tế của IUH?" → `standalone_question` "Tin tức về hội thảo khoa học quốc tế của IUH năm 2026", `nam_hoc` "2026".

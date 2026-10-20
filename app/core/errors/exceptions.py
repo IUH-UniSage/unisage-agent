@@ -264,6 +264,15 @@ class EmbeddingChunkSetMismatchException(UniSageException):
         )
 
 
+class EmbeddingReindexInProgressException(UniSageException):
+    """Raised by `POST /ingestion/embedding` while an embedding re-index is open: its points would
+    go to the live collection only and be missing after the cutover (changes/
+    17-10-2026-Embedding-Reindex plan.md D4)."""
+
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.EMBEDDING_REINDEX_IN_PROGRESS)
+
+
 class EmbeddingDraftLegacyException(UniSageException):
     """Raised when `POST /ingestion/embedding`'s canonical draft was not
     produced by the current chunking logic: `chunking_version` differs from

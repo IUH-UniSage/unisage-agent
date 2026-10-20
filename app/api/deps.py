@@ -78,12 +78,17 @@ _retrieval_service: tuple[object, RetrievalService] | None = None
 
 
 def _embedding_setup(snapshot: ModelRegistrySnapshot | None) -> object:
-    """What a resolved embedder depends on: the EMBEDDING credentials and the collection's
-    registered identity. Any other registry change (a chat model, a budget) leaves it."""
+    """What a resolved embedder depends on: the EMBEDDING credentials, the live collection and
+    its registered identity (a re-index cutover changes all three). Any other registry change
+    (a chat model, a budget) leaves it."""
 
     if snapshot is None:
         return None
-    return (snapshot.credentials_for("EMBEDDING"), snapshot.embedding_index_identity)
+    return (
+        snapshot.credentials_for("EMBEDDING"),
+        snapshot.embedding_collection,
+        snapshot.embedding_index_identity,
+    )
 
 
 def _shared_retrieval_service(snapshot: ModelRegistrySnapshot | None) -> RetrievalService:

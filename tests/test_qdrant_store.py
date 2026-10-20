@@ -376,7 +376,7 @@ def test_ensure_collection_creates_department_access_level_and_is_public_payload
 
     ensure_collection(client)
 
-    assert client.create_payload_index.call_count == 3
+    assert client.create_payload_index.call_count == 4
     calls = {
         call.kwargs["field_name"]: call.kwargs["field_schema"]
         for call in client.create_payload_index.call_args_list
@@ -384,6 +384,7 @@ def test_ensure_collection_creates_department_access_level_and_is_public_payload
     assert calls["department"] == PayloadSchemaType.KEYWORD
     assert calls["access_level"] == PayloadSchemaType.INTEGER
     assert calls["is_public"] == PayloadSchemaType.BOOL
+    assert calls["document_id"] == PayloadSchemaType.KEYWORD
     for call in client.create_payload_index.call_args_list:
         assert call.kwargs["collection_name"] == settings.QDRANT_COLLECTION
 
