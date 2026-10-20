@@ -130,9 +130,12 @@ T1 settings + schemas + normalize/key (thuần)
   nghĩa ("phải học trước"/"tiền quyết"), lỗi gõ của model ("vàphải"), và tách SINGLE/MULTI.
   Quyết định: **giữ L2**, vì (a) sát ngưỡng 50 % và một phần lệch là dấu câu đã được
   `normalize_question` bỏ hết sau lần đo này, (b) miss L2 chỉ tốn một GET Redis, không tốn
-  LLM. Đo lại bằng `stats` thật sau 2 tuần; hit rate L2 dưới 5 % thì cắt. Chưa đo
-  `--field question_user` (câu không dấu, kiểu sinh viên gõ) - 5 câu đầu của lần chạy
-  trước đều lệch, dự đoán thấp hơn nhiều.
+  LLM. Đo lại bằng `stats` thật sau 2 tuần; hit rate L2 dưới 5 % thì cắt. Đo thêm
+  `--field question_user` (câu không dấu, viết tắt kiểu sinh viên gõ, 49 câu học vụ):
+  **0/49 ổn định cả 3 lần, 14/49 = 28,6 % trùng 2/3.** Với đầu vào không dấu, classifier
+  phải tự thêm dấu và viết lại nên gần như không lặp được. Kết luận: L2 chỉ có giá trị khi
+  câu đầu vào đã sạch (có dấu, ít viết tắt); phần lớn lợi ích đến từ L1. Giữ L2 nhưng
+  không kỳ vọng; cổng cắt: hit rate L2 trong `stats` < 5 % sau 2 tuần.
 - **Kiểm tra tay** còn lại (checkpoint L2, Invalidation, L1): chạy với
   `RETRIEVAL_CACHE_REDIS_URL=redis://localhost:6380/3` trong `.env.eval`, xem log
   `retrieval_cache layer=... outcome=...` và `task db:retrieval-cache env=eval -- stats`.
