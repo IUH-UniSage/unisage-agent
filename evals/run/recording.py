@@ -45,6 +45,8 @@ class Recording:
     web_queries: list[str] = field(default_factory=list)
     # Searches answered by the result cache, of `len(web_queries)`.
     web_cache_hits: int = 0
+    # Retrieval-cache hits: turns whose chunks came back through `fetch` (by id, no search).
+    retrieval_cache_fetches: int = 0
     ttft_ms: float | None = None
 
 
@@ -118,6 +120,18 @@ class RecordingRetrieval:
         )
         _record(queries, results)
         return results
+
+    def fetch(
+        self, chunk_ids: list[str], *, security: AcademicSecurityContext
+    ) -> list[RetrievedChunk]:
+        """A retrieval-cache hit re-fetches its chunks by id (SPEC-retrieval-cache.md);
+        counted so a run shows which turns skipped the search."""
+
+        chunks = self.inner.fetch(chunk_ids, security=security)
+        recording = current()
+        if recording is not None:
+            recording.retrieval_cache_fetches += 1
+        return chunks
 
 
 def _record(queries: list[str], results: list[list[RetrievedChunk]]) -> None:

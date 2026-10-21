@@ -11,7 +11,9 @@ from pydantic_ai.models.function import FunctionModel
 from app.core.config import settings
 from app.graph.streaming_state import GraphModels
 from app.schemas.retrieval import RetrievedChunk
-from evals.run.recording import RecordingRetrieval
+from app.schemas.security import AcademicSecurityContext
+from evals.run import recording as recording_module
+from evals.run.recording import Recording, RecordingRetrieval
 from evals.run.runner import Job, Runner, access_of, rescore, select_jobs, spread
 from tests.llm_mocks import FakeRetrievalService, make_classification_llm_model
 
@@ -121,8 +123,14 @@ def test_spread_takes_every_category_first() -> None:
 
 
 def test_rescore_rereads_expected_document_ids_from_the_manifest(tmp_path: Path) -> None:
-    row = {"id": "d1", "category": "normal", "expected_doc_ids": ["f1"], "expected_document_ids": ["f1"],
-           "context": [{"document_id": "uuid-1"}], "expect_visible": True}
+    row = {
+        "id": "d1",
+        "category": "normal",
+        "expected_doc_ids": ["f1"],
+        "expected_document_ids": ["f1"],
+        "context": [{"document_id": "uuid-1"}],
+        "expect_visible": True,
+    }
     (tmp_path / "results.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
     rescore(tmp_path, {"f1": {"file_id": "f1", "document_id": "uuid-1", "title": "T"}})
@@ -130,3 +138,25 @@ def test_rescore_rereads_expected_document_ids_from_the_manifest(tmp_path: Path)
     rescored = json.loads((tmp_path / "results.jsonl").read_text(encoding="utf-8"))
     assert rescored["expected_document_ids"] == ["uuid-1"]
     assert rescored["checks"]["recall_at_5"] is True
+
+
+class _FetchingService(FakeRetrievalService):
+    def fetch(self, chunk_ids, *, security):  # type: ignore[no-untyped-def]
+        return [CHUNK] if CHUNK.chunk_id in chunk_ids else []
+
+
+def test_recording_retrieval_passes_fetch_through_and_counts_cache_hits() -> None:
+    """The retrieval cache re-fetches chunks by id on a hit; the eval wrapper must offer
+    `fetch` like the real service (missing it made every hit an error on 21/10/2026)."""
+
+    wrapped = RecordingRetrieval(_FetchingService([CHUNK]))
+    recording = Recording()
+    token = recording_module._current.set(recording)
+    try:
+        chunks = wrapped.fetch(
+            [CHUNK.chunk_id], security=AcademicSecurityContext(role="GUEST", department_access=[])
+        )
+    finally:
+        recording_module._current.reset(token)
+    assert [c.chunk_id for c in chunks] == [CHUNK.chunk_id]
+    assert recording.retrieval_cache_fetches == 1
