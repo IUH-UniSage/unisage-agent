@@ -148,3 +148,9 @@ T1 settings + schemas + normalize/key (thuần)
 - `store_l1` chỉ khi `metadata_updates` rỗng và mọi task là `academic_advisory`; lượt có
   task tính toán truyền `l1_pending=None` xuống.
 - Hook invalidation nằm ở `app/services/retrieval_cache_invalidation.py`, no-op khi cache tắt.
+
+## Known gaps / Phase sau (21/10)
+
+- **Semantic cache cho L1**: chưa làm, có chủ đích. Khoảng trống, lý do, cổng mở lại (hit rate L1
+  < 20 % sau 1–2 tuần log thật) và phác thảo cách làm ghi ở `docs/specs/SPEC-retrieval-cache.md`
+  mục "Known gaps". Không bắt đầu trước khi có số đo hit rate exact-match thật.

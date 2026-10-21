@@ -391,3 +391,38 @@ comment tiếng Anh như phần còn lại của `app/` (tài liệu `docs/`, `c
 ## Open Questions
 
 Không còn. Câu hỏi mới phát sinh trong lúc làm ghi vào `changes/20-10-2026-RetrievalCache/plan.md`.
+
+## Known gaps (ghi 21/10/2026, sẽ làm lại sau)
+
+### Semantic cache cho L1
+
+**Khoảng trống:** L1 chỉ hit khi câu hỏi gốc trùng *nguyên văn* sau chuẩn hoá. Hai sinh viên hỏi
+"học phí ngành CNTT bao nhiêu" và "ngành cntt học phí nhiêu v" là hai khoá khác nhau. Đo 20/10
+trên câu kiểu sinh viên gõ (không dấu, viết tắt): 0/49 câu cho cùng câu độc lập cả 3 lần, nên cả
+L1 lẫn L2 đều khó hit với đầu vào kiểu này. Hit rate thật của L1 chưa đo được vì chưa có traffic.
+
+**Chưa làm vì:** (1) chưa có số đo hit rate exact-match để biết có cần không; (2) rủi ro trả sai
+cho câu "gần giống nhưng khác ý" (2,5–5 % hit sai ở ngưỡng 0,97–0,99 theo vCache) trong khi một
+câu trả lời sai về học vụ đắt hơn nhiều 5 giây tiết kiệm; (3) cần thêm một lượt embedding
+(~400 ms, có phí) cho mỗi miss để tìm láng giềng, và RAM Redis (6 KB/vector) trên instance 256 MB
+dùng chung; (4) Redis hiện tại không có vector search, phải thêm Redis Stack / RediSearch hoặc
+dùng chính Qdrant làm nơi lưu vector câu hỏi.
+
+**Cổng mở lại:** sau 1–2 tuần log thật, `task db:retrieval-cache -- stats` cho hit rate L1 trên lượt
+đầu hội thoại **< 20 %** (tiêu chí 1 của spec không đạt) và `stale = 0`.
+
+**Phác thảo khi làm:**
+- Vẫn giữ exact-match làm lớp đầu; semantic chỉ chạy khi L1 miss.
+- Vector của câu hỏi gốc sau `normalize_question` (không phải HyDE, không phải câu độc lập) để
+  khoá độc lập với LLM; lưu vào một collection Qdrant riêng `question_cache` với payload = các
+  thành phần khoá hiện có (scope, coll, emb, gen, cfg, date) làm filter cứng, chỉ so cosine trong
+  cùng filter.
+- Ngưỡng cao và bảo thủ (bắt đầu 0,97), chỉ chấp nhận khi top-1 vượt ngưỡng và top-2 cách
+  top-1 một khoảng rõ; đo tỷ lệ "hit sai" bằng cách so câu trả lời của hit với câu trả lời
+  chạy thật trên bộ eval trước khi bật.
+- Ghi vẫn theo chính sách thấy-lần-thứ-hai; TTL, invalidation, reverse index, kill switch
+  dùng lại nguyên của L1 (entry semantic trỏ vào cùng bundle chunk_id + điểm).
+- Loại trừ ngay từ đầu: câu có số/mã (mã học phần, số quyết định, năm, K18), vì khác một chữ số
+  là khác câu; câu có intent tính toán; câu có từ phủ định khác nhau ("không", "chưa").
+- Đo trước/sau bằng `evals.run` với bộ `question_user` (câu không dấu) để thấy hit tăng mà
+  recall/leak không đổi.
