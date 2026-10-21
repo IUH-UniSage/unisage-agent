@@ -11,6 +11,10 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from app.core.config import settings
 from app.core.registry.model_registry import active_collection, get_current_snapshot
 from app.rag.retrieval.lexical import BM25_VECTOR, rrf_merge
+
+# Payload key set on a hit only BM25 returned (`search_chunks_batch`); carried into
+# `RetrievedChunk.metadata` so a floor can exempt it instead of trusting its stand-in score.
+LEXICAL_ONLY_FLAG = "lexical_only"
 from app.schemas.security import AcademicSecurityContext
 
 # Dimension of OpenAI's `text-embedding-3-small` - only used to create the live collection
@@ -450,7 +454,16 @@ def search_chunks_batch(
                 ranked.append(dense_point)
             else:
                 lexical_point = sparse_by_id[cast("str | int | UUID", point_id)]
-                ranked.append(lexical_point.model_copy(update={"score": lexical_score}))
+                # `score` is a stand-in (no cosine was measured); the flag is what the floor
+                # and anything else that must not read it as a cosine should look at.
+                ranked.append(
+                    lexical_point.model_copy(
+                        update={
+                            "score": lexical_score,
+                            "payload": {**(lexical_point.payload or {}), LEXICAL_ONLY_FLAG: True},
+                        }
+                    )
+                )
         results.append(ranked)
     return results
 

@@ -114,3 +114,17 @@ def test_score_rerank_keeps_the_retrieval_order_so_lexical_hits_do_not_jump_the_
 
     assert [c.chunk_id for c in result.per_query[0].chunks] == ["d0", "d1", "l0", "l1", "l2"]
     assert [c.chunk_id for c in result.chunks] == ["d0", "d1"]
+
+
+def test_the_floor_exempts_a_lexical_only_hit_by_its_flag_not_by_its_score() -> None:
+    """The floor must not read the lexical stand-in as a cosine: a BM25-only hit passes
+    because it is flagged, a dense hit at the same number does not."""
+
+    flagged = RetrievedChunk(
+        chunk_id="lex", content="", source="s", score=0.30, metadata={"lexical_only": True}
+    )
+    dense_low = RetrievedChunk(chunk_id="d", content="", source="s", score=0.30)
+
+    result = rerank_chunks([[dense_low, flagged]], score_threshold=0.45)
+
+    assert [c.chunk_id for c in result.chunks] == ["lex"]

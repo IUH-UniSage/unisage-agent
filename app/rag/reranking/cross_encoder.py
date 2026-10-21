@@ -38,5 +38,12 @@ def rerank(
     threshold = (
         score_threshold if score_threshold is not None else settings.CHAT_RERANK_SCORE_THRESHOLD
     )
-    filtered = [chunk for chunk in chunks if chunk.score >= threshold]
+    # A BM25-only hit has no cosine: its `score` is the fixed lexical stand-in, not a
+    # relevance measure comparable to the threshold, so it passes the floor on its flag and
+    # is left to the LLM rerank (docs/specs/SPEC-hybrid-retrieval.md, Thiết kế 4-5).
+    filtered = [
+        chunk
+        for chunk in chunks
+        if chunk.score >= threshold or chunk.metadata.get("lexical_only") is True
+    ]
     return RerankResult(has_valid_context=bool(filtered), chunks=filtered)
