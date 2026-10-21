@@ -229,8 +229,8 @@ chạy `runs/hybrid-on` cho demo và lát cắt; (4) ghi recall@5, leak, fallbac
 
 ## Checkpoint: Hoàn tất
 
-- [ ] `task test`, `uv run ruff check app tests`, `uv run ruff format --check app tests`, `uv run mypy app tests`
-- [ ] Eval đạt tiêu chí; PR lên `main`
+- [~] `task test` 2.357 xanh (1 flaky `test_judge` có sẵn, `tests/e2e` lỗi import có sẵn); ruff/mypy sạch trên file đổi, lỗi còn lại ở file khác có từ trước — 21/10
+- [~] Eval đạt tiêu chí 1, 2, 3, 4, 6; tiêu chí 5 (lát cắt mã) thiếu dữ liệu; PR đã mở: agent #26 (draft), backend #31, web #46 — chưa merge — 21/10
 
 ## Phase sau (không làm đợt này)
 
