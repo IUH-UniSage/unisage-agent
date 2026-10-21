@@ -71,9 +71,12 @@ _BOLD_MAGENTA = "\033[1;35m"
 _BOLD_BLUE = "\033[1;34m"
 _BRIGHT_BLUE = "\033[94m"
 _DIM = "\033[2m"
-# Red/yellow stay reserved for real warnings and errors.
+# Yellow stays reserved for warnings; bold red marks errors and, by request, every retrieval
+# cache line (hit, miss, miss_first, miss_second, stale, bypass) plus a graph node served from
+# the cache (`cached=True`), so a turn's cache story stands out when scrolling the log.
 _YELLOW = "\033[33m"
 _BOLD_RED = "\033[1;31m"
+_RETRIEVAL_CACHE_LOGGER = "app.graph.nodes.retrieval_cache"
 _LEVEL_COLORS = {logging.WARNING: _YELLOW, logging.ERROR: _BOLD_RED, logging.CRITICAL: _BOLD_RED}
 _SLOW_NODE_MS = 2000
 # Green: the web search lines that say whether Tavily was answered from the cache - each
@@ -151,8 +154,10 @@ class TraceIdFilter(logging.Filter):
 
 class ColorFormatter(logging.Formatter):
     """Highlights the graph trace (`unisage.graph`) so a turn reads at a glance:
-    node starts cyan, node timings green (magenta when slow), debug dumps blue; and
-    the web search / Tavily cache lines green (a cache hit bold)."""
+    node starts cyan, node timings green (magenta when slow), debug dumps blue; the
+    web search / Tavily cache lines green (a cache hit bold); and the retrieval cache
+    lines (`retrieval_cache layer=... outcome=...`) and nodes skipped thanks to it
+    (`node=... cached=True`) bold red."""
 
     def format(self, record: logging.LogRecord) -> str:
         line = super().format(record)
@@ -171,6 +176,8 @@ class ColorFormatter(logging.Formatter):
         message = record.getMessage()
         if record.name == "google_genai.models":
             return _DIM
+        if record.name == _RETRIEVAL_CACHE_LOGGER and message.startswith("retrieval_cache "):
+            return _BOLD_RED
         if message.startswith(_WEB_SEARCH_PREFIXES.get(record.name, ())):
             return _BOLD_GREEN if message.startswith("Tavily cache HIT") else _GREEN
         if record.name != "unisage.graph":
@@ -180,7 +187,7 @@ class ColorFormatter(logging.Formatter):
             slow = elapsed is not None and int(elapsed.group(1)) >= _SLOW_NODE_MS
             return _BOLD_MAGENTA if slow else _GREEN
         if message.startswith("node="):
-            return _BOLD_CYAN
+            return _BOLD_RED if " cached=True" in message else _BOLD_CYAN
         if message.startswith(("first_token", "graph_done")):
             return _BOLD_BLUE
         if message.startswith("prompt "):
