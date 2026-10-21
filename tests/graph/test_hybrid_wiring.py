@@ -92,3 +92,25 @@ async def test_an_advisory_turn_sends_the_standalone_question_as_lexical_query(
     assert result.response_text == "Trả lời [1]."
     # The lexical side gets the standalone question (first line), not the HyDE passage.
     assert service.last_lexical_queries == ["Học phần 2105618 có bao nhiêu tín chỉ?"]  # type: ignore[attr-defined]
+
+
+def test_score_rerank_keeps_the_retrieval_order_so_lexical_hits_do_not_jump_the_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RRF put the dense hits first; a BM25-only hit's fixed 0.70 must not move it ahead of
+    them (21/10/2026: with the old sort-by-score, 7 keyword-only chunks took the 8-chunk
+    context and the tuition table was cut)."""
+
+    monkeypatch.setattr(settings, "CHAT_CONTEXT_MAX_CHUNKS", 2)
+    dense = [
+        RetrievedChunk(chunk_id=f"d{i}", content="", source="s", score=0.60 - i * 0.01)
+        for i in range(2)
+    ]
+    lexical = [
+        RetrievedChunk(chunk_id=f"l{i}", content="", source="s", score=0.70) for i in range(3)
+    ]
+
+    result = rerank_chunks([dense + lexical], score_threshold=0.45)
+
+    assert [c.chunk_id for c in result.per_query[0].chunks] == ["d0", "d1", "l0", "l1", "l2"]
+    assert [c.chunk_id for c in result.chunks] == ["d0", "d1"]

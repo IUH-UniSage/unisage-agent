@@ -251,3 +251,21 @@ async def test_a_fee_row_far_down_a_table_reaches_the_model() -> None:
 
     (prompt,) = seen
     assert "| 3.1 | - Khối Công nghệ: | | 38.350.000 |" in prompt
+
+
+@pytest.mark.asyncio
+async def test_kept_chunks_follow_the_retrieval_order_not_the_score() -> None:
+    """When the model keeps a BM25-only hit (0.70) next to the dense hit RRF ranked first,
+    the dense hit stays first - otherwise the context cap would take the keyword match."""
+
+    dense = _chunk("dense", 0.59, "Khối Kinh tế 36.260.000")
+    lexical = _chunk("lexical", 0.70, "Danh mục ngành đúng, ngành phù hợp")
+    agent = build_llm_rerank_agent(
+        make_sync_llm_model('{"SQ1": {"C2": "nhắc tới ngành", "C1": "có mức thu"}}')
+    )
+
+    outcome = await llm_rerank(
+        agent, ["Học phí ngành Quản trị kinh doanh"], rerank_chunks([[dense, lexical]])
+    )
+
+    assert [c.chunk_id for c in outcome.result.chunks] == ["dense", "lexical"]

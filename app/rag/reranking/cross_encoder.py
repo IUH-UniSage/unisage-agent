@@ -18,7 +18,14 @@ def rerank(
     *,
     score_threshold: float | None = None,
 ) -> RerankResult:
-    """Sort by score, then drop anything under `score_threshold`.
+    """Drop anything under `score_threshold`, keeping the retrieval order.
+
+    The order is the store's: cosine for dense-only, reciprocal rank fusion for hybrid.
+    It is NOT re-sorted by score here: a BM25-only hit carries the fixed
+    `CHAT_RETRIEVAL_LEXICAL_HIT_SCORE` (0.70), above most dense cosines (0.5-0.6), so
+    sorting by score put keyword-only chunks first and, whenever the LLM rerank kept
+    many, they filled the context cap while the right dense chunks were cut
+    (seen 21/10/2026 on "học phí ngành quản trị kinh doanh").
 
     `score_threshold` defaults to `settings.CHAT_RERANK_SCORE_THRESHOLD` (0.70). With
     hybrid retrieval (docs/specs/SPEC-hybrid-retrieval.md) the graph passes the lower
@@ -31,6 +38,5 @@ def rerank(
     threshold = (
         score_threshold if score_threshold is not None else settings.CHAT_RERANK_SCORE_THRESHOLD
     )
-    ranked = sorted(chunks, key=lambda chunk: chunk.score, reverse=True)
-    filtered = [chunk for chunk in ranked if chunk.score >= threshold]
+    filtered = [chunk for chunk in chunks if chunk.score >= threshold]
     return RerankResult(has_valid_context=bool(filtered), chunks=filtered)
