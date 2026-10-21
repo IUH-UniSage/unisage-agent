@@ -95,3 +95,48 @@ def test_an_unfenced_form_is_cut_out_and_captured() -> None:
 def test_other_json_and_broken_blocks_are_left_in_the_text() -> None:
     original = 'Ví dụ {"type": "other"} và {"type": "ask_user_form", "fields": ['
     assert take_bare_blocks(original) == (original, [])
+
+
+BARE_ANSWER = (
+    'Hiện em hiểu "inh" có thể là viết tắt; em cho biết ngành ạ?\n\n'
+    '{"type":"ask_user_form","about":"self","fields":[{"field":"nganh_hoc",'
+    '"label":"Ngành học","options":[{"id":"cntt","label":"Công nghệ {thông tin}"},'
+    '{"id":"kinh_te","label":"Kinh tế"}]}]}'
+    "\n\nVăn bản liên quan: {xem thêm}."
+)
+BARE_VISIBLE = (
+    'Hiện em hiểu "inh" có thể là viết tắt; em cho biết ngành ạ?\n\n'
+    "\n\nVăn bản liên quan: {xem thêm}."
+)
+
+
+def test_an_unfenced_form_is_held_back_while_streaming() -> None:
+    shown, redactor = _run([BARE_ANSWER])
+
+    assert shown == BARE_VISIBLE
+    assert [block["fields"][0]["field"] for block in redactor.captured] == ["nganh_hoc"]
+
+
+@pytest.mark.parametrize("cut", range(1, len(BARE_ANSWER)))
+def test_an_unfenced_form_split_anywhere_gives_the_same_output(cut: int) -> None:
+    shown, redactor = _run([BARE_ANSWER[:cut], BARE_ANSWER[cut:]])
+
+    assert shown == BARE_VISIBLE
+    assert len(redactor.captured) == 1
+
+
+def test_braces_in_prose_and_other_json_pass_through() -> None:
+    text = 'Ví dụ {"type": "other", "x": 1} và tập {a, b} rồi {\n"type"\n: "ask_user_form"'
+    shown, redactor = _run([text[:7], text[7:20], text[20:]])
+
+    # The last fragment never completes: dropped at finish like an unclosed fence of ours.
+    assert shown == 'Ví dụ {"type": "other", "x": 1} và tập {a, b} rồi '
+    assert redactor.captured == []
+
+
+def test_a_bare_block_at_the_very_end_is_captured_at_finish() -> None:
+    form = '{"type": "confirmed_metadata", "fields": {"program": "cntt"}}'
+    shown, redactor = _run(["Cảm ơn bạn.\n", form])
+
+    assert shown == "Cảm ơn bạn.\n"
+    assert redactor.captured == [{"type": "confirmed_metadata", "fields": {"program": "cntt"}}]

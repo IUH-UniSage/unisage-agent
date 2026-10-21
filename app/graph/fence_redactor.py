@@ -10,6 +10,12 @@ across chunks - and hands the captured blocks to the caller.
 Only ``` up to 7 characters are ever held back, so the visible stream is
 delayed by a few characters at most. Every other code block passes through
 untouched. Spec: docs/specs/SPEC-clarification-panel.md §4.
+
+A model sometimes drops the fence and writes the block bare (seen 21/10/2026: the raw
+`{"type":"ask_user_form",...}` reached the student). So a `{` is held back for a few
+characters too: if what follows is `"type": "<one of ours>"` the object is collected until
+it parses and captured, otherwise the `{` is released (`_BARE_LOOKAHEAD`). Finished,
+non-streamed text goes through `take_bare_blocks` instead.
 """
 
 import json
@@ -21,6 +27,13 @@ CAPTURED_TYPES = frozenset({"ask_user_form", "confirmed_metadata"})
 # Longest language tag we wait for before deciding a fence is not ```json.
 _LANG_LOOKAHEAD = 16
 _JSON_LANG = re.compile(r"json(?![a-z0-9_-])", re.IGNORECASE)
+# A bare block starts like this (whitespace ignored); how many characters after a `{` we wait
+# before deciding it is ordinary text, and how long a bare block may grow before we give up.
+_BARE_LITERAL = '{"type":"'
+_BARE_LOOKAHEAD = 40
+_BARE_MAX = 20_000
+_WS = re.compile(r"\s")
+_TYPE_NAME = re.compile(r'([a-z_]*)("?)')
 
 
 class FenceRedactor:
@@ -29,6 +42,7 @@ class FenceRedactor:
         self._in_fence = False
         self._opening = ""  # the "```json…" text of the open fence, to re-emit if not ours
         self._content = ""  # IN_FENCE: body collected so far
+        self._bare = ""  # BARE: an unfenced block of ours collected so far
         self.captured: list[dict[str, Any]] = []
 
     def feed(self, chunk: str) -> str:
@@ -38,6 +52,9 @@ class FenceRedactor:
         self._pending = ""
         visible: list[str] = []
         while data:
+            if self._bare:
+                data = self._absorb_bare(data, visible)
+                continue
             if self._in_fence:
                 end = data.find(FENCE)
                 if end == -1:
@@ -52,6 +69,21 @@ class FenceRedactor:
                 continue
 
             start = data.find(FENCE)
+            brace = data.find("{")
+            if brace != -1 and (start == -1 or brace < start):
+                visible.append(data[:brace])
+                head = data[brace:]
+                kind = _bare_kind(head)
+                if kind in CAPTURED_TYPES:
+                    self._bare = head[:1]
+                    data = self._absorb_bare(head[1:], visible)
+                    continue
+                if kind == "maybe":
+                    self._pending = head  # not enough characters yet to tell
+                    return "".join(visible)
+                visible.append("{")  # ordinary text
+                data = head[1:]
+                continue
             if start == -1:
                 keep = _partial_fence_suffix(data)
                 visible.append(data[: len(data) - keep])
@@ -83,6 +115,16 @@ class FenceRedactor:
 
         tail = self._pending
         self._pending = ""
+        if self._bare:
+            # Stream ended inside a bare block of ours: capture if it parses, never show it;
+            # whatever followed a complete block is shown.
+            text = self._bare + tail
+            self._bare = ""
+            value, end = _try_decode(text)
+            if isinstance(value, dict) and value.get("type") in CAPTURED_TYPES:
+                self.captured.append(value)
+                return text[end:]
+            return ""
         if not self._in_fence:
             return tail
         self._content += tail
@@ -94,6 +136,25 @@ class FenceRedactor:
                 self.captured.append(parsed)
             return ""
         return self._opening + body
+
+    def _absorb_bare(self, data: str, visible: list[str]) -> str:
+        """Add `data` to the open bare block; when the block is complete, capture it (or
+        show it, if it turns out not to be ours) and return the text after it."""
+
+        self._bare += data
+        value, end = _try_decode(self._bare)
+        if value is None:
+            if len(self._bare) > _BARE_MAX:
+                visible.append(self._bare)
+                self._bare = ""
+            return ""
+        if isinstance(value, dict) and value.get("type") in CAPTURED_TYPES:
+            self.captured.append(value)
+        else:
+            visible.append(self._bare[:end])
+        rest = self._bare[end:]
+        self._bare = ""
+        return rest
 
     def _close_fence(self) -> str:
         self._in_fence = False
@@ -128,6 +189,35 @@ def take_bare_blocks(text: str) -> tuple[str, list[dict[str, Any]]]:
         text = (text[:start].rstrip() + "\n\n" + text[end:].lstrip()).strip()
         search_from = start
     return text, blocks
+
+
+def _bare_kind(head: str) -> str:
+    """For text starting with `{`: the block type if it begins `{"type": "<x>"` (whitespace
+    anywhere), "maybe" while too short to tell, "no" when it is ordinary text."""
+
+    compact = _WS.sub("", head)
+    if not _BARE_LITERAL.startswith(compact[: len(_BARE_LITERAL)]):
+        return "no"
+    if len(compact) <= len(_BARE_LITERAL):
+        return "maybe" if len(head) <= _BARE_LOOKAHEAD else "no"
+    rest = compact[len(_BARE_LITERAL) :]
+    match = _TYPE_NAME.match(rest)
+    assert match is not None  # the pattern always matches (possibly empty)
+    if match.group(2):
+        return match.group(1)
+    if match.end() < len(rest):
+        return "no"  # a character that cannot be part of a type name
+    return "maybe" if len(head) <= _BARE_LOOKAHEAD else "no"
+
+
+def _try_decode(text: str) -> tuple[Any, int]:
+    """`(value, end)` of the JSON value at the start of `text`, or `(None, 0)` while
+    incomplete or invalid."""
+
+    try:
+        return json.JSONDecoder().raw_decode(text)
+    except ValueError:
+        return None, 0
 
 
 def _partial_fence_suffix(text: str) -> int:
