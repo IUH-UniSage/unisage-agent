@@ -107,7 +107,17 @@ Phase sau: cross-encoder (không làm đợt này)
 
 ### Phase 4: Đo
 
-- [~] Task 7: eval baseline (trước) và eval sau trên demo — **đã chạy 21/10/2026**; lát cắt mã/tên (≥ 30 tài liệu official) chưa ingest
+- [~] Task 7: eval baseline (trước) và eval sau trên demo — **đã chạy 21/10/2026**; lát cắt mã/tên: **không đủ dữ liệu** (xem dưới)
+
+  Lát cắt mã/tên (21/10): bộ câu hỏi official (575) chỉ có 25 câu chứa mã học phần / số quyết
+  định, 22 câu trong đó dùng tài liệu đã có trong corpus demo, 3 câu còn lại không có PDF trên
+  máy — không có nguồn cho "≥ 30 tài liệu, ≥ 30 câu" của tiêu chí 5. Đã chạy 6 câu đủ điều kiện
+  (d0012, d0215, d0312, d0313, d0334, d0335; `runs/hybrid-slice-*`) hai lần mỗi cấu hình:
+  recall@5 tắt 4/6 + 4/6, bật 4/6 + 3/6; câu đổi (d0335) có tài liệu đúng ở hạng 1 và 6 trong
+  hai run bật, tức nhiễu HyDE/classifier giữa các lần chạy, không kết luận được. Muốn đo tiêu chí
+  5 phải soạn thêm bộ câu hỏi có mã (≥ 30 câu, có đáp án và `expected_doc_ids`), là việc dữ liệu
+  chưa làm. Bằng chứng trực tiếp hiện có vẫn là kiểm tra RetrievalService: 3 mã có trong kho,
+  dense-only 0/3 trong 16 ứng viên, hybrid 3/3 ở hạng 2–3.
 
   Hai run cùng corpus eval (108 tài liệu, 2.323 point), `--set demo --variant exact --web off
   --category normal --category calculation`, cache tắt, concurrency 3, mỗi run ~5 phút:
@@ -123,8 +133,12 @@ Phase sau: cross-encoder (không làm đợt này)
 
   Câu đổi recall: +11 (d0008, d0022, d0035 normal; d0244, d0308, d0311, d0325, d0327, d0331,
   d0332, d0335 calculation) / −5 (d0028, d0033, d0036, d0050 normal; d0309 calculation). Các câu
-  mất đều là câu không có mã; cần xem từng câu (chunk đúng còn trong 16 ứng viên không, hay LLM
-  rerank bỏ) trước khi tinh chỉnh — chưa làm. Quyết định: **giữ bật mặc định** (tiêu chí 4 đạt,
+  mất đều là câu không có mã. Soi từng câu (21/10, từ `retrievals`/`context` trong results.jsonl):
+  d0028, d0036, d0050 — tài liệu đúng CÓ trong 16 ứng viên của hybrid (hạng 1, 4, 6; baseline
+  hạng 4, 2, 15) nhưng LLM rerank đẩy xuống hạng 6 hoặc loại; d0033, d0309 — run hybrid không
+  chạy retrieval (classifier rẽ nhánh khác, d0309 baseline cũng 0 chunk sau rerank). Tức là
+  nhiễu LLM rerank/classifier, không phải BM25 làm mất ứng viên. Không tinh chỉnh BM25 vì
+  việc này; nếu muốn ổn định hơn thì là việc của reranker (phase cross-encoder). Quyết định: **giữ bật mặc định** (tiêu chí 4 đạt,
   tiêu chí 6 đạt, tiêu chí 5 chờ lát cắt mã). Cần `departments.json` (gitignore) trong thư mục
   dataset: dựng từ bảng `departments` của DB backend eval.
 

@@ -206,7 +206,7 @@ chạy `runs/hybrid-on` cho demo và lát cắt; (4) ghi recall@5, leak, fallbac
 
 **Verification:**
 
-- [ ] Thủ công theo lệnh trên
+- [x] Thủ công theo lệnh trên (demo normal+calculation; lát cắt mã chỉ có 6 câu đủ điều kiện, xem plan) — 21/10
 
 **Dependencies:** Task 3, Task 6
 
