@@ -28,6 +28,7 @@ from app.core.security.redaction import safe_error_message
 from app.core.usage.usage_recorder import UsageRecorder
 from app.integrations.backend_java_client import BackendJavaClient, BackendJavaHTTPError
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder_for
+from app.rag.retrieval.lexical import lexical_text, sparse_vector
 from app.rag.vectorstore import qdrant_store
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,15 @@ def _parse_claim(raw: dict[str, Any]) -> _Claim:
         model_source_ref=candidate.get("modelSourceRef"),
         dimension=int(raw["dimension"]),
         fingerprint=[float(value) for value in raw.get("fingerprint") or []],
+    )
+
+
+def sparse_of_payload(payload: dict[str, Any]) -> tuple[list[int], list[float]]:
+    """The `bm25` vector a point gets in the target collection, from the same payload fields
+    ingestion used (`app.worker.tasks.ingestion`): heading path + content."""
+
+    return sparse_vector(
+        lexical_text(str(payload.get("content") or ""), list(payload.get("heading_path") or []))
     )
 
 
@@ -346,11 +356,12 @@ async def _reembed_batch(
     points = [
         models.PointStruct(
             id=str(record.id),
-            vector={
-                "content_vector": vectors[3 * index],
-                "summary_vector": vectors[3 * index + 1],
-                "questions_vector": vectors[3 * index + 2],
-            },
+            vector=qdrant_store.point_vectors(
+                vectors[3 * index],
+                vectors[3 * index + 1],
+                vectors[3 * index + 2],
+                bm25=sparse_of_payload(record.payload or {}),
+            ),
             payload={**(record.payload or {}), "embedding_identity_key": key},
         )
         for index, record in enumerate(embeddable)

@@ -198,6 +198,11 @@ service, môi trường, bind address, khoá bí mật cấp tiến trình) → 
 | `RETRIEVAL_CACHE_TIMEOUT_MS` | `50` | Timeout socket mỗi lần gọi Redis của cache: lookup không bao giờ tốn hơn mức này |
 | `RETRIEVAL_CACHE_WRITE_ON_SECOND_SIGHTING` | `true` | Chỉ ghi entry khi cùng khoá miss lần thứ hai trong TTL (lần đầu chỉ đặt dấu `seen`), để câu hỏi một lần không chiếm chỗ; câu lặp có hit từ lần thứ 3 |
 | `RETRIEVAL_CACHE_KEY_VERSION` | `1` | Bump tay khi đổi cách dựng khoá/giá trị (đổi cấu hình hay prompt đã tự đổi khoá qua fingerprint) |
+| `RETRIEVAL_HYBRID_ENABLED` | `true` | Hybrid retrieval (`docs/specs/SPEC-hybrid-retrieval.md`): mỗi sub-query tìm thêm bằng BM25 trên sparse vector `bm25` (từ câu hỏi độc lập), trộn 4 danh sách bằng RRF phía client; điểm chunk vẫn là cosine dense. Collection chưa có `bm25` → tự chạy dense-only. Thêm `bm25` vào collection đang chạy: `task db:bm25-backfill env=eval` (không gọi OpenAI) hoặc re-index rebuild |
+| `CHAT_RETRIEVAL_DENSE_FLOOR` | `0.45` | Sàn cosine áp trước LLM rerank khi LLM rerank sẽ chạy; LLM rerank là gate. Không có LLM rerank thì dùng `CHAT_RERANK_SCORE_THRESHOLD` 0.70 như cũ |
+| `CHAT_RETRIEVAL_LEXICAL_HIT_SCORE` | `0.70` | Điểm gán cho chunk chỉ BM25 tìm thấy (không có cosine dense) |
+| `CHAT_RETRIEVAL_RRF_K` | `1` | Hằng số k của RRF (điểm = Σ 1/(k+hạng)). Đo trên corpus eval 21/10/2026: k=60 (giá trị TREC) để chunk đứng hạng 1 BM25 nhưng vắng trong dense top-32 rớt khỏi top-16, vì mọi chunk có mặt ở cả hai danh sách (dù hạng 30) đều thắng; k=1 đưa nó lên hạng 2–3 mà vẫn giữ nguyên top-8 dense |
+| `CHAT_RETRIEVAL_HYBRID_CANDIDATES_MULTIPLIER` | `2` | Mỗi danh sách lấy `limit × hệ số` ứng viên trước khi trộn |
 | `CHAT_ALLOW_REPAIR_JSON` | `True` | Bật/tắt lệnh gọi LLM sửa lỗi lần 2 khi câu trả lời quên khối `ask_user_form` bắt buộc (`generation_synthesis.py::_repair_missing_ask_form`). Heuristic phát hiện có lỗ hổng biết trước (câu mời đặt điều kiện ở cuối câu, kiểu "..., nếu bạn cần...", không bị nhận diện là câu không ràng buộc) khiến lần gọi sửa đôi khi bịa ra một form không ai hỏi. Tắt thì bỏ hẳn lần gọi sửa: một form thật sự bị quên sẽ không được vá, nhưng không bao giờ bịa form giả |
 
 ### Ví dụ thêm một biến mới

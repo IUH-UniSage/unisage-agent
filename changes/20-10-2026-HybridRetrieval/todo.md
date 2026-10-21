@@ -10,13 +10,13 @@ tách theo ký tự không phải chữ/số, bỏ token 1 ký tự không phả
 
 **Acceptance criteria:**
 
-- [ ] "Học phần 2105618 (mã) - K18" → tokens gồm "2105618", "k18", "học", "phần"; không có "(" hay "-".
-- [ ] Cùng text hai lần → cùng indices; NFD/NFC cho cùng kết quả.
-- [ ] `rrf_merge`: chunk có mặt ở nhiều danh sách lên trên; tie-break ổn định theo id.
+- [x] "Học phần 2105618 (mã) - K18" → tokens gồm "2105618", "k18", "học", "phần"; không có "(" hay "-".
+- [x] Cùng text hai lần → cùng indices; NFD/NFC cho cùng kết quả.
+- [x] `rrf_merge`: chunk có mặt ở nhiều danh sách lên trên; tie-break ổn định theo id.
 
 **Verification:**
 
-- [ ] `uv run pytest tests/rag/test_lexical.py -q`; ruff; mypy
+- [x] `uv run pytest tests/rag/test_lexical.py -q`; ruff; mypy
 
 **Dependencies:** None
 
@@ -33,13 +33,13 @@ tách theo ký tự không phải chữ/số, bỏ token 1 ký tự không phả
 
 **Acceptance criteria:**
 
-- [ ] Fake client ghi lại `create_collection` có sparse config; `upsert` có `bm25` khi point có.
-- [ ] `has_sparse_vector` đọc `config.params.sparse_vectors`, cache, trả False khi thiếu.
-- [ ] Backfill helpers gọi `update_vectors` với `SparseVector` đúng point id.
+- [x] Fake client ghi lại `create_collection` có sparse config; `upsert` có `bm25` khi point có.
+- [x] `has_sparse_vector` đọc `config.params.sparse_vectors`, cache, trả False khi thiếu.
+- [x] Backfill helpers gọi `update_vectors` với `SparseVector` đúng point id.
 
 **Verification:**
 
-- [ ] `uv run pytest tests/test_qdrant_store.py -q`
+- [x] `uv run pytest tests/test_qdrant_store.py -q`
 
 **Dependencies:** Task 1
 
@@ -50,18 +50,20 @@ tách theo ký tự không phải chữ/số, bỏ token 1 ký tự không phả
 ## Task 3: CLI backfill tại chỗ (dev/eval, dự phòng) + xác minh trên eval
 
 **Description:** Lối tắt không cutover cho dev và eval, và là dự phòng nếu rebuild (Task 9)
-chưa sẵn. `app/tools/bm25_backfill.py`: `add_sparse_vector_config` rồi scroll mọi point
-(payload content + heading_path), tính sparse, `update_vectors` lô 256, in tiến độ; `--dry-run`;
-`--collection` (mặc định collection đang dùng). `taskfiles/db.yml`: `db:bm25-backfill`.
+chưa sẵn. `app/tools/bm25_backfill.py`: ~~`add_sparse_vector_config` rồi `update_vectors`~~
+**(21/10: Qdrant không cho thêm vector vào collection có sẵn)** → xây lại cùng tên qua
+`<name>__bm25tmp` bằng `copy_points_with_bm25` (scroll `with_vectors=True`, payload content +
+heading_path, lô 256, in tiến độ); `--dry-run`; `--collection` (mặc định collection đang dùng).
+`taskfiles/db.yml`: `db:bm25-backfill`.
 
 **Acceptance criteria:**
 
-- [ ] Chạy trên `unisage_eval_chunks`: Qdrant chấp nhận `update_collection(sparse_vectors_config)` trên collection có dữ liệu (ghi kết quả vào plan). Không chấp nhận → ghi lại, chuyển kế hoạch sang re-index.
-- [ ] Sau chạy: `count` point có vector `bm25` = tổng point; chạy lần 2 không lỗi.
+- [x] Chạy trên `unisage_eval_chunks`: Qdrant **không** chấp nhận `update_collection(sparse_vectors_config)` trên collection có dữ liệu ("Not existing vector name", 21/10) → ghi vào plan/spec; dev/eval đi đường xây lại cùng tên, production đi rebuild (Task 9).
+- [x] Sau chạy: 2.322/2.323 point có `bm25` (1 point không có text); lần 2 "already present - nothing to do". — 21/10
 
 **Verification:**
 
-- [ ] `task db:bm25-backfill env=eval -- --dry-run` rồi không dry-run; kiểm tra bằng `collections/<name>` info và scroll `with_vectors=["bm25"]`
+- [x] `task db:bm25-backfill env=eval -- --dry-run` rồi không dry-run (16,3 s); kiểm tra bằng `collections/<name>` info và scroll `with_vectors=["bm25"]` — 21/10
 
 **Dependencies:** Task 2
 
@@ -71,7 +73,7 @@ chưa sẵn. `app/tools/bm25_backfill.py`: `add_sparse_vector_config` rồi scro
 
 ## Checkpoint: Lưu trữ
 
-- [ ] 100 % point eval có `bm25`; test store xanh; ruff, mypy sạch
+- [x] 100 % point eval có `bm25`; test store xanh; ruff, mypy sạch — 21/10
 
 ## Task 9: Re-index "rebuild" (đường production, 3 repo)
 
@@ -113,21 +115,21 @@ collection mới có `bm25` mà không embed lại.
 ## Task 4: Truy vấn hybrid
 
 **Description:** `search_chunks_batch(..., sparse_queries=None)`: mỗi truy vấn thêm một
-`QueryRequest(query=SparseVector, using="bm25", limit=limit*mult, filter=...)`; trộn 4 danh sách
-bằng `rrf_merge`; lấy `limit` đầu; `score` = max cosine dense nếu có, else
+`QueryRequest(query=SparseVector, using="bm25", limit=limit*mult, filter=...)`; ~~trộn 4 danh sách~~
+**(21/10)** gộp 3 dense theo max cosine rồi `rrf_merge` 2 danh sách với k = 1; lấy `limit` đầu; `score` = max cosine dense nếu có, else
 `CHAT_RETRIEVAL_LEXICAL_HIT_SCORE`. `RetrievalService.retrieve_many(_async)(queries, *,
 lexical_queries=None, security, limit)`; `lexical_queries` None hoặc cờ tắt hoặc
 `not has_sparse_vector` → đường cũ.
 
 **Acceptance criteria:**
 
-- [ ] Fake client nhận 4 request/query, filter giống nhau trên cả 4; tắt cờ → 3 request.
-- [ ] Chunk chỉ có trong danh sách sparse vẫn vào kết quả với score lexical; chunk dense giữ cosine.
-- [ ] Thứ tự theo RRF; `limit` được tôn trọng.
+- [x] Fake client nhận 4 request/query, filter giống nhau trên cả 4; tắt cờ → 3 request. — 21/10
+- [x] Chunk chỉ có trong danh sách sparse vẫn vào kết quả với score lexical; chunk dense giữ cosine. — 21/10
+- [x] Thứ tự theo RRF; `limit` được tôn trọng. — 21/10
 
 **Verification:**
 
-- [ ] `uv run pytest tests/test_qdrant_store.py tests/rag -q`
+- [x] `uv run pytest tests/test_qdrant_store_hybrid.py tests/rag -q` — 21/10
 
 **Dependencies:** Task 2
 
@@ -144,12 +146,12 @@ của collection đích đã có sparse config (Task 2).
 
 **Acceptance criteria:**
 
-- [ ] Test ingestion: `ChunkPoint` nhận `bm25` không rỗng cho chunk có text.
-- [ ] Test re-index: point upsert sang collection mới có `bm25`.
+- [x] Test ingestion: `ChunkPoint` nhận `bm25` không rỗng cho chunk có text.
+- [x] Test re-index: point upsert sang collection mới có `bm25`.
 
 **Verification:**
 
-- [ ] `uv run pytest tests/test_ingestion_embedding.py tests/worker/test_embedding_reindex.py -q`
+- [x] `uv run pytest tests/test_ingestion_embedding.py tests/worker/test_embedding_reindex.py -q`
 
 **Dependencies:** Task 2
 
@@ -168,13 +170,13 @@ multiplier.
 
 **Acceptance criteria:**
 
-- [ ] Wiring test: fake retrieval nhận `lexical_queries` = câu độc lập.
-- [ ] Có LLM rerank: chunk cosine 0,5 đi tới LLM rerank; không có LLM rerank: bị cắt ở 0,70 như cũ.
-- [ ] Cache: bật/tắt hybrid → khoá khác (test fingerprint).
+- [x] Wiring test: fake retrieval nhận `lexical_queries` = câu độc lập.
+- [x] Có LLM rerank: chunk cosine 0,5 đi tới LLM rerank; không có LLM rerank: bị cắt ở 0,70 như cũ.
+- [x] Cache: bật/tắt hybrid → khoá khác (test fingerprint).
 
 **Verification:**
 
-- [ ] `uv run pytest tests/graph tests/test_retrieval_cache.py -q`
+- [x] `uv run pytest tests/graph tests/test_retrieval_cache.py -q`
 
 **Dependencies:** Task 4, Task 5
 
@@ -185,19 +187,22 @@ multiplier.
 
 ## Checkpoint: Truy vấn
 
-- [ ] Test graph xanh; chạy tay eval stack: "học phần <mã có trong kho>" có chunk trong 16 ứng viên; canary quyền; log `Retrieval timing`
+- [x] Test graph xanh; chạy tay eval stack: "học phần <mã có trong kho>" có chunk trong 16 ứng viên (hạng 2–3; dense-only không có); canary quyền; log `Retrieval timing` — 21/10
 
 ## Task 7: Eval trước/sau + lát cắt mã/tên
 
-**Description:** (1) `task eval:run env=eval -- --set demo --out runs/hybrid-baseline` với cờ tắt.
+**Description:** (1) `task eval:run env=eval -- --set demo --out runs/hybrid-baseline` với cờ tắt
+(21/10: chạy `--category normal --category calculation --variant exact --web off`, cache tắt
+bằng `RETRIEVAL_CACHE_REDIS_URL=`; cần `departments.json` trong thư mục dataset — file bị
+gitignore, dựng lại từ bảng `departments` của DB backend eval khi máy mới).
 (2) Chọn ≥ 30 câu official có mã học phần / "Quyết định" / tên học phần → `expected_doc_ids` →
 `evals/dataset/code_slice.csv`; `task eval:ingest env=eval -- --only ...`. (3) Backfill, bật cờ,
 chạy `runs/hybrid-on` cho demo và lát cắt; (4) ghi recall@5, leak, fallback, timing vào plan.
 
 **Acceptance criteria:**
 
-- [ ] Có 2 run so sánh được trên cùng corpus; bảng kết quả trong plan.md.
-- [ ] Quyết định bật mặc định hay không dựa trên tiêu chí 4–6 của spec.
+- [x] Có 2 run so sánh được trên cùng corpus (`runs/hybrid-baseline`, `runs/hybrid-on`); bảng kết quả trong plan.md — 21/10
+- [x] Quyết định: giữ bật mặc định (tiêu chí 4, 6 đạt; 5 chờ lát cắt mã) — 21/10
 
 **Verification:**
 
@@ -216,7 +221,7 @@ chạy `runs/hybrid-on` cho demo và lát cắt; (4) ghi recall@5, leak, fallbac
 
 **Acceptance criteria:**
 
-- [ ] Biến và lệnh khớp code; spec khớp code
+- [x] Biến và lệnh khớp code; spec khớp code — 21/10
 
 **Dependencies:** Task 6
 

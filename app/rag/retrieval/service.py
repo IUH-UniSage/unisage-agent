@@ -9,10 +9,13 @@ from qdrant_client.http.models import Record, ScoredPoint
 
 from app.core.config import settings
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
+from app.rag.retrieval.lexical import sparse_query_vector
 from app.rag.vectorstore.qdrant_store import (
+    SparseQuery,
     build_access_filter,
     fetch_chunks_by_ids,
     get_client,
+    has_sparse_vector,
     search_chunks_batch,
 )
 from app.schemas.ingestion import SourceLocator
@@ -41,6 +44,7 @@ class RetrievalServiceProtocol(Protocol):
         *,
         security: AcademicSecurityContext,
         limit: int | None = None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]: ...
 
     async def retrieve_many_async(
@@ -49,6 +53,7 @@ class RetrievalServiceProtocol(Protocol):
         *,
         security: AcademicSecurityContext,
         limit: int | None = None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]: ...
 
     def fetch(
@@ -97,13 +102,18 @@ class RetrievalService:
         *,
         security: AcademicSecurityContext,
         limit: int | None = None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
-        """One embedding call and one Qdrant round trip for all `queries`."""
+        """One embedding call and one Qdrant round trip for all `queries`. `lexical_queries`
+        (one per query, the standalone question) adds the BM25 side of the hybrid search
+        when the collection has it (docs/specs/SPEC-hybrid-retrieval.md)."""
 
         started_at = time.monotonic()
         query_vectors = self.embedder.embed(queries)
         embedded_at = time.monotonic()
-        result = self._search(query_vectors, security=security, limit=limit)
+        result = self._search(
+            query_vectors, security=security, limit=limit, lexical_queries=lexical_queries
+        )
         _log_timing(len(queries), started_at, embedded_at)
         return result
 
@@ -113,6 +123,7 @@ class RetrievalService:
         *,
         security: AcademicSecurityContext,
         limit: int | None = None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
         """`retrieve_many` for chat: embeds on the caller's event loop (see
         `EmbeddingProvider.embed_async`), only the synchronous Qdrant call goes to a worker
@@ -123,7 +134,11 @@ class RetrievalService:
         query_vectors = await self.embedder.embed_async(queries)
         embedded_at = time.monotonic()
         result = await asyncio.to_thread(
-            self._search, query_vectors, security=security, limit=limit
+            self._search,
+            query_vectors,
+            security=security,
+            limit=limit,
+            lexical_queries=lexical_queries,
         )
         _log_timing(len(queries), started_at, embedded_at)
         return result
@@ -134,14 +149,24 @@ class RetrievalService:
         *,
         security: AcademicSecurityContext,
         limit: int | None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
         effective_limit = limit if limit is not None else settings.CHAT_RETRIEVAL_MAX_CHUNKS
         client = self.client or get_client()
+        sparse_queries: list[SparseQuery | None] | None = None
+        if (
+            lexical_queries
+            and settings.RETRIEVAL_HYBRID_ENABLED
+            and len(lexical_queries) == len(query_vectors)
+            and has_sparse_vector(client)
+        ):
+            sparse_queries = [sparse_query_vector(text) for text in lexical_queries]
         per_query_points = search_chunks_batch(
             client,
             query_vectors=query_vectors,
             limits=[effective_limit] * len(query_vectors),
             query_filter=build_access_filter(security),
+            sparse_queries=sparse_queries,
         )
         return [
             [_to_retrieved_chunk(point, point.score) for point in points]

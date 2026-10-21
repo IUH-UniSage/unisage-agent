@@ -544,6 +544,9 @@ async def test_no_chunk_and_no_web_page_still_falls_back_to_ticket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    # Hybrid: with an LLM rerank ahead the graph applies the dense floor instead, so
+    # raise it too - these turns must reach rerank with no usable chunk.
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_DENSE_FLOOR", 1.1)
     calls = _fake_web_search(monkeypatch, [])
     models = GraphModels(
         classification=make_classification_llm_model("academic_advisory"),
@@ -718,6 +721,9 @@ async def test_web_branch_reports_each_page_it_reads(
 ) -> None:
     monkeypatch.setattr(settings, "CHAT_WEB_JUDGE_WITH_CHUNKS", False)
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    # Hybrid: with an LLM rerank ahead the graph applies the dense floor instead, so
+    # raise it too - these turns must reach rerank with no usable chunk.
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_DENSE_FLOOR", 1.1)
     _fake_slot_web_search(monkeypatch, [_WEB_PAGE, _FEE_DECISION])
     seen: list[tuple[str, str | None]] = []
     models = GraphModels(
@@ -751,6 +757,9 @@ async def test_pages_judged_alongside_rerank_are_reported_once_rerank_is_done(
     rule keeps the page above CHAT_WEB_SEARCH_MIN_SCORE only)."""
 
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    # Hybrid: with an LLM rerank ahead the graph applies the dense floor instead, so
+    # raise it too - these turns must reach rerank with no usable chunk.
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_DENSE_FLOOR", 1.1)
     _fake_slot_web_search(monkeypatch, [_WEB_PAGE, _FEE_DECISION])
     seen: list[tuple[str, str | None]] = []
     models = GraphModels(
@@ -836,6 +845,7 @@ async def test_the_web_judge_runs_while_retrieval_is_still_running(
             *,
             security: AcademicSecurityContext,
             limit: int | None = None,
+            lexical_queries: list[str] | None = None,
         ) -> list[list[RetrievedChunk]]:
             await asyncio.wait_for(judged.wait(), timeout=2)
             return self.retrieve_many(queries, security=security, limit=limit)
@@ -930,6 +940,9 @@ async def test_official_page_without_the_figures_is_linked_by_the_ticket_fallbac
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    # Hybrid: with an LLM rerank ahead the graph applies the dense floor instead, so
+    # raise it too - these turns must reach rerank with no usable chunk.
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_DENSE_FLOOR", 1.1)
     _fake_slot_web_search(monkeypatch, [_FEE_DECISION])
     seen_prompts: list[str] = []
     models = GraphModels(
@@ -965,6 +978,9 @@ async def test_pages_kept_only_as_links_are_listed_after_an_answer(
     second one is linked after the answer rather than lost."""
 
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 1.1)
+    # Hybrid: with an LLM rerank ahead the graph applies the dense floor instead, so
+    # raise it too - these turns must reach rerank with no usable chunk.
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_DENSE_FLOOR", 1.1)
     _fake_slot_web_search(monkeypatch, [_WEB_PAGE, _FEE_DECISION])
     streamed: list[str] = []
     models = GraphModels(

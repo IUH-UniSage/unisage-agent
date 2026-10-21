@@ -1143,11 +1143,19 @@ async def _run_advisory_flow(
             [sub_query.retrieval_text for sub_query in sub_queries],
             models.retrieval,
             graph_input.security,
+            # BM25 side of the hybrid search: the standalone questions, where a course code
+            # or a document name appears verbatim.
+            lexical_queries=questions,
         )
 
-        # PostRetrievalRerankNode (per sub-query, then merged).
+        # PostRetrievalRerankNode (per sub-query, then merged). With an LLM rerank ahead,
+        # only the low dense floor applies here; the LLM is the gate.
         trace.node("09_PostRetrievalRerankNode")
-        rerank_result = rerank_chunks(per_query_chunks)
+        llm_rerank_follows = settings.CHAT_LLM_RERANK_ENABLED and models.rerank is not None
+        rerank_result = rerank_chunks(
+            per_query_chunks,
+            score_threshold=settings.CHAT_RETRIEVAL_DENSE_FLOOR if llm_rerank_follows else None,
+        )
         rerank_ok = True
 
     # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).

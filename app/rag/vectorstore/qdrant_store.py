@@ -1,8 +1,8 @@
 import os
 import threading
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from qdrant_client import QdrantClient, models
@@ -10,6 +10,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.core.config import settings
 from app.core.registry.model_registry import active_collection, get_current_snapshot
+from app.rag.retrieval.lexical import BM25_VECTOR, rrf_merge
 from app.schemas.security import AcademicSecurityContext
 
 # Dimension of OpenAI's `text-embedding-3-small` - only used to create the live collection
@@ -84,7 +85,9 @@ def ensure_collection(
             vector_name: models.VectorParams(size=size, distance=models.Distance.COSINE)
             for vector_name in _VECTOR_NAMES
         },
+        sparse_vectors_config=sparse_vectors_config(),
     )
+    _sparse_cache[name] = True
     for field_name, schema in (
         ("department", models.PayloadSchemaType.KEYWORD),
         ("access_level", models.PayloadSchemaType.INTEGER),
@@ -114,6 +117,95 @@ def get_collection_dimension(client: QdrantClient, collection: str | None = None
     # A collection with a single unnamed vector (shouldn't happen for this collection, but
     # `VectorParams` is a valid non-dict shape for the SDK type) — defensive fallback.
     return vectors_config.size if vectors_config is not None else None
+
+
+def sparse_vectors_config() -> dict[str, models.SparseVectorParams]:
+    """The `bm25` sparse vector: term frequencies from `app.rag.retrieval.lexical`, IDF
+    applied by Qdrant (docs/specs/SPEC-hybrid-retrieval.md)."""
+
+    return {BM25_VECTOR: models.SparseVectorParams(modifier=models.Modifier.IDF)}
+
+
+# Whether a collection carries the `bm25` sparse vector, by name: read once per process,
+# so a chat turn never pays a `get_collection` round trip. `add_sparse_vector_config` and
+# `ensure_collection` update it; `reset_sparse_cache` is for tests.
+_sparse_cache: dict[str, bool] = {}
+
+
+def reset_sparse_cache() -> None:
+    _sparse_cache.clear()
+
+
+def has_sparse_vector(client: QdrantClient, collection: str | None = None) -> bool:
+    """True when the collection exists and has the `bm25` sparse vector configured - the
+    condition for the hybrid query; a collection not yet backfilled/rebuilt is searched
+    dense-only."""
+
+    name = _name(collection)
+    cached = _sparse_cache.get(name)
+    if cached is not None:
+        return cached
+    if not client.collection_exists(name):
+        return False
+    sparse = client.get_collection(name).config.params.sparse_vectors or {}
+    found = BM25_VECTOR in sparse
+    _sparse_cache[name] = found
+    return found
+
+
+def copy_points_with_bm25(
+    client: QdrantClient,
+    source: str,
+    target: str,
+    *,
+    batch: int = 256,
+    on_batch: Callable[[int], None] | None = None,
+) -> int:
+    """Copy every point of `source` into `target` (dense vectors and payload as they are)
+    and give each one its `bm25` sparse vector from the payload. The way a collection
+    indexed before hybrid retrieval gets the sparse vector: Qdrant cannot add a vector to
+    an existing collection, so the points move to one created with it (`ensure_collection`).
+    No embedding call. Returns the number of points copied."""
+
+    from app.rag.retrieval.lexical import lexical_text, sparse_vector
+
+    copied = 0
+    offset: PointOffset = None
+    while True:
+        records, offset = client.scroll(
+            collection_name=source, limit=batch, offset=offset, with_payload=True, with_vectors=True
+        )
+        points: list[models.PointStruct] = []
+        for record in records:
+            payload = dict(record.payload or {})
+            vectors = dict(record.vector) if isinstance(record.vector, dict) else {}
+            dense = {
+                name: cast(list[float], vectors[name]) for name in _VECTOR_NAMES if name in vectors
+            }
+            bm25 = sparse_vector(
+                lexical_text(
+                    str(payload.get("content") or ""), list(payload.get("heading_path") or [])
+                )
+            )
+            points.append(
+                models.PointStruct(
+                    id=record.id,
+                    vector=point_vectors(
+                        dense.get(_VECTOR_NAMES[0], []),
+                        dense.get(_VECTOR_NAMES[1], []),
+                        dense.get(_VECTOR_NAMES[2], []),
+                        bm25=bm25,
+                    ),
+                    payload=payload,
+                )
+            )
+        if points:
+            client.upsert(collection_name=target, points=points)
+            copied += len(points)
+            if on_batch is not None:
+                on_batch(copied)
+        if offset is None:
+            return copied
 
 
 def collection_has_points(client: QdrantClient, collection: str | None = None) -> bool:
@@ -195,6 +287,9 @@ class ChunkPoint:
     structure_confidence: float | None = None
     parse_warnings: list[str] = field(default_factory=list)
     embedding_identity_key: str | None = None
+    # BM25 term frequencies of the chunk (`lexical.sparse_vector`); None/empty = no sparse
+    # vector written (a collection without `bm25` accepts the point all the same).
+    bm25: tuple[list[int], list[float]] | None = None
 
 
 def search_chunks(
@@ -236,6 +331,9 @@ def search_chunks(
     )[0]
 
 
+SparseQuery = tuple[list[int], list[float]]
+
+
 def search_chunks_batch(
     client: QdrantClient,
     *,
@@ -243,21 +341,63 @@ def search_chunks_batch(
     limits: list[int],
     query_filter: models.Filter | None = None,
     collection: str | None = None,
+    sparse_queries: Sequence[SparseQuery | None] | None = None,
+    candidate_multiplier: int | None = None,
+    rrf_k: int | None = None,
+    lexical_hit_score: float | None = None,
 ) -> list[list[models.ScoredPoint]]:
     """`search_chunks` for several queries at once: every query x named
-    vector goes out in one `query_batch_points` round trip."""
+    vector goes out in one `query_batch_points` round trip.
 
-    requests = [
-        models.QueryRequest(
-            query=vector,
-            using=vector_name,
-            limit=limit,
-            with_payload=True,
-            filter=query_filter,
-        )
-        for vector, limit in zip(query_vectors, limits, strict=True)
-        for vector_name in _VECTOR_NAMES
-    ]
+    Hybrid (docs/specs/SPEC-hybrid-retrieval.md): with `sparse_queries` (one BM25 sparse
+    vector per query, None for a query without terms), each query also searches the `bm25`
+    vector, every list fetches `limit x candidate_multiplier`, the 3 dense lists are merged
+    (best cosine per chunk) and that ranking is fused with the BM25 ranking by reciprocal
+    rank fusion, both with the same weight. The fusion only decides the order and the cut; the
+    returned `score` stays the best dense cosine of the chunk (everything downstream - the
+    floor, the LLM rerank's rescue rule, web search's ordering, the retrieval cache - reads
+    it as cosine), or `lexical_hit_score` for a chunk only BM25 found. The caller checks
+    `has_sparse_vector` first.
+
+    `query_filter` (the caller's permissions) is applied identically to every query, sparse
+    included: a chunk the caller may not see never surfaces by matching a code."""
+
+    hybrid = sparse_queries is not None
+    multiplier = (
+        (candidate_multiplier or settings.CHAT_RETRIEVAL_HYBRID_CANDIDATES_MULTIPLIER)
+        if hybrid
+        else 1
+    )
+    requests: list[models.QueryRequest] = []
+    # Per query: how many requests went out (3 dense, +1 when it had a sparse vector).
+    request_counts: list[int] = []
+    for position, (vector, limit) in enumerate(zip(query_vectors, limits, strict=True)):
+        fetch = limit * multiplier
+        count = 0
+        for vector_name in _VECTOR_NAMES:
+            requests.append(
+                models.QueryRequest(
+                    query=vector,
+                    using=vector_name,
+                    limit=fetch,
+                    with_payload=True,
+                    filter=query_filter,
+                )
+            )
+            count += 1
+        sparse = sparse_queries[position] if sparse_queries is not None else None
+        if sparse is not None and sparse[0]:
+            requests.append(
+                models.QueryRequest(
+                    query=models.SparseVector(indices=list(sparse[0]), values=list(sparse[1])),
+                    using=BM25_VECTOR,
+                    limit=fetch,
+                    with_payload=True,
+                    filter=query_filter,
+                )
+            )
+            count += 1
+        request_counts.append(count)
     try:
         responses = client.query_batch_points(collection_name=_name(collection), requests=requests)
     except UnexpectedResponse as exc:
@@ -268,17 +408,48 @@ def search_chunks_batch(
             return [[] for _ in query_vectors]
         raise
 
-    per_query = len(_VECTOR_NAMES)
+    dense_count = len(_VECTOR_NAMES)
     results: list[list[models.ScoredPoint]] = []
-    for index, limit in enumerate(limits):
+    cursor = 0
+    for limit, count in zip(limits, request_counts, strict=True):
+        dense_responses = responses[cursor : cursor + dense_count]
+        sparse_response = responses[cursor + dense_count] if count > dense_count else None
+        cursor += count
         best_by_id: dict[str | int | UUID, models.ScoredPoint] = {}
-        for response in responses[index * per_query : (index + 1) * per_query]:
+        for response in dense_responses:
             for point in response.points:
                 existing = best_by_id.get(point.id)
                 if existing is None or point.score > existing.score:
                     best_by_id[point.id] = point
-        ranked = sorted(best_by_id.values(), key=lambda point: point.score, reverse=True)
-        results.append(ranked[:limit])
+        if sparse_response is None:
+            ranked = sorted(best_by_id.values(), key=lambda point: point.score, reverse=True)
+            results.append(ranked[:limit])
+            continue
+        # Two lists of equal weight: the dense side merged first (best cosine per chunk, as
+        # the dense-only search ranks it), then BM25. Fusing the 3 dense lists separately
+        # gave dense three votes to BM25's one, and a chunk matched only by its code never
+        # reached the top (measured 21/10/2026).
+        dense_ranked = sorted(best_by_id.values(), key=lambda point: point.score, reverse=True)
+        ranked_lists: list[list[str | int | UUID]] = [
+            [point.id for point in dense_ranked],
+            [point.id for point in sparse_response.points],
+        ]
+        lexical_score = (
+            lexical_hit_score
+            if lexical_hit_score is not None
+            else settings.CHAT_RETRIEVAL_LEXICAL_HIT_SCORE
+        )
+        sparse_by_id = {point.id: point for point in sparse_response.points}
+        fused = rrf_merge(ranked_lists, k=rrf_k or settings.CHAT_RETRIEVAL_RRF_K)
+        ranked = []
+        for point_id, _rrf in fused[:limit]:
+            dense_point = best_by_id.get(cast("str | int | UUID", point_id))
+            if dense_point is not None:
+                ranked.append(dense_point)
+            else:
+                lexical_point = sparse_by_id[cast("str | int | UUID", point_id)]
+                ranked.append(lexical_point.model_copy(update={"score": lexical_score}))
+        results.append(ranked)
     return results
 
 
@@ -396,11 +567,12 @@ def upsert_chunk(client: QdrantClient, point: ChunkPoint, collection: str | None
         points=[
             models.PointStruct(
                 id=point.point_id,
-                vector={
-                    "content_vector": point.content_vector,
-                    "summary_vector": point.summary_vector,
-                    "questions_vector": point.questions_vector,
-                },
+                vector=point_vectors(
+                    point.content_vector,
+                    point.summary_vector,
+                    point.questions_vector,
+                    bm25=point.bm25,
+                ),
                 payload={
                     "document_id": point.document_id,
                     "object_key": point.object_key,
@@ -430,6 +602,25 @@ def upsert_chunk(client: QdrantClient, point: ChunkPoint, collection: str | None
             )
         ],
     )
+
+
+def point_vectors(
+    content_vector: list[float],
+    summary_vector: list[float],
+    questions_vector: list[float],
+    *,
+    bm25: tuple[list[int], list[float]] | None = None,
+) -> dict[str, Any]:
+    """The named vectors of a point: the 3 dense ones, plus `bm25` when the chunk has terms."""
+
+    vectors: dict[str, Any] = {
+        "content_vector": content_vector,
+        "summary_vector": summary_vector,
+        "questions_vector": questions_vector,
+    }
+    if bm25 is not None and bm25[0]:
+        vectors[BM25_VECTOR] = models.SparseVector(indices=list(bm25[0]), values=list(bm25[1]))
+    return vectors
 
 
 def _document_filter(document_id: str) -> models.Filter:

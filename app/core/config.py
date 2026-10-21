@@ -200,7 +200,28 @@ class Settings(BaseSettings):
     # can grow without bloating the prompt - also when the LLM rerank fails open.
     CHAT_RETRIEVAL_MAX_CHUNKS: int = Field(default=16, ge=1)
     CHAT_CONTEXT_MAX_CHUNKS: int = Field(default=8, ge=1)
+    # Cosine cutoff of the score rerank when NO LLM rerank will run (no RERANK/EXTRACTION
+    # model, or CHAT_LLM_RERANK_ENABLED=false): the pre-hybrid behaviour.
     CHAT_RERANK_SCORE_THRESHOLD: float = 0.70
+    # Hybrid retrieval (docs/specs/SPEC-hybrid-retrieval.md): every sub-query also runs a
+    # BM25 sparse query (`bm25` vector, built from the standalone question); the dense
+    # lists merged by best cosine and the BM25 list are fused by RRF. Off, or a collection
+    # without the `bm25` vector, means the dense-only search of before.
+    RETRIEVAL_HYBRID_ENABLED: bool = True
+    # With an LLM rerank ahead, the score rerank only applies this low floor to the dense
+    # cosine; the LLM decides what answers the question (decision (a), 20/10/2026).
+    CHAT_RETRIEVAL_DENSE_FLOOR: float = Field(default=0.45, ge=0.0, le=1.0)
+    # `RetrievedChunk.score` of a chunk found by BM25 only (no dense cosine known): what
+    # the floor, the rescue rule and web search's ordering see for it.
+    CHAT_RETRIEVAL_LEXICAL_HIT_SCORE: float = Field(default=0.70, ge=0.0, le=1.0)
+    # RRF: score = sum of 1/(k + rank) over the two lists. Measured on the eval corpus
+    # (21/10/2026): with the textbook k=60 a chunk at BM25 rank 1 but outside the dense
+    # top-32 loses to every chunk present in both lists, even at rank 30, and falls out
+    # of the top-16; k=1 puts it at rank 2-3 while the dense top-8 stays intact.
+    CHAT_RETRIEVAL_RRF_K: int = Field(default=1, ge=1)
+    # Each list fetches limit x this before fusion, so a chunk strong in one list but
+    # absent from the other still competes.
+    CHAT_RETRIEVAL_HYBRID_CANDIDATES_MULTIPLIER: int = Field(default=2, ge=1)
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
     # LLMRerankNode: one call to the RERANK model (EXTRACTION if none) per turn checks

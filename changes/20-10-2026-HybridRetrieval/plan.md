@@ -17,12 +17,24 @@ trước và sau, cộng một lát cắt mới gồm câu có mã/tên chính x
   dense nguyên trạng từ collection cũ (không gọi OpenAI vì model không đổi), tính sparse từ
   payload, cutover nguyên tử bằng cơ chế UNISAGE-103; cần backend cho phép lượt re-index
   nhắm vào chính model đang live (hiện bị chặn bởi `EMBEDDING_REINDEX_NOT_NEEDED`). (2)
-  **backfill tại chỗ** (`update_collection` + `update_vectors`) là lối tắt cho dev/eval và là
-  dự phòng; không cutover, không tốn OpenAI. Cả hai dùng chung tokenizer và helper tính sparse.
+  **backfill cùng tên qua collection tạm** là lối tắt cho dev/eval và là dự phòng; không
+  cutover, không tốn OpenAI. *Sửa 21/10:* Qdrant 1.15 không cho thêm vector vào collection
+  đang có (`update_collection` → "Not existing vector name"), nên "tại chỗ" thành "xây lại
+  cùng tên": copy sang `<name>__bm25tmp`, xoá/tạo lại gốc có sparse, copy về
+  (`copy_points_with_bm25`, cũng là helper Task 9b dùng). Cả hai dùng chung tokenizer và
+  helper tính sparse.
 - **BM25 tự tính, IDF server-side** (`Modifier.IDF`): không dependency, cùng tokenizer cho
-  ingest và truy vấn, chỉ số = CRC32 token.
+  ingest và truy vấn, chỉ số = CRC32 token. *Bổ sung 21/10 (đo trên corpus eval):* phía chunk
+  dùng tf bão hoà BM25 (k1 1,2, b 0,75, avg 165 token) thay tf thô; phía câu hỏi bỏ stopword
+  tiếng Việt và cho token có chữ số trọng số ×3. Không có ba điều này, chunk chứa mã đứng
+  hạng 24 BM25 vì "có bao nhiêu tín chỉ" cộng idf vượt một mã.
 - **RRF phía client** thay vì `FusionQuery` của Qdrant: cần giữ cosine dense làm `score`
   (các bước sau hiểu score là cosine), và code đã trộn client-side cho 3 vector dense.
+  *Bổ sung 21/10:* trộn **2 danh sách** (dense gộp theo max cosine, BM25) chứ không 4 — 4
+  danh sách cho dense 3 phiếu; và **k = 1** thay 60: lưới đo k ∈ {60, 20, 10, 5, 1} ×
+  hệ số {1, 2} trên 5 câu có mã cho thấy k = 60 làm chunk hạng 1 BM25 rớt khỏi top-16 (mọi
+  chunk có mặt ở cả hai danh sách thắng nó), k = 1 + hệ số 2 đưa nó lên hạng 2–3 và giữ
+  nguyên top-8 dense.
 - **Sparse từ câu hỏi độc lập, dense từ HyDE**: mã và tên nằm nguyên văn trong câu hỏi; HyDE
   passage diễn giải và dễ rớt mã.
 - **Gate = LLM rerank + sàn dense 0,45**; 0,70 chỉ khi không có LLM rerank. Lý do: fusion
@@ -54,16 +66,16 @@ Phase sau: cross-encoder (không làm đợt này)
 
 ### Phase 1: Nền thuần
 
-- [ ] Task 1: `lexical.py`: tokenizer, `sparse_vector`, `rrf_merge`
+- [x] Task 1: `lexical.py`: tokenizer, `sparse_vector` (tf bão hoà), `sparse_query_vector` (stopword, trọng số mã), `rrf_merge` — 21/10
 
 ### Phase 2: Lưu trữ
 
-- [ ] Task 2: `qdrant_store`: sparse config, `ChunkPoint.bm25`, `has_sparse_vector`, helpers backfill
-- [ ] Task 3: CLI `db:bm25-backfill`, chạy trên collection eval, xác minh `update_collection`
+- [x] Task 2: `qdrant_store`: sparse config, `ChunkPoint.bm25`, `has_sparse_vector`, `copy_points_with_bm25` — 21/10
+- [x] Task 3: CLI `db:bm25-backfill` (xây lại cùng tên qua collection tạm), chạy trên eval 2.323 point/16 s; `update_collection` KHÔNG thêm được vector — 21/10
 
 ### Checkpoint: Lưu trữ
 
-- [ ] 100 % point eval có `bm25`; backfill lần 2 no-op; test store xanh
+- [x] 100 % point eval có `bm25` (2.322/2.323 — 1 point không có text); backfill lần 2 no-op; test store xanh — 21/10
 
 ### Phase 2b: Re-index "rebuild" (đường production, 3 repo)
 
@@ -84,26 +96,45 @@ Phase sau: cross-encoder (không làm đợt này)
 
 ### Phase 3: Truy vấn
 
-- [ ] Task 4: `search_chunks_batch` 4 truy vấn + RRF; `RetrievalService.retrieve_many(_async)` nhận `lexical_queries`
-- [ ] Task 5: ingest và re-index ghi sparse
-- [ ] Task 6: graph: `SubQuery.question` làm lexical query; sàn dense khi có LLM rerank; cờ hybrid; cache fingerprint
+- [x] Task 4: `search_chunks_batch` 4 truy vấn + RRF; `RetrievalService.retrieve_many(_async)` nhận `lexical_queries`
+- [x] Task 5: ingest và re-index ghi sparse — 21/10
+- [x] Task 6: graph: `SubQuery.question` làm lexical query; sàn dense khi có LLM rerank; cờ hybrid; cache fingerprint
 
 ### Checkpoint: Truy vấn
 
-- [ ] Test graph xanh; "học phần <mã>" có chunk trong 16 ứng viên; canary quyền
-- [ ] Chạy tay trên stack eval với `RETRIEVAL_HYBRID_ENABLED=true`
+- [x] Test graph xanh; "học phần <mã>" có chunk trong 16 ứng viên (hạng 2–3 cho 2107555/8940390/2102435, dense-only: không có); canary quyền — 21/10
+- [x] Chạy tay trên stack eval với `RETRIEVAL_HYBRID_ENABLED=true` (RetrievalService, SA) — 21/10
 
 ### Phase 4: Đo
 
-- [ ] Task 7: eval baseline (trước), lát cắt mã/tên (chọn ≥ 30 tài liệu official, ingest), eval sau; ghi vào plan
+- [~] Task 7: eval baseline (trước) và eval sau trên demo — **đã chạy 21/10/2026**; lát cắt mã/tên (≥ 30 tài liệu official) chưa ingest
+
+  Hai run cùng corpus eval (108 tài liệu, 2.323 point), `--set demo --variant exact --web off
+  --category normal --category calculation`, cache tắt, concurrency 3, mỗi run ~5 phút:
+
+  | Chỉ số | `runs/hybrid-baseline` (tắt) | `runs/hybrid-on` (bật) | Tiêu chí spec |
+  |---|---|---|---|
+  | recall@5 normal (116) | 105 | 104 | ≥ trước − 1 → đạt |
+  | recall@5 calculation (38) | 16 | 23 | (+7, +18 điểm) |
+  | leak | 0 | 0 | = 0 → đạt |
+  | ticket fallback | 0 | 1 (d0333, lượt có failover RPM) | không tăng → lệch 1/154, xem ghi chú |
+  | latency p50 / p95 (ms) | 5.289 / 12.834 | 5.345 / 9.453 | p95 +<100 ms → đạt |
+  | pass calculation (LLM tính) | 20/38 | 18/38 | — (phụ thuộc model, run bật gặp 503 + RPM saturation) |
+
+  Câu đổi recall: +11 (d0008, d0022, d0035 normal; d0244, d0308, d0311, d0325, d0327, d0331,
+  d0332, d0335 calculation) / −5 (d0028, d0033, d0036, d0050 normal; d0309 calculation). Các câu
+  mất đều là câu không có mã; cần xem từng câu (chunk đúng còn trong 16 ứng viên không, hay LLM
+  rerank bỏ) trước khi tinh chỉnh — chưa làm. Quyết định: **giữ bật mặc định** (tiêu chí 4 đạt,
+  tiêu chí 6 đạt, tiêu chí 5 chờ lát cắt mã). Cần `departments.json` (gitignore) trong thư mục
+  dataset: dựng từ bảng `departments` của DB backend eval.
 
 ### Phase 5: Tài liệu
 
-- [ ] Task 8: `docs/guide/cau-hinh.md`, `.env.example`, `dev-onboard.txt` (ngoài repo), spec khớp code
+- [x] Task 8: `docs/guide/cau-hinh.md`, `.env.example`, `.env.eval.example`, `dev-onboard.txt` mục 14 (ngoài repo), docstring `cross_encoder.py`, spec khớp code — 21/10
 
 ### Checkpoint: Hoàn tất
 
-- [ ] `task test`, ruff, mypy sạch; eval đạt tiêu chí; PR
+- [~] `task test` (2.355 xanh, 1 flaky `test_judge` không liên quan, `tests/e2e` lỗi import có sẵn), ruff/mypy sạch cho file đổi (lỗi còn lại có sẵn ở file khác); eval đạt tiêu chí 4, 6; PR #26 (draft) — 21/10
 
 ## Risks and Mitigations
 

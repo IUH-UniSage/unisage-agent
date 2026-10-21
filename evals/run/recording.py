@@ -92,16 +92,30 @@ class RecordingRetrieval:
         return self.retrieve_many([query], security=security, limit=limit)[0]
 
     def retrieve_many(
-        self, queries: list[str], *, security: AcademicSecurityContext, limit: int | None = None
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
-        results = self.inner.retrieve_many(queries, security=security, limit=limit)
+        results = self.inner.retrieve_many(
+            queries, security=security, limit=limit, lexical_queries=lexical_queries
+        )
         _record(queries, results)
         return results
 
     async def retrieve_many_async(
-        self, queries: list[str], *, security: AcademicSecurityContext, limit: int | None = None
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
-        results = await self.inner.retrieve_many_async(queries, security=security, limit=limit)
+        results = await self.inner.retrieve_many_async(
+            queries, security=security, limit=limit, lexical_queries=lexical_queries
+        )
         _record(queries, results)
         return results
 

@@ -20,13 +20,12 @@ def rerank(
 ) -> RerankResult:
     """Sort by score, then drop anything under `score_threshold`.
 
-    `score_threshold` defaults to `settings.CHAT_RERANK_SCORE_THRESHOLD` (0.70)
-    rather than a hardcoded constant. A real cross-encoder (bge-reranker-base)
-    is not wired up yet - this keeps the existing deterministic base ranking
-    and applies the threshold on top of it, which is enough to exercise the
-    has_valid_context / ticket-fallback branch correctly; swapping in a real
-    cross-encoder later only changes how `chunk.score` is computed, not this
-    function's contract.
+    `score_threshold` defaults to `settings.CHAT_RERANK_SCORE_THRESHOLD` (0.70). With
+    hybrid retrieval (docs/specs/SPEC-hybrid-retrieval.md) the graph passes the lower
+    `CHAT_RETRIEVAL_DENSE_FLOOR` whenever an LLM rerank follows: this step is then a floor
+    on the dense cosine (a BM25-only hit carries `CHAT_RETRIEVAL_LEXICAL_HIT_SCORE`), and the
+    LLM rerank is the gate. No cross-encoder is wired up (planned as a later phase); one
+    would only change how `chunk.score` is computed, not this function's contract.
     """
 
     threshold = (

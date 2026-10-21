@@ -302,3 +302,25 @@ async def test_a_target_identity_of_another_model_fails_the_run(
 
     assert backend.results[0]["succeeded"] is False
     assert not embedder.calls
+
+
+@pytest.mark.asyncio
+async def test_the_target_collection_carries_the_bm25_sparse_vector(
+    qdrant: QdrantClient, embedder: FakeEmbedder
+) -> None:
+    """Hybrid retrieval (SPEC-hybrid-retrieval.md): a re-index writes the `bm25` vector of
+    every point from its payload, so the new collection is searchable lexically at once."""
+
+    from app.rag.retrieval.lexical import BM25_VECTOR
+
+    assert await run_embedding_reindex_once(backend=FakeBackend(), qdrant=qdrant) is True  # type: ignore[arg-type]
+
+    assert qdrant_store.has_sparse_vector(qdrant, TARGET) is True
+    (record,) = qdrant.retrieve(
+        collection_name=TARGET,
+        ids=[qdrant_store.chunk_point_id("doc-1:3")],
+        with_vectors=[BM25_VECTOR],
+        with_payload=False,
+    )
+    assert record.vector is not None and BM25_VECTOR in record.vector
+    assert len(record.vector[BM25_VECTOR].indices) > 0

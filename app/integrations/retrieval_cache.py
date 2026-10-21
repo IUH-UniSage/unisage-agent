@@ -155,6 +155,12 @@ def config_fingerprint(layer: Layer) -> str:
         "rescue_min_score": settings.CHAT_LLM_RERANK_RESCUE_MIN_SCORE,
         "rescue_keep": settings.CHAT_LLM_RERANK_RESCUE_KEEP,
         "rerank_template": _sha(templates.agent_reranker_compressor),
+        # Hybrid retrieval (SPEC-hybrid-retrieval.md): a different candidate set per setting.
+        "hybrid": settings.RETRIEVAL_HYBRID_ENABLED,
+        "dense_floor": settings.CHAT_RETRIEVAL_DENSE_FLOOR,
+        "lexical_hit_score": settings.CHAT_RETRIEVAL_LEXICAL_HIT_SCORE,
+        "rrf_k": settings.CHAT_RETRIEVAL_RRF_K,
+        "candidates_multiplier": settings.CHAT_RETRIEVAL_HYBRID_CANDIDATES_MULTIPLIER,
     }
     if layer == "l1":
         parts.update(

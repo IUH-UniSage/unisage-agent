@@ -57,7 +57,14 @@ rỗng thì ticket fallback. Không có lexical index. Với "học phần 21056
 1. **Sparse vector `bm25`** trên cùng collection, `SparseVectorParams(modifier=IDF)`.
    - Tokenizer (`app/rag/retrieval/lexical.py`): NFC → casefold → tách theo mọi ký tự không
      phải chữ/số → bỏ token 1 ký tự không phải số → giữ nguyên số và mã. Chỉ số = CRC32 của
-     token (u32), giá trị = tần suất trong chunk. Cùng hàm cho chunk và câu hỏi.
+     token (u32). **Phía chunk** (`sparse_vector`): giá trị = tần suất bão hoà kiểu BM25
+     `tf·(k1+1)/(tf + k1·(1 − b + b·len/avg))`, k1 = 1,2, b = 0,75, avg = 165 token (đo trên
+     corpus eval 21/10/2026). **Phía câu hỏi** (`sparse_query_vector`): bỏ từ chức năng tiếng
+     Việt (`QUERY_STOPWORDS`: có, bao, nhiêu, là, gì, …), mỗi từ còn lại trọng số 1,0, token
+     có chữ số (mã học phần, số quyết định, K18, số điều) trọng số 3,0 (`IDENTIFIER_WEIGHT`).
+     Qdrant nhân IDF. Lý do đo được: với tf thô một bảng học phần lặp "học phần" 50 lần
+     thắng mọi thứ; với trọng số đều, "có bao nhiêu tín chỉ" (4 từ idf 1–5) cộng lại vượt
+     một mã idf 7,35 nên chunk chứa mã đứng hạng 24; bỏ stopword vẫn hạng ~8; ×3 → hạng 1.
    - Văn bản của chunk đưa vào BM25: `content` + `heading_path` (tên mục thường chứa mã học
      phần), không gồm summary/questions.
 2. **Ingest** (`embed_chunks`): tính sparse từ chunk, đưa vào `ChunkPoint.bm25` và upsert
@@ -69,15 +76,24 @@ rỗng thì ticket fallback. Không có lexical index. Với "học phần 21056
      payload, upsert sang collection mới, cutover nguyên tử. Không gọi OpenAI. Cần backend
      cho phép lượt `rebuild` (hiện `start()` chặn khi identity trùng) và web có lựa chọn
      tương ứng. Chi tiết: plan Task 9.
-   - **Backfill tại chỗ** (`task db:bm25-backfill env=eval`, dev/eval và dự phòng): thêm
-     sparse config bằng `update_collection`, scroll mọi point, tính sparse từ payload,
-     `update_vectors` theo lô 256. Idempotent. Không cutover.
+   - **Backfill cùng tên** (`task db:bm25-backfill env=eval`, dev/eval và dự phòng). Qdrant
+     1.15 **không** cho thêm vector vào collection đang có (xác minh 21/10/2026:
+     `update_collection(sparse_vectors_config=...)` → "Not existing vector name"), nên CLI
+     xây lại dưới **cùng tên** qua collection tạm `<name>__bm25tmp`: copy mọi point (3 vector
+     dense nguyên trạng + payload, không gọi OpenAI, `copy_points_with_bm25`) sang tạm có
+     sparse → xoá gốc → tạo lại gốc có sparse → copy về → xoá tạm. Chat trên collection đó
+     gián đoạn vài giây (2.323 point: 16 s); registry/identity không đổi. Chạy lần 2 là no-op.
 4. **Truy vấn** (`RetrievalService.retrieve_many[_async]` nhận thêm `lexical_queries`):
-   mỗi sub-query gửi 3 dense + 1 sparse trong một `query_batch_points`; dense lấy
-   `limit × 2`, sparse `limit × 2`; trộn bằng **RRF client-side** (k = 60) trên 4 danh sách;
-   lấy `limit` chunk đầu theo RRF. `score` của chunk = max cosine dense nếu chunk có mặt
-   trong bất kỳ danh sách dense nào, ngược lại (chỉ sparse) = `CHAT_RETRIEVAL_LEXICAL_HIT_SCORE`
-   (mặc định 0,70, tức "đạt sàn cũ"). Filter quyền áp y hệt lên cả 4 truy vấn.
+   mỗi sub-query gửi 3 dense + 1 sparse trong một `query_batch_points` (bỏ request sparse
+   khi câu hỏi không còn term sau stopword); mỗi request lấy `limit × 2`. Ba danh sách dense
+   gộp thành **một** theo max cosine, rồi **RRF client-side 2 danh sách** (dense gộp, BM25)
+   với **k = 1** (`CHAT_RETRIEVAL_RRF_K`); lấy `limit` chunk đầu. Đo 21/10/2026: trộn 4 danh
+   sách cho dense 3 phiếu/sparse 1 phiếu; k = 60 (giá trị TREC) khiến chunk hạng 1 BM25 nhưng
+   vắng dense top-32 (1/61) thua mọi chunk có mặt ở cả hai danh sách dù hạng 30, rớt khỏi
+   top-16; k = 1 đưa nó lên hạng 2–3 mà top-8 dense giữ nguyên. `score` của chunk = max
+   cosine dense nếu chunk có mặt trong bất kỳ danh sách dense nào, ngược lại (chỉ sparse) =
+   `CHAT_RETRIEVAL_LEXICAL_HIT_SCORE` (mặc định 0,70, tức "đạt sàn cũ"). Filter quyền áp y
+   hệt lên cả 4 truy vấn.
 5. **Gate** (quyết định (a) ngày 20/10): `rerank()` áp **sàn** `CHAT_RETRIEVAL_DENSE_FLOOR`
    (0,45) thay cho 0,70 khi LLM rerank sẽ chạy; LLM rerank giữ ≥ 1 chunk → có ngữ cảnh.
    Khi `CHAT_LLM_RERANK_ENABLED=false` hoặc không có model RERANK/EXTRACTION, giữ ngưỡng
@@ -95,7 +111,10 @@ rỗng thì ticket fallback. Không có lexical index. Với "học phần 21056
 - Tắt cờ hybrid hoặc collection chưa backfill → kết quả bằng hôm nay (test so sánh thứ
   tự chunk với dense-only).
 - Người dùng không có quyền với tài liệu → chunk không xuất hiện dù BM25 khớp mã (canary).
-- Backfill chạy hai lần không lỗi, số point có `bm25` = tổng point.
+- Backfill chạy hai lần không lỗi, số point có `bm25` = tổng point. (Đạt 21/10/2026 trên
+  `unisage_eval_chunks`: 2.323 point, 16,3 s; lần 2 "already present".)
+- Trên corpus eval, "học phần 2107555 có bao nhiêu tín chỉ?" (và 8940390, 2102435): dense-only
+  không có chunk chứa mã trong 16; hybrid có ở hạng 2–3. (Đạt 21/10/2026.)
 - Re-index blue-green sang collection mới giữ `bm25`.
 - Eval: tiêu chí ở "Thành công".
 
@@ -198,6 +217,10 @@ def sparse_vector(text: str) -> tuple[list[int], list[float]]:
 
 ## Open Questions
 
-- Qdrant có chấp nhận `update_collection(sparse_vectors_config=...)` trên collection đang
-  có dữ liệu không: xác minh ở Task 2 của plan trên collection eval; không được thì backfill
-  đi đường re-index blue-green.
+- ~~Qdrant có chấp nhận `update_collection(sparse_vectors_config=...)` trên collection đang
+  có dữ liệu không~~ — **Không** (21/10/2026, Qdrant 1.15.4: "Not existing vector name").
+  Backfill dev/eval = xây lại cùng tên qua collection tạm (Thiết kế 3); production = rebuild
+  blue-green (plan Task 9).
+- `BM25_AVG_LENGTH` là hằng (165) đo trên corpus eval; corpus official (1.929 tài liệu) có
+  thể khác. Sai lệch chỉ làm chuẩn hoá độ dài lệch nhẹ, không đổi thứ tự mã; xem lại khi có
+  số đo trên official.
