@@ -302,3 +302,105 @@ async def test_a_target_identity_of_another_model_fails_the_run(
 
     assert backend.results[0]["succeeded"] is False
     assert not embedder.calls
+
+
+def _rebuild_claim() -> dict[str, Any]:
+    return {
+        **_claim(),
+        "rebuild": True,
+        "dimension": OLD_DIMENSION,
+        "fingerprint": [0.1] * (OLD_DIMENSION * 3),
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_rebuild_copies_the_dense_vectors_and_adds_bm25_without_embedding(
+    qdrant: QdrantClient, embedder: FakeEmbedder
+) -> None:
+    """Production path of SPEC-hybrid-retrieval.md: the live model's own collection is rebuilt
+    with the sparse vector - no embedding call, same dimension, same identity, pointer moves."""
+
+    from app.rag.retrieval.lexical import BM25_VECTOR
+
+    backend = FakeBackend(claims=[_rebuild_claim()])
+
+    assert await run_embedding_reindex_once(backend=backend, qdrant=qdrant) is True  # type: ignore[arg-type]
+
+    assert not embedder.calls
+    assert qdrant_store.get_collection_dimension(qdrant, TARGET) == OLD_DIMENSION
+    assert qdrant_store.count_points(qdrant, TARGET) == 5
+    assert qdrant_store.point_ids(qdrant, TARGET) == qdrant_store.point_ids(qdrant, SOURCE)
+    (record,) = qdrant.retrieve(
+        collection_name=TARGET,
+        ids=[qdrant_store.chunk_point_id("doc-1:3")],
+        with_vectors=True,
+        with_payload=True,
+    )
+    assert isinstance(record.vector, dict)
+    assert set(record.vector) == {*qdrant_store._VECTOR_NAMES, BM25_VECTOR}
+    (source,) = qdrant.retrieve(
+        collection_name=SOURCE, ids=[record.id], with_vectors=True, with_payload=False
+    )
+    assert isinstance(source.vector, dict)
+    assert record.vector["content_vector"] == pytest.approx(source.vector["content_vector"])
+    assert len(record.vector[BM25_VECTOR].indices) > 0  # type: ignore[union-attr]
+    assert record.payload is not None and record.payload["content"] == "noi dung 3"
+    assert backend.identities[TARGET]["dimension"] == OLD_DIMENSION
+    assert backend.results == [
+        {
+            "run_id": "run-1",
+            "lease_token": "lease-1",
+            "succeeded": True,
+            "total_points": 5,
+            "processed_points": 5,
+            "failed_points": 0,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_rebuild_reconciles_points_added_meanwhile(
+    qdrant: QdrantClient, embedder: FakeEmbedder
+) -> None:
+    backend = FakeBackend(claims=[_rebuild_claim()])
+    original = qdrant_store.point_ids
+    added = False
+
+    def point_ids_adding_one(
+        client: QdrantClient, collection: str, page_size: int = 1000
+    ) -> set[str]:
+        nonlocal added
+        if collection == SOURCE and not added:
+            added = True
+            qdrant_store.upsert_points(client, SOURCE, [_point(9, "doc-2")])
+        return original(client, collection, page_size)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(qdrant_store, "point_ids", point_ids_adding_one)
+        assert await run_embedding_reindex_once(backend=backend, qdrant=qdrant) is True  # type: ignore[arg-type]
+
+    assert qdrant_store.point_ids(qdrant, TARGET) == qdrant_store.point_ids(qdrant, SOURCE)
+    assert qdrant_store.count_points(qdrant, TARGET) == 6
+    assert not embedder.calls
+
+
+@pytest.mark.asyncio
+async def test_the_target_collection_carries_the_bm25_sparse_vector(
+    qdrant: QdrantClient, embedder: FakeEmbedder
+) -> None:
+    """Hybrid retrieval (SPEC-hybrid-retrieval.md): a re-index writes the `bm25` vector of
+    every point from its payload, so the new collection is searchable lexically at once."""
+
+    from app.rag.retrieval.lexical import BM25_VECTOR
+
+    assert await run_embedding_reindex_once(backend=FakeBackend(), qdrant=qdrant) is True  # type: ignore[arg-type]
+
+    assert qdrant_store.has_sparse_vector(qdrant, TARGET) is True
+    (record,) = qdrant.retrieve(
+        collection_name=TARGET,
+        ids=[qdrant_store.chunk_point_id("doc-1:3")],
+        with_vectors=[BM25_VECTOR],
+        with_payload=False,
+    )
+    assert record.vector is not None and BM25_VECTOR in record.vector
+    assert len(record.vector[BM25_VECTOR].indices) > 0

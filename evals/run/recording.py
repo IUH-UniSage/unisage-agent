@@ -45,6 +45,8 @@ class Recording:
     web_queries: list[str] = field(default_factory=list)
     # Searches answered by the result cache, of `len(web_queries)`.
     web_cache_hits: int = 0
+    # Retrieval-cache hits: turns whose chunks came back through `fetch` (by id, no search).
+    retrieval_cache_fetches: int = 0
     ttft_ms: float | None = None
 
 
@@ -92,18 +94,44 @@ class RecordingRetrieval:
         return self.retrieve_many([query], security=security, limit=limit)[0]
 
     def retrieve_many(
-        self, queries: list[str], *, security: AcademicSecurityContext, limit: int | None = None
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
-        results = self.inner.retrieve_many(queries, security=security, limit=limit)
+        results = self.inner.retrieve_many(
+            queries, security=security, limit=limit, lexical_queries=lexical_queries
+        )
         _record(queries, results)
         return results
 
     async def retrieve_many_async(
-        self, queries: list[str], *, security: AcademicSecurityContext, limit: int | None = None
+        self,
+        queries: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int | None = None,
+        lexical_queries: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
-        results = await self.inner.retrieve_many_async(queries, security=security, limit=limit)
+        results = await self.inner.retrieve_many_async(
+            queries, security=security, limit=limit, lexical_queries=lexical_queries
+        )
         _record(queries, results)
         return results
+
+    def fetch(
+        self, chunk_ids: list[str], *, security: AcademicSecurityContext
+    ) -> list[RetrievedChunk]:
+        """A retrieval-cache hit re-fetches its chunks by id (SPEC-retrieval-cache.md);
+        counted so a run shows which turns skipped the search."""
+
+        chunks = self.inner.fetch(chunk_ids, security=security)
+        recording = current()
+        if recording is not None:
+            recording.retrieval_cache_fetches += 1
+        return chunks
 
 
 def _record(queries: list[str], results: list[list[RetrievedChunk]]) -> None:

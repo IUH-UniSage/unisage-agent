@@ -11,6 +11,7 @@ from app.core.registry.model_registry import index_collections
 from app.database.repositories.ingestion_job import delete_draft, set_draft_department
 from app.rag.vectorstore import qdrant_store
 from app.schemas.document_index import IndexMetadataUpdateRequest
+from app.services.retrieval_cache_invalidation import invalidate_document
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ async def update_index_metadata(
         )
     if request.department_id is not None:
         await set_draft_department(session, document_id, request.department_id)
+    await invalidate_document(document_id)
     logger.info(
         "document %s: access payload rewritten on %d point(s) (department=%s, level=%d, public=%s)",
         document_id,
@@ -53,5 +55,6 @@ async def delete_index(client: QdrantClient, session: AsyncSession, document_id:
     for collection in index_collections():
         deleted += qdrant_store.delete_document_points(client, document_id, collection=collection)
     await delete_draft(session, document_id)
+    await invalidate_document(document_id)
     logger.info("document %s: index dropped (%d point(s))", document_id, deleted)
     return deleted

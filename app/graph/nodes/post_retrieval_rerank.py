@@ -42,12 +42,21 @@ class TurnRerankResult:
         return sorted(failed, key=lambda index: self.best_scores[index])
 
 
-def rerank_chunks(per_query_chunks: Sequence[Sequence[RetrievedChunk]]) -> TurnRerankResult:
+def rerank_chunks(
+    per_query_chunks: Sequence[Sequence[RetrievedChunk]],
+    *,
+    score_threshold: float | None = None,
+) -> TurnRerankResult:
+    """`score_threshold` None = `CHAT_RERANK_SCORE_THRESHOLD` (the pre-hybrid cutoff); the
+    graph passes the low `CHAT_RETRIEVAL_DENSE_FLOOR` when an LLM rerank follows, which
+    then decides what answers the question (docs/specs/SPEC-hybrid-retrieval.md)."""
+
     best_scores = [
         max((chunk.score for chunk in chunks), default=0.0) for chunks in per_query_chunks
     ]
     return turn_result(
-        [rerank(chunks).chunks for chunks in per_query_chunks], best_scores=best_scores
+        [rerank(chunks, score_threshold=score_threshold).chunks for chunks in per_query_chunks],
+        best_scores=best_scores,
     )
 
 

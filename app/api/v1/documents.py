@@ -12,6 +12,7 @@ from app.rag.vectorstore import qdrant_store
 from app.schemas.common import ApiResponse, PageResponse
 from app.schemas.ingestion import Chunk, IndexedChunk
 from app.services.chunk_service import ChunkService
+from app.services.retrieval_cache_invalidation import invalidate_document
 
 logger = logging.getLogger(__name__)
 
@@ -121,4 +122,7 @@ async def delete_indexed_chunk(
 
     service = ChunkService(ChunkRepository(db_session))
     service.delete_indexed_chunk(client, document_id, chunk_id)
+    # A cached turn holding this chunk's id would re-fetch it and miss anyway; purging
+    # now keeps the stale counter honest (docs/specs/SPEC-retrieval-cache.md).
+    await invalidate_document(document_id)
     return ApiResponse.success_without_data()

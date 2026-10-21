@@ -138,6 +138,27 @@ def test_color_formatter_greens_the_tavily_cache_lookups() -> None:
     assert formatter.format(_graph_record("other line", name=name)) == "other line"
 
 
+def test_color_formatter_reds_the_retrieval_cache_lines_and_cached_nodes() -> None:
+    from app.core.observability.logging_config import ColorFormatter
+
+    formatter = ColorFormatter("%(message)s")
+    name = "app.graph.nodes.retrieval_cache"
+
+    for outcome in ("hit", "miss", "miss_first", "miss_second", "stale", "bypass"):
+        line = formatter.format(
+            _graph_record(f"retrieval_cache layer=l1 outcome={outcome} key=rc:v1:l1:abc", name=name)
+        )
+        assert line.startswith("\033[1;31m") and line.endswith("\033[0m"), outcome
+    # A node the cache let the graph skip is red too; a normal node start stays cyan.
+    assert formatter.format(
+        _graph_record("node=03_MessageClassificationNode model=- cached=True conversation_id=c")
+    ).startswith("\033[1;31m")
+    assert formatter.format(
+        _graph_record("node=03_MessageClassificationNode model=gpt cached=False conversation_id=c")
+    ).startswith("\033[1;36m")
+    assert formatter.format(_graph_record("other", name=name)) == "other"
+
+
 def test_color_formatter_colors_only_the_header_of_a_prompt_dump() -> None:
     from app.core.observability.logging_config import ColorFormatter
 

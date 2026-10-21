@@ -32,8 +32,10 @@ from app.core.usage.usage_recorder import UsageRecorder
 from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
 from app.rag.enrichment.multi_representation import EnrichedChunk, MultiRepresentationEnricher
+from app.rag.retrieval.lexical import lexical_text, sparse_vector
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
+from app.services.retrieval_cache_invalidation import invalidate_after_embed
 from app.worker.celery_app import celery_app
 from app.worker.embedding_job_errors import (
     JOB_FATAL_ERRORS,
@@ -379,6 +381,7 @@ async def _run_embed_chunks(
                         content=chunk.content,
                         summary=enriched.summary,
                         questions=enriched.questions,
+                        bm25=sparse_vector(lexical_text(chunk.content, chunk.heading_path)),
                         department=department_id,
                         access_level=access_level,
                         is_public=is_public,
@@ -436,6 +439,9 @@ async def _run_embed_chunks(
             _progress(position)
 
         _drop_stale_points(qdrant_client, document_id, chunks)
+        # Cached turns that referenced this document, and the scope's generation
+        # (docs/specs/SPEC-retrieval-cache.md) - fail-open, never fails the job.
+        await invalidate_after_embed(document_id, department_id=department_id, is_public=is_public)
 
         failed_chunk_count = sum(1 for r in results if r["status"] == "FAILED")
         if failed_chunk_count > 0:

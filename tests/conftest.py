@@ -85,6 +85,15 @@ def _no_live_web_search(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "TAVILY_API_KEY", "")
 
 
+@pytest.fixture(autouse=True)
+def _no_retrieval_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retrieval cache (SPEC-retrieval-cache.md) is off in every test unless a test
+    injects its own cache: a dev `.env` points it at a live Redis, and a graph test must
+    exercise retrieval, not a cached turn."""
+
+    monkeypatch.setattr(settings, "RETRIEVAL_CACHE_REDIS_URL", "")
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     """Create a test client with `get_db_session` backed by an in-memory SQLite DB.

@@ -224,6 +224,7 @@ def result_row(
         ],
         "web_queries": recording.web_queries,
         "web_cache_hits": recording.web_cache_hits,
+        "retrieval_cache_fetches": recording.retrieval_cache_fetches,
         "warning_codes": [warning.code for warning in output.admin_warnings] if output else [],
         "ttft_ms": recording.ttft_ms,
         "total_ms": result.total_ms,

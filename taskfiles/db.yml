@@ -34,6 +34,24 @@ tasks:
     cmds:
       - '{{.UV_RUN}} app.tools.web_search_cache{{if .queries}} --queries{{end}}{{if .content}} --content{{end}}{{if .query}} --query "{{.query}}"{{end}}{{if .flush}} --flush{{end}} {{.CLI_ARGS}}'
 
+  retrieval-cache:
+    desc: "Xem/đo/xoá retrieval cache (vd task db:retrieval-cache env=eval -- stats | list | show --key KEY | clear [--document ID] [--disable|--enable])"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} app.tools.retrieval_cache {{.CLI_ARGS}}'
+
+  bm25-backfill:
+    desc: "Dựng lại collection cùng tên có sparse vector bm25 (hybrid retrieval) qua collection tạm, không gọi OpenAI; dev/eval (vd task db:bm25-backfill env=eval -- --dry-run)"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} app.tools.bm25_backfill {{.CLI_ARGS}}'
+
+  retrieval-cache-stability:
+    desc: "Đo độ ổn định câu độc lập mà classifier viết ra trên bộ câu hỏi eval (trần hit rate của L2). Vd task db:retrieval-cache-stability env=eval -- --limit 50 --runs 3"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} app.tools.retrieval_cache_stability {{.CLI_ARGS}}'
+
   upgrade:
     desc: "Apply tất cả migrations (alembic upgrade head)"
     dotenv: ['.env.{{.env}}', '.env']
