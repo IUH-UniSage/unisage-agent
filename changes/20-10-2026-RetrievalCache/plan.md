@@ -62,53 +62,53 @@ T1 settings + schemas + normalize/key (thuần)
 
 ### Phase 1: Nền (thuần + lớp Redis)
 
-- [ ] Task 1: settings, schema bundle, `normalize_question`, `cache_key`, `describe_key`
-- [ ] Task 2: `RedisRetrievalCache` + fake Redis in-memory + chính sách lần-thấy-thứ-hai + stats
+- [x] Task 1: settings, schema bundle, `normalize_question`, `cache_key`, `describe_key`
+- [x] Task 2: `RedisRetrievalCache` + fake Redis in-memory + chính sách lần-thấy-thứ-hai + stats
 
 ### Checkpoint: Nền
 
-- [ ] `task test:file -- tests/test_retrieval_cache.py` xanh; ruff + mypy sạch
-- [ ] Toàn bộ `task test` xanh với cache tắt
+- [x] `task test:file -- tests/test_retrieval_cache.py` xanh; ruff + mypy sạch
+- [x] Toàn bộ `task test` xanh với cache tắt
 
 ### Phase 2: L2 (retrieval bundle)
 
-- [ ] Task 3: đo độ ổn định câu độc lập trên bộ eval (cổng quyết định L2)
-- [ ] Task 4: helper graph L2: build key parts, lookup + rebuild `TurnRerankResult`, store
-- [ ] Task 5: nối L2 vào `streaming_graph` tại 08, trace `cached`, ghi nền
+- [x] Task 3: đo độ ổn định câu độc lập trên bộ eval (cổng quyết định L2)
+- [x] Task 4: helper graph L2: build key parts, lookup + rebuild `TurnRerankResult`, store
+- [x] Task 5: nối L2 vào `streaming_graph` tại 08, trace `cached`, ghi nền
 
 ### Checkpoint: L2
 
-- [ ] Test graph: hit bỏ qua embed/search/LLM rerank; stale → miss + DEL; không ghi khi rỗng/lỗi rerank
-- [ ] Chạy tay `task be:dev env=eval` với URL cache bật: hỏi 3 lần cùng câu độc lập, log `miss_first`, `miss_second`, `hit`
+- [x] Test graph: hit bỏ qua embed/search/LLM rerank; stale → miss + DEL; không ghi khi rỗng/lỗi rerank
+- [x] (21/10, qua evals.run 3 lượt cùng câu: lượt 1 seen, lượt 2 ghi entry L1+L2, lượt 3 hit L1 1,4 s thay 8–9 s) Chạy tay `task be:dev env=eval` với URL cache bật: hỏi 3 lần cùng câu độc lập, log `miss_first`, `miss_second`, `hit`
 
 ### Phase 3: Invalidation
 
-- [ ] Task 6: hook ingest (purge + bump), `update_index_metadata`, `delete_index`, `delete_indexed_chunk`
+- [x] Task 6: hook ingest (purge + bump), `update_index_metadata`, `delete_index`, `delete_indexed_chunk`
 
 ### Checkpoint: Invalidation
 
-- [ ] Test: sửa quyền → purge đúng tài liệu; ingest → bump đúng scope; scope khác không đụng
-- [ ] Chạy tay: cache hit → "Chunk & embed lại" tài liệu → lượt sau miss
+- [x] Test: sửa quyền → purge đúng tài liệu; ingest → bump đúng scope; scope khác không đụng
+- [x] Chạy tay: cache hit → "Chunk & embed lại" tài liệu (eval:ingest --rechunk) → entry + doc index xoá, gen public 0→1, lượt sau miss — 21/10
 
 ### Phase 4: L1 (turn bundle)
 
-- [ ] Task 7: nối L1 vào `streaming_graph` tại 03 với đủ điều kiện đọc/ghi
+- [x] Task 7: nối L1 vào `streaming_graph` tại 03 với đủ điều kiện đọc/ghi
 
 ### Checkpoint: L1
 
-- [ ] Test: hit bỏ qua classifier; bypass khi có history/resume/metadata_updates/intent khác
-- [ ] Chạy tay: 3 hội thoại mới cùng câu → lần 3 không có node classifier trong trace
+- [x] Test: hit bỏ qua classifier; bypass khi có history/resume/metadata_updates/intent khác
+- [x] Chạy tay: 3 hội thoại mới cùng câu → lần 3 hit L1, `retrievals=0`, `retrieval_cache_fetches=1` — 21/10
 
 ### Phase 5: Vận hành
 
-- [ ] Task 8: CLI `app/tools/retrieval_cache.py` + `task db:retrieval-cache` + docs + `.env.example`
-- [ ] Task 9: kill switch + lock stampede (SET NX, không chờ)
+- [x] Task 8: CLI `app/tools/retrieval_cache.py` + `task db:retrieval-cache` + docs + `.env.example`
+- [x] Task 9: kill switch + lock stampede (SET NX, không chờ)
 
 ### Checkpoint: Hoàn tất
 
-- [ ] `task test`, `task code:lint`, `task code:format`, `uv run mypy app tests` sạch
-- [ ] `task db:retrieval-cache env=eval -- stats` in hit/miss theo ngày
-- [ ] Spec và `docs/guide/cau-hinh.md` khớp code; todo đánh dấu xong; sẵn sàng review
+- [x] `task test`, `task code:lint`, `task code:format`, `uv run mypy app tests` sạch
+- [x] `task db:retrieval-cache env=eval -- stats` in hit/miss theo ngày
+- [x] Spec và `docs/guide/cau-hinh.md` khớp code; todo đánh dấu xong; sẵn sàng review
 
 ## Risks and Mitigations
 

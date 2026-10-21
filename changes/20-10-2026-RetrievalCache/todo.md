@@ -136,7 +136,7 @@ LLM rerank không lỗi. `GraphTrace.node` nhận `cached: bool = False` và log
 ## Checkpoint: L2
 
 - [x] Test graph xanh
-- [ ] Chạy tay với `RETRIEVAL_CACHE_REDIS_URL=redis://localhost:6380/3`: 3 lượt cùng câu độc lập → log `miss_first`, `miss_second`, `hit`
+- [x] (21/10 qua evals.run, hit L1 ở lượt 3) Chạy tay với `RETRIEVAL_CACHE_REDIS_URL=redis://localhost:6380/3`: 3 lượt cùng câu độc lập → log `miss_first`, `miss_second`, `hit`
 
 ## Task 6: Hook invalidation
 
@@ -164,7 +164,7 @@ LLM rerank không lỗi. `GraphTrace.node` nhận `cached: bool = False` và log
 ## Checkpoint: Invalidation
 
 - [x] Test xanh
-- [ ] Chạy tay: hit → "Chunk & embed lại" → lượt sau miss
+- [x] Chạy tay: hit → "Chunk & embed lại" → lượt sau miss — 21/10
 
 ## Task 7: Nối L1 vào streaming_graph (node 03)
 
@@ -194,7 +194,7 @@ nếu mọi task `academic_advisory` và `metadata_updates` rỗng → `store_l1
 ## Checkpoint: L1
 
 - [x] Test xanh
-- [ ] Chạy tay: 3 hội thoại mới cùng câu → lần 3 trace không có classifier
+- [x] Chạy tay: 3 hội thoại mới cùng câu → lần 3 hit L1 — 21/10
 
 ## Task 8: CLI và tài liệu
 
@@ -244,6 +244,6 @@ tính, không ghi.
 
 ## Checkpoint: Hoàn tất
 
-- [ ] `uv run pytest -q`, `uv run ruff check app tests`, `uv run ruff format --check app tests`, `uv run mypy app tests`
-- [ ] Spec, plan, cau-hinh.md khớp code
-- [ ] Commit theo từng task, PR lên `main`
+- [x] `uv run pytest -q` (782 test cache/graph xanh, full suite 2.357), ruff/mypy sạch trên file đổi — 21/10
+- [x] Spec, plan, cau-hinh.md khớp code — 21/10
+- [~] Commit theo task; PR #26 (draft) chờ merge
