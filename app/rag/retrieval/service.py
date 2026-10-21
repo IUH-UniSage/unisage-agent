@@ -10,6 +10,7 @@ from qdrant_client.http.models import Record, ScoredPoint
 from app.core.config import settings
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
 from app.rag.retrieval.lexical import sparse_query_vector
+from app.rag.vectorstore import qdrant_store
 from app.rag.vectorstore.qdrant_store import (
     SparseQuery,
     build_access_filter,
@@ -221,5 +222,7 @@ def _to_retrieved_chunk(point: ScoredPoint | Record, score: float) -> RetrievedC
             "is_public": payload.get("is_public", False),
             "category": payload.get("category"),
             "region_type": payload.get("region_type"),
+            # Hybrid: BM25 found it, no dense cosine was measured; `score` is a stand-in.
+            "lexical_only": bool(payload.get(qdrant_store.LEXICAL_ONLY_FLAG, False)),
         },
     )

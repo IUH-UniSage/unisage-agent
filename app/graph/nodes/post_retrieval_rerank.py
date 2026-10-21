@@ -70,7 +70,7 @@ def turn_result(
         RerankResult(has_valid_context=bool(chunks), chunks=list(chunks))
         for chunks in per_query_kept
     ]
-    merged = per_query[0].chunks if len(per_query) == 1 else _merge_by_best_score(per_query_kept)
+    merged = per_query[0].chunks if len(per_query) == 1 else _merge_by_best_rank(per_query_kept)
     # `per_query` stays uncapped: it is the LLM rerank's candidate pool, which may
     # hold more than the generation prompt does.
     return TurnRerankResult(
@@ -80,16 +80,29 @@ def turn_result(
     )
 
 
-def _merge_by_best_score(results: Sequence[list[RetrievedChunk]]) -> list[RetrievedChunk]:
-    """Keep each chunk once at its best score (earlier query wins ties), ranked.
+def _merge_by_best_rank(results: Sequence[list[RetrievedChunk]]) -> list[RetrievedChunk]:
+    """Keep each chunk once, ordered by its best position in any query's list (the
+    retrieval order: cosine for dense-only, RRF for hybrid), ties by best score, then
+    by the earlier query. The copy kept is the best-scoring one (earlier query on a
+    tie). Ranking by position rather than score keeps a BM25-only hit, whose score is
+    the fixed lexical constant, behind the dense hits the fusion ranked above it.
 
     `turn_result` caps the result after thresholding, which keeps exactly what
-    capping first then thresholding would: both drop only the lowest scores."""
+    capping first then thresholding would: both drop only the lowest ranks."""
 
-    best: dict[str, RetrievedChunk] = {}
-    for chunks in results:
-        for chunk in chunks:
-            existing = best.get(chunk.chunk_id)
-            if existing is None or chunk.score > existing.score:
-                best[chunk.chunk_id] = chunk
-    return sorted(best.values(), key=lambda chunk: chunk.score, reverse=True)
+    best: dict[str, tuple[int, float, int, RetrievedChunk]] = {}
+    for query_index, chunks in enumerate(results):
+        for rank, chunk in enumerate(chunks):
+            current = best.get(chunk.chunk_id)
+            if current is None:
+                best[chunk.chunk_id] = (rank, chunk.score, query_index, chunk)
+                continue
+            best_rank, best_score, first_query, kept = current
+            best[chunk.chunk_id] = (
+                min(best_rank, rank),
+                max(best_score, chunk.score),
+                first_query,
+                chunk if chunk.score > best_score else kept,
+            )
+    ordered = sorted(best.values(), key=lambda entry: (entry[0], -entry[1], entry[2]))
+    return [entry[3] for entry in ordered]

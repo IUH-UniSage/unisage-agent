@@ -142,8 +142,10 @@ def test_a_bm25_only_hit_enters_the_result_with_the_lexical_score(
     by_id = {point.id: point for point in ranked}
     assert set(by_id) == {"a", "code-chunk"}
     assert by_id["code-chunk"].score == 0.66
-    assert by_id["code-chunk"].payload == {"chunk_id": "code-chunk"}
+    # The stand-in score is not a cosine: the hit says so in its payload.
+    assert by_id["code-chunk"].payload == {"chunk_id": "code-chunk", "lexical_only": True}
     assert by_id["a"].score == 0.80
+    assert "lexical_only" not in (by_id["a"].payload or {})
 
 
 def test_limit_applies_after_fusion() -> None:

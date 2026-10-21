@@ -97,8 +97,14 @@ rỗng thì ticket fallback. Không có lexical index. Với "học phần 21056
    vắng dense top-32 (1/61) thua mọi chunk có mặt ở cả hai danh sách dù hạng 30, rớt khỏi
    top-16; k = 1 đưa nó lên hạng 2–3 mà top-8 dense giữ nguyên. `score` của chunk = max
    cosine dense nếu chunk có mặt trong bất kỳ danh sách dense nào, ngược lại (chỉ sparse) =
-   `CHAT_RETRIEVAL_LEXICAL_HIT_SCORE` (mặc định 0,70, tức "đạt sàn cũ"). Filter quyền áp y
-   hệt lên cả 4 truy vấn.
+   `CHAT_RETRIEVAL_LEXICAL_HIT_SCORE` (mặc định 0,70, tức "đạt sàn cũ") **và** payload/metadata
+   mang cờ `lexical_only=true` (21/10): điểm này là số thế chỗ, không phải cosine; sàn miễn
+   lọc theo cờ chứ không theo con số. Filter quyền áp y hệt lên cả 4 truy vấn.
+   **Thứ tự được giữ nguyên** từ đây về sau (sửa 21/10/2026): `rerank()` chỉ lọc theo sàn,
+   không sắp lại theo điểm; gộp nhiều sub-query xếp theo hạng tốt nhất rồi mới tới điểm; LLM
+   rerank giữ chunk theo thứ tự ứng viên. Lý do: chunk chỉ BM25 mang hằng 0,70 cao hơn cosine
+   dense 0,5–0,6, nếu sắp theo điểm thì khi LLM rerank giữ nhiều, 7 chunk khớp từ khoá chiếm
+   hết 8 chỗ ngữ cảnh và bảng học phí đúng bị cắt (ca "học phí ngành quản trị kinh doanh").
 5. **Gate** (quyết định (a) ngày 20/10): `rerank()` áp **sàn** `CHAT_RETRIEVAL_DENSE_FLOOR`
    (0,45) thay cho 0,70 khi LLM rerank sẽ chạy; LLM rerank giữ ≥ 1 chunk → có ngữ cảnh.
    Khi `CHAT_LLM_RERANK_ENABLED=false` hoặc không có model RERANK/EXTRACTION, giữ ngưỡng

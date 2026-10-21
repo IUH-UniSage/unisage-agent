@@ -251,3 +251,85 @@ async def test_a_fee_row_far_down_a_table_reaches_the_model() -> None:
 
     (prompt,) = seen
     assert "| 3.1 | - Khối Công nghệ: | | 38.350.000 |" in prompt
+
+
+@pytest.mark.asyncio
+async def test_kept_chunks_follow_the_retrieval_order_not_the_score() -> None:
+    """When the model keeps a BM25-only hit (0.70) next to the dense hit RRF ranked first,
+    the dense hit stays first - otherwise the context cap would take the keyword match."""
+
+    dense = _chunk("dense", 0.59, "Khối Kinh tế 36.260.000")
+    lexical = _chunk("lexical", 0.70, "Danh mục ngành đúng, ngành phù hợp")
+    agent = build_llm_rerank_agent(
+        make_sync_llm_model('{"SQ1": {"C2": "nhắc tới ngành", "C1": "có mức thu"}}')
+    )
+
+    outcome = await llm_rerank(
+        agent, ["Học phí ngành Quản trị kinh doanh"], rerank_chunks([[dense, lexical]])
+    )
+
+    assert [c.chunk_id for c in outcome.result.chunks] == ["dense", "lexical"]
+
+
+@pytest.mark.asyncio
+async def test_regression_17_05_the_tuition_table_survives_a_reranker_that_keeps_everything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """21/10/2026 17:05, "học phí ngành quản trị kinh doanh": dense found the tuition table
+    (cosine 0.58), seven chunks came from BM25 only (stand-in 0.70), the LLM reranker kept
+    all 16, the context takes 8. The table must be in those 8 whatever the reranker does,
+    and the order before and after the steps must be the retrieval order minus drops."""
+
+    monkeypatch.setattr(settings, "CHAT_CONTEXT_MAX_CHUNKS", 8)
+    # Retrieval (RRF) order: the table first, then the seven keyword-only hits, then dense.
+    tuition = RetrievedChunk(
+        chunk_id="tuition",
+        content="Khối Kinh tế (các ngành khác) 36.260.000",
+        source="Quyet Dinh 1035.pdf",
+        score=0.58,
+    )
+    lexical = [
+        RetrievedChunk(
+            chunk_id=f"lex{i}",
+            content="Danh mục ngành đúng, ngành phù hợp",
+            source=f"lex{i}.pdf",
+            score=0.70,
+            metadata={"lexical_only": True},
+        )
+        for i in range(7)
+    ]
+    dense = [
+        RetrievedChunk(chunk_id=f"d{i}", content="...", source=f"d{i}.pdf", score=0.57 - i * 0.01)
+        for i in range(8)
+    ]
+    candidates = [tuition, *lexical, *dense]
+    scored = rerank_chunks([candidates], score_threshold=0.45)
+    assert [c.chunk_id for c in scored.per_query[0].chunks] == [c.chunk_id for c in candidates]
+
+    keep_all = "{" + '"SQ1": [' + ", ".join(str(i) for i in range(1, 17)) + "]}"
+    agent = build_llm_rerank_agent(make_sync_llm_model(keep_all))
+
+    outcome = await llm_rerank(agent, ["Học phí ngành Quản trị kinh doanh"], scored)
+
+    assert outcome.failure is None
+    final = [c.chunk_id for c in outcome.result.chunks]
+    assert len(final) == 8
+    assert final[0] == "tuition"
+    assert final == [c.chunk_id for c in candidates][:8]
+
+
+def test_regression_17_05_merging_sub_queries_does_not_sort_by_the_stand_in_score() -> None:
+    """Two sub-queries, each with the tuition-style dense hit first and BM25-only hits
+    (0.70) after: the merge keeps the dense hits ahead."""
+
+    def lex(i: int) -> RetrievedChunk:
+        return RetrievedChunk(
+            chunk_id=f"lex{i}", content="", source="s", score=0.70, metadata={"lexical_only": True}
+        )
+
+    a = RetrievedChunk(chunk_id="a", content="", source="s", score=0.58)
+    b = RetrievedChunk(chunk_id="b", content="", source="s", score=0.61)
+
+    result = rerank_chunks([[a, lex(1), lex(2)], [b, lex(3), lex(1)]], score_threshold=0.45)
+
+    assert [c.chunk_id for c in result.chunks] == ["b", "a", "lex1", "lex3", "lex2"]

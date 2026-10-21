@@ -84,7 +84,7 @@ def _no_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("_no_threshold")
-def test_every_query_is_searched_in_order_and_merged_by_best_score() -> None:
+def test_every_query_is_searched_in_order_and_merged_by_best_rank_then_score() -> None:
     service = _PerQueryRetrieval(
         {
             "hoc phi": [_chunk("a", 0.7), _chunk("shared", 0.6)],
@@ -199,3 +199,21 @@ def test_context_cap_trims_a_single_query_but_keeps_the_rerank_pool(
 
     assert [c.chunk_id for c in result.chunks] == ["c0", "c1"]
     assert len(result.per_query[0].chunks) == 5
+
+
+@pytest.mark.usefixtures("_no_threshold")
+def test_merge_ranks_by_best_position_so_a_lexical_only_hit_stays_behind_dense_hits() -> None:
+    """Hybrid: each sub-query's list is in RRF order and a BM25-only hit carries the fixed
+    0.70; merging by score would put both lexical hits first, merging by position keeps
+    the dense hits the fusion ranked above them."""
+
+    service = _PerQueryRetrieval(
+        {
+            "q1": [_chunk("a", 0.58), _chunk("lex", 0.70)],
+            "q2": [_chunk("b", 0.61), _chunk("lex2", 0.70)],
+        }
+    )
+
+    chunks = _merged(["q1", "q2"], service)
+
+    assert [c.chunk_id for c in chunks] == ["b", "a", "lex", "lex2"]

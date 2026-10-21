@@ -108,12 +108,11 @@ async def llm_rerank(
         logger.warning("LLM rerank failed - keeping the score-only ranking: %s", message)
         return LLMRerankOutcome(result=rerank_result, failure=message)
 
+    # Kept chunks stay in candidate order (the retrieval ranking), not by score: a
+    # BM25-only hit's fixed 0.70 would otherwise outrank the dense hits the model also
+    # kept and take the context cap when it keeps many.
     per_query_kept = [
-        sorted(
-            (candidates[index] for index in relevant[query_index]),
-            key=lambda chunk: chunk.score,
-            reverse=True,
-        )
+        [candidates[index] for index in sorted(relevant[query_index])]
         for query_index in range(len(questions))
     ]
     _log_decisions(questions, candidates, relevant)
