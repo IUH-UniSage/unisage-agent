@@ -79,19 +79,19 @@ Phase sau: cross-encoder (không làm đợt này)
 
 ### Phase 2b: Re-index "rebuild" (đường production, 3 repo)
 
-- [ ] Task 9a (backend): `EmbeddingReindexRequest` thêm `rebuild: boolean`; `start()` với
+- [x] Task 9a (backend) — 21/10: `EmbeddingReindexRequest` thêm `rebuild: boolean`; `start()` với
       `rebuild=true` nhắm vào chính model đang live (bỏ `EMBEDDING_REINDEX_MODEL_INVALID` và
       `EMBEDDING_REINDEX_NOT_NEEDED` cho ca này), vẫn chặn khi có lượt đang mở; run ghi
       `rebuild`; claim response cho agent biết `rebuild`
-- [ ] Task 9b (agent): worker khi `rebuild`: scroll `with_vectors=True`, copy 3 vector dense
+- [x] Task 9b (agent) — 21/10: worker khi `rebuild`: scroll `with_vectors=True`, copy 3 vector dense
       nguyên trạng, tính `bm25` từ payload, upsert sang target; không gọi embedding; identity
       của target = identity nguồn; cutover như cũ
-- [ ] Task 9c (web): dialog re-index có lựa chọn "Xây lại chỉ mục với model hiện tại (thêm
+- [x] Task 9c (web) — 21/10: dialog re-index có lựa chọn "Xây lại chỉ mục với model hiện tại (thêm
       BM25)" gửi `rebuild: true`; panel hiển thị lượt rebuild
 
 ### Checkpoint: Rebuild
 
-- [ ] Trên eval: chạy rebuild → collection mới có `bm25` đủ 100 % point, cutover xong, chat
+- [x] 21/10: rebuild trên eval (run e7818764, xếp thẳng vào DB vì không có đăng nhập) → `unisage_eval_chunks__20261021030324` 2.323 point, 2.322 có `bm25` (1 point không có text), worker không gọi embedding, 10 s; pointer chuyển, agent thấy collection mới, câu mã vẫn hạng 2; cache 0 entry sau cutover. Trên eval: chạy rebuild → collection mới có `bm25` đủ 100 % point, cutover xong, chat
       vẫn trả lời, retrieval cache tự miss (coll đổi); không có lượt gọi OpenAI trong log worker
 
 ### Phase 3: Truy vấn

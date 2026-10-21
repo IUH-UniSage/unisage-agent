@@ -8,6 +8,11 @@ Re-embeds from the payload each point already holds (`content`, `summary`, `ques
 same three texts ingestion embedded (`app.worker.tasks.ingestion`), so no PDF is parsed and no
 EXTRACTION call is made. The claimed credential (plaintext API key) lives only in this call stack:
 the Celery task that runs this takes no arguments.
+
+A claim with `rebuild=true` (docs/specs/SPEC-hybrid-retrieval.md, the production way to give a
+collection the `bm25` sparse vector) targets the live model itself: every point is copied with
+its dense vectors as they are and gets `bm25` from its payload - no embedding call at all. Java
+then only moves the pointer.
 """
 
 import asyncio
@@ -61,6 +66,7 @@ class _Claim:
     model_source_ref: str | None
     dimension: int
     fingerprint: list[float]
+    rebuild: bool = False
 
 
 def _parse_claim(raw: dict[str, Any]) -> _Claim:
@@ -85,6 +91,7 @@ def _parse_claim(raw: dict[str, Any]) -> _Claim:
         model_source_ref=candidate.get("modelSourceRef"),
         dimension=int(raw["dimension"]),
         fingerprint=[float(value) for value in raw.get("fingerprint") or []],
+        rebuild=bool(raw.get("rebuild") or False),
     )
 
 
@@ -124,8 +131,9 @@ async def run_embedding_reindex_once(
 async def _run(claim: _Claim, backend: BackendJavaClient, qdrant: QdrantClient) -> None:
     progress = _Progress()
     logger.info(
-        "embedding re-index %s: %s -> %s with %s/%s (dimension %d)",
+        "embedding re-index %s%s: %s -> %s with %s/%s (dimension %d)",
         claim.run_id,
+        " (rebuild, copy + bm25)" if claim.rebuild else "",
         claim.source,
         claim.target,
         claim.credential.provider,
@@ -134,10 +142,13 @@ async def _run(claim: _Claim, backend: BackendJavaClient, qdrant: QdrantClient) 
     )
     try:
         key = await _prepare_target(claim, backend, qdrant)
-        embedder = build_embedder_for(claim.credential, key)
         progress.total = qdrant_store.count_points(qdrant, claim.source)
         await _report(claim, backend, progress)
-        await _reembed_collection(claim, backend, qdrant, embedder, key, progress)
+        if claim.rebuild:
+            await _copy_collection(claim, backend, qdrant, key, progress)
+        else:
+            embedder = build_embedder_for(claim.credential, key)
+            await _reembed_collection(claim, backend, qdrant, embedder, key, progress)
         if progress.failed:
             raise ReindexError(f"{progress.failed} point(s) could not be re-embedded")
     except _RunCancelled:
@@ -164,9 +175,10 @@ async def _run(claim: _Claim, backend: BackendJavaClient, qdrant: QdrantClient) 
         failed_points=progress.failed,
     )
     logger.info(
-        "embedding re-index %s: %d point(s) re-embedded into %s, run %s",
+        "embedding re-index %s: %d point(s) %s into %s, run %s",
         claim.run_id,
         progress.processed,
+        "copied with bm25" if claim.rebuild else "re-embedded",
         claim.target,
         status,
     )
@@ -263,6 +275,59 @@ async def _report(claim: _Claim, backend: BackendJavaClient, progress: _Progress
     )
     if status == CANCELLED:
         raise _RunCancelled()
+
+
+async def _copy_collection(
+    claim: _Claim,
+    backend: BackendJavaClient,
+    qdrant: QdrantClient,
+    key: str,
+    progress: _Progress,
+) -> None:
+    """The rebuild: every point of the source goes to the target with its dense vectors as
+    they are and a `bm25` vector from its payload (`qdrant_store.point_with_bm25`). No embedding
+    API, no budget. Points added to or removed from the source meanwhile are reconciled like the
+    re-embed does, so the cutover sees the same set of ids."""
+
+    batch_size = max(1, settings.EMBEDDING_REINDEX_BATCH_SIZE)
+
+    async def copy(records: list[models.Record]) -> None:
+        points = [
+            qdrant_store.point_with_bm25(record, payload_update={"embedding_identity_key": key})
+            for record in records
+        ]
+        qdrant_store.upsert_points(qdrant, claim.target, points)
+        progress.processed += len(points)
+        await _report(claim, backend, progress)
+
+    offset: qdrant_store.PointOffset = None
+    while True:
+        records, offset = qdrant_store.scroll_points(
+            qdrant, claim.source, limit=batch_size, offset=offset, with_vectors=True
+        )
+        if records:
+            await copy(records)
+        if offset is None:
+            break
+
+    source_ids = qdrant_store.point_ids(qdrant, claim.source)
+    target_ids = qdrant_store.point_ids(qdrant, claim.target)
+    missing = sorted(source_ids - target_ids)
+    for start in range(0, len(missing), batch_size):
+        await copy(
+            qdrant_store.retrieve_points(
+                qdrant, claim.source, missing[start : start + batch_size], with_vectors=True
+            )
+        )
+    extra = sorted(target_ids - source_ids)
+    qdrant_store.delete_points(qdrant, claim.target, extra)
+    if missing or extra:
+        logger.info(
+            "embedding re-index %s: reconciled %d missing and %d extra point(s)",
+            claim.run_id,
+            len(missing),
+            len(extra),
+        )
 
 
 async def _reembed_collection(

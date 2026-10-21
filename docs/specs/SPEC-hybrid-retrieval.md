@@ -71,11 +71,16 @@ rỗng thì ticket fallback. Không có lexical index. Với "học phần 21056
    cùng 3 vector dense. **Re-index** (`embedding_reindex`): tính sparse từ payload khi copy
    sang collection mới. `ensure_collection` tạo sparse config cho collection mới.
 3. **Đưa `bm25` vào collection đang chạy**, hai đường:
-   - **Re-index "rebuild"** (production): lượt re-index blue-green nhắm vào chính model đang
-     live; agent copy 3 vector dense nguyên trạng (`with_vectors=True`), tính sparse từ
-     payload, upsert sang collection mới, cutover nguyên tử. Không gọi OpenAI. Cần backend
-     cho phép lượt `rebuild` (hiện `start()` chặn khi identity trùng) và web có lựa chọn
-     tương ứng. Chi tiết: plan Task 9.
+   - **Re-index "rebuild"** (production, làm 21/10/2026): `POST /chat-models/embedding-index/reindex`
+     với `{"rebuild": true}` (bỏ qua `chatModelId`) xếp một lượt re-index blue-green nhắm vào
+     chính model EMBEDDING đang ACTIVE; backend chấp nhận identity trùng (cột
+     `embedding_reindex_runs.rebuild`, V38), vẫn chặn khi có lượt đang mở, từ chối khi chưa có
+     gì được index (NOT_NEEDED) hoặc model live lệch identity (MODEL_INVALID → cần re-index
+     thật). Claim trả `rebuild: true`; agent copy 3 vector dense nguyên trạng
+     (`scroll_points(with_vectors=True)`), tính `bm25` từ payload (`point_with_bm25`), upsert
+     sang collection `<base>__<ts>`, không gọi embedding/budget, reconcile point thêm/xoá giữa
+     chừng như re-embed. Cutover chỉ chuyển pointer, model giữ nguyên ACTIVE. Web: dialog
+     re-index có lựa chọn "Xây lại chỉ mục với mô hình hiện tại (thêm BM25)".
    - **Backfill cùng tên** (`task db:bm25-backfill env=eval`, dev/eval và dự phòng). Qdrant
      1.15 **không** cho thêm vector vào collection đang có (xác minh 21/10/2026:
      `update_collection(sparse_vectors_config=...)` → "Not existing vector name"), nên CLI

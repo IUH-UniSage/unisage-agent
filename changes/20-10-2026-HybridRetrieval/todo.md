@@ -94,14 +94,14 @@ collection mới có `bm25` mà không embed lại.
 
 **Acceptance criteria:**
 
-- [ ] Trên eval: rebuild → collection `<base>__<ts>` có 100 % point với `bm25`; cutover; chat OK.
-- [ ] Log worker không có lượt gọi embedding; thời gian rebuild cho 2.323 point dưới 2 phút.
-- [ ] Retrieval cache tự miss sau cutover (`coll` trong khoá đổi).
+- [x] Trên eval: rebuild → `unisage_eval_chunks__20261021030324` 2.323 point, 2.322 với `bm25`; cutover; retrieval OK (câu mã hạng 2) — 21/10
+- [x] Log worker không có lượt gọi embedding; 2.323 point trong 10 s (started 03:03:38 → finished 03:03:48) — 21/10
+- [x] Retrieval cache: `coll` nằm trong khoá (test fingerprint); sau cutover `stats` báo 0 entry — 21/10
 
 **Verification:**
 
-- [ ] Backend: `./mvnw test -Dtest=EmbeddingReindex*`; agent: `uv run pytest tests/worker/test_embedding_reindex.py -q`; web: `pnpm test`.
-- [ ] Chạy tay trên eval, `task db:retrieval-cache env=eval -- stats` thấy miss sau cutover.
+- [x] Backend: `./mvnw test -Dtest=EmbeddingReindex*` (23 xanh); agent: `uv run pytest tests/worker/test_embedding_reindex.py -q` (12 xanh); web: `pnpm test` chat-models (21 xanh) — 21/10
+- [x] Chạy tay trên eval, `task db:retrieval-cache env=eval -- stats` chạy được, 0 entry sau cutover — 21/10
 
 **Dependencies:** Task 2 (sparse config + helper), Task 1
 

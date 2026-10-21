@@ -153,6 +153,33 @@ def has_sparse_vector(client: QdrantClient, collection: str | None = None) -> bo
     return found
 
 
+def point_with_bm25(
+    record: models.Record, *, payload_update: dict[str, Any] | None = None
+) -> models.PointStruct:
+    """`record` (scrolled with its vectors) as a point for a collection that has the `bm25`
+    sparse vector: dense vectors as they are, `bm25` computed from the payload (heading path +
+    content, like ingestion), payload copied with `payload_update` applied."""
+
+    from app.rag.retrieval.lexical import lexical_text, sparse_vector
+
+    payload = {**(record.payload or {}), **(payload_update or {})}
+    vectors = dict(record.vector) if isinstance(record.vector, dict) else {}
+    dense = {name: cast(list[float], vectors[name]) for name in _VECTOR_NAMES if name in vectors}
+    bm25 = sparse_vector(
+        lexical_text(str(payload.get("content") or ""), list(payload.get("heading_path") or []))
+    )
+    return models.PointStruct(
+        id=record.id,
+        vector=point_vectors(
+            dense.get(_VECTOR_NAMES[0], []),
+            dense.get(_VECTOR_NAMES[1], []),
+            dense.get(_VECTOR_NAMES[2], []),
+            bm25=bm25,
+        ),
+        payload=payload,
+    )
+
+
 def copy_points_with_bm25(
     client: QdrantClient,
     source: str,
@@ -167,38 +194,13 @@ def copy_points_with_bm25(
     an existing collection, so the points move to one created with it (`ensure_collection`).
     No embedding call. Returns the number of points copied."""
 
-    from app.rag.retrieval.lexical import lexical_text, sparse_vector
-
     copied = 0
     offset: PointOffset = None
     while True:
         records, offset = client.scroll(
             collection_name=source, limit=batch, offset=offset, with_payload=True, with_vectors=True
         )
-        points: list[models.PointStruct] = []
-        for record in records:
-            payload = dict(record.payload or {})
-            vectors = dict(record.vector) if isinstance(record.vector, dict) else {}
-            dense = {
-                name: cast(list[float], vectors[name]) for name in _VECTOR_NAMES if name in vectors
-            }
-            bm25 = sparse_vector(
-                lexical_text(
-                    str(payload.get("content") or ""), list(payload.get("heading_path") or [])
-                )
-            )
-            points.append(
-                models.PointStruct(
-                    id=record.id,
-                    vector=point_vectors(
-                        dense.get(_VECTOR_NAMES[0], []),
-                        dense.get(_VECTOR_NAMES[1], []),
-                        dense.get(_VECTOR_NAMES[2], []),
-                        bm25=bm25,
-                    ),
-                    payload=payload,
-                )
-            )
+        points = [point_with_bm25(record) for record in records]
         if points:
             client.upsert(collection_name=target, points=points)
             copied += len(points)
@@ -699,16 +701,17 @@ def scroll_points(
     limit: int,
     offset: PointOffset = None,
     with_payload: bool = True,
+    with_vectors: bool = False,
 ) -> tuple[list[models.Record], PointOffset]:
-    """One page of `collection` (no vectors) in point id order, and the offset of the next page
-    (None after the last one)."""
+    """One page of `collection` (vectors only on request) in point id order, and the offset of
+    the next page (None after the last one)."""
 
     records, next_offset = client.scroll(
         collection_name=collection,
         limit=limit,
         offset=offset,
         with_payload=with_payload,
-        with_vectors=False,
+        with_vectors=with_vectors,
     )
     return list(records), next_offset
 
@@ -730,15 +733,18 @@ def point_ids(client: QdrantClient, collection: str, page_size: int = 1000) -> s
 
 
 def retrieve_points(
-    client: QdrantClient, collection: str, ids: Sequence[str]
+    client: QdrantClient, collection: str, ids: Sequence[str], *, with_vectors: bool = False
 ) -> list[models.Record]:
-    """The points `ids` of `collection` with their payload (no vectors)."""
+    """The points `ids` of `collection` with their payload (vectors only on request)."""
 
     if not ids:
         return []
     return list(
         client.retrieve(
-            collection_name=collection, ids=list(ids), with_payload=True, with_vectors=False
+            collection_name=collection,
+            ids=list(ids),
+            with_payload=True,
+            with_vectors=with_vectors,
         )
     )
 
