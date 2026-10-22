@@ -67,6 +67,10 @@ from app.graph.nodes.calculation import (
     resume_calculation_task,
     run_calculation_task,
 )
+from app.graph.nodes.cross_encoder_rerank import (
+    CROSS_ENCODER_SKIPPED,
+    cross_encoder_rerank,
+)
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import detect_greeting, greeting_for
 from app.graph.nodes.intent_routing import plan_route
@@ -118,6 +122,7 @@ from app.graph.streaming_state import (
     GraphOutput,
     ResumeInput,
 )
+from app.integrations.cross_encoder_client import CrossEncoderClient
 from app.rag.prompting.citations import (
     build_citations,
     build_context_trace,
@@ -1152,18 +1157,43 @@ async def _run_advisory_flow(
         # only the low dense floor applies here; the LLM is the gate.
         trace.node("09_PostRetrievalRerankNode")
         llm_rerank_follows = settings.CHAT_LLM_RERANK_ENABLED and models.rerank is not None
+        judge_follows = llm_rerank_follows or settings.CHAT_RERANK_MODE != "llm"
         rerank_result = rerank_chunks(
             per_query_chunks,
-            score_threshold=settings.CHAT_RETRIEVAL_DENSE_FLOOR if llm_rerank_follows else None,
+            score_threshold=settings.CHAT_RETRIEVAL_DENSE_FLOOR if judge_follows else None,
         )
         rerank_ok = True
 
-    # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
+    # CrossEncoderRerankNode (CHAT_RERANK_MODE cross_encoder / cross_encoder_then_llm,
+    # docs/specs/SPEC-cross-encoder-rerank.md): each sub-query's top CHAT_CROSS_ENCODER_KEEP
+    # by cross-encoder score. `cross_encoder` stops there; `cross_encoder_then_llm` hands
+    # those to the LLM rerank. A service failure falls over to the LLM rerank with a
+    # warning and skips the cache store: that result is not what this mode's key stands for.
+    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED
     if (
         cached_result is None
-        and settings.CHAT_LLM_RERANK_ENABLED
+        and settings.CHAT_RERANK_MODE != "llm"
         and rerank_result.has_valid_context
     ):
+        trace.node("09a_CrossEncoderRerankNode")
+        ce_outcome = await cross_encoder_rerank(CrossEncoderClient(), questions, rerank_result)
+        if ce_outcome.failure is None:
+            rerank_result = ce_outcome.result
+            llm_rerank_wanted = (
+                settings.CHAT_RERANK_MODE == "cross_encoder_then_llm"
+                and settings.CHAT_LLM_RERANK_ENABLED
+            )
+        else:
+            rerank_ok = False
+            admin_warnings.append(
+                AdminWarning(
+                    code="CROSS_ENCODER_FAILED",
+                    message=f"{CROSS_ENCODER_SKIPPED}{ce_outcome.failure}",
+                )
+            )
+
+    # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
+    if cached_result is None and llm_rerank_wanted and rerank_result.has_valid_context:
         if models.rerank is not None:
             rerank_agent = build_llm_rerank_agent(models.rerank)
             trace.node("09a_LLMRerankNode", agent=rerank_agent, credential=models.rerank_credential)

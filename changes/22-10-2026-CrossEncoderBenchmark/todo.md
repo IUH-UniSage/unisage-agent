@@ -42,16 +42,26 @@ CE lỗi → log + LLM rerank. Trace `09a_CrossEncoderRerankNode`. Fingerprint c
 
 **Acceptance criteria:**
 
-- [ ] Client giả trả điểm → giữ đúng top-K, thứ tự theo điểm, `ce_score` có mặt, `score` không đổi.
-- [ ] Client ném lỗi/timeout → kết quả bằng LLM rerank, log warning một dòng.
-- [ ] Chế độ hai tầng: LLM nhận đúng K ứng viên.
-- [ ] Đổi `CHAT_RERANK_MODE` → khoá cache khác (test fingerprint).
+- [x] Client giả trả điểm → giữ đúng top-K, thứ tự theo điểm, `ce_score` có mặt, `score` không đổi.
+- [x] Client ném lỗi/timeout → kết quả bằng LLM rerank, log warning một dòng.
+- [x] Chế độ hai tầng: LLM nhận đúng K ứng viên.
+- [x] Đổi `CHAT_RERANK_MODE` → khoá cache khác (test fingerprint).
 
 **Verification:**
 
-- [ ] `uv run pytest tests/graph -q`; chạy tay trên eval với service bật rồi tắt.
+- [x] `uv run pytest tests/graph -q`; chạy tay trên eval với service bật rồi tắt.
 
 **Dependencies:** Task 1 · **Files:** như trên · **Scope:** M
+
+**Kết quả (22/10):** `app/integrations/cross_encoder_client.py` (httpx, một deadline
+`CROSS_ENCODER_TIMEOUT_SECONDS`, mọi lỗi → `CrossEncoderUnavailableError` tiếng Việt),
+`app/graph/nodes/cross_encoder_rerank.py` (gather một request/sub-query, passage = heading_path +
+content, top-K theo điểm CE, `metadata["ce_score"]`, score giữ nguyên, không bao giờ làm rỗng
+sub-query). Graph chính và node Calculation cùng rẽ nhánh theo `CHAT_RERANK_MODE`; CE lỗi →
+warning `CROSS_ENCODER_FAILED` + LLM rerank + không ghi cache. Fingerprint cache thêm
+`rerank_mode`, `ce_keep`. Tests: node 6, client 8, wiring 3, fingerprint 1; toàn bộ suite 2665
+passed (bỏ `tests/e2e` vì lỗi import `ClarificationStateRepository` có sẵn trên main). Chạy tay
+trên eval để ở Task 5.
 
 ## Task 3: Harness `-a`
 

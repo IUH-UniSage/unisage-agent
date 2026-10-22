@@ -44,6 +44,10 @@ from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.graph.fence_redactor import FenceRedactor, take_bare_blocks
 from app.graph.metadata_fields import canonical_field, canonical_params, is_profile_field
+from app.graph.nodes.cross_encoder_rerank import (
+    CROSS_ENCODER_SKIPPED,
+    cross_encoder_rerank,
+)
 from app.graph.nodes.llm_rerank import (
     LLM_RERANK_SKIPPED,
     build_llm_rerank_agent,
@@ -60,6 +64,7 @@ from app.graph.streaming import (
     run_agent_text_with_failover,
 )
 from app.graph.streaming_state import AdminWarning, GraphModels
+from app.integrations.cross_encoder_client import CrossEncoderClient
 from app.rag.prompting import append_current_time, build_calculation_llm_prompt, get_templates
 from app.rag.prompting.citations import cited_indexes, source_title
 from app.schemas.chat_history import HistoryMessage
@@ -509,7 +514,22 @@ async def _search(
                 best[chunk.chunk_id] = chunk
     result = rerank_chunks([list(best.values())])
     models = deps.models
-    if settings.CHAT_LLM_RERANK_ENABLED and result.has_valid_context:
+    # Same rerank stage as the main graph (CHAT_RERANK_MODE): cross-encoder first when
+    # configured, the LLM rerank after it or instead of it, fail-over on a service error.
+    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED
+    if settings.CHAT_RERANK_MODE != "llm" and result.has_valid_context:
+        if deps.trace is not None:
+            deps.trace.step("09a_CrossEncoderRerankNode", parent="07_CalculationNode")
+        ce_outcome = await cross_encoder_rerank(CrossEncoderClient(), [question], result)
+        if ce_outcome.failure is None:
+            result = ce_outcome.result
+            llm_rerank_wanted = (
+                settings.CHAT_RERANK_MODE == "cross_encoder_then_llm"
+                and settings.CHAT_LLM_RERANK_ENABLED
+            )
+        else:
+            deps.warn("CROSS_ENCODER_FAILED", f"{CROSS_ENCODER_SKIPPED}{ce_outcome.failure}")
+    if llm_rerank_wanted and result.has_valid_context:
         if models.rerank is not None:
             agent = build_llm_rerank_agent(models.rerank)
             if deps.trace is not None:

@@ -235,6 +235,17 @@ class Settings(BaseSettings):
     # answer, and the turn would end in TicketFallback with the right document retrieved.
     CHAT_LLM_RERANK_RESCUE_MIN_SCORE: float = Field(default=0.75, ge=0, le=1)
     CHAT_LLM_RERANK_RESCUE_KEEP: int = Field(default=2, ge=0)
+    # Cross-encoder rerank (docs/specs/SPEC-cross-encoder-rerank.md): a local
+    # bge-reranker-v2-m3 service (`task reranker:serve`) scores (question, chunk) pairs.
+    # `llm`: the LLM rerank above, as before (the service is never called).
+    # `cross_encoder`: CrossEncoderRerankNode keeps each sub-query's top CROSS_ENCODER_KEEP
+    # by cross-encoder score and the LLM rerank is skipped.
+    # `cross_encoder_then_llm`: the cross-encoder cuts to KEEP, the LLM rerank judges those.
+    # A service error or timeout falls over to the LLM rerank with an AI-admin warning.
+    CHAT_RERANK_MODE: Literal["llm", "cross_encoder", "cross_encoder_then_llm"] = "llm"
+    CROSS_ENCODER_URL: str = "http://127.0.0.1:8403"
+    CROSS_ENCODER_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
+    CHAT_CROSS_ENCODER_KEEP: int = Field(default=8, ge=1)
     # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
     # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),

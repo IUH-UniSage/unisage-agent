@@ -11,7 +11,8 @@ AST-scans every `.py` file under `app/` for:
     which is exactly the bare-client pattern this feature bans.
   - `httpx.Client(`/`httpx.AsyncClient(` constructions outside the factory
     module itself. `app/integrations/backend_java_client.py`,
-    `app/integrations/slack_notifier.py` and `app/integrations/tavily_client.py`
+    `app/integrations/slack_notifier.py`, `app/integrations/tavily_client.py` and
+    `app/integrations/cross_encoder_client.py`
     are scoped exceptions: each builds a
     plain `httpx.AsyncClient` to call an operator-configured external
     service, not a provider — SSRF pinning is a defense for URLs the SA
@@ -40,6 +41,8 @@ _HTTPX_CLIENT_ALLOWED_FILES = {
     _APP_ROOT / "integrations" / "backend_java_client.py",
     _APP_ROOT / "integrations" / "slack_notifier.py",
     _APP_ROOT / "integrations" / "tavily_client.py",
+    # Fixed local host (CROSS_ENCODER_URL), same reasoning as the two above.
+    _APP_ROOT / "integrations" / "cross_encoder_client.py",
 }
 
 _SDK_CLIENT_NAMES = {"OpenAI", "AsyncOpenAI", "Anthropic"}

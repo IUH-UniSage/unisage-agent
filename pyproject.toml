@@ -59,7 +59,8 @@ markers = [
 ]
 # Default run stays hermetic (no live Java/Redis/Celery needed) - integration
 # tests opt in explicitly via `pytest -m integration`.
-addopts = "-m 'not integration'"
+# reranker/ is its own uv project with its own pytest config (`task reranker:test`).
+addopts = "-m 'not integration' --ignore=reranker"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -154,6 +154,10 @@ def config_fingerprint(layer: Layer) -> str:
         "llm_rerank": settings.CHAT_LLM_RERANK_ENABLED,
         "rescue_min_score": settings.CHAT_LLM_RERANK_RESCUE_MIN_SCORE,
         "rescue_keep": settings.CHAT_LLM_RERANK_RESCUE_KEEP,
+        # Cross-encoder rerank (SPEC-cross-encoder-rerank.md): which chunks survive 09a
+        # depends on the mode and on how many the cross-encoder keeps.
+        "rerank_mode": settings.CHAT_RERANK_MODE,
+        "ce_keep": settings.CHAT_CROSS_ENCODER_KEEP,
         "rerank_template": _sha(templates.agent_reranker_compressor),
         # Hybrid retrieval (SPEC-hybrid-retrieval.md): a different candidate set per setting.
         "hybrid": settings.RETRIEVAL_HYBRID_ENABLED,
