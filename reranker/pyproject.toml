@@ -1,0 +1,27 @@
+[project]
+name = "unisage-reranker"
+version = "0.1.0"
+description = "Cross-encoder rerank service for UniSage (BAAI/bge-reranker-v2-m3) - SPEC-cross-encoder-rerank.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "torch>=2.4",
+    "transformers>=4.44,<6",
+    "sentencepiece>=0.2",
+    "protobuf>=4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27"]
+
+[tool.uv]
+# Not a distributable package: `reranker.app` is imported from the repo root (uvicorn's
+# default --app-dir is the cwd), so nothing is built or installed into the venv.
+package = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = [".."]

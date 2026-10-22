@@ -59,3 +59,4 @@ runs/
 
 # UNISAGE-106: benchmark reports are local artefacts
 benchmark_results/
+reranker/.venv/

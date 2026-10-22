@@ -4,8 +4,8 @@ Plan: `changes/22-10-2026-CrossEncoderBenchmark/plan.md`. Spec: `docs/specs/SPEC
 
 ## Task 1: Service reranker
 
-**Description:** `reranker/pyproject.toml` (fastapi, uvicorn, FlagEmbedding, torch CUDA 12.x),
-`reranker/app.py`: lifespan load `FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=True)`,
+**Description:** `reranker/pyproject.toml` (fastapi, uvicorn, transformers + torch CUDA 13 — không dùng FlagEmbedding, xem ghi chú),
+`reranker/app.py`: lifespan load `AutoModelForSequenceClassification` bge-reranker-v2-m3 FP16 (cùng cách tính điểm với `FlagReranker`),
 `POST /rerank {query, passages, top_k?} -> {scores, ranking, model, took_ms}` (batch
 `RERANKER_BATCH_SIZE`, `max_length=1024`), `GET /health`; tắt → del model + `empty_cache`.
 `taskfiles/reranker.yml`: `reranker:serve` (`uv run --project reranker uvicorn ... --port 8403`),
@@ -13,15 +13,23 @@ Plan: `changes/22-10-2026-CrossEncoderBenchmark/plan.md`. Spec: `docs/specs/SPEC
 
 **Acceptance criteria:**
 
-- [ ] `/rerank` 16 passage → 16 điểm cùng thứ tự đầu vào; `ranking` giảm dần theo điểm; `top_k` cắt `ranking`.
-- [ ] Rỗng passages → 400; passage > max_length bị cắt, không lỗi.
-- [ ] `/health` báo loaded/device/vram; sau SIGTERM `nvidia-smi` không còn tiến trình.
+- [x] `/rerank` 16 passage → 16 điểm cùng thứ tự đầu vào; `ranking` giảm dần theo điểm; `top_k` cắt `ranking`.
+- [x] Rỗng passages → 400; passage > max_length bị cắt, không lỗi.
+- [x] `/health` báo loaded/device/vram; sau SIGTERM `nvidia-smi` không còn tiến trình.
 
 **Verification:**
 
-- [ ] `task reranker:test`; chạy thật: `task reranker:serve` + `curl` 16 passage, ghi took_ms lần đầu/lần sau.
+- [x] `task reranker:test`; chạy thật: `task reranker:serve` + `curl` 16 passage, ghi took_ms lần đầu/lần sau.
 
 **Dependencies:** none · **Files:** `reranker/*`, `taskfiles/reranker.yml`, `Taskfile.yml` include · **Scope:** M
+
+**Kết quả (22/10, RTX 4080 SUPER):** `reranker:test` 6/6; chạy thật: model nạp ~50 s lần đầu
+(tải 2.3 GB), `/health` `vram_used_mb=1083`; `/rerank` 16 passage: lần đầu 334 ms (warm-up),
+5 lần sau 10–11 ms e2e; chunk học phí CNTT xếp hạng 1. VRAM `nvidia-smi` 7546 → 8987 MiB khi
+serve → 7546 MiB sau Ctrl+C (log "reranker unloaded, VRAM released"). Ghi chú: thay FlagEmbedding
+bằng transformers trực tiếp vì FlagEmbedding 1.4.2 kéo theo datasets/peft/ir-datasets; điểm là
+logit[0] y hệt `FlagReranker.compute_score`. Response có thêm `truncated` (số passage vượt
+`max_length`) để trả lời câu hỏi mở về chunk dài.
 
 ## Task 2: Agent: chế độ rerank + node CE + fail-over
 
