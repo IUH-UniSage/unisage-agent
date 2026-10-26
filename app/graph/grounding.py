@@ -31,6 +31,12 @@ from app.rag.prompting.citations import cited_indexes
 _NUMBER = re.compile(r"(?<![\w/])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)(?![\w/])")
 _MARKER = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 _DATE = re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b")
+_UNIT_SUFFIX = re.compile(r"(\d)(?:đ|%|k|₫)(?![\w])")
+# Phone numbers and extensions are identifiers, not figures to verify: "028 3588 2679",
+# "0283 894 0390", "Ext: 3894", "máy lẻ 112".
+_PHONE = re.compile(
+    r"\b0\d{1,3}[ .]?\d{3,4}[ .]?\d{3,4}\b|(?:ext|máy lẻ|số lẻ)\s*:?\s*\d{2,5}", re.IGNORECASE
+)
 # Small integers are list numbers, ordinals, counts ("2 học phần") far more often than
 # invented figures; a fabricated fee or score is almost never below this.
 SMALL_INTEGER_MAX = 12
@@ -80,10 +86,60 @@ def _to_float(token: str) -> float | None:
         return None
 
 
+_DATE_FULL = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+_TIME = re.compile(r"\b(\d{1,2})[h:](\d{2})\b")
+
+
+def _date_time_spans(texts: Iterable[str]) -> list[float]:
+    """Day counts between any two dates and hour/minute spans between any two clock times
+    written in `texts`: what "quá hạn 21 ngày", "730 ngày", "13 giờ 10 phút" come from."""
+
+    import datetime as dt
+
+    dates: list[dt.date] = []
+    minutes: list[int] = []
+    for text in texts:
+        for d, m, y in _DATE_FULL.findall(text):
+            try:
+                dates.append(dt.date(int(y), int(m), int(d)))
+            except ValueError:
+                continue
+        for h, mi in _TIME.findall(text):
+            if int(h) < 24 and int(mi) < 60:
+                minutes.append(int(h) * 60 + int(mi))
+    out: list[float] = []
+    # "thời hạn 02 năm" -> 730 ngày / 24 tháng; a deadline = a date shifted by n years.
+    small = {
+        int(v)
+        for text in texts
+        for v in numbers_in(text).values()
+        if v.is_integer() and 1 <= v <= 10
+    }
+    for n in small:
+        out += [n * 365.0, n * 366.0, n * 12.0, n * 30.0, n * 7.0]
+    shifted = []
+    for date in set(dates):
+        for n in small:
+            for sign in (1, -1):
+                try:
+                    shifted.append(date.replace(year=date.year + sign * n))
+                except ValueError:
+                    continue
+    dates = [*dates, *shifted]
+    for first, second in itertools.combinations(sorted(set(dates)), 2):
+        days = (second - first).days
+        out += [float(days), float(days + 1), float(days - 1), days / 7, days / 30, days / 365]
+    for start, end in itertools.combinations(sorted(set(minutes)), 2):
+        span = end - start
+        out += [float(span), span / 60, float(span // 60), float(span % 60)]
+    return out
+
+
 def numbers_in(text: str) -> dict[str, float]:
     """Numeric tokens of `text` (as written -> value), dates and citation markers removed."""
 
-    cleaned = _MARKER.sub(" ", _DATE.sub(" ", text))
+    cleaned = _PHONE.sub(" ", _MARKER.sub(" ", _DATE.sub(" ", text)))
+    cleaned = _UNIT_SUFFIX.sub(r"\1 ", cleaned)  # 250.000đ -> 250.000 ; 50% -> 50
     found: dict[str, float] = {}
     for match in _NUMBER.finditer(cleaned):
         token = match.group(1)
@@ -160,8 +216,10 @@ def ungrounded_numbers(
     and that cannot be derived from them. Order of first appearance."""
 
     source_values: set[float] = set()
-    for text in [*sources, question, *(str(v) for v in (known or {}).values())]:
+    texts = [*sources, question, *(str(v) for v in (known or {}).values())]
+    for text in texts:
         source_values.update(numbers_in(text).values())
+    source_values.update(_date_time_spans(texts))
     grounded = sorted(source_values)
     out: list[str] = []
     # Two passes: a number derived from sources (a subtotal) can ground the next one

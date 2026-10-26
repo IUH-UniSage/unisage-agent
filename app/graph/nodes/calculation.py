@@ -44,7 +44,7 @@ from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.graph.evidence import levels_for
 from app.graph.fence_redactor import FenceRedactor, take_bare_blocks
-from app.graph.grounding import caution_line, check_answer
+from app.graph.grounding import check_answer
 from app.graph.metadata_fields import canonical_field, canonical_params, is_profile_field
 from app.graph.nodes.cross_encoder_rerank import (
     CROSS_ENCODER_SKIPPED,
@@ -769,7 +769,9 @@ async def _ask_llm(
                 "CALC_UNGROUNDED_INPUT",
                 f"{CALC_UNGROUNDED}{', '.join(report.ungrounded)} (câu: {query[:80]})",
             )
-            text += caution_line(report.ungrounded)
+            # No caution line here: every LLM calculation already carries the "AI tự tính, có
+            # thể sai" banner, and date/duration arithmetic produces numbers no document holds
+            # (measured 26/10: 4/4 flags on correct answers were such figures).
     return LlmAnswered(task_id, query, text, plan, dict(known), _cited(text, chunks))
 
 

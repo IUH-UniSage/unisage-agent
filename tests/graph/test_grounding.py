@@ -91,3 +91,22 @@ def test_a_number_rich_table_does_not_make_invented_figures_derivable() -> None:
     # collision the check accepts by design (one step from two source numbers). The two
     # multiplicative near-misses (51,006 x a fee) are caught since ratios must be exact.
     assert flagged == invented[:2]
+
+
+def test_day_and_hour_spans_between_dates_and_times_in_the_sources_are_grounded() -> None:
+    sources = [
+        "Chứng chỉ có thời hạn 02 năm, cấp ngày 20/05/2024, nộp ngày 10/06/2026; "
+        "hỗ trợ từ 06h30 đến 19h40; giá 250.000đ giảm 60.000đ."
+    ]
+    # 730 = 2 x 365; 21 = 10/06/2026 - (20/05/2024 + 2 năm); 13 = 19h40 - 06h30; 190.000 = 250.000 - 60.000
+    answer = "Thời hạn 2 năm = 730 ngày, quá hạn 21 ngày; mỗi ngày 13 giờ 10 phút; trả 190.000đ."
+
+    assert ungrounded_numbers(answer, sources) == []
+    assert ungrounded_numbers("Quá hạn 1.234 ngày.", sources) == ["1.234"]
+
+
+def test_phone_numbers_and_extensions_are_not_figures() -> None:
+    assert (
+        ungrounded_numbers("Gọi 028 3588 2679 hoặc máy lẻ 112, Ext: 3894.", ["không có số"]) == []
+    )
+    assert numbers_in("hotline 0283 894 0390, học phí 1.150.000") == {"1.150.000": 1150000.0}

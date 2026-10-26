@@ -397,8 +397,8 @@ async def test_a_result_that_does_not_fit_is_redone_by_the_llm() -> None:
 
     # 196.000.000 comes from nowhere the model was shown (a test double): the grounding
     # check keeps the answer, appends its caution and tells AI admins.
-    assert result.response_text.startswith(f"**{LLM_NOTICE}**\n\n{redone}")
-    assert "196.000.000 không tìm thấy trong tài liệu" in result.response_text
+    assert result.response_text == f"**{LLM_NOTICE}**\n\n{redone}"
+    # No caution line on calculations (the banner already warns); AI admins are told.
     assert "CALC_UNGROUNDED_INPUT" in [warning.code for warning in result.admin_warnings]
     assert result.pending_round is None
     _review_prompt, llm_prompt = prompts
