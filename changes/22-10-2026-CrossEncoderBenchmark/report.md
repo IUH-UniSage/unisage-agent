@@ -254,6 +254,31 @@ Tất định: 2 lượt cho cùng thứ tự ở 139/139 câu (Jaccard 1,000, l
 | thứ tự retrieval (RRF) | 0.752 | 0.838 | 0.867 | 0.903 | 0.924 | 0.932 | 0.935 | 0.935 |
 | cross_encoder | 0.712 | 0.766 | 0.831 | 0.871 | 0.888 | 0.906 | 0.914 | 0.921 |
 
+![Đường cong recall@k của 4 cách xếp trên cùng 16 ứng viên](recall-at-k.png)
+
+*Hình 1. recall@k (k = 1..8) trên cùng 16 ứng viên của 139 câu. Đường xanh dương là thứ tự
+retrieval không rerank, chạm trần 0,935 từ k = 7. Cross-encoder (cam) xuất phát thấp hơn ở k = 1
+nhưng tiến gần trần ở k = 8. Hai biến thể LLM (lục, vàng) cao nhất ở k = 1–2 rồi phẳng từ k = 3 vì
+chúng chỉ giữ median 2 chunk: phần tài liệu đúng bị loại không bao giờ quay lại dù k tăng. Số của
+hai đường LLM lấy từ bước C (mục 5), vẽ chung để so.*
+
+### 3.1. Các chỉ số ở mục này chứng minh điều gì
+
+| Chỉ số | Dùng để chứng minh | Số đo | Kết luận rút ra |
+|---|---|---|---|
+| recall@8 so với **mốc không rerank** và **trần** | Cross-encoder có làm mất tài liệu đúng không khi thay LLM | 0,921 so với mốc 0,935 và trần 0,935 | Mất 1,4 điểm, do 2 câu cụ thể (d0010 bảng tên riêng, d0287 tài liệu trùng tên). Retrieval đã đưa tài liệu đúng vào top-8 ở mọi câu có thể, nên cross-encoder không có chỗ để thêm recall, chỉ có thể giữ hoặc làm rơi |
+| recall@5, MRR, recall@1, đường cong recall@k | Cross-encoder xếp tài liệu đúng cao hơn hay thấp hơn thứ tự RRF | recall@1 0,712 so với 0,752; MRR 0,815 so với 0,854 | Xếp hạng 1 kém RRF một chút: cross-encoder không phải bộ xếp tốt hơn hybrid; giá trị của nó nằm ở chỗ không loại nhầm như LLM (mục 5) |
+| Đường cong recall@k từ 1 đến 8 | Chọn K bao nhiêu là đủ | k = 6: 0,906; k = 8: 0,921 | Giữ K = 8; giảm K mất recall |
+| Loại hết 0 %, Giữ TB 8,0 | Cross-encoder không bao giờ làm rỗng sub-query | 0/278 lượt | Mất gate "không tài liệu nào trả lời → web search"; hệ quả thiết kế, xử lý ở mục 8.2 |
+| Jaccard 1,000, cùng thứ tự 100 % ở 2 lượt | Kết quả tất định, tái lập được | 139/139 câu | Eval chạy lại cho cùng số; không cần lặp nhiều lần như LLM |
+| Phân phối điểm top-1 khi đúng và khi sai | Có dùng được điểm cross-encoder làm ngưỡng loại không | đúng: median 5,7, min −0,8; sai: median 3,5, max 8,3 | Hai phân phối chồng nhau, **không** dùng ngưỡng để loại, đúng với giả định spec |
+| p50 111 ms, p95 147 ms | Chi phí thời gian của bước này so với LLM | so với 1,7 s ở mục 6 | Nhanh hơn 15 lần |
+
+Mục này chứng minh cross-encoder **giữ được độ chính xác gần bằng retrieval gốc, chạy tất định và
+nhanh**, nhưng **không xếp tốt hơn RRF** và **không có ngưỡng điểm đáng tin**. Nó chưa chứng minh
+cross-encoder tốt hơn LLM rerank; việc đó cần mục 5 (so trực tiếp trên cùng 139 câu) và mục 7
+(câu trả lời cuối).
+
 **Đọc số**
 
 - Cross-encoder **thấp hơn mốc không rerank** 1,4 điểm recall@8, 3,6 điểm recall@5 và 3,9 điểm
@@ -358,6 +383,8 @@ vì rate limit, kết quả đó bị bỏ, không tính.
 | cross_encoder | 0.712 | 0.766 | 0.831 | 0.871 | 0.888 | 0.906 | 0.914 | 0.921 |
 | llm_rerank | 0.829 | 0.868 | 0.879 | 0.880 | 0.880 | 0.880 | 0.880 | 0.880 |
 | cross_encoder_then_llm | 0.811 | 0.860 | 0.872 | 0.874 | 0.876 | 0.876 | 0.876 | 0.876 |
+
+(Hình 1 ở mục 3 vẽ bốn đường này.)
 
 Độ ổn định giữa 3 lượt:
 
