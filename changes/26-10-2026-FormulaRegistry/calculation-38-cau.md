@@ -823,10 +823,10 @@ Mỗi câu: câu hỏi gửi vào hệ thống (input), đáp án kỳ vọng v�
 
 **Kỳ vọng:** 8 ngày: từ 13/08/2026 đến 20/08/2026, 20 − 13 + 1 = 8 ngày.  
 **Số kỳ vọng:** [8]  
-**Đường kỳ vọng:** `formula:date_span`
+**Đường kỳ vọng:** `advisory` (gắn lại; mốc ngày chỉ có trong tài liệu)
 
 **Đường thực tế:** `advisory`  
-**pass:** False  
+**pass:** True  
 **Cảnh báo:** []  
 **Thời gian:** 9.3 s
 

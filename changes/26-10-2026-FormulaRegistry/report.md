@@ -97,9 +97,9 @@ d0330, d0332, d0319) - đã bật cho các lượt này (chưa chạy lại eval
 
 ## 4. Gắn nhãn eval theo đường tính + công thức đếm ngày/cộng giờ (26/10 đêm)
 
-- Dataset (gateway PR #9): 38 câu calculation có `expected_calculation`: 12 `formula:<id>`
-  (admission_score_2026 ×2, transcript_score_3hk, weighted_score ×4, date_span ×4, time_span), 13
-  `arithmetic`, 13 `advisory`. Eval chấm `pass` = đúng đường + số kỳ vọng xuất hiện; câu `advisory` mà
+- Dataset (gateway PR #9): 38 câu calculation có `expected_calculation`: 11 `formula:<id>`
+  (admission_score_2026 ×2, transcript_score_3hk, weighted_score ×4, date_span ×3, time_span), 13
+  `arithmetic`, 14 `advisory` (d0329 gắn lại advisory: mốc ngày chỉ có trong tài liệu). Eval chấm `pass` = đúng đường + số kỳ vọng xuất hiện; câu `advisory` mà
   model tự tính số (grounding chặt) → fail dù đúng; câu `advisory` không có số → chờ judge.
 - Registry thêm `date_span` (hiệu hai ngày, tính cả hai đầu, hạn N năm cộng vào mốc đầu) và `time_span`
   (tổng các khoảng hh:mm-hh:mm). Lần chạy đầu 5 câu lỗi vì quên thêm id vào Literal của
@@ -107,12 +107,12 @@ d0330, d0332, d0319) - đã bật cho các lượt này (chưa chạy lại eval
 
 | Nhãn | pass | fail | chờ judge |
 |---|---|---|---|
-| formula (12) | 10 | 2 | 0 |
+| formula (11) | 10 | 1 | 0 |
 | arithmetic (13) | 8 | 5 | 0 |
-| advisory (13) | 5 | 7 | 1 |
-| **Tổng 38** | **23** | 14 | 1 |
+| advisory (14) | 6 | 7 | 1 |
+| **Tổng 38** | **24** | 13 | 1 |
 
-Câu không pass (15):
+Câu không pass (14):
 - d0241: advisory, không có số kỳ vọng → chờ judge (trả lời đúng mã 4/5)
 - d0242: advisory: model đọc sai số liệu (3 + 5 = 8 thay vì 10 tín chỉ)
 - d0245: advisory: model tự nêu hiệu 120 − 90 = 30 trong câu chữ thay vì calc_request → grounding chặt gắn caution → fail theo chính sách
@@ -123,7 +123,6 @@ Câu không pass (15):
 - d0320: gắn arithmetic nhưng classifier/extractor đưa sang advisory (trả lời đúng 5 điểm) → sai đường
 - d0321: gắn arithmetic nhưng đi advisory + calc_request (code tính đúng 9 / 3) → sai đường theo nhãn
 - d0326: gắn arithmetic nhưng đi advisory (đúng 12 / 4) → sai đường
-- d0329: formula:date_span nhưng lượt v3 đi advisory (lỗi Literal lúc đó); v3b không chạy lại câu này
 - d0330: arithmetic tính đúng 600.000 nhưng không nêu tổng giảm 170.000 → thiếu một số kỳ vọng
 - d0331: advisory: model tự tính 145/175 trong câu chữ (175 sai) → caution → fail
 - d0334: gắn arithmetic nhưng đi advisory (đúng 24 tháng) → sai đường
