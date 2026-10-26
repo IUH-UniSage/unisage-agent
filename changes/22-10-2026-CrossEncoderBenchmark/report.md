@@ -45,7 +45,7 @@ Bốn phương án cho bước 09a (rerank) của graph, đặt bằng `CHAT_RER
 | e2e calculation pass (38 câu) | 19 (*) | 20 | 18 | **21** |
 | e2e từ chối trả lời (154 câu) | 31 | 32 | 41 | **29** |
 | e2e cả lượt p50 / p95 | 4,9 s / 8,2 s (*) | **4,6 s / 7,5 s** | 5,3 s / 9,5 s | 6,6 s / 17,9 s |
-| USD / lượt chat | **0,00483** | 0,00503 | 0,00557 | 0,00540 |
+| USD API / lượt chat (chưa gồm GPU của CE) | **0,00483** | 0,00503 | 0,00557 | 0,00540 |
 | Cần gì thêm | **không** | GPU ~2,5 GB + service | API + rate limit | cả hai |
 
 (*) `none` có 1 lượt lỗi 504 của model sinh (33 s), không liên quan rerank.
@@ -199,19 +199,36 @@ throughput phẳng.*
 
 ## 6. e2e Tầng câu trả lời (154 câu, cache tắt, web off)
 
+Mỗi chế độ một run eval đầy đủ (cùng 154 câu: 116 normal, 38 calculation). Chỉ số lấy từ
+`evals/run/metrics.py`; định nghĩa trước, số sau.
+
+| Chỉ số | Đo gì | Đọc thế nào |
+|---|---|---|
+| normal recall@5 | số câu normal (trên 116) mà **tài liệu kỳ vọng nằm trong 5 chunk đầu của ngữ cảnh** đưa vào prompt sinh | cao hơn = nhiều câu có đúng tài liệu để trả lời |
+| normal fail | số câu normal eval chấm **fail**: recall@5 sai, **hoặc** câu không đi nhánh RAG (bị phân loại off-topic hay rẽ sang calculation), hoặc lộ tài liệu không được phép | = 116 − recall@5, cộng thêm câu không đi RAG (ở `none` và CE: d0009 rẽ nhầm sang calculation dù recall đúng) |
+| calculation pass | số câu calculation (trên 38) **đi qua CalculationNode** và các con số của đáp án kỳ vọng xuất hiện trong câu trả lời (`numbers_match`, khá dễ dãi) | câu đi nhánh RAG thường bị tính fail dù số đúng (10 câu ở mọi chế độ) |
+| calculation recall@5 theo trích dẫn | số câu calculation có tài liệu kỳ vọng trong **trích dẫn [n]** của câu trả lời (nhánh này không ghi ngữ cảnh) | thấp hơn có thể do câu trả lời không gắn trích dẫn, không phải thiếu tài liệu |
+| Từ chối trả lời | số câu (trên 154) mà câu trả lời chứa mẫu "chưa có thông tin / không hỗ trợ được" | thấp hơn = ít né tránh hơn; gồm cả từ chối đúng (5 câu không có tài liệu) |
+| Ticket fallback | số lượt kết thúc ở TicketFallbackNode (không còn ngữ cảnh dùng được) | |
+| Citation accuracy | trung bình phần trích dẫn [n] trỏ đúng tài liệu kỳ vọng, trên các câu có trích dẫn | |
+| LLM rerank lỗi fail-open | số lượt node 09a LLM lỗi (rate limit, JSON hỏng) và graph đi tiếp với xếp theo điểm | mốc `llm` thực tế là hỗn hợp 55 % LLM + 45 % xếp theo điểm |
+| Cả lượt p50 / p95 | thời gian từ gửi câu hỏi tới token cuối, 3 lượt song song | gồm thời gian chờ slot rate limit của credential Chat và RERANK |
+| Lượt gọi LLM / lượt | số lần gọi model trong một lượt: phân loại, HyDE/tách câu, rerank (nếu có), sinh | `none`/CE bớt đúng 1 lượt |
+| USD / lượt | tiền **API LLM** của cả lượt, theo bảng giá model; **chưa gồm** GPU của service CE | chênh giữa `none` và CE là nhiễu token của bước sinh, không phải tiền rerank |
+
 | Chỉ số | `none` | CE | `llm` | CE → LLM |
 |---|---|---|---|---|
-| normal recall@5 (116) | **111** | 110 | 104 | 108 |
-| normal không có tài liệu đúng | **6** | 7 | 12 | 8 |
-| calculation pass (38) | 19 (1 lỗi 504) | 20 | 18 | **21** |
-| calculation recall@5 theo trích dẫn (38) | 19 | 20 | **23** | 20 |
-| Từ chối trả lời (154) | 31 | 32 | 41 | **29** |
+| normal recall@5 (trên 116) | **111** | 110 | 104 | 108 |
+| normal fail (trên 116) | **6** | 7 | 12 | 8 |
+| calculation pass (trên 38) | 19 (1 lỗi 504) | 20 | 18 | **21** |
+| calculation recall@5 theo trích dẫn (trên 38) | 19 | 20 | **23** | 20 |
+| Từ chối trả lời (trên 154) | 31 | 32 | 41 | **29** |
 | Ticket fallback | **0** | **0** | 1 | 1 |
 | Citation accuracy | 0,909 | **0,910** | 0,891 | 0,905 |
 | LLM rerank lỗi fail-open | 0 | 0 | 70 | 32 |
 | Cả lượt p50 / p95 | 4,9 s / 8,2 s | **4,6 s / 7,5 s** | 5,3 s / 9,5 s | 6,6 s / 17,9 s |
 | Lượt gọi LLM / lượt | **2,34** | 2,33 | 3,32 | 3,30 |
-| USD / lượt | **0,00483** | 0,00503 | 0,00557 | 0,00540 |
+| USD / lượt (API, chưa gồm GPU CE) | **0,00483** | 0,00503 | 0,00557 | 0,00540 |
 
 ![So sánh e2e](fig7-e2e-comparison.png)
 
