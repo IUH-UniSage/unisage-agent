@@ -470,9 +470,9 @@ cùng lúc, không chờ thêm); giữ worker thread vì nó làm `/health` khô
 
 ![Đánh đổi theo max_length](fig3b-maxlen-sweep.png)
 
-*Hình 3b. Trái: recall@8 giữ nguyên ở trần 0,928 từ 256 đến 512 rồi giảm nhẹ ở 768–1024; MRR cao
-nhất ở 384–512. Giữa: độ trễ giảm gần tuyến tính theo max_length, throughput tăng 7,3 → 17 req/s.
-Phải: tỷ lệ passage bị cắt; ở 512 gần 1/3 passage bị cắt mà độ chính xác không giảm, nghĩa là
+*Hình 3b. Từ trái: recall@8 giữ nguyên ở trần 0,928 từ 256 đến 512 rồi giảm nhẹ ở 768–1024, MRR
+cao nhất ở 384–512; độ trễ p50 giảm gần tuyến tính theo max_length; throughput tăng 7,3 → 17 req/s;
+tỷ lệ passage bị cắt; ở 512 gần 1/3 passage bị cắt mà độ chính xác không giảm, nghĩa là
 phần đuôi của chunk dài không giúp cross-encoder phân biệt tài liệu.*
 
 Bảng 3 ở `max_length=512` (`benchmark_results/step-b4-ce-maxlen512`, 5 vòng `-p`: p50 89 ms,
