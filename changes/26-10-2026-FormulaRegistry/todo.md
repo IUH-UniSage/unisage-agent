@@ -29,3 +29,9 @@
 - [x] Advisory: `calc_request` (FenceRedactor, `GenerationResult.calc_requests`, `app/graph/calc_requests.py`), nối khối sau grounding; tests (`test_calc_requests.py`)
 - [x] Prompt 4 file theo 3 mức; snapshot advisory; docs spec/known-gaps/plan
 - [x] Chạy lại 38 câu (`runs/calc-registry-v2`) → report.md mục 3; grounding chặt cho lượt deferred/calc_request (đo offline 2 → 8 caution)
+
+## Phase 6: nhãn eval, date/time span, siết advisory (26/10 đêm)
+- [x] `expected_calculation` cho 38 câu (gateway PR #9), metrics chấm theo đường, runner ghi `calculation_formulas`
+- [x] `date_span`, `time_span` + Literal plan + test chặn; v3 + chạy lại: 24/38 theo nhãn
+- [x] Prompt advisory/multi-intent: mục số học bắt buộc + `{arithmetic_notice}` theo lượt; 14 câu advisory 6 → 7 pass, tự tính 4 → 2
+- [ ] Ticket sau: date_span cộng/trừ N ngày (d0335); routing câu số học thuần còn lọt sang tư vấn; đọc sai số liệu bảng

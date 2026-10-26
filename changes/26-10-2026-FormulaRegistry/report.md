@@ -133,7 +133,26 @@ classifier/extractor đưa câu số học thuần sang tư vấn (4 câu, vẫn
 tư vấn vẫn tự nêu con số thay vì gửi `calc_request` (4 câu, grounding chặt bắt được và chấm fail theo chính
 sách), (3) đọc sai số liệu từ tài liệu (2 câu). Toàn văn 38 câu: `calculation-38-cau.md`.
 
-## 5. Ngoài phạm vi / việc tiếp
+## 5. Siết luật số học cho câu trả lời tư vấn (26/10 đêm)
+
+Người dùng chấp nhận kết quả formula/arithmetic, yêu cầu siết advisory. Hai lớp: (1) mục "Phép Tính Số
+Học Trên Số Liệu Đã Trích (bắt buộc)" đặt trước phần hướng dẫn của cả hai prompt sinh câu trả lời, cấm
+viết kết quả tự tính kể cả phép rất đơn giản, ví dụ SAI/ĐÚNG, liệt kê trường hợp chỉ trích dẫn; (2) chỉ
+thị theo lượt `{arithmetic_notice}` chèn ngay trên câu hỏi khi lượt có task calculation không công thức.
+
+Chạy lại 14 câu `advisory` (`runs/calc-advisory-v4`, tuần tự):
+
+| | trước (v3) | sau |
+|---|---|---|
+| pass | 6/14 | 7/14 (+ 1 chờ judge) |
+| model tự nêu kết quả trong câu chữ (grounding chặt bắt) | 4 (d0245, d0316, d0331, d0314) | 2 (d0316; d0314 là áp quy tắc làm tròn, không phải cộng trừ) |
+| khối `calc_request` do code tính | 2 | 2 (d0243, d0331 đi `arithmetic` ở node) |
+
+Còn lại: d0316 vẫn tự cộng 6 + 94 và tự tính 15 % (bị caution); d0318 đọc sai số liệu; d0243 extractor
+coi "Tiếng Anh 1 và 2" là +2 → đã thêm luật "số trong tên không phải số hạng" cho extractor (chưa chạy
+lại); d0331 đi `arithmetic` nên chỉ tính được phần số trong câu hỏi; d0335 cần phép "ngày − N ngày".
+
+## 6. Ngoài phạm vi / việc tiếp
 
 - Gắn lại nhãn eval calculation theo `formula_id`, tách 30 câu số học văn bản sang category riêng.
 - Chốt hướng (a)/(b) ở 2.2.
