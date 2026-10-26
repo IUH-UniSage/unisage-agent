@@ -123,8 +123,9 @@ Báo cáo đầy đủ, từng số liệu kèm đọc số và cách dùng: `re
 
 Mốc không rerank (8 chunk đầu theo RRF) recall@8 0,935 = trần của bộ ứng viên: trên corpus này
 cross-encoder không thêm recall, nó thay LLM rerank (vốn loại nhầm tài liệu ở 12 câu) với chi phí
-gần 0. Tiêu chí thành công của spec: đạt 5/6; không đạt calculation recall@5 (−3) nhưng 6 câu mất
-là mất trích dẫn, câu trả lời không đổi (report.md 6.4).
+gần 0. Tiêu chí thành công của spec: 3/5 đạt trọn, 2/5 đạt một phần (tiêu chí 2: MRR 0,815 so với
+0,890 dù recall@8 và NDCG vượt; tiêu chí 4: calculation recall@5 20 so với 23, 6 câu mất là mất
+trích dẫn, câu trả lời không đổi). Chi tiết report.md 0.1–0.2, danh sách từng câu trượt 6.6.
 
 **Khuyến nghị**: bật `CHAT_RERANK_MODE=cross_encoder` mặc định ở dev/eval và ở production khi máy
 chủ có GPU trống ≥ 2,5 GB; không triển khai `cross_encoder_then_llm`. Điều kiện: đo lại Bảng 2/3

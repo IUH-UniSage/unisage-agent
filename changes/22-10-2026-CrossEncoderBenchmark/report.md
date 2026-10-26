@@ -14,18 +14,52 @@ Mỗi bảng dưới đây đi kèm ba phần: **đo gì**, **đọc ra gì**, *
 
 ## 0. Kết luận
 
-| Tiêu chí thành công (spec) | Ngưỡng | Kết quả | Đạt |
-|---|---|---|---|
-| Độ trễ bước rerank cross-encoder, P95 | < 500 ms (trên 3060) | 147 ms trên 4080 (3060 chậm hơn ~2–2,5 lần → ~300–370 ms, cần đo lại) | Đạt trên 4080, nhiều khả năng đạt trên 3060 |
-| recall@8 bước rerank | ≥ LLM rerank − 1 điểm | cross_encoder 0,921 so với llm_rerank 0,880 (+4,1 điểm) | Đạt, vượt |
-| Tầng câu trả lời, normal recall@5 | ≥ LLM − 1 điểm | 110/116 (94,8 %) so với 104/116 (89,7 %) | Đạt, vượt |
-| Tầng câu trả lời, calculation pass | ≥ LLM − 1 điểm | 20/38 so với 18/38 | Đạt |
-| Tầng câu trả lời, calculation recall@5 | ≥ LLM − 1 điểm | 20/38 so với 23/38 (−3) | **Không đạt**, nhưng xem 6.4: 6 câu mất là mất trích dẫn, không mất câu trả lời |
-| VRAM được nhả sau benchmark | nvidia-smi về mức trước | 494 → 1 839 → 494 MiB ở mọi lần | Đạt |
+### 0.1. Đối chiếu 5 tiêu chí thành công của spec (`SPEC-cross-encoder-rerank.md`, mục Success Criteria)
 
-**Khuyến nghị: bật `CHAT_RERANK_MODE=cross_encoder` làm mặc định cho môi trường có GPU (dev,
-eval, và production nếu máy chủ có GPU ≥ 4 GB trống), giữ `llm` làm fail-over tự động như đã
-cài.** Lý do bằng số, trên cùng 154 câu demo:
+| # | Tiêu chí trong spec | Số đo | Kết luận |
+|---|---|---|---|
+| 1 | P95 bước rerank `cross_encoder` < 500 ms trên 3060 (kỳ vọng < 200 ms trên 4080), 16 ứng viên, concurrency 4 không OOM, hàng đợi không tăng | 4080: p95 **147 ms** (695 phép đo); concurrency 4: p95 542 ms, 0 lỗi, VRAM đỉnh 2 987 MiB không đổi theo mức đồng thời; throughput phẳng ~7,3 req/s (không có hàng đợi tích luỹ) | **Đạt trên 4080**; 3060 chưa đo (ước p95 ~350 ms, mục 8) |
+| 2 | recall@8 `cross_encoder` ≥ `llm_rerank` − 1 điểm trên bộ demo; **NDCG@16 và MRR không thấp hơn** | recall@8 **0,921 so với 0,880** (+4,1); NDCG@16 **0,739 so với 0,608** (+13); MRR **0,815 so với 0,890 (−7,5)** | **Đạt một phần**: recall@8 và NDCG đạt, **MRR không đạt**. Lý do ở 0.2 |
+| 3 | Ổn định: cross-encoder cho cùng thứ tự qua các lần chạy; ghi được mức dao động của LLM rerank | cross-encoder 139/139 câu cùng thứ tự ở 2 lượt; LLM rerank Jaccard 0,82, chỉ 49,6 % câu cùng tập giữ qua 3 lượt | **Đạt** |
+| 4 | Tầng câu trả lời: recall@5 và pass calculation của `cross_encoder` ≥ `llm` − 1 điểm; ticket fallback không tăng; p95 toàn lượt giảm | normal recall@5 **110/116 so với 104/116** (+6); calculation pass **20/38 so với 18/38** (+2); **calculation recall@5 20/38 so với 23/38 (−3)**; ticket 0 so với 1; p95 7,5 s so với 9,5 s | **Đạt một phần**: 4/5 ý đạt, **calculation recall@5 không đạt**. Lý do ở 0.2 |
+| 5 | `nvidia-smi` sau benchmark không còn tiến trình do benchmark tạo; VRAM về mức trước | 494 → 1 839 (service) → 494 MiB ở mọi lần chạy; lần bước D còn 1 435 MiB là của hai tiến trình dự án khác | **Đạt** |
+
+Tổng: 3 tiêu chí đạt trọn, 2 tiêu chí đạt một phần (mỗi tiêu chí hụt đúng một ý phụ). Không có
+tiêu chí nào trượt ở ý chính (độ trễ, recall@8, recall@5 normal, pass calculation, VRAM).
+
+### 0.2. Hai ý không đạt và vì sao
+
+**MRR 0,815 so với 0,890 (tiêu chí 2).** MRR = 1/hạng của chunk đúng đầu tiên. LLM rerank chỉ giữ
+median 2 chunk và khi nó giữ được tài liệu đúng thì gần như luôn đặt ở hạng 1 (recall@1 0,829);
+cross-encoder giữ đủ 8 và ở 23 câu đặt chunk đúng ở hạng 2–4 (recall@1 0,712, thấp hơn cả thứ
+tự retrieval 0,752). Nói cách khác, cross-encoder **không xếp tốt hơn RRF ở hạng 1**, nó chỉ
+*không loại nhầm* như LLM. MRR của LLM còn được "lợi" bởi cách tính: 12 câu LLM loại hết tài
+liệu đúng cho MRR = 0 nhưng kéo trung bình xuống ít hơn so với việc cross-encoder xếp đúng ở
+hạng 3 ở nhiều câu. Hệ quả thực tế: ở tầng câu trả lời (prompt đọc cả 8 chunk) MRR thấp hơn
+**không** làm giảm số câu trả lời đúng (normal 110 so với 104), nhưng với một model sinh nhạy
+thứ tự hơn gpt-5-mini/gemini-flash thì có thể. Cách khắc phục nếu cần: dùng cross-encoder để
+xếp nhưng giữ nguyên chunk hạng 1 của RRF khi điểm cross-encoder của nó không thua top-1 quá
+một ngưỡng; chưa làm trong ticket này.
+
+**Calculation recall@5 20/38 so với 23/38 (tiêu chí 4).** Nhánh calculation không ghi ngữ cảnh,
+eval tính recall@5 trên **trích dẫn** trong câu trả lời. 6 câu từ đúng thành sai (d0244, d0311,
+d0319, d0326, d0327, d0335) đều có `citations: []` ở run cross-encoder trong khi 4/6 câu trả lời
+**cùng con số** với run gốc (d0327 "Còn 335 chỗ", d0311, d0326, d0335); 3 câu từ sai thành đúng
+(d0243, d0328, d0336). Chỉ số `pass` (đúng con số, không cần trích dẫn) lại tăng 18 → 20 và số
+câu từ chối giảm 10 → 5. Nghĩa là tài liệu vào prompt tính toán vẫn đủ, nhưng model tính toán
+**bớt gắn số trích dẫn** khi danh sách chunk được cross-encoder xếp lại. Giả thuyết: nhánh
+calculation cắt `LLM_CHUNKS_LIMIT` chunk đầu sau rerank; cross-encoder đưa nhiều chunk cùng tài
+liệu lên trên (8/8 chunk cùng một tài liệu ở d0033, d0217) nên chunk mang số liệu cụ thể rơi
+xuống dưới giới hạn, model trả lời từ số đã có trong câu hỏi mà không trích. Cần một ticket nhỏ
+để xác nhận (ghi `context` ở nhánh calculation rồi so). Đánh giá: không mất chất lượng câu trả
+lời, mất khả năng kiểm chứng nguồn; là lỗi cần sửa trước khi bật mặc định cho nhánh calculation,
+hoặc tạm giữ `llm` riêng cho nhánh này (graph đã tách hai chỗ gọi, đổi được độc lập).
+
+### 0.3. Khuyến nghị
+
+**Bật `CHAT_RERANK_MODE=cross_encoder` làm mặc định cho môi trường có GPU (dev, eval, và
+production nếu máy chủ có GPU ≥ 2,5 GB trống), giữ `llm` làm fail-over tự động như đã cài.**
+Lý do bằng số, trên cùng 154 câu demo:
 
 - Nhanh hơn: bước rerank 112 ms thay vì 1 696 ms (median, −93 %); cả lượt chat p50 4,6 s thay vì
   5,3 s (−13,5 %), p95 7,5 s thay vì 9,5 s (−20 %).
@@ -444,6 +478,146 @@ lập) trong khi trả giá đầy đủ về độ trễ và chi phí.
 **Dùng để quyết định**: ở tầng người dùng, bỏ LLM rerank và dùng cross-encoder **không làm mất
 câu trả lời nào ở nhóm normal mà thêm 7 câu trả lời được**; nhóm calculation đúng hơn 2 câu,
 ít từ chối hơn 5 câu, nhưng cần sửa việc gắn trích dẫn.
+
+### 6.6. Danh sách đầy đủ các câu trượt ở cả hai cấu hình
+
+Cách đọc nguyên nhân. Normal (recall@5 = tài liệu kỳ vọng nằm trong 5 chunk đầu của ngữ cảnh):
+
+- **A** phân loại off-topic → không retrieval (lỗi của bước phân loại, không liên quan rerank);
+- **B** retrieval không lấy được tài liệu vào 16 ứng viên (lỗi retrieval/corpus; rerank không
+  thể cứu);
+- **C** tài liệu có trong 16 ứng viên nhưng rerank loại khỏi ngữ cảnh (lỗi của bước rerank);
+- **D** tài liệu trong ngữ cảnh nhưng ở vị trí 6–8 (rerank xếp thấp; câu trả lời vẫn có thể đúng);
+- **E** ticket fallback.
+
+Calculation (`pass` theo `evals/run/metrics.py`: câu category=calculation **phải đi qua
+CalculationNode** (outcome chứa `calculation`), không hỏi lại, và các con số trong câu trả lời
+khớp con số của đáp án kỳ vọng):
+
+- **R1** phân loại off-topic; **R2** đi nhánh RAG thường, không qua CalculationNode → `pass=False`
+  **dù con số có thể đúng** (d0237 "12 tín chỉ", d0241 "mã 4 và 5", d0245 "30 tín chỉ" đều đúng
+  nội dung); **R3** hỏi lại người dùng; **R4** qua CalculationNode nhưng con số sai/thiếu hoặc
+  từ chối tính.
+
+R1–R3 là lỗi **định tuyến** (MessageClassification/IntentRouting), giống hệt nhau ở hai run (10
+câu: d0237, d0238, d0241, d0245, d0246, d0310, d0316, d0317, d0318, d0329); rerank chỉ ảnh hưởng
+nhóm R4.
+
+#### 6.6.1. `llm` (hybrid-on): 12 câu normal trượt recall@5
+
+| Câu | Câu hỏi | Tài liệu kỳ vọng | Nguyên nhân | Chi tiết | Câu trả lời (đầu) |
+|---|---|---|---|---|---|
+| d0011 | Công ty NGS tuyển vị trí Fresher tư vấn triển khai ERP SAP Logistic với số lượng bao nhiêu | Mô tả công việc nhân viên tư vấn triển khai E | A. Phân loại off-topic, không retrieval |  | Tiếc quá, nội dung này mình chưa giúp được vì mình chỉ tư vấn học vụ. Bạn có thể |
+| d0028 | Học kỳ III năm học 2024-2025, Phòng Khảo thí và ĐBCL nhận tổng cộng bao nhiêu đơn phúc khả | Báo cáo tình hình phúc khảo học kỳ III năm họ | D. Trong ngữ cảnh nhưng ngoài top-5 (LLM rerank lỗi, fail-open) | vị trí ngữ cảnh [6] | Tổng số lượng đơn phúc khảo và số trường hợp thay đổi điểm của Học kỳ III năm họ |
+| d0033 | Trong hồ sơ đăng ký xét đạt tiêu chuẩn chức danh Phó giáo sư của TS. Trần Thanh Ngọc (Khoa | Bản đăng ký xét công nhận đạt tiêu chuẩn chức | A. Phân loại off-topic, không retrieval |  | Chủ đề này hơi xa chuyên môn của mình rồi. Mình là trợ lý học vụ, nên mạnh nhất  |
+| d0036 | Theo IUH Exchange Student Handbook 2019, IUH được nâng cấp thành Trường Đại học Công nghiệ | IUH Exchange Student Handbook 2019 | C. Có trong ứng viên nhưng rerank loại khỏi ngữ cảnh (LLM rerank lỗi, fail-open) | hạng retrieval [4, 12, 14, 16] | Hiện mình chưa có thông tin về nội dung cuốn "IUH Exchange Student Handbook 2019 |
+| d0040 | Tạp chí Khoa học và Công nghệ của IUH số 24 năm 2016 có bài nghiên cứu về sự hài lòng tron | Tạp chí Khoa học và Công nghệ số 24 | E. Ticket fallback |  | Hiện mình chưa tìm được thông tin chi tiết về các bài viết đăng trong Tạp chí Kh |
+| d0042 | Để đạt kỳ thi chứng chỉ Ứng dụng CNTT cơ bản của Trung tâm Ngoại ngữ - Tin học (đợt thi 12 | Kết quả thi chứng chỉ ứng dụng CNTT cơ bản ng | C. Có trong ứng viên nhưng rerank loại khỏi ngữ cảnh | hạng retrieval [1, 2, 8, 9, 10, 12, 14, 15] | Điều kiện để đạt chứng chỉ Ứng dụng Công nghệ thông tin cơ bản là: điểm lý thuyế |
+| d0050 | Trong chương trình đào tạo ngành Kiểm toán năm 2020, học phần Kiểm toán cơ bản học ở học k | Chương trình đào tạo ngành Kiểm toán năm 2020 | C. Có trong ứng viên nhưng rerank loại khỏi ngữ cảnh | hạng retrieval [6] | Hiện mình chưa có thông tin về học kỳ và điều kiện tiên quyết của học phần Kiểm  |
+| d0217 | Chương trình học bổng KHCN du học của Tập đoàn Vingroup năm 2020 cấp tối đa bao nhiêu suất | Thông báo nhận hồ sơ học bổng khoa học công n | A. Phân loại off-topic, không retrieval |  | Tiếc quá, nội dung này mình chưa giúp được vì mình chỉ tư vấn học vụ. Bạn có thể |
+| d0225 | Bài nghiên cứu sự hài lòng trong công việc của giảng viên trong Tạp chí Khoa học và Công n | Tạp chí Khoa học và Công nghệ số 24 | B. Retrieval không lấy được tài liệu (không trong 16 ứng viên) (LLM rerank lỗi, fail-open) |  | Bài nghiên cứu "Sự hài lòng trong công việc của giảng viên" trong Tạp chí Khoa h |
+| d0286 | Bảng kết quả chấm phúc khảo kỳ thi chứng chỉ ứng dụng CNTT cơ bản (các ngày thi từ 24/3 đế | Kết quả chấm phúc khảo chứng chỉ ứng dụng CNT | C. Có trong ứng viên nhưng rerank loại khỏi ngữ cảnh (LLM rerank lỗi, fail-open) | hạng retrieval [2, 5, 8] | Hiện mình chưa có thông tin về danh sách người xác nhận bảng kết quả chấm phúc k |
+| d0291 | Kỳ thi TOEIC Online dành cho sinh viên IUH tổ chức tại IIG Việt Nam vào tháng 01/2025 (từ  | Attendance list TOEIC Online - IUH tại IIG Vi | C. Có trong ứng viên nhưng rerank loại khỏi ngữ cảnh (LLM rerank lỗi, fail-open) | hạng retrieval [1, 3, 7, 11, 13, 15] | Hiện mình chưa có thông tin về địa điểm tổ chức kỳ thi TOEIC Online tại IIG Việt |
+| d0296 | Trong Tạp chí Khoa học và Công nghệ số 26 (2017) của IUH, bài đánh giá sau một năm thực hi | Bìa Tạp chí Khoa học và Công nghệ số 26 | B. Retrieval không lấy được tài liệu (không trong 16 ứng viên) (LLM rerank lỗi, fail-open) |  | Hiện mình chưa có thông tin về bài báo đánh giá sau một năm thực hiện tự chủ của |
+
+Tổng theo nguyên nhân: {'A.': 3, 'B.': 2, 'C.': 5, 'D.': 1, 'E.': 1}
+
+#### 6.6.2. `llm` (hybrid-on): 20 câu calculation trượt pass
+
+| Câu | Câu hỏi | Đáp án kỳ vọng | Nguyên nhân | recall@5 | Câu trả lời (đầu) |
+|---|---|---|---|---|---|
+| d0237 | Trong chương trình Logistics và Quản lý chuỗi cung ứng của Khoa Quản trị Kinh doanh, tổng  | 12 tín chỉ (3 + 4 + 2 + 3 = 12). | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Tổng số tín chỉ của 4 học phần trong chương trình đào tạo ngành Logistics và quả |
+| d0238 | Trong bài tập Nhập môn lập trình C của Khoa CNTT, chương trình ở Bài 13 phần bài tập tuần  | total = 60 (num1 = 25, num2 = 35; total = 25 + 35 = 60). | R1. Phân loại off-topic | False | Xin lỗi, mình chỉ có thể hỗ trợ các câu hỏi liên quan đến học vụ của Nhà trường. |
+| d0241 | Trên phiếu đăng ký ưu tiên xét tuyển đại học năm 2024 của IUH, thí sinh có chứng chỉ IELTS | Chứng chỉ IELTS ghi mã đối tượng 4; TOEIC 4 kỹ năng ghi mã đ | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Mã đối tượng ưu tiên xét tuyển đại học năm 2024 đối với thí sinh có chứng chỉ IE |
+| d0242 | Trong khung chương trình ngành Quản trị nguồn nhân lực (tổng 138 tín chỉ), học phần Thực t | Thực tập doanh nghiệp 5 + Khóa luận tốt nghiệp 5 = 10 tín ch | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  **Thực t |
+| d0245 | Theo Quy chế đào tạo tiến sĩ của IUH năm 2017, nghiên cứu sinh có bằng đại học phải học nh | 120 − 90 = 30 tín chỉ. | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Nghiên cứu sinh có bằng đại học phải học tối thiểu **30 tín chỉ** nhiều hơn so v |
+| d0246 | Theo quy chế đào tạo tiến sĩ năm 2023 của IUH, một nghiên cứu sinh chưa có bằng thạc sĩ có | Tổng thời gian tối đa là 06 năm nên còn tối đa 6 − 4 = 2 năm | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Thời gian đào tạo tiêu chuẩn đối với nghiên cứu sinh chưa có bằng thạc sĩ là 4 n |
+| d0310 | Theo bản mô tả chương trình Cử nhân Ngôn ngữ Anh (2024), điểm học phần được làm tròn đến m | 7,9 điểm, tương ứng điểm chữ B. Điểm học phần = 0,2 × 9,0 +  | R3. Hỏi lại người dùng | False | Mình cần thêm vài thông tin để tính giúp bạn: |
+| d0315 | Theo Sổ tay sinh viên 2024 của Viện Tài chính – Kế toán, khối kiến thức chuyên ngành của c | Còn 18 tín chỉ: bắt buộc 50 − 38 = 12, tự chọn 11 − 5 = 6; t | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+| d0316 | Theo thống kê tình hình phúc khảo học kỳ III năm học 2018-2019 của Phòng KT&ĐBCL, tổng cộn | 100 đơn, tỷ lệ thay đổi điểm 15%. Tổng đơn = 6 (TN) + 94 (TL | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Theo thống kê tình hình phúc khảo Học kỳ III năm học 2018–2019, tổng số lượng đơ |
+| d0317 | Theo thống kê phúc khảo học kỳ I năm học 2020-2021 của Phòng KT&ĐBCL, toàn trường có tổng  | 374 đơn, trong đó 329 đơn không thay đổi điểm. Tổng = 16 + 3 | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Theo thống kê phúc khảo Học kỳ I năm học 2020-2021 của Phòng Kiểm định Chất lượn |
+| d0318 | Theo thống kê phúc khảo học kỳ I năm học 2019-2020, Khoa Khoa học Cơ bản có tổng cộng bao  | 21 đơn, trong đó 16 đơn giữ nguyên điểm. Tổng = 12 (TN) + 9  | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Theo thống kê phúc khảo Học kỳ I năm học 2019-2020, Khoa Khoa học Cơ bản có tổng |
+| d0322 | Khung chương trình ngành Logistics và quản lý chuỗi cung ứng có tổng 140 tín chỉ, phân bổ  | Còn 31 tín chỉ. Đã học 20 + 25 + 21 + 22 + 21 = 109; còn 140 | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+| d0324 | Theo kế hoạch đào tạo ngành Công nghệ thông tin khóa 16, học kỳ 5 có 18 tín chỉ, trong đó  | Thêm 6 tín chỉ, tương ứng 2 học phần (mỗi nhóm 1 học phần 3  | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện em  |
+| d0329 | Theo hướng dẫn đăng ký chỗ ở nội trú online tại Ký túc xá năm học 2026-2027, thời gian đăn | 8 ngày: từ 13/08/2026 đến 20/08/2026, 20 − 13 + 1 = 8 ngày. | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Thời gian đăng ký và đóng phí nội trú đợt 1 kéo dài **08 ngày** (từ ngày 13/08/2 |
+| d0330 | Theo thông báo mua sách của Công ty CDIMEX tháng 4/2025, nếu sinh viên mua online 3 cuốn c | Phải trả 600.000đ, được giảm 170.000đ. Giá sau giảm: 190.000 | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+| d0331 | Theo hướng dẫn sử dụng Wi-Fi IUH (06/2026), người học được cấp 240 phút sử dụng. Sinh viên | Còn 145 phút; hạn mức người học ít hơn cán bộ, giảng viên 80 | R4. Qua CalculationNode nhưng con số sai/thiếu | True | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Bạn còn  |
+| d0332 | Trong hướng dẫn thi sát hạch tiếng Anh đầu vào cho tân sinh viên khóa 22, Ban hỗ trợ kỹ th | 37,5 giờ (37 giờ 30 phút). Ngày 26 và 27: mỗi ngày 19h40 − 0 | R4. Qua CalculationNode nhưng con số sai/thiếu | True | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Thời gia |
+| d0333 | Theo phụ lục hướng dẫn tự đánh giá CTĐT kèm Công văn 2085/QLCL, số đề tài quy đổi được tín | 12 đề tài quy đổi. Cấp trường: 0,5 × (3 + 4 + 2 + 5 + 6) = 0 | R4. Qua CalculationNode nhưng con số sai/thiếu | True | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+| d0335 | Theo Quy chế đào tạo trình độ tiến sĩ năm 2017 (QĐ 3177/QĐ-ĐHCN), thời gian, địa điểm, tóm | Chậm nhất ngày 31/5/2018: 20/6/2018 lùi 20 ngày (20 ngày của | R4. Qua CalculationNode nhưng con số sai/thiếu | True | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+| d0336 | Theo thông báo Chương trình Học bổng KHCN đào tạo thạc sĩ, tiến sĩ du học nước ngoài của V | 117 ngày: còn 11 ngày tháng 12/2019 (21 – 31) + 31 (tháng 1) | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện em  |
+
+Tổng theo nguyên nhân: {'R1': 1, 'R2': 8, 'R3': 1, 'R4': 10}
+
+#### 6.6.3. `cross_encoder` (ce-on): 6 câu normal trượt recall@5
+
+| Câu | Câu hỏi | Tài liệu kỳ vọng | Nguyên nhân | Chi tiết | Câu trả lời (đầu) |
+|---|---|---|---|---|---|
+| d0011 | Công ty NGS tuyển vị trí Fresher tư vấn triển khai ERP SAP Logistic với số lượng bao nhiêu | Mô tả công việc nhân viên tư vấn triển khai E | A. Phân loại off-topic, không retrieval |  | Mình chỉ trả lời được các câu hỏi về học vụ của trường thôi bạn ạ. Nếu bạn cần t |
+| d0012 | Học phần Interpretation 1 (mã 2111443) của Khoa Ngoại ngữ có bao nhiêu tín chỉ và cần học  | Course specification - Interpretation 1 (2111 | D. Trong ngữ cảnh nhưng ngoài top-5 | vị trí ngữ cảnh [7] | Học phần **Interpretation 1** (mã 2111443) có **3 tín chỉ** [7].   Điều kiện học |
+| d0040 | Tạp chí Khoa học và Công nghệ của IUH số 24 năm 2016 có bài nghiên cứu về sự hài lòng tron | Tạp chí Khoa học và Công nghệ số 24 | B. Retrieval không lấy được tài liệu (không trong 16 ứng viên) |  | Hiện mình chưa có thông tin về bài nghiên cứu về sự hài lòng trong công việc của |
+| d0050 | Trong chương trình đào tạo ngành Kiểm toán năm 2020, học phần Kiểm toán cơ bản học ở học k | Chương trình đào tạo ngành Kiểm toán năm 2020 | C. Có trong ứng viên nhưng rerank loại khỏi ngữ cảnh | hạng retrieval [7] | Trong chương trình đào tạo đại học chính quy ngành Kiểm toán năm 2020, học phần  |
+| d0225 | Bài nghiên cứu sự hài lòng trong công việc của giảng viên trong Tạp chí Khoa học và Công n | Tạp chí Khoa học và Công nghệ số 24 | B. Retrieval không lấy được tài liệu (không trong 16 ứng viên) |  | Hiện mình chưa có thông tin về bài viết nghiên cứu sự hài lòng trong công việc c |
+| d0296 | Trong Tạp chí Khoa học và Công nghệ số 26 (2017) của IUH, bài đánh giá sau một năm thực hi | Bìa Tạp chí Khoa học và Công nghệ số 26 | B. Retrieval không lấy được tài liệu (không trong 16 ứng viên) |  | Hiện mình chưa có thông tin về số trang chứa bài đánh giá đó trong Tạp chí Khoa  |
+
+Tổng theo nguyên nhân: {'A.': 1, 'B.': 3, 'C.': 1, 'D.': 1}
+
+#### 6.6.4. `cross_encoder` (ce-on): 18 câu calculation trượt pass
+
+| Câu | Câu hỏi | Đáp án kỳ vọng | Nguyên nhân | recall@5 | Câu trả lời (đầu) |
+|---|---|---|---|---|---|
+| d0237 | Trong chương trình Logistics và Quản lý chuỗi cung ứng của Khoa Quản trị Kinh doanh, tổng  | 12 tín chỉ (3 + 4 + 2 + 3 = 12). | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Tổng số tín chỉ của 4 học phần thuộc ngành Logistics và Quản lý chuỗi cung ứng l |
+| d0238 | Trong bài tập Nhập môn lập trình C của Khoa CNTT, chương trình ở Bài 13 phần bài tập tuần  | total = 60 (num1 = 25, num2 = 35; total = 25 + 35 = 60). | R1. Phân loại off-topic | False | Mình chỉ trả lời được các câu hỏi về học vụ của trường thôi bạn ạ. Nếu bạn cần t |
+| d0241 | Trên phiếu đăng ký ưu tiên xét tuyển đại học năm 2024 của IUH, thí sinh có chứng chỉ IELTS | Chứng chỉ IELTS ghi mã đối tượng 4; TOEIC 4 kỹ năng ghi mã đ | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Trên phiếu đăng ký ưu tiên xét tuyển đại học năm 2024 của Trường, thí sinh có ch |
+| d0242 | Trong khung chương trình ngành Quản trị nguồn nhân lực (tổng 138 tín chỉ), học phần Thực t | Thực tập doanh nghiệp 5 + Khóa luận tốt nghiệp 5 = 10 tín ch | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+| d0244 | Chương trình học bổng KHCN du học của Tập đoàn Vingroup năm 2020 cấp tối đa 100 suất toàn  | 100 − 10 = 90 suất học bổng toàn phần còn lại. | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+| d0245 | Theo Quy chế đào tạo tiến sĩ của IUH năm 2017, nghiên cứu sinh có bằng đại học phải học nh | 120 − 90 = 30 tín chỉ. | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Nghiên cứu sinh có bằng đại học phải học nhiều hơn nghiên cứu sinh có bằng thạc  |
+| d0246 | Theo quy chế đào tạo tiến sĩ năm 2023 của IUH, một nghiên cứu sinh chưa có bằng thạc sĩ có | Tổng thời gian tối đa là 06 năm nên còn tối đa 6 − 4 = 2 năm | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Theo Quy chế 2023, nghiên cứu sinh chưa có bằng Thạc sĩ có thời gian đào tạo tiê |
+| d0309 | Theo phương thức xét tuyển bằng kết quả học tập THPT nêu trong bản mô tả CTĐT ngành Kiểm t | Tối thiểu 5,5 điểm. Toán = (7,5 + 8,0 + 8,5)/3 = 8,0; Hóa =  | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Để đạt n |
+| d0310 | Theo bản mô tả chương trình Cử nhân Ngôn ngữ Anh (2024), điểm học phần được làm tròn đến m | 7,9 điểm, tương ứng điểm chữ B. Điểm học phần = 0,2 × 9,0 +  | R3. Hỏi lại người dùng | False | Mình cần thêm vài thông tin để tính giúp bạn: |
+| d0312 | Theo đề cương học phần Interpretation 1 (2111443), đánh giá gồm Multiple-choice Test 10%,  | 6,8 điểm. 0,1 × 8,0 + 0,1 × 9,0 + 0,3 × 7,0 + 0,5 × 6,0 = 0, | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Dựa theo |
+| d0316 | Theo thống kê tình hình phúc khảo học kỳ III năm học 2018-2019 của Phòng KT&ĐBCL, tổng cộn | 100 đơn, tỷ lệ thay đổi điểm 15%. Tổng đơn = 6 (TN) + 94 (TL | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Tổng số đơn phúc khảo trong học kỳ III năm học 2018-2019 là 100 đơn (gồm 6 đơn t |
+| d0317 | Theo thống kê phúc khảo học kỳ I năm học 2020-2021 của Phòng KT&ĐBCL, toàn trường có tổng  | 374 đơn, trong đó 329 đơn không thay đổi điểm. Tổng = 16 + 3 | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Toàn trường trong học kỳ I năm học 2020-2021 có tổng cộng 16 đơn phúc khảo trắc  |
+| d0318 | Theo thống kê phúc khảo học kỳ I năm học 2019-2020, Khoa Khoa học Cơ bản có tổng cộng bao  | 21 đơn, trong đó 16 đơn giữ nguyên điểm. Tổng = 12 (TN) + 9  | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Trong học kỳ I năm học 2019-2020, Khoa Khoa học Cơ bản có tổng cộng **21 đơn phú |
+| d0329 | Theo hướng dẫn đăng ký chỗ ở nội trú online tại Ký túc xá năm học 2026-2027, thời gian đăn | 8 ngày: từ 13/08/2026 đến 20/08/2026, 20 − 13 + 1 = 8 ngày. | R2. Đi nhánh RAG, không qua CalculationNode (outcome=['rag']) | True | Thời gian đăng ký và đóng phí đợt 1 là từ ngày 13/08/2026 đến 20/08/2026, tức ké |
+| d0330 | Theo thông báo mua sách của Công ty CDIMEX tháng 4/2025, nếu sinh viên mua online 3 cuốn c | Phải trả 600.000đ, được giảm 170.000đ. Giá sau giảm: 190.000 | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+| d0331 | Theo hướng dẫn sử dụng Wi-Fi IUH (06/2026), người học được cấp 240 phút sử dụng. Sinh viên | Còn 145 phút; hạn mức người học ít hơn cán bộ, giảng viên 80 | R4. Qua CalculationNode nhưng con số sai/thiếu | True | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Theo hướ |
+| d0332 | Trong hướng dẫn thi sát hạch tiếng Anh đầu vào cho tân sinh viên khóa 22, Ban hỗ trợ kỹ th | 37,5 giờ (37 giờ 30 phút). Ngày 26 và 27: mỗi ngày 19h40 − 0 | R4. Qua CalculationNode nhưng con số sai/thiếu | True | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Ban hỗ t |
+| d0335 | Theo Quy chế đào tạo trình độ tiến sĩ năm 2017 (QĐ 3177/QĐ-ĐHCN), thời gian, địa điểm, tóm | Chậm nhất ngày 31/5/2018: 20/6/2018 lùi 20 ngày (20 ngày của | R4. Qua CalculationNode nhưng con số sai/thiếu | False | **Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé**  Hiện mìn |
+
+Tổng theo nguyên nhân: {'R1': 1, 'R2': 8, 'R3': 1, 'R4': 8}
+
+#### 6.6.5. Đối chiếu hai cấu hình
+
+| Nhóm | Trượt ở cả hai | Chỉ trượt ở `llm` | Chỉ trượt ở `cross_encoder` |
+|---|---|---|---|
+| normal recall@5 | d0011 (A), d0040 (B/E), d0050 (C), d0225 (B), d0296 (B) | d0028 (D), d0033 (A), d0036 (C), d0042 (C), d0217 (A), d0286 (C), d0291 (C) | d0012 (D) |
+| calculation pass | d0237, d0238, d0241, d0245, d0246, d0310, d0316, d0317, d0318, d0329 (định tuyến R1–R3), d0242, d0330, d0331, d0332, d0335 (R4) | d0315, d0322, d0324, d0333, d0336 (R4: run gốc từ chối tính "chưa có thông tin", run CE tính ra đúng) | d0244, d0309, d0312 (R4) |
+
+Đọc bảng:
+
+- **Normal**: 5 câu trượt ở cả hai đều là lỗi ngoài rerank (3 lỗi retrieval/corpus B, 1 off-topic
+  A, 1 ticket) trừ d0050: ở run CE tài liệu kỳ vọng "CTĐT Kiểm toán 2020" (hạng 7 retrieval)
+  không vào ngữ cảnh, nhưng câu trả lời **đúng hoàn toàn** ("Học kỳ 3, 3 tín chỉ, học trước
+  2127403") nhờ "Bản mô tả CTĐT Kiểm toán" p17 chứa cùng bảng; run gốc từ chối. 7 câu chỉ trượt ở
+  `llm`: 5 câu là C (LLM rerank loại tài liệu đúng, 4/5 lượt đó LLM rerank còn **lỗi fail-open**
+  nên thực ra là xếp theo điểm cũng không đưa vào top-5), 2 câu là A (phân loại off-topic ở run
+  gốc, run CE phân loại đúng → đây là nhiễu của bước phân loại, không phải công của cross-encoder).
+  Câu duy nhất chỉ trượt ở `cross_encoder` (d0012): tài liệu đúng ở vị trí 7 của ngữ cảnh, câu
+  trả lời **đúng** ("3 tín chỉ", trích [7]).
+- **Calculation**: 15 câu trượt ở cả hai (10 định tuyến + 5 tính sai ở cả hai). 5 câu chỉ trượt
+  ở `llm` đều cùng một kiểu: run gốc trả lời "chưa có thông tin ... để tính" (d0315, d0322, d0324,
+  d0333, d0336) còn run CE tính ra con số khớp đáp án; 3 câu chỉ trượt ở `cross_encoder`: d0244
+  (run CE từ chối "chưa có thông tin về học bổng Vingroup", run gốc tính đúng 90), d0309 (CE ra
+  6,50, gốc ra 8,5; đáp án kỳ vọng là ngưỡng khác, cả hai lệch cách tính nhưng eval chấm theo
+  tập số trong đáp án nên gốc được tính pass), d0312 (CE làm tròn thành phần trước khi tính, ra
+  số khác 6,8). Lưu ý `numbers_match` của eval khá dễ dãi: d0333 run CE ra "15,5" khác đáp án
+  "12" nhưng vẫn pass vì các số thành phần (3, 4, 2, 5, 6, 0,5...) đều xuất hiện. Con số pass
+  20/38 so với 18/38 vì vậy nên đọc là "không xấu đi", không phải "tốt hơn rõ rệt".
+
+**Dùng để quyết định**: phần lớn câu trượt của cả hai cấu hình nằm ở **phân loại/định tuyến**
+(A, R1–R3: 13 câu) và **retrieval/corpus** (B: 3 câu), không phải ở rerank. Muốn tăng điểm eval
+tiếp theo thì ưu tiên hai chỗ đó hơn là tinh chỉnh rerank.
 
 ---
 

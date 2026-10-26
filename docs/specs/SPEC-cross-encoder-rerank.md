@@ -194,10 +194,12 @@ không import `app.*`.
 
 ## Kết quả đo (26/10/2026)
 
-`changes/22-10-2026-CrossEncoderBenchmark/report.md`. Tiêu chí thành công đạt 5/6: P95 bước rerank
-147 ms (4080), recall@8 0,921 so với LLM 0,880, e2e normal recall@5 110/116 so với 104/116,
-calculation pass 20/38 so với 18/38, VRAM nhả đúng; không đạt calculation recall@5 (20 so với 23,
-mất trích dẫn chứ không mất câu trả lời). Khuyến nghị bật `CHAT_RERANK_MODE=cross_encoder` mặc
+`changes/22-10-2026-CrossEncoderBenchmark/report.md`. Tiêu chí thành công: 3/5 đạt trọn (P95 bước
+rerank 147 ms trên 4080; ổn định 100 %; VRAM nhả đúng), 2/5 đạt một phần: tiêu chí 2 recall@8
+0,921 so với 0,880 và NDCG@16 0,739 so với 0,608 đạt nhưng MRR 0,815 so với 0,890 không đạt;
+tiêu chí 4 normal recall@5 110/116 so với 104/116, calculation pass 20/38 so với 18/38, ticket và
+p95 giảm đạt nhưng calculation recall@5 20 so với 23 không đạt (mất trích dẫn, không mất câu
+trả lời). Khuyến nghị bật `CHAT_RERANK_MODE=cross_encoder` mặc
 định khi có GPU; không dùng `cross_encoder_then_llm`. Mặc định trong code vẫn là `llm` cho tới khi
 có quyết định triển khai (ticket sau: registry, Windows 3060, gate web search).
 
