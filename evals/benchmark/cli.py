@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import logging
 import sys
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
@@ -179,10 +180,19 @@ async def run_benchmark(args: argparse.Namespace) -> int:
     accuracy: list[AccuracyResult] = []
     performance: list[PerfResult] = []
     concurrency: list[ConcurrencyPoint] = []
+    stack = AsyncExitStack()
     try:
+        await stack.__aenter__()
         if any(name in CE_VARIANTS for name in args.variants):
             handle = await ensure_service(client, url=settings.CROSS_ENCODER_URL, serve=args.serve)
             vram["khi service đã nạp model"] = vram_used_mb()
+        # The LLM variants need the model registry snapshot the app loads at startup
+        # (`init_model_registry`, pricing...): the same lifespan `evals.run` enters. Entered
+        # after the candidates were fetched, so they come from the run's base collection.
+        if any(name in LLM_VARIANTS for name in args.variants):
+            from app.core.lifespan import lifespan
+
+            await stack.enter_async_context(lifespan(None))  # type: ignore[arg-type]
         variants = await build_variants(args.variants, keep=keep, client=client)
         if args.accuracy:
             accuracy = await run_accuracy(candidates, variants, llm_repeats=args.repeats)
@@ -206,6 +216,7 @@ async def run_benchmark(args: argparse.Namespace) -> int:
         logger.error("cross-encoder service: %s", exc)
         return 3
     finally:
+        await stack.aclose()
         if handle is not None:
             handle.stop()
             vram["sau khi tắt service"] = handle.vram_after_stop_mb
