@@ -18,7 +18,11 @@ from typing import Protocol
 logger = logging.getLogger("reranker")
 
 DEFAULT_MODEL = "BAAI/bge-reranker-v2-m3"
-DEFAULT_MAX_LENGTH = 1024
+# 512 since 26/10/2026: on the demo corpus recall@8 0,928 (= ceiling) vs 0,921 at 1024, MRR
+# 0,828 vs 0,815, p50 89-97 ms vs 112-139 ms, 12 req/s vs 7,3 - the GPU is compute-bound in
+# tokens, and a chunk's subject sits in its heading + first lines. Report: changes/22-10-2026-
+# CrossEncoderBenchmark/report.md mục 4.
+DEFAULT_MAX_LENGTH = 512
 DEFAULT_BATCH_SIZE = 16
 
 
@@ -26,6 +30,14 @@ DEFAULT_BATCH_SIZE = 16
 class ScoreResult:
     scores: list[float]
     truncated: int  # passages whose (query + passage) did not fit max_length
+    took_ms: int
+    batched: int = 1  # requests that shared the forward pass (dynamic batching)
+
+
+@dataclass(frozen=True)
+class PairScores:
+    scores: list[float]
+    truncated: list[bool]  # per pair
     took_ms: int
 
 
@@ -35,11 +47,13 @@ class Scorer(Protocol):
 
     def score(self, query: str, passages: list[str]) -> ScoreResult: ...
 
+    def score_pairs(self, pairs: list[tuple[str, str]]) -> PairScores: ...
+
     def close(self) -> None: ...
 
 
 class CrossEncoderScorer:
-    """Loads the model once; `score` is synchronous and holds the GPU for one call."""
+    """Loads the model once; scoring is synchronous and holds the GPU for one call."""
 
     def __init__(
         self,
@@ -62,7 +76,7 @@ class CrossEncoderScorer:
         started = time.perf_counter()
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)
         self._model = AutoModelForSequenceClassification.from_pretrained(
-            model_name, torch_dtype=torch.float16 if use_fp16 else torch.float32
+            model_name, dtype=torch.float16 if use_fp16 else torch.float32
         )
         self._model.to(self.device)
         self._model.eval()
@@ -75,21 +89,32 @@ class CrossEncoderScorer:
         )
 
     def score(self, query: str, passages: list[str]) -> ScoreResult:
+        result = self.score_pairs([(query, passage) for passage in passages])
+        return ScoreResult(
+            scores=result.scores, truncated=sum(result.truncated), took_ms=result.took_ms
+        )
+
+    def score_pairs(self, pairs: list[tuple[str, str]]) -> PairScores:
+        """(query, passage) pairs from any number of requests in one go, `batch_size` pairs
+        per forward pass - what the service's dynamic batching feeds."""
+
         torch = self._torch
         started = time.perf_counter()
         scores: list[float] = []
-        truncated = 0
+        truncated: list[bool] = []
         with torch.inference_mode():
-            for start in range(0, len(passages), self.batch_size):
-                batch = passages[start : start + self.batch_size]
+            for start in range(0, len(pairs), self.batch_size):
+                batch = pairs[start : start + self.batch_size]
+                queries = [query for query, _ in batch]
+                passages = [passage for _, passage in batch]
                 # Count what max_length drops: tokenize once untruncated for the lengths.
-                lengths = self._tokenizer(
-                    [query] * len(batch), batch, truncation=False, padding=False
-                )["input_ids"]
-                truncated += sum(1 for ids in lengths if len(ids) > self.max_length)
+                lengths = self._tokenizer(queries, passages, truncation=False, padding=False)[
+                    "input_ids"
+                ]
+                truncated.extend(len(ids) > self.max_length for ids in lengths)
                 encoded = self._tokenizer(
-                    [query] * len(batch),
-                    batch,
+                    queries,
+                    passages,
                     padding=True,
                     truncation=True,
                     max_length=self.max_length,
@@ -97,7 +122,7 @@ class CrossEncoderScorer:
                 ).to(self.device)
                 logits = self._model(**encoded, return_dict=True).logits.view(-1).float()
                 scores.extend(logits.cpu().tolist())
-        return ScoreResult(
+        return PairScores(
             scores=scores, truncated=truncated, took_ms=int((time.perf_counter() - started) * 1000)
         )
 

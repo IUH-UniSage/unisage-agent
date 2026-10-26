@@ -334,12 +334,13 @@ async def run_concurrency(
                 variant: Variant = variant, semaphore: asyncio.Semaphore = semaphore
             ) -> tuple[float, str | None]:
                 async with semaphore:
-                    started = time.perf_counter()
                     try:
-                        await variant.select(fixed)
+                        selection = await variant.select(fixed)
                     except VariantError as exc:
                         return 0.0, type(exc).__name__
-                    return (time.perf_counter() - started) * 1000, None
+                    # The call itself (the LLM variants exclude their rate-limit waits, which
+                    # the wall time / throughput still reflects).
+                    return selection.took_ms, None
 
             with ResourceSampler() as sampler:
                 started = time.perf_counter()
