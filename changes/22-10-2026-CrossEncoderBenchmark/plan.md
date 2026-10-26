@@ -169,6 +169,12 @@ triển khai `cross_encoder_then_llm`. Điều kiện: gate web search khác khi
 tra trích dẫn nhánh calculation; đo lại trên bộ official trước khi khái quát; sửa rate limit
 credential RERANK (70/154 lượt lỗi trong run gốc).
 
+**Phase 6 (26/10 chiều)**: grounding sau khi sinh (0 cảnh báo trên 80 lượt unanswerable); 20 câu
+unanswerable 5 nhóm: `none` 20/20, CE 20/20, `llm` 19/20, `auto` 18/20 (1 lỗi credential), mọi lần
+bịa đều là d0350 near-miss kể cả khi không có LLM rerank (nhiễu model sinh); nghiên cứu ngưỡng
+evidence: cosine < 0,60 gắn cờ ~10 % lượt, bắt 3/5 miss, đồng thuận dense/BM25 không phân biệt
+được; `auto` kích hoạt 2/20 lượt, cả hai đúng; web policy tách khỏi rerank. Chi tiết report.md 1.5, 8.2.
+
 **Cần đo lại trên Windows 3060**: `-p`, `-c` (kỳ vọng p50 ~250–300 ms, p95 ~350 ms, ~3 req/s);
 `-a` không cần (tất định).
 

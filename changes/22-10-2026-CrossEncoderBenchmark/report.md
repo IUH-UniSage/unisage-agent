@@ -46,6 +46,8 @@ Bốn phương án cho bước 09a (rerank) của graph, đặt bằng `CHAT_RER
 | e2e từ chối trả lời (154 câu) | 31 | 32 | 41 | **29** |
 | e2e cả lượt p50 / p95 | 4,9 s / 8,2 s (*) | **4,6 s / 7,5 s** | 5,3 s / 9,5 s | 6,6 s / 17,9 s |
 | USD API / lượt chat (chưa gồm GPU của CE) | **0,00483** | 0,00503 | 0,00557 | 0,00540 |
+| 20 câu unanswerable (5 nhóm), Phase 6 | **20/20, 0 bịa** | **20/20, 0 bịa** | 19/20, 1 bịa | — (`auto`: 18/20, 1 bịa, 1 lỗi credential) |
+| Cảnh báo grounding trên 20 câu đó | 0 | 0 | 0 | — |
 | Cần gì thêm | **không** | GPU ~2,5 GB + service | API + rate limit | cả hai |
 
 (*) `none` có 1 lượt lỗi 504 của model sinh (33 s), không liên quan rerank.
@@ -83,6 +85,34 @@ Bốn phương án cho bước 09a (rerank) của graph, đặt bằng `CHAT_RER
 | 3 | CE tất định, đo được dao động LLM | 100 % so với 49,6 % | đạt |
 | 4 | e2e recall@5, pass ≥ LLM − 1; ticket không tăng; p95 giảm | normal +6, pass +2, ticket 0, p95 −2 s; **calculation recall@5 −3** (mất trích dẫn) | đạt một phần |
 | 5 | VRAM về mức trước | 494 → 1 839 → 494 MiB mọi lần | đạt |
+
+### 1.5. Tổng kết sau Phase 6 (26/10, cuối ngày)
+
+**Câu hỏi của ticket**: thay LLM rerank bằng cross-encoder có nhanh hơn mà giữ độ chính xác không?
+**Trả lời**: có, nhưng câu trả lời có giá trị hơn là **bước rerank không còn cần thiết trên corpus
+này**, và việc bỏ LLM rerank không làm hệ thống bịa nhiều hơn.
+
+| Lớp | Kết luận có số | Quyết định |
+|---|---|---|
+| Bước rerank (-a, 139 câu, cùng 16 ứng viên) | RRF 0,928 = trần; CE 0,921 (0,928 ở `max_length` 512); LLM 0,880, loại nhầm 12 câu, tái lập 49,6 % | `none` mặc định; CE là lựa chọn khi retrieval xếp kém |
+| Độ trễ bước rerank (-p) | `none` 0; CE 0,09–0,11 s; LLM 1,7 s (p95 3,3 s) | bỏ LLM rerank tiết kiệm ~1,6 s mỗi lượt |
+| Chịu tải CE (-c) | tuần tự, 7,3 req/s ở 1024, 12 req/s ở 512; batching không giúp (GPU bão hoà compute) | `RERANKER_MAX_LENGTH=512`; model nhỏ hơn hoặc GPU thứ hai nếu cần hơn |
+| Tầng câu trả lời (154 câu) | `none` 111/116 normal, CE 110, `llm` 104; từ chối 31/32/41; chi phí −10–13 % | `none` ≈ CE > `llm` |
+| Chống bịa (20 câu unanswerable, 5 nhóm) | `none` 20/20, CE 20/20, `llm` 19/20, `auto` 18/20; mọi lần bịa đều là d0350 (near-miss), kể cả khi không có LLM rerank → nhiễu của model sinh | bỏ LLM rerank không tăng bịa; near-miss là nhóm cần theo dõi |
+| Grounding sau khi sinh | 0 cảnh báo trên 80 lượt unanswerable; test bắt được số bịa, `[n]` sai, số không trích dẫn | bật mặc định (`CHAT_GROUNDING_CHECK`) |
+| Tín hiệu evidence / `auto` | cosine < 0,60 gắn cờ ~10 % lượt, bắt 3/5 miss; đồng thuận dense/BM25 không phân biệt được; `auto` kích hoạt 2/20 lượt unanswerable, cả hai đúng | `auto` là phương án khi cần gate web search/từ chối; chưa đo e2e đầy đủ |
+| Web policy | tách khỏi rerank, mặc định không tìm web vì evidence yếu | đánh giá riêng khi bật web |
+
+**Khuyến nghị cuối**: `CHAT_RERANK_MODE=none` + `CHAT_GROUNDING_CHECK=true` làm mặc định; giữ
+service CE (`max_length` 512) và `auto` như hai lựa chọn có sẵn, bật theo số đo trên corpus đích;
+tắt `llm`. Mặc định trong code vẫn là `llm` cho tới khi có quyết định triển khai.
+
+**Chưa làm / ticket sau**: e2e với `auto` trên tập đầy đủ (ước 0,8 USD); đo CE trên 3060; e2e
+bộ official; entailment cho claim chữ; web fallback khi bật web; trích dẫn nhánh calculation
+(recall@5 theo trích dẫn 19–20 so với 23); rate limit credential RERANK/Chat (gây 70/154 lượt
+fail-open và 1 lỗi 504 trong các run).
+
+---
 
 ## 2. Cách đo
 
