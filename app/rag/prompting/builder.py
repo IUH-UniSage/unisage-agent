@@ -344,6 +344,21 @@ def build_task_2_section() -> str:
     return get_templates().task_2.format(ask_user_form_guide=build_ask_user_form_guide())
 
 
+ARITHMETIC_NOTICE = (
+    "HỆ THỐNG: câu hỏi này cần một phép tính trên số liệu của tài liệu mà không có công thức cài"
+    " sẵn. BẮT BUỘC: trong câu chữ chỉ chép các số thành phần kèm [n] và nói kết quả tính ở bên"
+    " dưới; đưa phép tính vào khối calc_request ở cuối; KHÔNG tự viết con số kết quả."
+)
+
+
+def build_arithmetic_notice(strict: bool) -> str:
+    """`{arithmetic_notice}`: the per-turn reminder when the turn is a calculation question
+    the registry has no formula for (deferred to the advisory path) - the model must hand
+    the arithmetic to a calc_request block instead of stating a number."""
+
+    return ARITHMETIC_NOTICE if strict else ""
+
+
 def build_calculation_results_section(titles: Sequence[str]) -> str:
     """`{calculation_results}`: titles only - never a number - of the calculations
     already shown above the advisory answer."""

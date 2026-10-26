@@ -1434,6 +1434,7 @@ async def _run_advisory_flow(
         trace=trace,
         sub_queries=sub_query_questions,
         calculation_titles=calculation_titles_shown,
+        strict_arithmetic=strict_numbers,
         purpose="CHAT",
         credential=models.generation_credential,
         snapshot_version=models.snapshot_version,

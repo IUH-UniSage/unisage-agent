@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from app.rag.prompting import (
@@ -617,3 +618,28 @@ def test_node_10_field_table_lists_profile_fields_only() -> None:
 
     table = build_known_metadata_fields_section()
     assert "`khoa_nhap_hoc`" in table and "`tc_lt`" not in table
+
+
+def test_the_arithmetic_notice_is_shown_only_on_a_deferred_calculation_turn() -> None:
+    from app.rag.prompting.builder import ARITHMETIC_NOTICE
+
+    common: dict[str, Any] = {
+        "user_query": "4 môn đó cộng lại mấy tín?",
+        "security": AcademicSecurityContext(),
+        "confirmed_metadata": {},
+        "chunks": [RetrievedChunk(chunk_id="c1", content="3 tín chỉ", source="s", score=0.9)],
+    }
+    assert ARITHMETIC_NOTICE not in build_system_prompt(**common)  # type: ignore[arg-type]
+    strict = build_system_prompt(**common, arithmetic_notice=True)  # type: ignore[arg-type]
+    assert ARITHMETIC_NOTICE in strict
+    assert strict.index("## Phép Tính Số Học Trên Số Liệu Đã Trích") < strict.index(
+        "## Hướng Dẫn Xử Lý"
+    )
+    assert '{"type": "calc_request"' in strict
+    multi = build_multi_intent_prompt(
+        user_query="a và b",
+        sub_queries=["a", "b"],
+        arithmetic_notice=True,
+        **{k: v for k, v in common.items() if k != "user_query"},  # type: ignore[arg-type]
+    )
+    assert ARITHMETIC_NOTICE in multi

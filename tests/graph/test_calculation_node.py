@@ -1309,3 +1309,48 @@ async def test_a_calc_request_in_the_answer_is_computed_by_code_and_appended(
     assert "".join(tokens).replace("\n\n\n\n", "\n\n") == result.response_text
     assert "ANSWER_UNGROUNDED_NUMBERS" not in [warning.code for warning in result.admin_warnings]
     assert result.calculation_items == []
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_turn_tells_node_10_to_hand_the_arithmetic_to_a_calc_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag.prompting.builder import ARITHMETIC_NOTICE
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    query = "Ngành Logistics, 4 môn đó cộng lại mấy tín?"
+    seen: list[str] = []
+    await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "none", "params": {}, "retrieval_query": None},
+            ),
+            query_transformation=_echo_model(),
+            generation=_prompt_capturing_generation(seen),
+            retrieval=_RecordingRetrieval([_CHUNK]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert seen and ARITHMETIC_NOTICE in seen[0]
+
+    # An ordinary advisory question carries no such reminder.
+    plain_seen: list[str] = []
+    await run_graph(
+        _input(_ADVISORY_QUERY),
+        GraphModels(
+            classification=make_classification_llm_model(
+                "academic_advisory", routing_mode="SINGLE"
+            ),
+            query_transformation=_echo_model(),
+            generation=_prompt_capturing_generation(plain_seen),
+            retrieval=_RecordingRetrieval([_CHUNK]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+    assert plain_seen and ARITHMETIC_NOTICE not in plain_seen[0]

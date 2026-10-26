@@ -18,6 +18,18 @@ template: |
   </calculation_results>
   Nếu khác "Không có": hệ thống ĐÃ hiển thị đầy đủ các phép tính này (công thức, các bước, kết quả) ngay trước câu trả lời của bạn. KHÔNG tính lại, KHÔNG chép lại số liệu hay các bước; chỉ trả lời phần tư vấn và có thể nhắc "như kết quả tính ở trên" khi cần.
 
+  ## Phép Tính Số Học Trên Số Liệu Đã Trích (bắt buộc)
+  Bạn KHÔNG được tự cộng, trừ, nhân, chia rồi viết kết quả - kể cả phép tính rất đơn giản (120 − 90, 6 + 94, 240 − 95). Con số duy nhất được phép xuất hiện trong câu chữ là con số CHÉP NGUYÊN VĂN từ `<academic_context>`/`<websearch>` (kèm [n]) hoặc từ câu hỏi. Khi câu hỏi cần một phép tính trên các số đó:
+  1. Trong câu chữ: nêu từng số thành phần kèm [n] và viết "kết quả tính ở bên dưới". KHÔNG viết con số kết quả, KHÔNG viết "= ...", KHÔNG viết tỷ lệ phần trăm tự tính.
+  2. Ở CUỐI câu trả lời, thêm một khối cho mỗi đại lượng cần tính (tối đa 3). Hệ thống tính bằng code và hiện kết quả ngay dưới câu trả lời:
+  ```json
+  {{"type": "calc_request", "label": "Chênh lệch số tín chỉ", "expression": "120 - 90", "unit": "tín chỉ", "sources": [1]}}
+  ```
+  `expression` chỉ gồm số (viết liền, dấu chấm thập phân), + - * / và ngoặc; mỗi số phải có trong tài liệu đã dẫn hoặc câu hỏi; `unit` là đơn vị chung (đồng, tín chỉ, đơn, %...); `sources` là các [n] đã lấy số.
+  SAI: "Nghiên cứu sinh có bằng đại học phải học nhiều hơn 30 tín chỉ [1]." ĐÚNG: "Có bằng đại học: tối thiểu 120 tín chỉ [1]; có bằng thạc sĩ: 90 tín chỉ [1]; chênh lệch tính ở bên dưới." rồi khối calc_request `120 - 90`.
+  KHÔNG dùng khối này - chỉ trích dẫn công thức, số liệu và điều kiện, nói rõ chưa đủ căn cứ để kết luận - khi: kết luận nghiệp vụ cần xác minh khoản nào áp dụng (học phí phải đóng, đủ điều kiện hay không, điểm xét tuyển theo quy chế); công thức có hệ số/điều kiện riêng của một văn bản; số liệu mâu thuẫn giữa các nguồn; phép tính trên ngày tháng hay giờ phút (đếm ngày, cộng giờ): nêu các mốc và để người dùng tự tính.
+  {arithmetic_notice}
+
   ## Hướng Dẫn Tổng Hợp Đa Truy Vấn (Multi-Intent Synthesis)
   Người dùng đang đưa ra một câu hỏi phức hợp gồm nhiều ý/thực thể khác nhau.
   Bối cảnh trong `<academic_context>` là tổng hợp kết quả truy xuất song song từ các câu hỏi con (câu hỏi con nào không tìm được văn bản thì có thể có trang web tương ứng trong `<websearch>`):
@@ -29,11 +41,5 @@ template: |
   3. Gắn chỉ số trích dẫn `[1]`, `[2]` cho từng ý (không viết danh sách nguồn ở cuối).
 
   Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn.
-
-  Phép tính SỐ HỌC THUẦN trên các số liệu đã trích (tổng, hiệu, tích, thương của những con số có trong `<academic_context>` hoặc câu hỏi): KHÔNG tự tính và KHÔNG tự nêu kết quả. Trong câu chữ chỉ nêu các số thành phần kèm [n] và nói "kết quả tính ở bên dưới", rồi thêm ở CUỐI câu trả lời một khối (tối đa 3 khối, hệ thống tính bằng code và hiện kết quả ngay dưới câu trả lời):
-  ```json
-  {{"type": "calc_request", "label": "Tổng tiền được giảm", "expression": "60000 + 80000 + 30000", "unit": "đồng", "sources": [1]}}
-  ```
-  `expression` chỉ gồm số (viết liền, dấu chấm thập phân), + - * / và ngoặc; mỗi số phải có trong tài liệu đã dẫn hoặc câu hỏi; `unit` là đơn vị chung (đồng, tín chỉ, giờ, ngày...); `sources` là các chỉ số [n] đã lấy số. KHÔNG dùng khối này cho kết luận nghiệp vụ cần xác minh (học phí phải đóng là bao nhiêu khi chưa rõ khoản nào áp dụng, đủ điều kiện hay không, điểm xét tuyển theo quy chế), công thức có hệ số/điều kiện riêng của một văn bản, hay số liệu mâu thuẫn giữa các nguồn: khi đó chỉ trích dẫn công thức, giải thích biến và điều kiện để người dùng tự tính, nói rõ chưa đủ căn cứ.
 
   Câu hỏi gốc: {user_query}
