@@ -157,6 +157,78 @@ hoặc trong trích dẫn với nhánh calculation), `pass` (calculation: số �
   D ghi "sau khi tắt 1 435 MiB" vì hai tiến trình `vya-ocr-exp` (936 MiB) và `vya-ocr-staging`
   (484 MiB) của dự án khác khởi động trong lúc đo; service đã gỡ model (log "reranker unloaded").
 
+### 1.6. Bảng thuật ngữ dùng trong các bảng
+
+Nhóm chỉ số xếp hạng (bước rerank, mục 2 và 4):
+
+| Từ khoá | Nghĩa | Đọc thế nào |
+|---|---|---|
+| ứng viên (candidates) | 16 chunk retrieval trả về cho một câu (theo thứ tự RRF), đầu vào chung của mọi biến thể | mọi biến thể chỉ được chọn trong 16 chunk này |
+| chunk | một đoạn tài liệu đã cắt khi ingest (heading_path + nội dung), đơn vị của retrieval và rerank | một tài liệu có nhiều chunk; nhiều chunk cùng `document_id` |
+| document_id / tài liệu kỳ vọng | mã tài liệu gốc; `expected_document_ids` là tài liệu mà đáp án nằm trong đó (ground truth của eval) | chunk "đúng" = chunk thuộc tài liệu kỳ vọng |
+| kept / tập giữ | danh sách chunk biến thể trả ra sau rerank, theo thứ tự nó xếp | đây là thứ prompt sinh câu trả lời đọc (tối đa 8) |
+| recall@k | phần tài liệu kỳ vọng xuất hiện trong k chunk giữ đầu; câu có 2 tài liệu kỳ vọng mà chỉ có 1 → 0,5 | 1,0 = đủ tài liệu; chỉ số chính vì tài liệu không vào prompt thì không có câu trả lời |
+| recall@8 / recall@5 | recall@k với k = 8 (= `CHAT_CONTEXT_MAX_CHUNKS`, số chunk prompt đọc) và k = 5 (khớp eval e2e) | |
+| MRR | trung bình của 1/hạng của chunk đúng đầu tiên (hạng 1 → 1; hạng 2 → 0,5; không có → 0) | đo tài liệu đúng nằm cao đến đâu, không đo giữ được bao nhiêu |
+| NDCG@16 | DCG của danh sách giữ (mỗi chunk đúng ở hạng r cộng 1/log2(r+1)) chia cho DCG lý tưởng (mọi chunk đúng trong 16 ứng viên xếp lên đầu) | đo cả thứ tự lẫn số lượng chunk đúng; phạt biến thể giữ ít |
+| Loại hết (empty) | tỷ lệ lượt biến thể không giữ chunk nào | trong graph thật → web search / "chưa có thông tin" / ticket |
+| Giữ TB | số chunk giữ trung bình mỗi lượt | cross-encoder luôn 8; LLM median 2 |
+| Lỗi | lượt biến thể không trả kết quả (service lỗi, model lỗi, JSON hỏng, rate limit) | trong benchmark không fail-open; trong graph thật thì fail-open |
+| Lượt | số lần chạy = số câu × số lần lặp (cross-encoder 2, LLM 3) | |
+| mốc không rerank | lấy 8 chunk đầu theo thứ tự retrieval, không rerank gì | mức mà bước rerank phải vượt để có ích |
+| trần (ceiling) | recall cao nhất có thể khi chỉ chọn trong 16 ứng viên = tài liệu kỳ vọng có trong 16 ứng viên | không biến thể nào vượt được; 0,935 trên bộ này |
+| RRF | Reciprocal Rank Fusion: cách hybrid trộn danh sách dense và BM25 (điểm = Σ 1/(k + hạng)) | thứ tự "retrieval" trong báo cáo là thứ tự RRF |
+| dense / cosine | tìm theo vector ngữ nghĩa, điểm cosine 0–1 (`score` của chunk) | 0,70 là điểm gán cho chunk chỉ BM25 tìm thấy |
+| BM25 / hybrid | tìm theo từ khoá; hybrid = dense + BM25 trộn bằng RRF | bật qua `RETRIEVAL_HYBRID_ENABLED` |
+| điểm CE / logit | đầu ra của cross-encoder cho một cặp (câu hỏi, chunk), số thực không chặn (âm được), càng cao càng liên quan | chỉ so trong cùng một câu, không so giữa các câu |
+| K / `CHAT_CROSS_ENCODER_KEEP` | số chunk cross-encoder giữ mỗi sub-query (8) | |
+| sub-query | câu hỏi con sau khi decomposer tách (1–3 mỗi lượt); benchmark dùng sub-query đầu | |
+| rescue rule | trong `llm_rerank`: khi LLM loại hết ở mọi sub-query, sub-query có chunk cosine ≥ 0,75 được giữ lại top-2 | giải thích vì sao một số câu "loại hết" không được cứu (cosine < 0,75) |
+| Jaccard TB tập giữ | trung bình |A∩B|/|A∪B| của tập chunk giữ giữa các lần lặp | 1,0 = lần nào cũng giữ y hệt |
+| Cùng thứ tự | tỷ lệ câu mà mọi lần lặp cho đúng cùng danh sách, cùng thứ tự | thước đo tái lập |
+| Lệch recall@8 | trung bình (max − min) recall@8 của một câu qua các lần lặp | dao động của kết quả theo lần chạy |
+| `truncated` | số passage dài hơn `RERANKER_MAX_LENGTH` (1024 token) bị service cắt | 0 trong mọi lần đo |
+| FP16 | model chạy ở số thực 16 bit trên GPU | nhanh, ít VRAM, điểm gần như không đổi |
+
+Nhóm chỉ số hiệu năng (mục 3 và 5):
+
+| Từ khoá | Nghĩa |
+|---|---|
+| p50 / p95 / p99 | phân vị: 50 % / 95 % / 99 % số phép đo nhanh hơn giá trị này; p50 = median, p95 = "trường hợp xấu thường gặp" |
+| TB / Max | trung bình / lớn nhất |
+| Phép đo | số request đã đo (sau warm-up) |
+| warm-up | các request đầu bị bỏ, để model/cache nóng lên không làm méo số |
+| vòng (iterations) | số lần lặp qua toàn bộ câu ở `-p` |
+| req/s (throughput) | số request hoàn thành mỗi giây trong vòng đo |
+| Đồng thời (concurrency) | số request bắn cùng lúc qua `asyncio.Semaphore` ở `-c` |
+| CPU TB % | % CPU toàn máy trung bình trong vòng đo (psutil) |
+| RAM đỉnh GB | RAM toàn máy dùng cao nhất trong vòng đo |
+| VRAM đỉnh MiB | bộ nhớ GPU dùng cao nhất theo `nvidia-smi` (toàn GPU, gồm cả tiến trình khác) |
+| GPU TB % | mức bận của GPU trung bình theo `nvidia-smi` |
+| VRAM trước / sau | `nvidia-smi` trước khi spawn service và sau khi tắt; "đã nhả" khi về trong ±150 MiB |
+| rate limit / maxRpm | giới hạn lượt gọi mỗi phút của một credential LLM (RERANK của eval: 15) |
+| giãn cách (`--llm-rpm`) | harness tự chờ để không vượt maxRpm; thời gian chờ không tính vào độ trễ |
+
+Nhóm chỉ số tầng câu trả lời (mục 6, từ `evals/run/metrics.py`):
+
+| Từ khoá | Nghĩa |
+|---|---|
+| recall@5 (e2e) | tài liệu kỳ vọng có trong 5 chunk đầu của ngữ cảnh đưa vào prompt; nhánh calculation không ghi ngữ cảnh nên tính trên trích dẫn của câu trả lời |
+| fail / pending (normal) | fail = recall@5 sai hoặc không đi nhánh RAG; pending = chưa chấm nội dung (cần judge RAGAS) |
+| pass (calculation) | câu đi qua CalculationNode, không hỏi lại, và các con số của đáp án kỳ vọng xuất hiện trong câu trả lời (`numbers_match`, khá dễ dãi) |
+| outcome | nhánh đã đi: `rag`, `calculation`, `ticket`, `off_topic`... |
+| refusal_hint | câu trả lời chứa mẫu "chưa có thông tin / không thể hỗ trợ" |
+| ticket fallback | lượt kết thúc bằng TicketFallbackNode (gợi ý tạo ticket) |
+| citation accuracy | phần trích dẫn [n] trong câu trả lời trỏ đúng tài liệu kỳ vọng |
+| TTFT | time to first token: từ lúc gửi câu hỏi tới token đầu tiên của câu trả lời |
+| total_ms | thời gian cả lượt, từ gửi tới token cuối |
+| usage: calls / token vào / USD | số lượt gọi LLM, token đầu vào, chi phí ước tính mỗi lượt chat (mọi bước: phân loại, HyDE, rerank, sinh) |
+| LLM_RERANK_FAILED | cảnh báo AI admin khi LLM rerank lỗi và graph fail-open về xếp theo điểm |
+| CROSS_ENCODER_FAILED | cảnh báo khi service cross-encoder lỗi và graph fail-over sang LLM rerank |
+| fail-open | lỗi thì giữ kết quả trước đó (xếp theo điểm) và đi tiếp |
+| fail-over | lỗi thì chuyển sang cơ chế dự phòng (LLM rerank) |
+| cache tắt | `RETRIEVAL_CACHE_REDIS_URL=` trống, để mọi lượt đều retrieval + rerank thật |
+
 ---
 
 ## 2. Bước A — Accuracy cross-encoder (`-a --variant cross_encoder`)
