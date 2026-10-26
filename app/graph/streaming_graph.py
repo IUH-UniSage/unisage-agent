@@ -30,6 +30,7 @@ from app.core.registry.model_registry import CredentialConfig
 from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.address import address_for
+from app.graph.calc_requests import arithmetic_blocks
 from app.graph.calculation_turn import (
     CalculationTask,
     Review,
@@ -62,9 +63,10 @@ from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
     Deferred,
-    PlannedTask,
+    Planned,
     TaskOutcome,
     plan_calculation,
+    registry_id,
     resume_calculation_task,
     run_planned_task,
 )
@@ -376,7 +378,7 @@ async def _classified_turn(
     # the advisory part (answered from the documents, no arithmetic by the model), so
     # its retrieval starts with the others'.
     planned = await _plan_calculations(calculation_tasks, deps, trace)
-    runnable = [task for task in planned if isinstance(task, PlannedTask)]
+    runnable = [task for task in planned if not isinstance(task, Deferred)]
     advisory_tasks: list[tuple[ClassifiedTask, RoutingMode]] = [
         *route_plan.advisory_tasks,
         *(
@@ -555,9 +557,10 @@ def calculation_title(last: LastCalculation | None) -> str | None:
 
     if last is None:
         return None
-    if last.title or last.plan.formula_id == "llm":
+    known = registry_id(last.plan.formula_id)
+    if last.title or known is None:
         return last.title
-    return FORMULAS[last.plan.formula_id].title
+    return FORMULAS[known].title
 
 
 def _computed_calculations(outcomes: Sequence[TaskOutcome]) -> list[LastCalculation]:
@@ -573,9 +576,10 @@ def _computed_calculations(outcomes: Sequence[TaskOutcome]) -> list[LastCalculat
 
 async def _plan_calculations(
     tasks: Sequence[CalculationTask], deps: CalculationDeps, trace: GraphTrace
-) -> list[PlannedTask | Deferred]:
+) -> list[Planned | Deferred]:
     """One extractor call per task, concurrently: which registered formula (and which
-    numbers, unknown and target), or `Deferred` when none fits."""
+    numbers, unknown and target), plain arithmetic over the student's numbers, or
+    `Deferred` when none fits."""
 
     if not tasks:
         return []
@@ -586,7 +590,7 @@ async def _plan_calculations(
 
 
 def _start_calculations(
-    tasks: Sequence[PlannedTask], deps: CalculationDeps
+    tasks: Sequence[Planned], deps: CalculationDeps
 ) -> "asyncio.Task[list[TaskOutcome]] | None":
     """Planned calculations run alongside the advisory retrieval (they are awaited only
     at the barrier right before node 10)."""
@@ -1472,6 +1476,16 @@ async def _run_advisory_flow(
             report.invalid_markers,
             report.no_citation,
         )
+    # Plain arithmetic the answer asked for over figures it cited: computed by code and
+    # appended as a Python block (or refused with a fixed line and an AI-admin warning).
+    if generation_result.calc_requests:
+        computed, rejected = arithmetic_blocks(
+            generation_result.calc_requests, question=question, chunks=rerank_result.chunks
+        )
+        if computed:
+            await token_sink(computed)
+            response_text += computed
+        admin_warnings.extend(rejected)
     # Official pages the judge kept only as links: listed after the answer, as the
     # fallback lists them, instead of being lost because another page answered.
     links = source_links_block(web_sources, response_text)

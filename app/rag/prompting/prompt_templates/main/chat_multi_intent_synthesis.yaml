@@ -30,4 +30,10 @@ template: |
 
   Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn.
 
+  Phép tính SỐ HỌC THUẦN trên các số liệu đã trích (tổng, hiệu, tích, thương của những con số có trong `<academic_context>` hoặc câu hỏi): KHÔNG tự tính và KHÔNG tự nêu kết quả. Trong câu chữ chỉ nêu các số thành phần kèm [n] và nói "kết quả tính ở bên dưới", rồi thêm ở CUỐI câu trả lời một khối (tối đa 3 khối, hệ thống tính bằng code và hiện kết quả ngay dưới câu trả lời):
+  ```json
+  {{"type": "calc_request", "label": "Tổng tiền được giảm", "expression": "60000 + 80000 + 30000", "unit": "đồng", "sources": [1]}}
+  ```
+  `expression` chỉ gồm số (viết liền, dấu chấm thập phân), + - * / và ngoặc; mỗi số phải có trong tài liệu đã dẫn hoặc câu hỏi; `unit` là đơn vị chung (đồng, tín chỉ, giờ, ngày...); `sources` là các chỉ số [n] đã lấy số. KHÔNG dùng khối này cho kết luận nghiệp vụ cần xác minh (học phí phải đóng là bao nhiêu khi chưa rõ khoản nào áp dụng, đủ điều kiện hay không, điểm xét tuyển theo quy chế), công thức có hệ số/điều kiện riêng của một văn bản, hay số liệu mâu thuẫn giữa các nguồn: khi đó chỉ trích dẫn công thức, giải thích biến và điều kiện để người dùng tự tính, nói rõ chưa đủ căn cứ.
+
   Câu hỏi gốc: {user_query}

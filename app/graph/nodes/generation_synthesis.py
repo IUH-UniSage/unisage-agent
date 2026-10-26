@@ -168,6 +168,9 @@ class GenerationResult:
     response_text: str
     # The ```json ask_user_form blocks the model emitted (or the repair call added).
     ask_forms: tuple[dict[str, Any], ...] = ()
+    # The ```json calc_request blocks: plain arithmetic over cited figures the model asks
+    # the graph to compute (app/graph/calc_requests.py) instead of doing it itself.
+    calc_requests: tuple[dict[str, Any], ...] = ()
 
 
 async def run_generation_synthesis(
@@ -270,6 +273,9 @@ async def run_generation_synthesis(
         response_text="".join(visible).rstrip(),
         ask_forms=tuple(
             block for block in redactor.captured if block.get("type") == "ask_user_form"
+        ),
+        calc_requests=tuple(
+            block for block in redactor.captured if block.get("type") == "calc_request"
         ),
     )
 

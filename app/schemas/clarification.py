@@ -147,8 +147,9 @@ class CalculationTarget(_Strict):
 class CalculationPlan(_Strict):
     """How a pending calculation task is finished on resume: a registered formula
     computed by Python - forward, or solved for `solve_for` so that `target` holds.
-    `llm` is the retired LLM path (26/10/2026): a round stored with it is still readable
-    and resumes to a fixed sentence."""
+    `arithmetic` is plain arithmetic over the student's own numbers (computed at once,
+    never resumed). `llm` is the retired LLM path (26/10/2026): a round stored with it is
+    still readable and resumes to a fixed sentence."""
 
     formula_id: Literal[
         "gpa",
@@ -160,6 +161,7 @@ class CalculationPlan(_Strict):
         "admission_score_2026",
         "transcript_score_3hk",
         "weighted_score",
+        "arithmetic",
         "llm",
     ]
     # Inverse calculation: the param to find ("ck", or a list position "diem[4]") and

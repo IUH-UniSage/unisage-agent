@@ -26,6 +26,15 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
+from app.calculation.arithmetic import (
+    ARITHMETIC_SOURCE_OWN,
+    ArithmeticError,
+    ArithmeticRequest,
+    Evaluation,
+    arithmetic_result,
+    evaluate,
+    parse_request,
+)
 from app.calculation.formulas import (
     FORMULAS,
     FormulaId,
@@ -43,6 +52,7 @@ from app.calculation.result import CalculationInputError, CalculationResult, Fie
 from app.calculation.solver import Target, Unknown, parse_target, parse_unknown, solved_result
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
+from app.graph.calc_requests import missing_operands
 from app.graph.evidence import levels_for
 from app.graph.metadata_fields import canonical_field, is_profile_field
 from app.graph.nodes.cross_encoder_rerank import (
@@ -75,7 +85,9 @@ from app.schemas.security import AcademicSecurityContext
 logger = logging.getLogger(__name__)
 
 BUILTIN_IDS: frozenset[str] = frozenset(FORMULAS)
-UnresolvedReason = Literal["legacy_llm", "bad_target"]
+UnresolvedReason = Literal["legacy_llm", "bad_target", "not_resumable"]
+# Plans that are not a registry formula (never redone with new numbers, never resumed).
+NON_REGISTRY_PLANS = frozenset({"llm", "arithmetic"})
 # Documents read for one formula's lookups.
 LLM_CHUNKS_LIMIT = 5
 
@@ -136,6 +148,20 @@ class PlannedTask:
 
 
 @dataclass(frozen=True)
+class ArithmeticTask:
+    """Plain arithmetic over numbers the student stated themselves (policy level A):
+    computed by code from the whitelisted expression, no formula, no document."""
+
+    task_id: str
+    query: str
+    request: ArithmeticRequest
+    evaluation: Evaluation
+
+
+Planned = PlannedTask | ArithmeticTask
+
+
+@dataclass(frozen=True)
 class CalculationDeps:
     """LLM wiring shared by every call this node makes in one turn."""
 
@@ -181,11 +207,12 @@ def build_calculation_extractor_agent(model: Model | str) -> Agent[None, str]:
 
 @dataclass(frozen=True)
 class Extraction:
-    formula_id: FormulaId | Literal["none", "previous"]
+    formula_id: FormulaId | Literal["none", "previous", "arithmetic"]
     params: dict[str, JsonValue]
     retrieval_query: str | None = None
     unknown: Unknown | None = None
     target: Target | None = None
+    arithmetic: ArithmeticRequest | None = None
 
 
 def load_json_object(raw: str) -> dict[str, Any] | None:
@@ -256,6 +283,12 @@ def parse_extraction(
     routed = [formula for formula in allowed if formula in BUILTIN_IDS]
     if formula_id == "none":
         return _none_extraction(params, data)
+    if formula_id == "arithmetic":
+        request = parse_request(data.get("arithmetic"))
+        if request is None:
+            logger.warning("calculation.arithmetic_unreadable %r", data.get("arithmetic"))
+            return _none_extraction(params, data)
+        return Extraction("arithmetic", {}, None, arithmetic=request)
     if formula_id not in BUILTIN_IDS:
         if len(routed) != 1:
             return _none_extraction(params, data)
@@ -268,19 +301,23 @@ def parse_extraction(
     return Extraction(builtin, params, None, unknown, target)
 
 
+def registry_id(formula_id: str) -> FormulaId | None:
+    """The plan's formula when it is a registry formula; None for `llm`/`arithmetic`."""
+
+    return next((known for known in FORMULAS if known == formula_id), None)
+
+
 def previous_formula(previous: LastCalculation | None) -> FormulaId | None:
     """The registered formula the previous calculation can be redone with."""
 
-    if previous is None or previous.plan.formula_id == "llm":
-        return None
-    return previous.plan.formula_id
+    return registry_id(previous.plan.formula_id) if previous is not None else None
 
 
 def _previous_block(previous: LastCalculation) -> str:
-    formula_id = previous.plan.formula_id
+    known = registry_id(previous.plan.formula_id)
     described = {
         "formula_id": "previous",
-        "formula": FORMULAS[formula_id].title if formula_id != "llm" else previous.title,
+        "formula": FORMULAS[known].title if known is not None else previous.title,
         "params": previous.params,
     }
     return (
@@ -369,11 +406,12 @@ def plan_for(
 def solving_of(plan: CalculationPlan) -> tuple[Unknown | None, Target | None]:
     """The unknown and target a stored plan asks for (None, None for a forward one)."""
 
-    if plan.formula_id == "llm" or plan.solve_for is None or plan.target is None:
+    known = registry_id(plan.formula_id)
+    if known is None or plan.solve_for is None or plan.target is None:
         return None, None
     unknown = parse_unknown(plan.solve_for)
     target = parse_target(
-        plan.formula_id,
+        known,
         {"output": plan.target.output, "op": plan.target.op, "value": plan.target.value},
     )
     if unknown is None or isinstance(target, FieldError):
@@ -799,12 +837,11 @@ async def builtin_task(
 # ---------------------------------------------------------------------------
 
 
-async def plan_calculation(
-    task_id: str, query: str, deps: CalculationDeps
-) -> PlannedTask | Deferred:
+async def plan_calculation(task_id: str, query: str, deps: CalculationDeps) -> Planned | Deferred:
     """The extractor's decision for one task: a registered formula with the numbers the
     student gave (a typed value wins over the profile, the profile over the previous
-    calculation's numbers), or `Deferred` when nothing in the registry fits."""
+    calculation's numbers), plain arithmetic over the student's own numbers, or
+    `Deferred` when nothing in the registry fits."""
 
     extraction = await extract_request(query, deps)
     previous = deps.previous
@@ -813,6 +850,8 @@ async def plan_calculation(
             "calculation.deferred task=%s retrieval_query=%r", task_id, extraction.retrieval_query
         )
         return Deferred(task_id, query, extraction.retrieval_query)
+    if extraction.formula_id == "arithmetic":
+        return _plan_arithmetic(task_id, query, extraction, deps)
     if extraction.formula_id == "previous":
         formula_id = previous_formula(previous)
         assert previous is not None and formula_id is not None
@@ -821,15 +860,56 @@ async def plan_calculation(
     # The previous calculation's numbers are context for any registered formula: a
     # follow-up ("làm tròn thang 4") is not asked again for what the student already
     # gave, even when the router picked another formula.
+    assert formula_id is not None
+    reusable = previous is not None and previous_formula(previous) is not None
     params = {
-        **(_builtin_params(formula_id, previous.params) if previous is not None else {}),
+        **(_builtin_params(formula_id, previous.params) if reusable and previous else {}),
         **profile_params(formula_id, deps.confirmed_metadata),
         **extraction.params,
     }
     return PlannedTask(task_id, query, formula_id, params, extraction.unknown, extraction.target)
 
 
-async def run_planned_task(task: PlannedTask, deps: CalculationDeps) -> TaskOutcome:
+def _plan_arithmetic(
+    task_id: str, query: str, extraction: Extraction, deps: CalculationDeps
+) -> ArithmeticTask | Deferred:
+    """Permission and evidence for the student's own arithmetic: a whitelisted expression
+    whose every operand is a number of the question (or the raw message). Anything else
+    goes to the advisory path, which may still request the sum over cited figures."""
+
+    request = extraction.arithmetic
+    assert request is not None
+    try:
+        evaluation = evaluate(request.expression)
+    except ArithmeticError as exc:
+        logger.warning("calculation.arithmetic_refused task=%s %s", task_id, exc)
+        return Deferred(task_id, query, None)
+    missing = missing_operands(evaluation.operands, [query, deps.user_message or ""])
+    if missing:
+        logger.info(
+            "calculation.arithmetic_deferred task=%s missing=%s",
+            task_id,
+            [plain(m) for m in missing],
+        )
+        return Deferred(task_id, query, None)
+    logger.info(
+        "calculation.arithmetic task=%s expression=%r value=%s",
+        task_id,
+        evaluation.expression,
+        plain(evaluation.value),
+    )
+    return ArithmeticTask(task_id, query, request, evaluation)
+
+
+async def run_planned_task(task: Planned, deps: CalculationDeps) -> TaskOutcome:
+    if isinstance(task, ArithmeticTask):
+        result = arithmetic_result(task.request, task.evaluation, source=ARITHMETIC_SOURCE_OWN)
+        params: dict[str, JsonValue] = {
+            "expression": task.evaluation.expression,
+            "label": task.request.label,
+            "unit": task.request.unit,
+        }
+        return Computed(task.task_id, result, CalculationPlan(formula_id="arithmetic"), params)
     return await builtin_task(
         task.task_id,
         task.formula_id,
@@ -868,15 +948,12 @@ async def resume_calculation_task(
 
     if plan.formula_id == "llm":
         return Unresolved(task_id, "legacy_llm")
+    known = registry_id(plan.formula_id)
+    if known is None:
+        return Unresolved(task_id, "not_resumable")
     unknown, target = solving_of(plan)
-    values = {
-        **profile_params(plan.formula_id, deps.confirmed_metadata),
-        **known_params,
-        **answers,
-    }
-    return await builtin_task(
-        task_id, plan.formula_id, query, values, deps, unknown=unknown, target=target
-    )
+    values = {**profile_params(known, deps.confirmed_metadata), **known_params, **answers}
+    return await builtin_task(task_id, known, query, values, deps, unknown=unknown, target=target)
 
 
 # Fixed sentences for a task that cannot be calculated (rendered by Python, no LLM).
@@ -888,5 +965,8 @@ UNRESOLVED_MESSAGES: dict[UnresolvedReason, str] = {
     "bad_target": (
         "Mình chưa xác định được đại lượng cần tìm trong câu hỏi. Bạn nêu rõ cần tìm giá trị "
         'nào và mốc cần đạt (VD "cuối kỳ cần bao nhiêu để tổng kết đạt 8,5") giúp mình nhé.'
+    ),
+    "not_resumable": (
+        "Phép tính này không cần thêm số liệu; bạn hỏi lại trong một câu mới giúp mình nhé."
     ),
 }
