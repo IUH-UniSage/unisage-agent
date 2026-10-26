@@ -122,24 +122,37 @@ so với `runs/hybrid-on`.
 
 **Acceptance criteria:**
 
-- [ ] Bảng recall@5, pass calculation, ticket fallback, latency p50/p95 cho 3 chế độ trong plan.
+- [x] Bảng recall@5, pass calculation, ticket fallback, latency p50/p95 cho 3 chế độ trong plan.
 
 **Dependencies:** Task 2 · **Scope:** S (thời gian chạy)
 
+**Kết quả Task 5 (26/10):** `runs/ce-on`, `runs/ce-then-llm` so với `runs/hybrid-on`: normal
+recall@5 110 / 108 / 104 trên 116; calculation pass 20 / 21 / 18 trên 38, recall@5 20 / 20 / 23;
+từ chối 32 / 29 / 41; p50 toàn lượt 4,6 / 6,6 / 5,3 s; p95 7,5 / 17,9 / 9,5 s. Chi tiết
+`report.md` mục 6.
+
 ## Task 6: Chạy đủ benchmark trên 4080, khuyến nghị
 
-- [ ] `-a --repeats 3` (3 biến thể), `-p --iterations 5`, `-c` (CE; LLM nếu đồng ý tốn phí).
-- [ ] Bảng + histogram điểm CE + khuyến nghị bật/không; danh sách việc đo lại trên 3060.
+- [x] `-a --repeats 3` (3 biến thể), `-p --iterations 5`, `-c` (CE; LLM nếu đồng ý tốn phí).
+- [x] Bảng + histogram điểm CE + khuyến nghị bật/không; danh sách việc đo lại trên 3060.
 
 **Dependencies:** Task 4, Task 5 · **Scope:** S
 
+**Kết quả Task 6 (26/10):** bước A–D chạy đủ trên 4080 (`benchmark_results/step-{a,b,c,d}-*`);
+bảng và khuyến nghị trong `plan.md` "Kết quả đo" và `report.md`. Sự cố: lần đầu -a LLM hỏng vì
+rate limit 15 lượt/phút → thêm `--llm-rpm`/retry; biến thể LLM cần `lifespan` app.
+
 ## Task 7: Tài liệu
 
-- [ ] `docs/guide/benchmark-rerank.md` (theo BENCHMARK.md của vya-ocr), `cau-hinh.md` 4 biến, `.env.example`, `.env.eval.example`, `dev-onboard.txt` mục 15, spec khớp code.
+- [x] `docs/guide/benchmark-rerank.md` (theo BENCHMARK.md của vya-ocr), `cau-hinh.md` 4 biến, `.env.example`, `.env.eval.example`, `dev-onboard.txt` mục 15, spec khớp code.
 
 **Dependencies:** Task 2–4 · **Scope:** S
 
+**Kết quả Task 7 (26/10):** `docs/guide/benchmark-rerank.md`, `cau-hinh.md` 4 biến,
+`.env.example`, `.env.eval.example`, `dev-onboard.txt` mục 15, spec đồng bộ (transformers thay
+FlagEmbedding, trường `truncated`), `report.md` 538 dòng.
+
 ## Checkpoint: Hoàn tất
 
-- [ ] `task test`, `uv run ruff check app evals tests`, `uv run mypy app evals` sạch trên file đổi.
-- [ ] PR lên `main`.
+- [x] `task test`, `uv run ruff check app evals tests`, `uv run mypy app evals` sạch trên file đổi.
+- [x] PR lên `main`.

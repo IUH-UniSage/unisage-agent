@@ -1,7 +1,8 @@
 # Benchmark rerank: LLM rerank so với cross-encoder
 
-Thiết kế: `docs/specs/SPEC-cross-encoder-rerank.md`. Kết quả đo và khuyến nghị:
-`changes/22-10-2026-CrossEncoderBenchmark/plan.md` (mục "Kết quả đo").
+Thiết kế: `docs/specs/SPEC-cross-encoder-rerank.md`. Kết quả đo 26/10/2026 và khuyến nghị:
+`changes/22-10-2026-CrossEncoderBenchmark/report.md` (đầy đủ, từng số liệu kèm đọc số) và
+`plan.md` cùng thư mục (bảng tóm tắt).
 
 Bước 09a của graph hiện gọi model LLM (purpose `RERANK`, không có thì Extraction) một lần mỗi
 lượt để chọn chunk nào trả lời câu hỏi con: 3–6 s cho 16 chunk. Cross-encoder

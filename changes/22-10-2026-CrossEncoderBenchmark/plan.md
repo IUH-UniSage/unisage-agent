@@ -78,19 +78,19 @@ Task 7 docs/task sau Task 2–4
 
 ### Phase 4: Đo
 
-- [ ] Task 5: eval tầng câu trả lời: `runs/ce-on`, `runs/ce-then-llm` so với `runs/hybrid-on`
+- [x] Task 5: eval tầng câu trả lời: `runs/ce-on`, `runs/ce-then-llm` so với `runs/hybrid-on`
       (llm) cùng điều kiện; bảng recall@5 / pass / fallback / p95.
-- [ ] Task 6: chạy đủ benchmark trên 4080 (`-a --repeats 3`, `-p`, `-c`), ghi bảng vào plan,
+- [x] Task 6: chạy đủ benchmark trên 4080 (`-a --repeats 3`, `-p`, `-c`), ghi bảng vào plan,
       khuyến nghị; ghi việc cần đo lại trên 3060.
 
 ### Phase 5: Tài liệu
 
-- [ ] Task 7: `docs/guide/benchmark-rerank.md`, `docs/guide/cau-hinh.md` (4 biến), `.env.example`,
+- [x] Task 7: `docs/guide/benchmark-rerank.md`, `docs/guide/cau-hinh.md` (4 biến), `.env.example`,
       `.env.eval.example`, `dev-onboard.txt` mục 15 (ngoài repo), spec khớp code.
 
 ### Checkpoint: Hoàn tất
 
-- [ ] `task test`, ruff, mypy sạch trên file đổi; PR lên `main`.
+- [x] `task test` 2671 passed (bỏ tests/e2e lỗi import có sẵn trên main), ruff/mypy sạch trên file đổi; PR lên `main` (26/10).
 
 ## Risks and Mitigations
 
@@ -103,10 +103,40 @@ Task 7 docs/task sau Task 2–4
   in cảnh báo đỏ nếu VRAM sau cao hơn trước quá 200 MB.
 - **Điểm CE không có ngưỡng**: không gate; ghi histogram điểm để ticket sau hiệu chuẩn.
 
-## Kết quả đo (điền khi chạy)
+## Kết quả đo (26/10/2026, RTX 4080 SUPER)
 
-(chưa có)
+Báo cáo đầy đủ, từng số liệu kèm đọc số và cách dùng: `report.md` cùng thư mục. Tóm tắt:
+
+| Trục | `llm` (hiện tại) | `cross_encoder` | `cross_encoder_then_llm` |
+|---|---|---|---|
+| Độ trễ bước rerank p50 / p95 | 1,7 s / 3,3 s | **0,11 s / 0,15 s** | 1,7 s / 2,6 s |
+| Độ trễ cả lượt p50 / p95 (eval, 154 câu) | 5,3 s / 9,5 s | **4,6 s / 7,5 s** | 6,6 s / 17,9 s |
+| recall@8 bước rerank (139 câu, cùng 16 ứng viên) | 0,880 | **0,921** | 0,876 |
+| normal recall@5 e2e | 104/116 | **110/116** | 108/116 |
+| calculation pass e2e | 18/38 | 20/38 | **21/38** |
+| calculation recall@5 e2e (theo trích dẫn) | **23/38** | 20/38 | 20/38 |
+| Từ chối trả lời | 41 | 32 | **29** |
+| Tái lập qua 3 lượt | 49,6 % | **100 %** | 49,6 % |
+| USD / lượt | 0,00557 | **0,00503** | 0,00540 |
+| Chịu tải service (1 câu, 30 req/mức) | — | mức 1/2/4/8: p50 146/269/538/1076 ms, ~7,3 req/s | — |
+| VRAM | — | 1 839 MiB rảnh, 2 987 MiB đỉnh, về 494 MiB sau khi tắt | — |
+
+Mốc không rerank (8 chunk đầu theo RRF) recall@8 0,935 = trần của bộ ứng viên: trên corpus này
+cross-encoder không thêm recall, nó thay LLM rerank (vốn loại nhầm tài liệu ở 12 câu) với chi phí
+gần 0. Tiêu chí thành công của spec: đạt 5/6; không đạt calculation recall@5 (−3) nhưng 6 câu mất
+là mất trích dẫn, câu trả lời không đổi (report.md 6.4).
+
+**Khuyến nghị**: bật `CHAT_RERANK_MODE=cross_encoder` mặc định ở dev/eval và ở production khi máy
+chủ có GPU trống ≥ 2,5 GB; không triển khai `cross_encoder_then_llm`. Điều kiện: đo lại Bảng 2/3
+trên 3060; khi bật lại web search cần gate khác vì cross-encoder không "loại hết"; kiểm tra trích
+dẫn nhánh calculation; sửa rate limit credential RERANK (70/154 lượt lỗi trong run gốc).
+
+**Cần đo lại trên Windows 3060**: `-p`, `-c` (kỳ vọng p50 ~250–300 ms, p95 ~350 ms, ~3 req/s);
+`-a` không cần (tất định).
 
 ## Open Questions
 
-- Passage có nên kèm `summary` không: đo rồi quyết (xem spec).
+- Passage có nên kèm `summary` không: **đã đo** — service báo `truncated=0` ở mọi request (không
+  chunk nào vượt 1024 token với heading_path + content), nên chưa cần biến thể `summary`.
+- Gate web search khi không còn LLM rerank (report.md 7.2 mục 3): ticket sau.
+- Trích dẫn nhánh calculation ở chế độ `cross_encoder` (report.md 6.4): ticket sau.

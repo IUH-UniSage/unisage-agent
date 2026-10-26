@@ -192,8 +192,21 @@ không import `app.*`.
 3. Độ chính xác đo hai tầng như trên; RAGAS không chạy.
 4. Giữ top-K, không gate theo điểm CE.
 
+## Kết quả đo (26/10/2026)
+
+`changes/22-10-2026-CrossEncoderBenchmark/report.md`. Tiêu chí thành công đạt 5/6: P95 bước rerank
+147 ms (4080), recall@8 0,921 so với LLM 0,880, e2e normal recall@5 110/116 so với 104/116,
+calculation pass 20/38 so với 18/38, VRAM nhả đúng; không đạt calculation recall@5 (20 so với 23,
+mất trích dẫn chứ không mất câu trả lời). Khuyến nghị bật `CHAT_RERANK_MODE=cross_encoder` mặc
+định khi có GPU; không dùng `cross_encoder_then_llm`. Mặc định trong code vẫn là `llm` cho tới khi
+có quyết định triển khai (ticket sau: registry, Windows 3060, gate web search).
+
 ## Open Questions
 
-- Passage đưa cho CE: `heading_path + content` (như BM25) hay thêm `summary`? Bắt đầu với
-  heading + content, đo độ dài token thật sau tokenize; nếu > 5 % ứng viên bị cắt ở 1024
-  thì thử biến thể rerank trên `summary` và so bằng `-a`.
+- Passage đưa cho CE: `heading_path + content`. **Đã đo**: `truncated=0` ở mọi request của
+  benchmark (0 % ứng viên bị cắt ở 1024), nên chưa cần biến thể `summary`.
+- Gate "không tài liệu nào trả lời → web search" khi không còn LLM rerank: cross-encoder không
+  loại hết; phân phối điểm top-1 (đúng: median 5,7; sai: median 3,5, max 8,3) chồng nhau nên
+  ngưỡng điểm đơn thuần không đủ. Ticket sau.
+- Nhánh calculation ở chế độ `cross_encoder` bớt gắn trích dẫn (6 câu) dù câu trả lời không đổi:
+  kiểm tra `LLM_CHUNKS_LIMIT` và thứ tự chunk vào prompt tính toán. Ticket sau.
