@@ -1788,6 +1788,7 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
         re.compile(r"lý thuyết.{0,40}thực hành|thực hành.{0,40}lý thuyết"),
         re.compile(r"\b(tx|tbtx|gk|ck)\b.{0,30}\b(tx|tbtx|gk|ck)\b"),
         re.compile(r"giữa kỳ.{0,40}cuối kỳ|giữa kì.{0,40}cuối kì"),
+        re.compile(r"(điểm )?(cuối|giữa) k[ỳì] (cần|phải|tối thiểu|bao nhiêu)"),
     ),
     "grade_conversion": (
         re.compile(r"quy đổi|qui đổi|đổi (sang|ra) (điểm chữ|thang 4|hệ 4)"),

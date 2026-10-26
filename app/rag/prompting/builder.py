@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Mapping, Sequence
 
@@ -16,7 +15,6 @@ from app.core.academic_calendar import (
 from app.core.timezone import now_ict
 from app.graph.address import address_for
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import LastCalculation
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
@@ -344,19 +342,6 @@ def build_task_2_section() -> str:
     `confirmed_metadata`, so the model never re-reads a pending form."""
 
     return get_templates().task_2.format(ask_user_form_guide=build_ask_user_form_guide())
-
-
-def build_recent_calculations_section(recent: Sequence[LastCalculation]) -> str:
-    """`{recent_calculations}`: the conversation's latest calculations, newest last,
-    each with its own values under registry names - for the LLM calculation only
-    (node 10 never sees a number)."""
-
-    if not recent:
-        return NOTHING
-    return "\n".join(
-        f"- {item.title or item.plan.formula_id}: {json.dumps(item.params, ensure_ascii=False)}"
-        for item in recent
-    )
 
 
 def build_calculation_results_section(titles: Sequence[str]) -> str:

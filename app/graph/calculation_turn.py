@@ -7,7 +7,6 @@ showed; a result that does not fit is redone by the LLM), and the trace.
 Spec: docs/specs/SPEC-calculation-node.md §3 and §7.
 """
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -21,7 +20,6 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
-from app.calculation.formulas import label_for, param_spec
 from app.calculation.render import render_markdown
 from app.calculation.result import CalculationResult
 from app.core.config import settings
@@ -31,22 +29,19 @@ from app.graph.nodes.calculation import (
     UNRESOLVED_MESSAGES,
     CalculationDeps,
     Computed,
-    LlmAnswered,
     NeedsInput,
     TaskOutcome,
     Unresolved,
-    llm_outcome,
     load_json_object,
 )
 from app.graph.streaming import generation_model_settings, run_agent_text_with_failover
 from app.rag.prompting import build_calculation_review_prompt, get_templates
 from app.rag.prompting.citations import chunk_citation, renumber_markers
-from app.schemas.clarification import CalculationPlan, PendingCalculationTask
+from app.schemas.clarification import PendingCalculationTask
 from app.schemas.retrieval import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
-LLM_NOTICE = "Kết quả do AI tự tính, có thể sai - bạn kiểm tra lại giúp mình nhé"
 NEEDS_INPUT_LEAD = "Mình cần thêm vài thông tin để tính giúp bạn:"
 # Dotted thousands first, so "165.200.000" is one number and not 165.2 and 0.
 _NUMBER = re.compile(r"\d{1,3}(?:\.\d{3})+(?!\d)|\d+(?:[.,]\d+)?")
@@ -55,8 +50,6 @@ _HEADING_SEPARATOR = " \u203a "  # single right angle quote (RUF001 forbids the 
 _ALWAYS_ALLOWED = frozenset({Decimal(0), Decimal(4), Decimal(10)})
 _EXTRACTOR_PROMPTS = ("agent_calculation_extractor",)
 _REVIEW_PROMPT = "chat_calculation_review"
-REVIEW_ISSUE_KEY = "Lưu ý: kết quả công thức cài sẵn không khớp câu hỏi"
-_LLM_PROMPTS = ("agent_calculation_extractor", "chat_calculation_llm")
 
 
 @dataclass(frozen=True)
@@ -73,15 +66,16 @@ class CalculationTask:
 def number_citations(
     outcomes: Sequence[TaskOutcome], first_index: int
 ) -> tuple[list[TaskOutcome], list[dict[str, Any]]]:
-    """Give every document an LLM calculation cited one `[n]` for the whole message,
-    from `first_index` on (the advisory answer of a mixed turn keeps 1..first_index-1),
-    and the `citations` entries the client turns those markers into links with."""
+    """Give every document a calculation read a value from one `[n]` for the whole
+    message, from `first_index` on (the advisory answer of a mixed turn keeps
+    1..first_index-1), and the `citations` entries the client turns those markers into
+    links with."""
 
     numbered: list[TaskOutcome] = []
     citations: list[dict[str, Any]] = []
     next_index = first_index
     for outcome in outcomes:
-        if not isinstance(outcome, LlmAnswered | Computed) or not outcome.sources:
+        if not isinstance(outcome, Computed) or not outcome.sources:
             numbered.append(outcome)
             continue
         mapping: dict[int, int] = {}
@@ -91,19 +85,14 @@ def number_citations(
             sources.append((next_index, chunk))
             citations.append(chunk_citation(next_index, chunk))
             next_index += 1
-        if isinstance(outcome, LlmAnswered):
-            text = renumber_markers(outcome.text, mapping)
-            numbered.append(replace(outcome, text=text, sources=sources))
-        else:
-            notes = tuple(renumber_markers(note, mapping) for note in outcome.notes)
-            numbered.append(replace(outcome, notes=notes, sources=sources))
+        notes = tuple(renumber_markers(note, mapping) for note in outcome.notes)
+        numbered.append(replace(outcome, notes=notes, sources=sources))
     return numbered, citations
 
 
 def render_outcome(outcome: TaskOutcome) -> str:
     """Markdown for one task; a task that needs input is asked on the panel (only its
-    own lead, if any, is shown here). An LLM calculation's sources are its `[n]`
-    markers, which the client links through the message's `citations`."""
+    own lead, if any, is shown here)."""
 
     if isinstance(outcome, Computed):
         rendered = render_markdown(outcome.result)
@@ -111,8 +100,6 @@ def render_outcome(outcome: TaskOutcome) -> str:
             return rendered
         lines = "\n".join(f"- {note}" for note in outcome.notes)
         return f"{rendered}\n\nSố liệu lấy từ tài liệu:\n{lines}"
-    if isinstance(outcome, LlmAnswered):
-        return f"**{LLM_NOTICE}**\n\n{outcome.text}"
     if isinstance(outcome, Unresolved):
         return UNRESOLVED_MESSAGES[outcome.reason]
     return outcome.lead or ""
@@ -133,12 +120,11 @@ def known_fields(outcomes: Sequence[TaskOutcome]) -> set[str]:
     for outcome in outcomes:
         if isinstance(outcome, Computed):
             values: Mapping[str, JsonValue] = outcome.params
-        elif isinstance(outcome, LlmAnswered | NeedsInput):
+        elif isinstance(outcome, NeedsInput):
             values = outcome.known_params
         else:
             continue
         names.update(canonical_field(name) for name, value in values.items() if value is not None)
-    names.discard(canonical_field(REVIEW_ISSUE_KEY))
     return names
 
 
@@ -148,12 +134,9 @@ def calculation_titles(outcomes: Sequence[TaskOutcome]) -> list[str]:
 
     titles: list[str] = []
     for outcome in outcomes:
-        if isinstance(outcome, Computed):
-            title = outcome.result.title
-        elif isinstance(outcome, LlmAnswered):
-            title = f"Phép tính theo yêu cầu: {outcome.query[:80]}"
-        else:
+        if not isinstance(outcome, Computed):
             continue
+        title = outcome.result.title
         names = sorted(known_fields([outcome]))
         titles.append(f"{title} [đã có: {', '.join(names)}]" if names else title)
     return titles
@@ -320,57 +303,6 @@ async def review(
     return result
 
 
-def known_for_llm(outcome: Computed, issue: str | None) -> dict[str, JsonValue]:
-    """A built-in task's values for the LLM, keyed by what the student was asked
-    ("Số tín chỉ lý thuyết của một năm học": 100), so it can tell a value entered for
-    another period from one it can reuse - plus the review's reason."""
-
-    params = outcome.params
-    known: dict[str, JsonValue] = {}
-    for name, value in params.items():
-        spec = (
-            param_spec(outcome.plan.formula_id, name) if outcome.plan.formula_id != "llm" else None
-        )
-        known[label_for(spec, params) if spec is not None else name] = value
-    if issue:
-        known[REVIEW_ISSUE_KEY] = issue
-    return known
-
-
-async def redo_with_llm(
-    outcomes: Sequence[TaskOutcome],
-    queries: Mapping[str, str],
-    checked: Review,
-    deps: CalculationDeps,
-) -> tuple[list[TaskOutcome], dict[str, str]]:
-    """Every built-in result of a turn the review said does not fit goes to the LLM
-    path (answer, or ask on the panel). Returns the outcomes and, per redone task, the
-    formula it replaced. With the LLM path off or failing, the built-in result stays
-    and the caller shows it under the review's warning instead."""
-
-    if checked.fits or not settings.CHAT_CALC_LLM_ENABLED:
-        return list(outcomes), {}
-
-    async def redo(outcome: TaskOutcome) -> TaskOutcome:
-        if not isinstance(outcome, Computed) or outcome.chosen_by_llm:
-            return outcome
-        query = queries.get(outcome.task_id, "")
-        plan = CalculationPlan(formula_id="llm", retrieval_query=query or None)
-        known = known_for_llm(outcome, checked.issue)
-        redone = await llm_outcome(outcome.task_id, query, plan, known, deps)
-        return outcome if isinstance(redone, Unresolved) else redone
-
-    redone = list(await asyncio.gather(*(redo(outcome) for outcome in outcomes)))
-    replaced: dict[str, str] = {
-        old.task_id: old.plan.formula_id
-        for old, new in zip(outcomes, redone, strict=True)
-        if isinstance(old, Computed) and new is not old
-    }
-    if replaced:
-        logger.info("calculation.review_redone tasks=%s", sorted(replaced))
-    return redone, replaced
-
-
 # ---------------------------------------------------------------------------
 # Trace: public summary on the message, full trace for staff (SPEC §7.2)
 # ---------------------------------------------------------------------------
@@ -382,7 +314,7 @@ def _hash(value: object) -> str:
 
 
 def _status(outcome: TaskOutcome) -> str:
-    if isinstance(outcome, Computed | LlmAnswered):
+    if isinstance(outcome, Computed):
         return "computed"
     if isinstance(outcome, NeedsInput):
         return "needs_input"
@@ -390,13 +322,11 @@ def _status(outcome: TaskOutcome) -> str:
 
 
 def _mode(outcome: TaskOutcome) -> str:
-    if isinstance(outcome, Computed):
-        return "builtin"
-    if isinstance(outcome, LlmAnswered):
-        return "llm"
-    if isinstance(outcome, NeedsInput):
-        return "llm" if outcome.plan.formula_id == "llm" else "builtin"
-    return "llm"
+    """Every calculation is Python's since 26/10/2026; `llm` only names a round stored
+    by the retired path (the client's enum knows both)."""
+
+    del outcome
+    return "builtin"
 
 
 def _chunk_trace(index: int, chunk: RetrievedChunk) -> dict[str, JsonValue]:
@@ -417,14 +347,10 @@ def trace_items(
     run_id: str,
     deps: CalculationDeps,
     review: Review | None = None,
-    redone: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, JsonValue]], list[dict[str, JsonValue]]]:
     """(public items for `metadata.calculation`, private traces for Java's staff table).
-    Đúng/Sai buttons go on the `llm` items that were computed. `review` covers every
-    built-in result of the turn, so each `builtin` item carries it, and so does each
-    task the LLM redid after it (`redone`: task id -> the built-in formula replaced)."""
-
-    redone = redone or {}
+    `review` covers every computed result of a calculation-only turn, so each item
+    carries it; the trace names the formula, its version and the inverse target."""
 
     versions = get_templates().versions
     credential = deps.models.generation_credential
@@ -433,7 +359,7 @@ def trace_items(
     private: list[dict[str, JsonValue]] = []
     for outcome in outcomes:
         mode = _mode(outcome)
-        sources = outcome.sources if isinstance(outcome, LlmAnswered | Computed) else []
+        sources = outcome.sources if isinstance(outcome, Computed) else []
         item: dict[str, JsonValue] = {
             "item_id": outcome.task_id,
             "run_id": run_id,
@@ -455,11 +381,8 @@ def trace_items(
         }
         public.append(item)
 
-        reviewed = review is not None and (
-            (isinstance(outcome, Computed) and not outcome.chosen_by_llm)
-            or outcome.task_id in redone
-        )
-        prompts = _LLM_PROMPTS if mode == "llm" else _EXTRACTOR_PROMPTS
+        reviewed = review is not None and isinstance(outcome, Computed)
+        prompts: tuple[str, ...] = _EXTRACTOR_PROMPTS
         if reviewed:
             prompts = (*prompts, _REVIEW_PROMPT)
         trace: dict[str, JsonValue] = {
@@ -471,7 +394,12 @@ def trace_items(
         }
         if isinstance(outcome, Computed):
             trace["formula_id"] = outcome.plan.formula_id
-            trace["formula_hash"] = _hash(outcome.plan.formula_id)
+            trace["formula_version"] = outcome.result.version
+            trace["formula_hash"] = _hash(f"{outcome.plan.formula_id}@{outcome.result.version}")
+            trace["solve_for"] = outcome.plan.solve_for
+            trace["target"] = (
+                outcome.plan.target.model_dump() if outcome.plan.target is not None else None
+            )
             trace["inputs"] = [
                 {"label": label, "value": value} for label, value in outcome.result.inputs
             ]
@@ -486,13 +414,6 @@ def trace_items(
                 "issue": review.issue,
                 "rejected": review.rejected,
             }
-        if outcome.task_id in redone:
-            trace["redone_from"] = redone[outcome.task_id]
-        if isinstance(outcome, LlmAnswered):
-            trace["retrieval_query"] = outcome.plan.retrieval_query
-            trace["known_params"] = dict(outcome.known_params)
-            trace["answer"] = outcome.text
-            trace["sources"] = [_chunk_trace(index, chunk) for index, chunk in sources]
         if isinstance(outcome, NeedsInput):
             trace["formula_id"] = outcome.plan.formula_id
             trace["known_params"] = dict(outcome.known_params)

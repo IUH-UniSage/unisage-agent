@@ -1,18 +1,19 @@
 """CalculationNode - one `academic_calculation` task to a result, the questions
 still needed, or an honest "cannot calculate this".
 
-Two ways to compute (docs/specs/SPEC-calculation-node.md):
-- Python, for the FORWARD calculation of the 3 built-in formulas (`formulas.py`):
-  the LLM only picks the formula and copies the numbers the student gave; missing
-  or invalid ones become panel questions built from `ParamSpec`.
-- The LLM (`main/chat_calculation_llm.yaml`), for everything else: target
-  questions ("cuối kỳ cần bao nhiêu để được A+"), formulas found in the documents
-  (regulations, tuition, lessons...) and follow-ups that need the chat history. Its
-  answer is labelled "AI tự tính, có thể sai" and gets Đúng/Sai feedback; when it
-  needs numbers it returns an ask_user_form block, asked on the panel.
+Python computes, the LLM routes (docs/specs/SPEC-calculation-node.md). The extractor
+(`agents/calculation_extractor.yaml`) picks one formula of the registry
+(`app/calculation/formulas.py`), copies the numbers the student gave and, for a target
+question ("cuối kỳ cần bao nhiêu để được A+"), names the unknown and the target; the
+registry's formula is then computed forward (`calculate`) or solved for the unknown
+(`solver.solved_result`). Missing or invalid numbers become panel questions built from
+`ParamSpec`; values the documents hold (unit prices...) are read from Qdrant first.
+
+A question no registered formula fits is `Deferred`: the graph answers it on the
+advisory path, which shows the formula and the figures from the documents and leaves
+the arithmetic to the user (decision 26/10/2026: no LLM arithmetic in this node).
 """
 
-import asyncio
 import json
 import logging
 import re
@@ -31,7 +32,6 @@ from app.calculation.formulas import (
     ParamSpec,
     calculate,
     describe_builtin_formulas,
-    describe_builtin_rules,
     label_for,
     missing_params,
     money,
@@ -39,13 +39,12 @@ from app.calculation.formulas import (
     plain,
     route_builtin,
 )
-from app.calculation.result import CalculationInputError, CalculationResult
+from app.calculation.result import CalculationInputError, CalculationResult, FieldError
+from app.calculation.solver import Target, Unknown, parse_target, parse_unknown, solved_result
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.graph.evidence import levels_for
-from app.graph.fence_redactor import FenceRedactor, take_bare_blocks
-from app.graph.grounding import check_answer
-from app.graph.metadata_fields import canonical_field, canonical_params, is_profile_field
+from app.graph.metadata_fields import canonical_field, is_profile_field
 from app.graph.nodes.cross_encoder_rerank import (
     CROSS_ENCODER_SKIPPED,
     cross_encoder_rerank,
@@ -62,31 +61,28 @@ from app.graph.streaming import (
     BudgetContext,
     FailoverCallback,
     auxiliary_model_settings,
-    generation_model_settings,
     run_agent_text_with_failover,
 )
 from app.graph.streaming_state import AdminWarning, GraphModels
 from app.integrations.cross_encoder_client import CrossEncoderClient
-from app.rag.prompting import append_current_time, build_calculation_llm_prompt, get_templates
-from app.rag.prompting.citations import cited_indexes, source_title
+from app.rag.prompting import append_current_time, get_templates
+from app.rag.prompting.citations import source_title
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import CalculationPlan, LastCalculation
+from app.schemas.clarification import CalculationPlan, CalculationTarget, LastCalculation
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 
 logger = logging.getLogger(__name__)
 
 BUILTIN_IDS: frozenset[str] = frozenset(FORMULAS)
-UnresolvedReason = Literal["llm_disabled", "llm_failed", "form_dropped"]
-# Documents handed to the LLM for one calculation.
+UnresolvedReason = Literal["legacy_llm", "bad_target"]
+# Documents read for one formula's lookups.
 LLM_CHUNKS_LIMIT = 5
-# Prefix of the AI-admin warning when the LLM calculation used numbers with no source.
-CALC_UNGROUNDED = "Phép tính dùng con số không có trong tài liệu, câu hỏi hay giá trị đã biết: "
 
 
 @dataclass(frozen=True)
 class Computed:
-    """A built-in formula computed by Python."""
+    """A registered formula computed (or solved) by Python."""
 
     task_id: str
     result: CalculationResult
@@ -96,24 +92,6 @@ class Computed:
     # chunk behind each marker; renumbered for the whole message before it is shown.
     notes: tuple[str, ...] = ()
     sources: list[tuple[int, RetrievedChunk]] = field(default_factory=list)
-    # Handed over by the LLM path (`_builtin_handoff`): the LLM itself asked for exactly
-    # this formula's params, so the "does it fit the question" review is skipped.
-    chosen_by_llm: bool = False
-
-
-@dataclass(frozen=True)
-class LlmAnswered:
-    """A calculation the LLM did itself - shown with the "AI tự tính" notice and the
-    documents it cited."""
-
-    task_id: str
-    query: str
-    text: str
-    plan: CalculationPlan
-    known_params: dict[str, JsonValue]
-    # (the [n] marker in `text`, chunk) for every document it cited, in first-cited
-    # order; renumbered for the whole message before it is shown.
-    sources: list[tuple[int, RetrievedChunk]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -122,7 +100,7 @@ class NeedsInput:
     plan: CalculationPlan
     known_params: dict[str, JsonValue]
     questions: list[dict[str, Any]]
-    # Shown above the panel instead of the generic lead (the LLM's own sentence).
+    # Shown above the panel instead of the generic lead.
     lead: str | None = None
 
 
@@ -132,7 +110,29 @@ class Unresolved:
     reason: UnresolvedReason
 
 
-TaskOutcome = Computed | LlmAnswered | NeedsInput | Unresolved
+TaskOutcome = Computed | NeedsInput | Unresolved
+
+
+@dataclass(frozen=True)
+class Deferred:
+    """No registered formula fits: the question is answered on the advisory path (the
+    documents' formula and figures, no arithmetic by the model)."""
+
+    task_id: str
+    query: str
+    retrieval_query: str | None = None
+
+
+@dataclass(frozen=True)
+class PlannedTask:
+    """A calculation task the extractor routed to a registered formula."""
+
+    task_id: str
+    query: str
+    formula_id: FormulaId
+    params: dict[str, JsonValue]
+    unknown: Unknown | None = None
+    target: Target | None = None
 
 
 @dataclass(frozen=True)
@@ -146,9 +146,8 @@ class CalculationDeps:
     budget: BudgetContext | None = None
     # The conversation's latest built-in calculation, for forward follow-ups.
     previous: LastCalculation | None = None
-    # Recent chat, so the LLM can pick up the numbers of an earlier calculation.
+    # Recent chat (kept for the trace and the extractor's context).
     history: Sequence[HistoryMessage] = ()
-    # The conversation's latest calculations with their own values (LLM calculation).
     recent_calculations: Sequence[LastCalculation] = ()
     # Self-declared attributes, shown apart from the verified identity.
     confirmed_metadata: Mapping[str, str] = field(default_factory=dict)
@@ -165,7 +164,7 @@ class CalculationDeps:
 
 
 # ---------------------------------------------------------------------------
-# Extractor
+# Extractor: which formula, which numbers, which unknown
 # ---------------------------------------------------------------------------
 
 
@@ -182,9 +181,11 @@ def build_calculation_extractor_agent(model: Model | str) -> Agent[None, str]:
 
 @dataclass(frozen=True)
 class Extraction:
-    formula_id: FormulaId | Literal["llm", "previous"]
+    formula_id: FormulaId | Literal["none", "previous"]
     params: dict[str, JsonValue]
-    retrieval_query: str | None
+    retrieval_query: str | None = None
+    unknown: Unknown | None = None
+    target: Target | None = None
 
 
 def load_json_object(raw: str) -> dict[str, Any] | None:
@@ -201,60 +202,85 @@ def load_json_object(raw: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _llm_extraction(params: dict[str, JsonValue], data: Mapping[str, Any]) -> Extraction:
+def _none_extraction(params: dict[str, JsonValue], data: Mapping[str, Any]) -> Extraction:
     retrieval_query = data.get("retrieval_query")
     query = retrieval_query.strip()[:500] if isinstance(retrieval_query, str) else ""
-    return Extraction("llm", params, query or None)
+    return Extraction("none", params, query or None)
+
+
+def _solving(
+    formula_id: FormulaId, data: Mapping[str, Any]
+) -> tuple[Unknown | None, Target | None]:
+    """The inverse part of the output, or (None, None) - a forward calculation - when
+    it is absent or unreadable (logged: the forward result is still shown)."""
+
+    raw_unknown = data.get("solve_for")
+    if raw_unknown in (None, ""):
+        return None, None
+    unknown = parse_unknown(raw_unknown)
+    target = parse_target(formula_id, data.get("target"))
+    if (
+        unknown is None
+        or isinstance(target, FieldError)
+        or param_spec(formula_id, unknown.name) is None
+    ):
+        logger.warning(
+            "calculation.solve_dropped formula=%s solve_for=%r target=%r",
+            formula_id,
+            raw_unknown,
+            data.get("target"),
+        )
+        return None, None
+    return unknown, target
 
 
 def parse_extraction(
     raw: str, *, allowed: list[str], previous: LastCalculation | None = None
 ) -> Extraction:
-    """Anything that is not a forward built-in calculation goes to the LLM, which can
-    still ask for what it needs. An explicit "llm" always wins; otherwise a single
-    built-in formula matched by the rule-based router wins (even over unreadable
-    output), and unreadable output without one goes to the LLM."""
+    """The model's choice of a registered formula is kept (it saw the whole registry and
+    the question's target; a keyword router cannot tell "cuối kỳ cần bao nhiêu để được
+    B+" from a grade conversion). Its explicit `none` is kept too. Only unreadable or
+    unknown output falls back to the single formula the rule-based router matched, and
+    to `none` when the router matched none or several - the advisory path then answers
+    from the documents."""
 
     data = load_json_object(raw) or {}
     formula_id = data.get("formula_id")
     raw_params = data.get("params")
     params: dict[str, JsonValue] = dict(raw_params) if isinstance(raw_params, dict) else {}
     if formula_id == "previous" and previous_formula(previous) is not None:
-        return Extraction("previous", params, None)
+        chosen = previous_formula(previous)
+        assert chosen is not None
+        unknown, target = _solving(chosen, data)
+        return Extraction("previous", params, None, unknown, target)
     routed = [formula for formula in allowed if formula in BUILTIN_IDS]
-    if formula_id == "llm" or (formula_id not in BUILTIN_IDS and len(routed) != 1):
-        return _llm_extraction(params, data)
-    if len(routed) == 1 and formula_id != routed[0]:
-        # The rule-based router already decided which built-in formula this is.
-        logger.info("calculation.router_disagreement routed=%s llm=%s", routed[0], formula_id)
+    if formula_id == "none":
+        return _none_extraction(params, data)
+    if formula_id not in BUILTIN_IDS:
+        if len(routed) != 1:
+            return _none_extraction(params, data)
+        logger.info("calculation.router_fallback routed=%s llm=%r", routed[0], formula_id)
         formula_id = routed[0]
     elif routed and formula_id not in routed:
-        return _llm_extraction(params, data)
+        logger.info("calculation.router_disagreement routed=%s llm=%s", routed, formula_id)
     builtin: FormulaId = next(known for known in FORMULAS if known == formula_id)
-    return Extraction(builtin, params, None)
+    unknown, target = _solving(builtin, data)
+    return Extraction(builtin, params, None, unknown, target)
 
 
 def previous_formula(previous: LastCalculation | None) -> FormulaId | None:
-    """The built-in formula the previous calculation can be redone with: its own, or -
-    for one the LLM computed - the one formula every number of it belongs to."""
+    """The registered formula the previous calculation can be redone with."""
 
-    if previous is None:
+    if previous is None or previous.plan.formula_id == "llm":
         return None
-    if previous.plan.formula_id != "llm":
-        return previous.plan.formula_id
-    names = {canonical_field(name) for name in previous.params}
-    return _builtin_for(names) if names else None
+    return previous.plan.formula_id
 
 
 def _previous_block(previous: LastCalculation) -> str:
     formula_id = previous.plan.formula_id
     described = {
         "formula_id": "previous",
-        "formula": (
-            FORMULAS[formula_id].title
-            if formula_id != "llm"
-            else f"AI tự tính: {previous.title or 'phép tính trước'}"
-        ),
+        "formula": FORMULAS[formula_id].title if formula_id != "llm" else previous.title,
         "params": previous.params,
     }
     return (
@@ -269,7 +295,6 @@ async def extract_request(query: str, deps: CalculationDeps) -> Extraction:
     prompt = query
     previous = deps.previous
     if previous is not None:
-        # Numbers the student gave for the previous calculation, the LLM's included.
         prompt += _previous_block(previous)
         if allowed and previous_formula(previous) is not None:
             allowed = [*allowed, "previous"]
@@ -299,7 +324,7 @@ async def extract_request(query: str, deps: CalculationDeps) -> Extraction:
 
 
 # ---------------------------------------------------------------------------
-# Built-in formulas: forward calculation by Python
+# Registered formulas: forward calculation or inverse solving by Python
 # ---------------------------------------------------------------------------
 
 
@@ -329,172 +354,76 @@ def question_for(
     return draft
 
 
-def builtin_outcome(
-    task_id: str, formula_id: FormulaId, params: Mapping[str, JsonValue]
-) -> Computed | NeedsInput:
-    """Compute, or list what to ask: missing params plus the ones Python rejected."""
-
-    plan = CalculationPlan(formula_id=formula_id)
-    known = {key: value for key, value in params.items() if param_spec(formula_id, key)}
-    missing = missing_params(formula_id, known)
-    if not missing:
-        try:
-            return Computed(task_id, calculate(formula_id, known), plan, dict(known))
-        except CalculationInputError as exc:
-            reasons: dict[str, str] = {}
-            for error in exc.errors:
-                reasons.setdefault(error.field, error.reason)
-            questions = []
-            for name, reason in reasons.items():
-                spec = param_spec(formula_id, name)
-                if spec is not None:
-                    questions.append(question_for(spec, known, reason))
-                    known.pop(name, None)
-            return NeedsInput(task_id, plan, known, questions)
-    return NeedsInput(task_id, plan, known, [question_for(spec, known) for spec in missing])
-
-
-# ---------------------------------------------------------------------------
-# Everything else: the LLM computes (target questions, document formulas...)
-# ---------------------------------------------------------------------------
-
-
-def build_calculation_llm_agent(model: Model | str) -> Agent[None, str]:
-    return Agent(model=model, model_settings=generation_model_settings(model))
-
-
-def _documents(chunks: Sequence[RetrievedChunk]) -> str:
-    return "\n\n".join(
-        f"[{index}] (nguồn: {chunk.source}"
-        + (f"; mục: {' > '.join(chunk.heading_path)}" if chunk.heading_path else "")
-        + f")\n{chunk.content}"
-        for index, chunk in enumerate(chunks, start=1)
+def plan_for(
+    formula_id: FormulaId, unknown: Unknown | None, target: Target | None
+) -> CalculationPlan:
+    if unknown is None or target is None:
+        return CalculationPlan(formula_id=formula_id)
+    return CalculationPlan(
+        formula_id=formula_id,
+        solve_for=unknown.text(),
+        target=CalculationTarget(output=target.output, op=target.op, value=plain(target.value)),
     )
 
 
-def _number(value: object) -> str | None:
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
-        return None
-    text = str(value).strip().replace(",", ".")
+def solving_of(plan: CalculationPlan) -> tuple[Unknown | None, Target | None]:
+    """The unknown and target a stored plan asks for (None, None for a forward one)."""
+
+    if plan.formula_id == "llm" or plan.solve_for is None or plan.target is None:
+        return None, None
+    unknown = parse_unknown(plan.solve_for)
+    target = parse_target(
+        plan.formula_id,
+        {"output": plan.target.output, "op": plan.target.op, "value": plan.target.value},
+    )
+    if unknown is None or isinstance(target, FieldError):
+        return None, None
+    return unknown, target
+
+
+def builtin_outcome(
+    task_id: str,
+    formula_id: FormulaId,
+    params: Mapping[str, JsonValue],
+    *,
+    unknown: Unknown | None = None,
+    target: Target | None = None,
+) -> TaskOutcome:
+    """Compute (or solve for `unknown`), or list what to ask: missing params plus the
+    ones Python rejected. The unknown itself is never asked."""
+
+    plan = plan_for(formula_id, unknown, target)
+    known = {key: value for key, value in params.items() if param_spec(formula_id, key)}
+    if unknown is not None and unknown.index is None:
+        known.pop(unknown.name, None)
+    missing = [
+        spec
+        for spec in missing_params(formula_id, known)
+        if unknown is None or spec.name != unknown.name
+    ]
+    if missing:
+        return NeedsInput(task_id, plan, known, [question_for(spec, known) for spec in missing])
     try:
-        float(text)
-    except ValueError:
-        return None
-    return text
-
-
-_CHOICE_KINDS = frozenset({"choice", "single_choice", "radio", "select", "enum", "options"})
-_NUMBER_KINDS = frozenset({"number", "integer", "int", "float", "decimal", "numeric"})
-_TEXT_KINDS = frozenset({"text", "string", "str"})
-
-
-def _first_text(item: Mapping[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = item.get(key)
-        if isinstance(value, str | int | float) and not isinstance(value, bool):
-            text = str(value).strip()
-            if text:
-                return text
-    return ""
-
-
-def _option_label(option: object) -> str:
-    """An option written as {"label"} or with "text"/"value"/"name" instead, or a bare string."""
-
-    if isinstance(option, Mapping):
-        return _first_text(option, "label", "text", "value", "name", "title")
-    if isinstance(option, str | int | float) and not isinstance(option, bool):
-        return str(option).strip()
-    return ""
-
-
-def _field_kind(item: Mapping[str, Any]) -> str:
-    raw = str(item.get("kind") or "").strip().lower()
-    if raw in _CHOICE_KINDS or (not raw and isinstance(item.get("options"), list)):
-        return "choice"
-    if raw in _NUMBER_KINDS:
-        return "number"
-    if raw in _TEXT_KINDS:
-        return "text"
-    return raw
-
-
-def llm_questions(
-    forms: Sequence[Mapping[str, Any]],
-    known: Mapping[str, JsonValue],
-    profile: Mapping[str, str] | None = None,
-) -> list[dict[str, Any]]:
-    """Panel questions from the LLM's ask_user_form blocks, under registry names. A
-    field already known (under any of its names) or in the profile, asked twice, or
-    malformed is dropped - that is what stops asking in circles. Small slips of the
-    model (bare-string options, `text` for `label`, `radio` for `choice`) are accepted;
-    every dropped field is logged with its reason."""
-
-    questions: list[dict[str, Any]] = []
-    dropped: list[str] = []
-    seen: set[str] = set(canonical_params(known)) | set(profile or {})
-    for form in forms:
-        fields = form.get("fields")
-        if form.get("type") != "ask_user_form" or not isinstance(fields, list):
-            dropped.append(f"form: type={form.get('type')!r} không phải ask_user_form có fields")
-            continue
-        for item in fields:
-            if not isinstance(item, Mapping):
-                dropped.append(f"?: field không phải object ({item!r:.60})")
+        if unknown is not None and target is not None:
+            result = solved_result(formula_id, known, unknown, target)
+        else:
+            result = calculate(formula_id, known)
+    except CalculationInputError as exc:
+        reasons: dict[str, str] = {}
+        for error in exc.errors:
+            reasons.setdefault(error.field, error.reason)
+        questions = []
+        for name, reason in reasons.items():
+            spec = param_spec(formula_id, name)
+            if spec is None or (unknown is not None and name == unknown.name):
                 continue
-            name = canonical_field(str(item.get("field") or ""))
-            label = _first_text(item, "label", "question", "prompt", "text")
-            kind = _field_kind(item)
-            if not name:
-                dropped.append(f"?: thiếu tên field (label={label!r:.60})")
-                continue
-            if not label:
-                dropped.append(f"{name}: thiếu label")
-                continue
-            if name in seen:
-                dropped.append(f"{name}: đã biết hoặc đã hỏi")
-                continue
-            draft: dict[str, Any] = {
-                "tab_label": label[:24],
-                "prompt": label[:200],
-                "origin": "calculation",
-                "field": name,
-            }
-            if kind in ("number", "number_list"):
-                low, high = _number(item.get("min")), _number(item.get("max"))
-                draft["kind"] = kind
-                draft["number"] = {
-                    "min": low if low is not None else "-1000000000000",
-                    "max": high if high is not None else "1000000000000",
-                    "step": "0.01",
-                    "unit": None,
-                }
-                if kind == "number_list":
-                    draft["max_items"] = 20
-            elif kind == "choice":
-                labels = [_option_label(option) for option in item.get("options") or []]
-                options = [
-                    {"id": f"o{index}", "label": text[:120]}
-                    for index, text in enumerate((text for text in labels if text), start=1)
-                ][:12]
-                if len(options) < 2:
-                    dropped.append(f"{name}: choice chỉ có {len(options)} lựa chọn hợp lệ")
-                    continue
-                draft.update(kind="choice", options=options, allow_other=True)
-            elif kind == "text":
-                draft.update(kind="text", max_length=200)
-            else:
-                dropped.append(f"{name}: kind={item.get('kind')!r} không hỗ trợ")
-                continue
-            seen.add(name)
-            questions.append(draft)
-    if dropped:
-        logger.warning("calculation.form_fields_dropped %s", "; ".join(dropped))
-    return questions
-
-
-def _cited(text: str, chunks: Sequence[RetrievedChunk]) -> list[tuple[int, RetrievedChunk]]:
-    return [(index, chunks[index - 1]) for index in cited_indexes(text, len(chunks))]
+            questions.append(question_for(spec, known, reason))
+            known.pop(name, None)
+        if not questions:
+            logger.warning("calculation.bad_target formula=%s errors=%s", formula_id, reasons)
+            return Unresolved(task_id, "bad_target")
+        return NeedsInput(task_id, plan, known, questions)
+    return Computed(task_id, result, plan, dict(known))
 
 
 async def _search(
@@ -580,49 +509,6 @@ async def _search(
     return chunks
 
 
-async def _fetch(chunk_ids: Sequence[str], deps: CalculationDeps) -> list[RetrievedChunk]:
-    """The documents an earlier turn's LLM saw, by id (no search, no rerank); empty
-    when they are gone, no longer visible or Qdrant fails - the caller searches again."""
-
-    try:
-        chunks = await asyncio.to_thread(
-            deps.models.retrieval.fetch, list(chunk_ids), security=deps.security
-        )
-    except Exception:
-        logger.warning("calculation.fetch_failed chunk_ids=%s", list(chunk_ids), exc_info=True)
-        return []
-    logger.info(
-        "calculation.retrieval reused=%d/%d kept=[%s]",
-        len(chunks),
-        len(chunk_ids),
-        "; ".join(source_title(chunk.source) for chunk in chunks),
-    )
-    return chunks
-
-
-def _form_fields(forms: Sequence[Mapping[str, Any]]) -> set[str]:
-    """Registry names of every field the LLM's ask_user_form blocks ask for."""
-
-    names: set[str] = set()
-    for form in forms:
-        fields = form.get("fields")
-        for item in fields if isinstance(fields, list) else []:
-            if isinstance(item, Mapping) and str(item.get("field") or "").strip():
-                names.add(canonical_field(str(item["field"])))
-    return names
-
-
-def _builtin_for(names: set[str]) -> FormulaId | None:
-    """The one built-in formula every name is a param of, if exactly one."""
-
-    matches = [
-        formula_id
-        for formula_id, formula in FORMULAS.items()
-        if names <= {spec.name for spec in formula.params}
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
 def _builtin_params(formula_id: FormulaId, known: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     """Panel answers under the formula's param names; a single number answered for a
     list param (the practice columns) becomes a one-item list."""
@@ -638,178 +524,8 @@ def _builtin_params(formula_id: FormulaId, known: Mapping[str, JsonValue]) -> di
     return params
 
 
-async def _builtin_handoff(
-    task_id: str,
-    query: str,
-    asked: set[str],
-    known: Mapping[str, JsonValue],
-    deps: CalculationDeps,
-) -> Computed | NeedsInput | None:
-    """When the LLM asks only for params of one built-in formula and the student has
-    already given every number of their own, Python computes it instead: values the
-    documents hold (prices...) are read from Qdrant first and only what they lack is
-    asked. No LLM call, and nothing runs while the student's own numbers are missing -
-    then the LLM's form asks them. A known value outside the formula (a choice label,
-    the review's mismatch note) keeps the task with the LLM."""
-
-    if not asked:
-        return None
-    formula_id = _builtin_for(asked | {canonical_field(name) for name in known})
-    if formula_id is None:
-        return None
-    params = {
-        **profile_params(formula_id, deps.confirmed_metadata),
-        **_builtin_params(formula_id, known),
-    }
-    if any(spec.lookup is None for spec in missing_params(formula_id, params)):
-        return None
-    outcome = await builtin_task(task_id, formula_id, query, params, deps)
-    if isinstance(outcome, Computed):
-        outcome = replace(outcome, chosen_by_llm=True)
-    logger.info(
-        "calculation.builtin_handoff formula=%s outcome=%s", formula_id, type(outcome).__name__
-    )
-    return outcome
-
-
-async def _ask_llm(
-    task_id: str,
-    query: str,
-    plan: CalculationPlan,
-    known: Mapping[str, JsonValue],
-    chunks: list[RetrievedChunk],
-    deps: CalculationDeps,
-) -> TaskOutcome:
-    prompt = build_calculation_llm_prompt(
-        user_query=query,
-        builtin_rules=describe_builtin_rules(),
-        documents=_documents(chunks),
-        known_values=json.dumps(dict(known), ensure_ascii=False) if known else "(chưa có)",
-        history=list(deps.history),
-        security=deps.security,
-        confirmed_metadata=dict(deps.confirmed_metadata),
-        original_message=deps.user_message,
-        recent_calculations=deps.recent_calculations,
-    )
-    agent = build_calculation_llm_agent(deps.models.generation)
-    if deps.trace is not None:
-        deps.trace.step(
-            "07a_CalculationLLMNode",
-            parent="07_CalculationNode",
-            agent=agent,
-            credential=deps.models.generation_credential,
-        )
-    try:
-        raw = await run_agent_text_with_failover(
-            agent,
-            prompt,
-            purpose="CHAT",
-            credential=deps.models.generation_credential,
-            snapshot_version=deps.models.snapshot_version,
-            agent_factory=build_calculation_llm_agent,
-            on_failover=deps.on_failover,
-            on_attempt=deps.on_attempt,
-            budget=deps.budget,
-            timeout_seconds=settings.CHAT_CALC_LLM_TIMEOUT_SECONDS,
-        )
-    except Exception:
-        logger.warning("calculation.llm_failed", exc_info=True)
-        return Unresolved(task_id, "llm_failed")
-    if deps.trace is not None:
-        deps.trace.prompt("07a_CalculationLLMNode", raw)
-    redactor = FenceRedactor()
-    text, bare = take_bare_blocks((redactor.feed(raw) + redactor.finish()).strip())
-    forms = [*redactor.captured, *bare]
-    questions = llm_questions(forms, known, deps.confirmed_metadata)
-    if forms:
-        handed = await _builtin_handoff(task_id, query, _form_fields(forms), known, deps)
-        if handed is not None:
-            return handed
-    if questions:
-        # The documents behind this form are reused on resume instead of searched again.
-        asked = plan.model_copy(update={"chunk_ids": [c.chunk_id for c in chunks] or None})
-        return NeedsInput(task_id, asked, dict(known), questions, lead=text or None)
-    if forms:
-        # The LLM asked instead of computing, but every field was malformed or already
-        # known: no panel, and its text is no result - never shown as "AI tự tính".
-        logger.warning(
-            "calculation.form_dropped known=%s forms=%s",
-            json.dumps(dict(known), ensure_ascii=False),
-            json.dumps(forms, ensure_ascii=False, default=str),
-        )
-        return Unresolved(task_id, "form_dropped")
-    if not text:
-        return Unresolved(task_id, "llm_failed")
-    if settings.CHAT_GROUNDING_CHECK:
-        # Numbers the model used that neither the documents, the question nor the known
-        # values contain (and that no arithmetic on them produces): an assumed input. The
-        # answer stays (it is what the user asked for) with a caution, and AI admins see it.
-        # Everything the prompt showed the model counts as a source: the documents, the
-        # built-in rules (their coefficients and percentages), the chat so far, the
-        # earlier calculations' values and the student's declared attributes.
-        shown = [
-            *(chunk.content for chunk in chunks),
-            describe_builtin_rules(),
-            *(message.content for message in deps.history),
-            *(
-                json.dumps(calculation.params, ensure_ascii=False)
-                for calculation in deps.recent_calculations
-            ),
-            " ".join(str(value) for value in deps.confirmed_metadata.values()),
-            deps.user_message or "",
-        ]
-        if deps.previous is not None:
-            shown.append(json.dumps(deps.previous.params, ensure_ascii=False))
-        report = check_answer(text, shown, question=query, known=known)
-        if report.ungrounded:
-            logger.warning(
-                "calculation.ungrounded_numbers task=%s numbers=%s", task_id, report.ungrounded
-            )
-            deps.warn(
-                "CALC_UNGROUNDED_INPUT",
-                f"{CALC_UNGROUNDED}{', '.join(report.ungrounded)} (câu: {query[:80]})",
-            )
-            # No caution line here: every LLM calculation already carries the "AI tự tính, có
-            # thể sai" banner, and date/duration arithmetic produces numbers no document holds
-            # (measured 26/10: 4/4 flags on correct answers were such figures).
-    return LlmAnswered(task_id, query, text, plan, dict(known), _cited(text, chunks))
-
-
-async def llm_outcome(
-    task_id: str,
-    query: str,
-    plan: CalculationPlan,
-    known: Mapping[str, JsonValue],
-    deps: CalculationDeps,
-) -> TaskOutcome:
-    """Non-streamed LLM call(s) over the built-in rules, the retrieved documents, the known
-    values and the recent chat. Shared by the first turn and every resume.
-
-    Documents before the user's form: when the LLM would ask for missing numbers without
-    having seen any document (a short chat-style question often gets no `retrieval_query`),
-    search with the question itself and ask again. Only if numbers are still missing does
-    the panel go to the user. A call that already had the `retrieval_query` documents is
-    not repeated - a second search + rerank + LLM call cost ~14 s for the same form.
-
-    On resume the documents the LLM saw when it asked (`plan.chunk_ids`) are fetched by
-    id instead of searched and reranked again; only when none is left is it searched."""
-
-    if not settings.CHAT_CALC_LLM_ENABLED:
-        return Unresolved(task_id, "llm_disabled")
-    chunks = await _fetch(plan.chunk_ids, deps) if plan.chunk_ids else []
-    if not chunks and plan.retrieval_query:
-        chunks = await _search(query, [plan.retrieval_query], deps)
-    outcome = await _ask_llm(task_id, query, plan, known, chunks, deps)
-    if plan.retrieval_query or plan.chunk_ids or not isinstance(outcome, NeedsInput):
-        return outcome
-    more = await _search(query, [query], deps, also=chunks)
-    if {chunk.chunk_id for chunk in more} <= {chunk.chunk_id for chunk in chunks}:
-        return outcome  # nothing new to show the LLM
-    return await _ask_llm(task_id, query, plan, known, more, deps)
-
-
 # ---------------------------------------------------------------------------
-# Built-in formulas: values looked up in the documents (unit prices, credits)
+# Registered formulas: values looked up in the documents (unit prices, credits)
 # ---------------------------------------------------------------------------
 
 _AMOUNT = re.compile(r"\d{1,3}(?:[.,]\d{3})+|\d+")
@@ -832,6 +548,15 @@ def build_value_extractor_agent(model: Model | str) -> Agent[None, str]:
         model=model,
         system_prompt=get_templates().agent_calculation_value_extractor,
         model_settings=auxiliary_model_settings(model),
+    )
+
+
+def _documents(chunks: Sequence[RetrievedChunk]) -> str:
+    return "\n\n".join(
+        f"[{index}] (nguồn: {chunk.source}"
+        + (f"; mục: {' > '.join(chunk.heading_path)}" if chunk.heading_path else "")
+        + f")\n{chunk.content}"
+        for index, chunk in enumerate(chunks, start=1)
     )
 
 
@@ -901,12 +626,19 @@ async def fill_from_documents(
     query: str,
     known: Mapping[str, JsonValue],
     deps: CalculationDeps,
+    *,
+    skip: Unknown | None = None,
 ) -> DocumentValues:
     """Missing params that can be looked up: search Qdrant, have the model copy each
     number with the chunk it is in, and keep a number only if that chunk really
-    contains it. Anything not found is left for the panel."""
+    contains it. Anything not found is left for the panel. `skip`: the unknown of an
+    inverse calculation, never looked up."""
 
-    wanted = [spec for spec in missing_params(formula_id, known) if spec.lookup]
+    wanted = [
+        spec
+        for spec in missing_params(formula_id, known)
+        if spec.lookup and (skip is None or spec.name != skip.name)
+    ]
     if not wanted:
         return DocumentValues()
     context = " ".join(
@@ -1016,35 +748,6 @@ def _with_document_notes(
     return replace(outcome, notes=tuple(notes), sources=sources)
 
 
-async def builtin_task(
-    task_id: str,
-    formula_id: FormulaId,
-    query: str,
-    params: Mapping[str, JsonValue],
-    deps: CalculationDeps,
-) -> Computed | NeedsInput:
-    """A built-in formula, documents first: values that can be looked up are read from
-    Qdrant before anything is asked. When the documents need the intake or the faculty
-    group first, that is asked together with the student's own missing values, and the
-    lookup runs again on the answer. Whatever is still missing goes to the panel."""
-
-    known = {key: value for key, value in params.items() if param_spec(formula_id, key)}
-    found = await fill_from_documents(formula_id, query, known, deps)
-    if found.questions:
-        own = [spec for spec in missing_params(formula_id, known) if not spec.lookup]
-        questions = [*found.questions, *(question_for(spec, known) for spec in own)]
-        return NeedsInput(task_id, CalculationPlan(formula_id=formula_id), known, questions)
-    outcome = builtin_outcome(task_id, formula_id, {**known, **found.values})
-    if isinstance(outcome, Computed) and found.sources:
-        return _with_document_notes(outcome, formula_id, found)
-    return outcome
-
-
-# ---------------------------------------------------------------------------
-# Entry points
-# ---------------------------------------------------------------------------
-
-
 def profile_params(formula_id: FormulaId, profile: Mapping[str, str]) -> dict[str, JsonValue]:
     """The formula's profile-scoped parameters (the intake, the faculty group...) that
     the student already declared - never asked again."""
@@ -1056,29 +759,98 @@ def profile_params(formula_id: FormulaId, profile: Mapping[str, str]) -> dict[st
     }
 
 
-async def run_calculation_task(task_id: str, query: str, deps: CalculationDeps) -> TaskOutcome:
-    """A value typed this turn wins over the profile, and the profile over the
-    numbers of the previous calculation (a corrected intake replaces the old one)."""
+async def builtin_task(
+    task_id: str,
+    formula_id: FormulaId,
+    query: str,
+    params: Mapping[str, JsonValue],
+    deps: CalculationDeps,
+    *,
+    unknown: Unknown | None = None,
+    target: Target | None = None,
+) -> TaskOutcome:
+    """A registered formula, documents first: values that can be looked up are read from
+    Qdrant before anything is asked. When the documents need the intake or the faculty
+    group first, that is asked together with the student's own missing values, and the
+    lookup runs again on the answer. Whatever is still missing goes to the panel."""
+
+    known = {key: value for key, value in params.items() if param_spec(formula_id, key)}
+    if unknown is not None and unknown.index is None:
+        known.pop(unknown.name, None)
+    found = await fill_from_documents(formula_id, query, known, deps, skip=unknown)
+    if found.questions:
+        own = [
+            spec
+            for spec in missing_params(formula_id, known)
+            if not spec.lookup and (unknown is None or spec.name != unknown.name)
+        ]
+        questions = [*found.questions, *(question_for(spec, known) for spec in own)]
+        return NeedsInput(task_id, plan_for(formula_id, unknown, target), known, questions)
+    outcome = builtin_outcome(
+        task_id, formula_id, {**known, **found.values}, unknown=unknown, target=target
+    )
+    if isinstance(outcome, Computed) and found.sources:
+        return _with_document_notes(outcome, formula_id, found)
+    return outcome
+
+
+# ---------------------------------------------------------------------------
+# Entry points
+# ---------------------------------------------------------------------------
+
+
+async def plan_calculation(
+    task_id: str, query: str, deps: CalculationDeps
+) -> PlannedTask | Deferred:
+    """The extractor's decision for one task: a registered formula with the numbers the
+    student gave (a typed value wins over the profile, the profile over the previous
+    calculation's numbers), or `Deferred` when nothing in the registry fits."""
 
     extraction = await extract_request(query, deps)
     previous = deps.previous
+    if extraction.formula_id == "none":
+        logger.info(
+            "calculation.deferred task=%s retrieval_query=%r", task_id, extraction.retrieval_query
+        )
+        return Deferred(task_id, query, extraction.retrieval_query)
     if extraction.formula_id == "previous":
         formula_id = previous_formula(previous)
         assert previous is not None and formula_id is not None
-    elif extraction.formula_id == "llm":
-        plan = CalculationPlan(formula_id="llm", retrieval_query=extraction.retrieval_query)
-        return await llm_outcome(task_id, query, plan, extraction.params, deps)
     else:
         formula_id = extraction.formula_id
-    # The previous calculation's numbers are context for any built-in formula: a
+    # The previous calculation's numbers are context for any registered formula: a
     # follow-up ("làm tròn thang 4") is not asked again for what the student already
-    # gave, even when the LLM computed it or the router picked another formula.
+    # gave, even when the router picked another formula.
     params = {
         **(_builtin_params(formula_id, previous.params) if previous is not None else {}),
         **profile_params(formula_id, deps.confirmed_metadata),
         **extraction.params,
     }
-    return await builtin_task(task_id, formula_id, query, params, deps)
+    return PlannedTask(task_id, query, formula_id, params, extraction.unknown, extraction.target)
+
+
+async def run_planned_task(task: PlannedTask, deps: CalculationDeps) -> TaskOutcome:
+    return await builtin_task(
+        task.task_id,
+        task.formula_id,
+        task.query,
+        task.params,
+        deps,
+        unknown=task.unknown,
+        target=task.target,
+    )
+
+
+async def run_calculation_task(
+    task_id: str, query: str, deps: CalculationDeps
+) -> TaskOutcome | Deferred:
+    """Plan and run one task (the graph plans every task first, so a deferred one can
+    join the advisory part before retrieval starts)."""
+
+    planned = await plan_calculation(task_id, query, deps)
+    if isinstance(planned, Deferred):
+        return planned
+    return await run_planned_task(planned, deps)
 
 
 async def resume_calculation_task(
@@ -1089,39 +861,32 @@ async def resume_calculation_task(
     answers: Mapping[str, JsonValue],
     deps: CalculationDeps,
 ) -> TaskOutcome:
-    """A panel answer: never calls the extractor again. A built-in formula computes
-    (looking its values up again when an answer told which fee schedule row applies);
-    an LLM calculation whose form asked a built-in formula's numbers is computed by
-    Python (`_builtin_handoff`), any other is asked again with the answers as known
-    values."""
+    """A panel answer: never calls the extractor again. The formula computes (or solves
+    for the plan's unknown), looking its values up again when an answer told which fee
+    schedule row applies. A round stored by the retired LLM path (`formula_id: llm`)
+    cannot be finished any more and says so."""
 
     if plan.formula_id == "llm":
-        known = {**known_params, **answers}
-        # The form the LLM asked was a built-in formula's: Python computes it now, with no
-        # LLM call, and the result is a built-in one a follow-up ("làm tròn thang 4",
-        # "nếu giữa kỳ 9 thì sao") can reuse as the previous calculation.
-        asked = {canonical_field(name) for name in answers}
-        handed = await _builtin_handoff(task_id, query, asked, known, deps)
-        if handed is not None:
-            return handed
-        return await llm_outcome(task_id, query, plan, known, deps)
+        return Unresolved(task_id, "legacy_llm")
+    unknown, target = solving_of(plan)
     values = {
         **profile_params(plan.formula_id, deps.confirmed_metadata),
         **known_params,
         **answers,
     }
-    return await builtin_task(task_id, plan.formula_id, query, values, deps)
+    return await builtin_task(
+        task_id, plan.formula_id, query, values, deps, unknown=unknown, target=target
+    )
 
 
 # Fixed sentences for a task that cannot be calculated (rendered by Python, no LLM).
 UNRESOLVED_MESSAGES: dict[UnresolvedReason, str] = {
-    "llm_disabled": (
-        "Hiện mình chỉ tự tính được GPA, điểm tổng kết học phần, quy đổi điểm và học phí. "
-        "Bạn có thể liên hệ Phòng Đào tạo hoặc giảng viên phụ trách để được hướng dẫn nhé."
+    "legacy_llm": (
+        "Phần tính toán này thuộc phiên bản cũ nên mình không hoàn tất được nữa. Bạn hỏi lại "
+        "phép tính trong một câu mới, kèm các số liệu, để mình tính giúp nhé."
     ),
-    "llm_failed": "Mình chưa tính được câu này lúc này, bạn thử hỏi lại sau ít phút giúp mình nhé.",
-    "form_dropped": (
-        "Mình chưa tính được với các số liệu bạn đã cung cấp. Bạn thử hỏi lại, ghi rõ phép "
-        "tính và đủ các số liệu trong cùng một câu giúp mình nhé."
+    "bad_target": (
+        "Mình chưa xác định được đại lượng cần tìm trong câu hỏi. Bạn nêu rõ cần tìm giá trị "
+        'nào và mốc cần đạt (VD "cuối kỳ cần bao nhiêu để tổng kết đạt 8,5") giúp mình nhé.'
     ),
 }

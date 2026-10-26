@@ -27,4 +27,6 @@ template: |
 
   Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn.
 
+  Câu hỏi cần TÍNH TOÁN mà hệ thống không có công thức cài sẵn (cộng/trừ/so sánh số liệu trong văn bản, tỷ lệ, số ngày giữa hai mốc, điểm theo công thức riêng của một văn bản...): KHÔNG tự tính ra con số kết quả. Trích đúng các số liệu và công thức liên quan kèm [n], nêu điều kiện áp dụng và cách thay số để người dùng tự tính; tài liệu không có công thức thì nói rõ.
+
   Câu hỏi: {user_query}

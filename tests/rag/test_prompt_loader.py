@@ -3,7 +3,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.rag.prompting import (
-    build_calculation_llm_prompt,
     build_calculation_review_prompt,
     build_json_repair_prompt,
     build_multi_intent_prompt,
@@ -50,7 +49,8 @@ def test_agent_templates_keep_literal_json_braces() -> None:
 
     assert '"sub_queries": [' in templates.agent_multi_query_decomposer
     assert '"formula_id": "course_score", "params": {' in templates.agent_calculation_extractor
-    assert '"formula_id": "llm", "params": {' in templates.agent_calculation_extractor
+    assert '"formula_id": "none", "params": {' in templates.agent_calculation_extractor
+    assert '"solve_for": "ck"' in templates.agent_calculation_extractor
 
 
 def test_rerank_lists_only_kept_chunks_and_reads_them_whole() -> None:
@@ -76,15 +76,6 @@ def test_ticket_fallback_and_calculation_prompts_carry_the_current_time() -> Non
     prompts = [
         build_ticket_fallback_prompt(
             user_query="Học phí kỳ này?", security=AcademicSecurityContext(), confirmed_metadata={}
-        ),
-        build_calculation_llm_prompt(
-            user_query="Học phí còn lại kỳ này?",
-            builtin_rules="",
-            documents="",
-            known_values="(chưa có)",
-            history=[],
-            security=AcademicSecurityContext(),
-            confirmed_metadata={},
         ),
         build_calculation_review_prompt(user_query="x", calculation_payload="[]", history=[]),
     ]
@@ -124,8 +115,8 @@ def test_calculation_titles_reach_the_advisory_prompt_without_numbers() -> None:
 
 def test_template_versions_change_with_content() -> None:
     versions = get_templates().versions
-    assert len(versions["chat_calculation_llm"]) == 12
-    assert versions["chat_calculation_llm"] != versions["agent_calculation_extractor"]
+    assert len(versions["chat_calculation_review"]) == 12
+    assert versions["chat_calculation_review"] != versions["agent_calculation_extractor"]
 
 
 def test_ticket_fallback_templates_do_not_mention_rerank_score_or_a_button() -> None:
@@ -619,67 +610,6 @@ def test_json_repair_prompt_sees_the_same_web_results() -> None:
     )
 
     assert "[1] (lich-thi — https://pdt.iuh.edu.vn/lich-thi)" in prompt
-
-
-def test_calculation_llm_prompt_keeps_its_ask_form_json_after_formatting() -> None:
-    from app.rag.prompting import build_calculation_llm_prompt
-
-    prompt = build_calculation_llm_prompt(
-        user_query="q",
-        builtin_rules="R",
-        documents="",
-        known_values="{}",
-        history=[],
-        security=AcademicSecurityContext(),
-        confirmed_metadata={},
-    )
-    assert '{"type": "ask_user_form", "fields": [{"field":' in prompt
-    assert "(không có tài liệu)" in prompt
-
-
-def test_calculation_llm_prompt_carries_the_security_rules_and_verified_identity() -> None:
-    from app.rag.prompting import build_calculation_llm_prompt
-
-    prompt = build_calculation_llm_prompt(
-        user_query="q",
-        builtin_rules="R",
-        documents="",
-        known_values="{}",
-        history=[],
-        security=AcademicSecurityContext(user_id="sv-1", role="SINH_VIEN"),
-        confirmed_metadata={"bac_dao_tao": "Đại học chính quy"},
-    )
-    assert "Quy Tắc Bảo Mật & Phân Quyền Thông Tin" in prompt
-    assert "<academic_user_context>" in prompt and "sv-1" in prompt
-    assert "bac_dao_tao: Đại học chính quy" in prompt
-
-
-def test_calculation_llm_prompt_shows_recent_calculations_and_every_registry_name() -> None:
-    from app.rag.prompting import build_calculation_llm_prompt
-    from app.schemas.clarification import CalculationPlan, LastCalculation
-
-    recent = [
-        LastCalculation(
-            plan=CalculationPlan(formula_id="tuition_semester"),
-            params={"tc_lt": 15, "khoa_nhap_hoc": "2022"},
-            title="Học phí học kỳ",
-        )
-    ]
-    prompt = build_calculation_llm_prompt(
-        user_query="q",
-        builtin_rules="R",
-        documents="",
-        known_values="{}",
-        history=[],
-        security=AcademicSecurityContext(),
-        confirmed_metadata={"nganh_hoc": "CNTT"},
-        recent_calculations=recent,
-    )
-    block = prompt.split("<recent_calculations>")[1].split("</recent_calculations>")[0]
-    assert '- Học phí học kỳ: {"tc_lt": 15, "khoa_nhap_hoc": "2022"}' in block
-    # The LLM names a calculation's numbers too, unlike node 10's profile-only table.
-    assert "| `tc_lt` |" in prompt and "| `khoa_nhap_hoc` |" in prompt
-    assert "ĐỌC TRƯỚC KHI HỎI" in prompt
 
 
 def test_node_10_field_table_lists_profile_fields_only() -> None:

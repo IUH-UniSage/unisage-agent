@@ -31,14 +31,12 @@ from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.address import address_for
 from app.graph.calculation_turn import (
-    REVIEW_ISSUE_KEY,
     CalculationTask,
     Review,
     calculation_titles,
     known_fields,
     needs_input_parts,
     number_citations,
-    redo_with_llm,
     render_outcomes,
     review,
     trace_items,
@@ -58,16 +56,17 @@ from app.graph.metadata_fields import (
     concept,
     field_scope,
     normalize_value,
-    registered_name,
     update_notice,
 )
 from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
-    LlmAnswered,
+    Deferred,
+    PlannedTask,
     TaskOutcome,
+    plan_calculation,
     resume_calculation_task,
-    run_calculation_task,
+    run_planned_task,
 )
 from app.graph.nodes.cross_encoder_rerank import (
     CROSS_ENCODER_SKIPPED,
@@ -366,13 +365,6 @@ async def _classified_turn(
             confirmed_metadata=confirmed_metadata,
         )
 
-    # A mixed turn answers only the advisory question(s), so generation doesn't
-    # try to answer the calculation part from regulations.
-    advisory_question = (
-        " ".join(task.query for task, _mode in route_plan.advisory_tasks)
-        if route_plan.calculation_tasks
-        else None
-    )
     calculation_tasks = [
         CalculationTask(task_id=f"T{index}", query=task.query)
         for index, task in enumerate(route_plan.calculation_tasks, start=1)
@@ -380,11 +372,30 @@ async def _classified_turn(
     deps = _calculation_deps(
         graph_input, models, usage_recorder, budget, trace, confirmed_metadata=confirmed_metadata
     )
+    # The extractor runs before anything else: a task no registered formula fits joins
+    # the advisory part (answered from the documents, no arithmetic by the model), so
+    # its retrieval starts with the others'.
+    planned = await _plan_calculations(calculation_tasks, deps, trace)
+    runnable = [task for task in planned if isinstance(task, PlannedTask)]
+    advisory_tasks: list[tuple[ClassifiedTask, RoutingMode]] = [
+        *route_plan.advisory_tasks,
+        *(
+            (
+                ClassifiedTask(intent="academic_advisory", query=task.query, routing_mode="SINGLE"),
+                "SINGLE",
+            )
+            for task in planned
+            if isinstance(task, Deferred)
+        ),
+    ]
+    # A mixed turn answers only the advisory question(s), so generation doesn't
+    # try to answer the calculation part from regulations.
+    advisory_question = " ".join(task.query for task, _mode in advisory_tasks) if runnable else None
     advisory: AdvisoryPart | None = None
-    if route_plan.advisory_tasks:
+    if advisory_tasks:
         advisory = AdvisoryPart(
             task_id=f"T{len(calculation_tasks) + 1}",
-            tasks=list(route_plan.advisory_tasks),
+            tasks=advisory_tasks,
             question=advisory_question,
         )
     return await _turn_with_calculations(
@@ -395,11 +406,11 @@ async def _classified_turn(
         usage_recorder,
         budget,
         confirmed_metadata=confirmed_metadata,
-        calculations=_start_calculations(calculation_tasks, deps, trace),
-        queries={task.task_id: task.query for task in calculation_tasks},
+        calculations=_start_calculations(runnable, deps),
+        queries={task.task_id: task.query for task in runnable},
         cache_ctx=cache_ctx,
         cached_turn=cached_turn,
-        l1_pending=l1_pending if not calculation_tasks else None,
+        l1_pending=l1_pending if not runnable else None,
         deps=deps,
         advisory=advisory,
         original_query=advisory_question or graph_input.user_message,
@@ -544,54 +555,47 @@ def calculation_title(last: LastCalculation | None) -> str | None:
 
     if last is None:
         return None
-    if last.title:
+    if last.title or last.plan.formula_id == "llm":
         return last.title
-    return FORMULAS[last.plan.formula_id].title if last.plan.formula_id != "llm" else None
+    return FORMULAS[last.plan.formula_id].title
 
 
 def _computed_calculations(outcomes: Sequence[TaskOutcome]) -> list[LastCalculation]:
-    """The turn's computed calculations, each with its own numbers (a follow-up reuses
-    them instead of asking again): a built-in one's parameters, an LLM one's inputs."""
+    """The turn's computed calculations, each with its parameters (a follow-up reuses
+    them instead of asking again)."""
 
-    calculations: list[LastCalculation] = []
-    for outcome in outcomes:
-        if isinstance(outcome, Computed):
-            calculations.append(
-                LastCalculation(
-                    plan=outcome.plan, params=outcome.params, title=outcome.result.title
-                )
-            )
-        elif isinstance(outcome, LlmAnswered):
-            calculations.append(
-                LastCalculation(
-                    plan=outcome.plan,
-                    params={
-                        registered_name(name): value
-                        for name, value in outcome.known_params.items()
-                        if name != REVIEW_ISSUE_KEY
-                    },
-                    title=outcome.query[:200],
-                )
-            )
-    return calculations
+    return [
+        LastCalculation(plan=outcome.plan, params=outcome.params, title=outcome.result.title)
+        for outcome in outcomes
+        if isinstance(outcome, Computed)
+    ]
+
+
+async def _plan_calculations(
+    tasks: Sequence[CalculationTask], deps: CalculationDeps, trace: GraphTrace
+) -> list[PlannedTask | Deferred]:
+    """One extractor call per task, concurrently: which registered formula (and which
+    numbers, unknown and target), or `Deferred` when none fits."""
+
+    if not tasks:
+        return []
+    trace.node("07_CalculationNode")
+    return list(
+        await asyncio.gather(*(plan_calculation(task.task_id, task.query, deps) for task in tasks))
+    )
 
 
 def _start_calculations(
-    tasks: Sequence[CalculationTask], deps: CalculationDeps, trace: GraphTrace
+    tasks: Sequence[PlannedTask], deps: CalculationDeps
 ) -> "asyncio.Task[list[TaskOutcome]] | None":
-    """Calculation tasks run alongside the advisory retrieval (they are awaited only at
-    the barrier right before node 10)."""
+    """Planned calculations run alongside the advisory retrieval (they are awaited only
+    at the barrier right before node 10)."""
 
     if not tasks:
         return None
-    trace.node("07_CalculationNode")
 
     async def run_all() -> list[TaskOutcome]:
-        return list(
-            await asyncio.gather(
-                *(run_calculation_task(task.task_id, task.query, deps) for task in tasks)
-            )
-        )
+        return list(await asyncio.gather(*(run_planned_task(task, deps) for task in tasks)))
 
     return asyncio.create_task(run_all())
 
@@ -625,14 +629,13 @@ async def _turn_with_calculations(
     """Stream order: calculation blocks (Python) → advisory answer (node 10, which only
     starts after the blocks were sent) → one panel for everything still missing. A
     calculation-only turn instead opens with the checked review, so its blocks wait for
-    that call; a built-in result that does not answer what was asked is redone by the
-    LLM, or - LLM path off or failing - shown under "Lưu ý"."""
+    that call; a result the review says does not answer what was asked is shown under
+    "Lưu ý"."""
 
     outcomes: list[TaskOutcome] = []
     shown: list[str] = []
     calculation_citations: list[dict[str, Any]] = []
     checked: Review | None = None
-    redone: dict[str, str] = {}
 
     def collect(done: Sequence[TaskOutcome], first_citation: int) -> None:
         numbered, cited = number_citations(done, first_citation)
@@ -674,12 +677,10 @@ async def _turn_with_calculations(
             )
         else:
             done = await calculations if calculations is not None else []
-            computed = [o for o in done if isinstance(o, Computed) and not o.chosen_by_llm]
+            computed = [o for o in done if isinstance(o, Computed)]
             checked = await review(computed, original_query, deps)
-            if checked is not None:
-                done, redone = await redo_with_llm(done, queries, checked, deps)
             collect(done, 1)
-            lead = checked.lead() if checked is not None and not redone else ""
+            lead = checked.lead() if checked is not None else ""
             await emit("\n\n".join(text for text in (lead, render_outcomes(outcomes)) if text))
             output = GraphOutput(
                 response_text="".join(shown),
@@ -725,7 +726,6 @@ async def _turn_with_calculations(
             run_id=budget.request_id if budget is not None else usage_recorder.request_id,
             deps=deps,
             review=checked,
-            redone=redone,
         )
         output = replace(
             output,

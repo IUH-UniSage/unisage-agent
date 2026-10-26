@@ -14,7 +14,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from app.schemas.chat_history import HistoryMessage
-from app.schemas.clarification import LastCalculation
 from app.schemas.retrieval import RetrievedChunk
 from app.schemas.security import AcademicSecurityContext
 from app.schemas.web_search import WebSearchResult
@@ -31,7 +30,6 @@ from .builder import (
     build_known_metadata_fields_section,
     build_metadata_section,
     build_prepared_context_section,
-    build_recent_calculations_section,
     build_task_2_section,
     build_web_sources_section,
     render_resolved_user_query,
@@ -44,7 +42,6 @@ __all__ = [
     "append_current_time",
     "append_recent_history",
     "build_ask_user_form_guide",
-    "build_calculation_llm_prompt",
     "build_calculation_review_prompt",
     "build_current_time_section",
     "build_declared_attributes_section",
@@ -208,45 +205,6 @@ def build_calculation_review_prompt(
         history_message=build_history_section(history),
         current_time=build_current_time_section(confirmed_metadata),
         user_query=user_query,
-    )
-
-
-def build_calculation_llm_prompt(
-    *,
-    user_query: str,
-    builtin_rules: str,
-    documents: str,
-    known_values: str,
-    history: Sequence[HistoryMessage],
-    security: AcademicSecurityContext,
-    confirmed_metadata: dict[str, str],
-    original_message: str | None = None,
-    recent_calculations: Sequence[LastCalculation] = (),
-) -> str:
-    """`main/chat_calculation_llm.yaml`: a calculation the LLM does itself (target
-    questions, formulas from documents, follow-ups) - everything but the forward
-    calculation of the built-in formulas. `original_message`: what the student typed
-    this turn, shown under the classifier's normalised question when they differ.
-    It reads the profile and the recent calculations before asking anything, and asks
-    under the registry's field names."""
-
-    templates = get_templates()
-    return templates.chat_calculation_llm.format(
-        header=templates.header,
-        academic_metadata=build_metadata_section(security, confirmed_metadata),
-        security_access_control=templates.security_access_control,
-        academic_domain_rules=templates.academic_domain_rules,
-        response_style=templates.response_style,
-        citation_rules=templates.citation_rules,
-        builtin_rules=builtin_rules,
-        documents=documents or "(không có tài liệu)",
-        known_values=known_values,
-        recent_calculations=build_recent_calculations_section(recent_calculations),
-        metadata_fields=build_known_metadata_fields_section(every_scope=True),
-        history=build_history_section(history),
-        current_time=build_current_time_section(confirmed_metadata),
-        user_query=user_query,
-        original_message=_original_message_line(original_message, user_query),
     )
 
 

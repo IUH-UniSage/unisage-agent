@@ -10,6 +10,7 @@ from typing import Any
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
+from app.calculation.formulas import describe_registry
 from app.core.config import settings
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import ModelRouter
@@ -62,7 +63,7 @@ def build_classification_agent(model: Model | str) -> Agent[None, str]:
     # `.replace`, not `.format`: the template is full of literal JSON braces.
     system_prompt = templates.agent_message_classification.replace(
         "{profile_fields}", build_known_metadata_fields_section()
-    )
+    ).replace("{calculation_formulas}", describe_registry())
     if settings.CHAT_CLASSIFY_WITH_RETRIEVAL:
         system_prompt = f"{system_prompt}\n\n{templates.agent_message_classification_retrieval}"
     return Agent(

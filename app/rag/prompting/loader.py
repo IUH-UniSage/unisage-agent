@@ -85,7 +85,6 @@ def _load_all_templates() -> PromptTemplates:
         chat_ticket_fallback=_load_yaml_template(main / "chat_ticket_fallback.yaml"),
         chat_social=_load_yaml_template(main / "chat_social.yaml"),
         chat_calculation_review=_load_yaml_template(main / "chat_calculation_review.yaml"),
-        chat_calculation_llm=_load_yaml_template(main / "chat_calculation_llm.yaml"),
         json_repair=_load_yaml_template(main / "json_repair.yaml"),
         agent_hyde_generator=_load_yaml_template(agents / "hyde_generator.yaml"),
         agent_message_classification=_load_yaml_template(agents / "message_classification.yaml"),

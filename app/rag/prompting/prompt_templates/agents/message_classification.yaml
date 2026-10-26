@@ -10,9 +10,12 @@ template: |
   ## Nhãn (chọn ĐÚNG MỘT)
   - `social_chat`: xã giao KHÔNG hỏi thông tin hay cách làm việc gì, GỒM câu hỏi về chính trợ lý. Tin nhắn hỏi thông tin hoặc cách làm một việc ở Trường (dù viết tắt, không dấu) KHÔNG BAO GIỜ là `social_chat`. VD "Cảm ơn bạn nhé", "Ok hiểu rồi", "Bạn là ai vậy?", "Bạn giúp được gì cho mình?".
   - `academic_advisory`: cần tra văn bản Nhà trường (quy chế, điều kiện, chính sách, số liệu học vụ/tuyển sinh, thủ tục, lịch, giấy tờ), GỒM câu SO SÁNH 2+ thực thể. VD "Điều kiện nhận học bổng loại giỏi là gì?", "Tổ hợp Toán, Vật lý xét được ngành nào?", "Khi nào đóng học phí học kỳ 2?", "Ngành CNTT và Kế toán học phí chênh bao nhiêu?".
-  - `academic_calculation`: yêu cầu tính số học liên quan học vụ, KỂ CẢ hỏi ngược "cần đạt bao nhiêu để được X". VD "18 tín chỉ ngành CNTT tốn bao nhiêu tiền?", "Tính GPA giúp em", "Điểm cuối kì phải bao nhiêu thì mới được A+?".
+  - `academic_calculation`: yêu cầu TÍNH XUÔI hoặc TÍNH NGƯỢC một công thức trong danh sách CÔNG THỨC HỆ THỐNG TÍNH ĐƯỢC bên dưới (điểm học phần, GPA, quy đổi điểm, học phí, điểm xét tuyển 2026, điểm xét học bạ, điểm theo trọng số đề cương), KỂ CẢ hỏi ngược "cần đạt bao nhiêu để được X". VD "18 tín chỉ ngành CNTT tốn bao nhiêu tiền?", "Tính GPA giúp em", "Điểm cuối kì phải bao nhiêu thì mới được A+?", "thi được 24, học bạ 27 thì điểm xét tuyển bao nhiêu?".
   - `off_topic`: hoàn toàn ngoài học vụ/tuyển sinh của Nhà trường, GỒM kiến thức phổ thông. VD "Giá vàng hôm nay?", "Python là gì?", "1+1 bằng mấy?".
   - `greeting`: tin nhắn CHỈ là câu chào (hiếm; câu chào lượt đầu đã được xử lý trước).
+
+  ## Công thức hệ thống tính được (registry Python, có tính ngược)
+  {calculation_formulas}
 
   ## Decision Rules
   1. CÂU NỐI TIẾP ngắn ("sao không có ngành X?", "còn khóa 2024 thì sao?") khi lịch sử đang nói chủ đề học vụ → theo chủ đề đó, KHÔNG `off_topic` vì thiếu ngữ cảnh.
@@ -21,8 +24,7 @@ template: |
   2. Có BẤT KỲ liên quan tới học vụ, tuyển sinh, ngành, môn học của Nhà trường → ưu tiên `academic_*`. Chỉ `off_topic` khi CHẮC CHẮN không liên quan, kể cả xét lịch sử.
   3. Ngắn, mơ hồ nhưng thiên về học vụ → `academic_advisory`; câu hỏi về CHÍNH TRỢ LÝ luôn `social_chat`.
   4. Câu chào từ lượt 2 không kèm câu hỏi → `social_chat`; kèm câu hỏi học vụ → theo câu hỏi.
-  5. ADVISORY vs CALCULATION: hỏi một ĐƠN GIÁ/MỨC THU có sẵn trong văn bản (giá 1 tín chỉ, học phí 1 năm, mức học bổng) là TRA CỨU → `academic_advisory`, dù có chữ số/đơn vị; hỏi lại đơn giá 1 tín chỉ sau khi hỏi học phí vẫn là tra cứu. Chỉ `academic_calculation` khi người dùng đưa SỐ LIỆU và cần TÍNH RA số mới ("18 tín chỉ thì tốn bao nhiêu", "tính GPA giúp em"). "Cần/phải đạt bao nhiêu (cuối kỳ, giữa kỳ...) để được <điểm>", "thi bao nhiêu thì qua môn" luôn `academic_calculation` (hệ thống tự tính ngược), kể cả chưa có số liệu.
-  5b. PHÉP TÍNH TRÊN SỐ LIỆU CÓ SẴN vẫn là `academic_calculation`: nguồn số liệu không quyết định nhãn, PHÉP TÍNH mới quyết định. Câu hỏi mà câu trả lời đúng là KẾT QUẢ của một phép tính (tổng, hiệu, tích, thương, phần trăm, chênh lệch, so sánh hơn/kém, đếm số ngày/giờ/lần giữa các mốc, trung bình, quy đổi) → `academic_calculation`, dù mọi con số đã nằm trong văn bản của Trường, trong lịch sử hội thoại hay trong chính câu hỏi. Chỉ là tra cứu (`academic_advisory`) khi câu trả lời là MỘT con số/mức/thời hạn đọc thẳng ra từ văn bản mà không cần tính toán gì.
+  5. ADVISORY vs CALCULATION: `academic_calculation` CHỈ khi phép tính thuộc MỘT công thức trong danh sách CÔNG THỨC HỆ THỐNG TÍNH ĐƯỢC (xuôi: đưa số liệu, hỏi kết quả, kể cả chưa đủ số - hệ thống tự hỏi thêm; ngược: "cần/phải đạt bao nhiêu để được <mốc>", "tối đa mấy tín để học phí không quá X"). Hỏi một ĐƠN GIÁ/MỨC THU/SỐ LIỆU có sẵn trong văn bản là tra cứu → `academic_advisory`, dù có chữ số. MỌI phép cộng, trừ, so sánh, tỷ lệ, đếm ngày/giờ trên số liệu của văn bản mà KHÔNG thuộc công thức nào trong danh sách (tổng số đơn phúc khảo, cộng tín chỉ các học phần, còn bao nhiêu chỗ ở, kéo dài bao nhiêu ngày, tiền sách sau giảm giá, số đề tài quy đổi theo hệ số của một công văn...) → `academic_advisory`: hệ thống trích số liệu và công thức từ tài liệu để người dùng tự tính, KHÔNG tự tính hộ.
 
   ## Cập nhật hồ sơ sinh viên (`metadata_updates`)
   `<declared_attributes>` là hồ sơ của CHÍNH người dùng (mọi vai trò), lưu cho các hội thoại sau. Chỉ ghi khi tin nhắn này người dùng TỰ NÓI về bản thân:

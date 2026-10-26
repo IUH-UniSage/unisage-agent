@@ -17,7 +17,6 @@ from app.graph.clarification_round import TaskQuestions, advisory_questions, bui
 from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
-    llm_questions,
     profile_params,
     question_for,
     run_calculation_task,
@@ -79,24 +78,6 @@ def _never() -> FunctionModel:
 @pytest.fixture(autouse=True)
 def _score_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
-
-
-def test_llm_questions_skip_a_field_known_under_an_alias_or_in_the_profile() -> None:
-    form = {
-        "type": "ask_user_form",
-        "fields": [
-            {"field": "so_tc_lt", "label": "Số tín chỉ lý thuyết", "kind": "number"},
-            {
-                "field": "nganh",
-                "label": "Ngành",
-                "kind": "choice",
-                "options": [{"label": "CNTT"}, {"label": "Kế toán"}],
-            },
-            {"field": "da_nop", "label": "Số tiền đã nộp", "kind": "number"},
-        ],
-    }
-    questions = llm_questions([form], known={"tc_lt": 15}, profile={"nganh_hoc": "CNTT"})
-    assert [q["field"] for q in questions] == ["so_tien_da_nop"]
 
 
 def test_advisory_questions_skip_what_the_turns_calculations_already_have() -> None:
