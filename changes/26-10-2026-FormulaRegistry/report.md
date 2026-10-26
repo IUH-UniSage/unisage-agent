@@ -95,7 +95,46 @@ d0330, d0332, d0319) - đã bật cho các lượt này (chưa chạy lại eval
 - Model có thể vẫn viết kết quả tự tính trong câu chữ; grounding chặt chỉ gắn caution, không xoá.
 - Thang đo eval cũ vẫn chưa gắn nhãn theo `formula_id`/`arithmetic`.
 
-## 4. Ngoài phạm vi / việc tiếp
+## 4. Gắn nhãn eval theo đường tính + công thức đếm ngày/cộng giờ (26/10 đêm)
+
+- Dataset (gateway PR #9): 38 câu calculation có `expected_calculation`: 12 `formula:<id>`
+  (admission_score_2026 ×2, transcript_score_3hk, weighted_score ×4, date_span ×4, time_span), 13
+  `arithmetic`, 13 `advisory`. Eval chấm `pass` = đúng đường + số kỳ vọng xuất hiện; câu `advisory` mà
+  model tự tính số (grounding chặt) → fail dù đúng; câu `advisory` không có số → chờ judge.
+- Registry thêm `date_span` (hiệu hai ngày, tính cả hai đầu, hạn N năm cộng vào mốc đầu) và `time_span`
+  (tổng các khoảng hh:mm-hh:mm). Lần chạy đầu 5 câu lỗi vì quên thêm id vào Literal của
+  `CalculationPlan` (đã sửa + test chặn); chạy lại 5 câu (`runs/calc-registry-v3b`).
+
+| Nhãn | pass | fail | chờ judge |
+|---|---|---|---|
+| formula (12) | 10 | 2 | 0 |
+| arithmetic (13) | 8 | 5 | 0 |
+| advisory (13) | 5 | 7 | 1 |
+| **Tổng 38** | **23** | 14 | 1 |
+
+Câu không pass (15):
+- d0241: advisory, không có số kỳ vọng → chờ judge (trả lời đúng mã 4/5)
+- d0242: advisory: model đọc sai số liệu (3 + 5 = 8 thay vì 10 tín chỉ)
+- d0245: advisory: model tự nêu hiệu 120 − 90 = 30 trong câu chữ thay vì calc_request → grounding chặt gắn caution → fail theo chính sách
+- d0313: weighted_score ra 7,1 (6,95 → 7,0 theo làm tròn 0,1 của Trường); đáp án 7,2 không làm tròn
+- d0314: advisory: quy tắc làm tròn Sổ tay, model nêu 6,0/7,5/9,0 đúng nhưng grounding chặt coi là số tự tính
+- d0316: advisory: model tự cộng 6 + 94 = 100 trong câu chữ → caution → fail theo chính sách
+- d0318: advisory: model đọc sai (0 đơn thay vì 16)
+- d0320: gắn arithmetic nhưng classifier/extractor đưa sang advisory (trả lời đúng 5 điểm) → sai đường
+- d0321: gắn arithmetic nhưng đi advisory + calc_request (code tính đúng 9 / 3) → sai đường theo nhãn
+- d0326: gắn arithmetic nhưng đi advisory (đúng 12 / 4) → sai đường
+- d0329: formula:date_span nhưng lượt v3 đi advisory (lỗi Literal lúc đó); v3b không chạy lại câu này
+- d0330: arithmetic tính đúng 600.000 nhưng không nêu tổng giảm 170.000 → thiếu một số kỳ vọng
+- d0331: advisory: model tự tính 145/175 trong câu chữ (175 sai) → caution → fail
+- d0334: gắn arithmetic nhưng đi advisory (đúng 24 tháng) → sai đường
+- d0335: gắn advisory nhưng extractor chọn date_span (câu cần 'ngày − 20' → mốc 31/5, chưa có công thức) → fail
+
+Đọc kết quả: phần code tính (formula + arithmetic) đúng khi đi đúng đường; phần hụt chủ yếu là (1) routing
+classifier/extractor đưa câu số học thuần sang tư vấn (4 câu, vẫn trả lời đúng), (2) model trong câu trả lời
+tư vấn vẫn tự nêu con số thay vì gửi `calc_request` (4 câu, grounding chặt bắt được và chấm fail theo chính
+sách), (3) đọc sai số liệu từ tài liệu (2 câu). Toàn văn 38 câu: `calculation-38-cau.md`.
+
+## 5. Ngoài phạm vi / việc tiếp
 
 - Gắn lại nhãn eval calculation theo `formula_id`, tách 30 câu số học văn bản sang category riêng.
 - Chốt hướng (a)/(b) ở 2.2.
