@@ -129,7 +129,7 @@ so với `runs/hybrid-on`.
 **Kết quả Task 5 (26/10):** `runs/ce-on`, `runs/ce-then-llm` so với `runs/hybrid-on`: normal
 recall@5 110 / 108 / 104 trên 116; calculation pass 20 / 21 / 18 trên 38, recall@5 20 / 20 / 23;
 từ chối 32 / 29 / 41; p50 toàn lượt 4,6 / 6,6 / 5,3 s; p95 7,5 / 17,9 / 9,5 s. Chi tiết
-`report.md` mục 6.
+`report.md` mục 7.
 
 ## Task 6: Chạy đủ benchmark trên 4080, khuyến nghị
 

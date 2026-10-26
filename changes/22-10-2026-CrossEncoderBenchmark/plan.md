@@ -125,7 +125,7 @@ Mốc không rerank (8 chunk đầu theo RRF) recall@8 0,935 = trần của bộ
 cross-encoder không thêm recall, nó thay LLM rerank (vốn loại nhầm tài liệu ở 12 câu) với chi phí
 gần 0. Tiêu chí thành công của spec: 3/5 đạt trọn, 2/5 đạt một phần (tiêu chí 2: MRR 0,815 so với
 0,890 dù recall@8 và NDCG vượt; tiêu chí 4: calculation recall@5 20 so với 23, 6 câu mất là mất
-trích dẫn, câu trả lời không đổi). Chi tiết report.md 0.1–0.2, danh sách từng câu trượt 6.6.
+trích dẫn, câu trả lời không đổi). Chi tiết report.md 1.1–1.2, danh sách từng câu trượt 7.6.
 
 **Khuyến nghị**: bật `CHAT_RERANK_MODE=cross_encoder` mặc định ở dev/eval và ở production khi máy
 chủ có GPU trống ≥ 2,5 GB; không triển khai `cross_encoder_then_llm`. Điều kiện: đo lại Bảng 2/3
@@ -139,5 +139,5 @@ dẫn nhánh calculation; sửa rate limit credential RERANK (70/154 lượt l�
 
 - Passage có nên kèm `summary` không: **đã đo** — service báo `truncated=0` ở mọi request (không
   chunk nào vượt 1024 token với heading_path + content), nên chưa cần biến thể `summary`.
-- Gate web search khi không còn LLM rerank (report.md 7.2 mục 3): ticket sau.
-- Trích dẫn nhánh calculation ở chế độ `cross_encoder` (report.md 6.4): ticket sau.
+- Gate web search khi không còn LLM rerank (report.md 8.2 mục 3): ticket sau.
+- Trích dẫn nhánh calculation ở chế độ `cross_encoder` (report.md 7.4): ticket sau.
