@@ -327,3 +327,12 @@ async def test_resume_of_a_round_stored_by_the_retired_llm_path_says_so(
         "T1", "q", plan, {"so_tc": 20}, {"don_gia": 980000}, _deps(mock_sync_llm_model("x"))
     )
     assert outcome == Unresolved("T1", "legacy_llm")
+
+
+def test_every_registry_formula_is_a_valid_plan() -> None:
+    """A formula added to the registry must also be storable in a pending round's plan."""
+
+    from app.calculation.formulas import FORMULAS
+
+    for formula_id in FORMULAS:
+        assert CalculationPlan(formula_id=formula_id).formula_id == formula_id  # type: ignore[arg-type]

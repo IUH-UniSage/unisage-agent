@@ -161,6 +161,8 @@ class CalculationPlan(_Strict):
         "admission_score_2026",
         "transcript_score_3hk",
         "weighted_score",
+        "date_span",
+        "time_span",
         "arithmetic",
         "llm",
     ]
