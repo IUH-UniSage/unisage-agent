@@ -345,12 +345,12 @@ def test_near_miss_fails_when_the_nearly_right_document_is_cited_as_the_answer()
 
 
 def test_a_tagged_calculation_row_must_take_its_expected_path() -> None:
-    base = dict(
-        category="calculation",
-        expected_numbers=[8],
-        response="Kéo dài **8 ngày**.",
-        context=[],
-    )
+    base: dict[str, Any] = {
+        "category": "calculation",
+        "expected_numbers": [8],
+        "response": "Kéo dài **8 ngày**.",
+        "context": [],
+    }
     by_formula = _row(
         **base,
         nodes=["07_CalculationNode"],
