@@ -1,0 +1,17 @@
+version: '3'
+
+# Benchmark rerank (docs/specs/SPEC-cross-encoder-rerank.md): LLM rerank vs cross-encoder trên
+# các ứng viên một run eval đã lấy về (runs/<run>/results.jsonl). Service reranker được tự chạy
+# nếu chưa có và luôn tắt khi xong (báo cáo ghi VRAM trước/sau). Báo cáo: benchmark_results/<timestamp>/.
+
+tasks:
+  run:
+    desc: "Benchmark rerank. Vd task benchmark:run env=eval -- hybrid-on -a | -p | -c | --all [--variant cross_encoder] [--limit 20]"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} evals.benchmark {{.CLI_ARGS}}'
+
+  help:
+    desc: "Các tuỳ chọn của benchmark"
+    cmds:
+      - '{{.UV_RUN}} evals.benchmark --help'

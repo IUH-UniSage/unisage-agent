@@ -74,13 +74,13 @@ LLM dùng `llm_rerank` thật qua registry), `metrics.py`, `report.py` (md + jso
 
 **Acceptance criteria:**
 
-- [ ] Cùng bộ ứng viên cho mọi biến thể; số câu in ở đầu báo cáo.
-- [ ] Bảng `-a`: recall@8, recall@5, NDCG@16, MRR, empty rate, theo category; biến thể LLM có cột ổn định (Jaccard, lệch recall) khi `--repeats > 1`.
-- [ ] Tỷ lệ passage bị cắt ở 1024 token được ghi (service trả `truncated` hoặc ước lượng).
+- [x] Cùng bộ ứng viên cho mọi biến thể; số câu in ở đầu báo cáo.
+- [x] Bảng `-a`: recall@8, recall@5, NDCG@16, MRR, empty rate, theo category; biến thể LLM có cột ổn định (Jaccard, lệch recall) khi `--repeats > 1`.
+- [x] Tỷ lệ passage bị cắt ở 1024 token được ghi (service trả `truncated` hoặc ước lượng).
 
 **Verification:**
 
-- [ ] `uv run pytest tests/evals/test_benchmark_metrics.py -q`; `task benchmark:run -- hybrid-on -a --limit 10 --variant cross_encoder`.
+- [x] `uv run pytest tests/evals/test_benchmark_metrics.py -q`; `task benchmark:run -- hybrid-on -a --limit 10 --variant cross_encoder`.
 
 **Dependencies:** Task 2 · **Scope:** M
 
@@ -94,15 +94,25 @@ trước/sau, cảnh báo nếu không trả.
 
 **Acceptance criteria:**
 
-- [ ] Bảng `-p`: P50/P95/avg ms, request/s, avg CPU, peak RAM, peak VRAM, error rate cho từng biến thể.
-- [ ] Bảng `-c`: mỗi mức: P50/P95, throughput, lỗi, peak VRAM.
-- [ ] Kết thúc (kể cả Ctrl+C) service do harness spawn bị tắt; báo cáo ghi VRAM trước/sau.
+- [x] Bảng `-p`: P50/P95/avg ms, request/s, avg CPU, peak RAM, peak VRAM, error rate cho từng biến thể.
+- [x] Bảng `-c`: mỗi mức: P50/P95, throughput, lỗi, peak VRAM.
+- [x] Kết thúc (kể cả Ctrl+C) service do harness spawn bị tắt; báo cáo ghi VRAM trước/sau.
 
 **Verification:**
 
-- [ ] `task benchmark:run -- hybrid-on -p --limit 10`; `-c --conc-requests 10`; `nvidia-smi` sau đó.
+- [x] `task benchmark:run -- hybrid-on -p --limit 10`; `-c --conc-requests 10`; `nvidia-smi` sau đó.
 
 **Dependencies:** Task 3 · **Scope:** M
+
+**Kết quả Task 3 + 4 (26/10):** `evals/benchmark/` (candidates, variants, metrics, runner,
+resource_sampler, service, report, cli, `__main__`), `taskfiles/benchmark.yml`
+(`task benchmark:run env=eval -- <run> [-a|-p|-c|--all] ...`). Smoke trên eval, 3 câu,
+`--variant cross_encoder --all`: service tự spawn (VRAM 494 → 1839 MiB), -a recall@8 1.0,
+2 lượt cùng thứ tự 100%; -p 16 passage thật p50 87 ms (service took_ms ~131 ms với chunk dài,
+khác 10 ms của passage ngắn ở Task 1); -c mức 1: p50 144 ms, mức 2: p50 267 ms (GPU xử lý tuần
+tự); tắt service → VRAM về 494 MiB, "đã nhả VRAM: có". Tests `tests/evals/test_benchmark_rerank.py`
+6/6 (biến thể giả, không Qdrant/service). Biến thể LLM chưa chạy thật (cần backend eval + key),
+để Task 6.
 
 ## Task 5: Eval tầng câu trả lời
 
