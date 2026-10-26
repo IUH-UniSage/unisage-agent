@@ -48,7 +48,7 @@ task reranker:test          # test HTTP với scorer giả, không tải model
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `CHAT_RERANK_MODE` | `llm` | `llm`: như cũ, không gọi service. `none`: không rerank gì, sàn cosine rồi lấy thứ tự retrieval (RRF) cắt 8, mốc "không rerank" đo được e2e. `cross_encoder`: node CE giữ top-K mỗi câu hỏi con, **bỏ** LLM rerank. `cross_encoder_then_llm`: CE cắt 16 → K, LLM rerank chấm K chunk đó |
+| `CHAT_RERANK_MODE` | `llm` | `llm`: như cũ, không gọi service. `none`: không rerank gì, sàn cosine rồi lấy thứ tự retrieval (RRF) cắt 8, mốc "không rerank" đo được e2e. `auto`: như `none`, gọi LLM rerank chỉ khi tín hiệu evidence của một câu hỏi con là `weak` (cosine top-1 < `CHAT_EVIDENCE_MIN_COSINE`). `cross_encoder`: node CE giữ top-K mỗi câu hỏi con, **bỏ** LLM rerank. `cross_encoder_then_llm`: CE cắt 16 → K, LLM rerank chấm K chunk đó |
 | `CROSS_ENCODER_URL` | `http://127.0.0.1:8403` | Service |
 | `CROSS_ENCODER_TIMEOUT_SECONDS` | `2.0` | Một deadline cho cả request |
 | `CHAT_CROSS_ENCODER_KEEP` | `8` | K chunk giữ mỗi câu hỏi con |
@@ -129,3 +129,15 @@ So `summary.json`: recall@5, pass calculation, ticket fallback, p50/p95 toàn l�
   chạy service trong WSL2 và trỏ `CROSS_ENCODER_URL` sang địa chỉ WSL.
 - Số cần đo lại trên 3060: Bảng 2 (p50/p95, VRAM đỉnh) và Bảng 3; Bảng 1 là tất định với cùng
   model nên không đổi.
+
+## Chống bịa khi không còn LLM rerank (Phase 6, 26/10)
+
+- **Grounding sau khi sinh** (`app/graph/grounding.py`, `CHAT_GROUNDING_CHECK`): số không có nguồn →
+  dòng lưu ý cho người dùng + cảnh báo AI admin; `[n]` sai và "có số mà không trích dẫn" → cảnh báo.
+- **Bộ 20 câu unanswerable phân nhóm** (d0337–d0356, `unanswerable_kind`): chạy
+  `task eval:run env=eval -- --set demo --ids d0337,...,d0356 --variant exact --web off`; summary tách
+  `unanswerable/<nhóm>` với cột `fabr` (bịa) và `ungr` (số không nguồn).
+- **Tín hiệu evidence** log mỗi lượt (`evidence mode=... SQ1 ok cos=... agree3=... ce=...`); nghiên cứu
+  ngưỡng: `task benchmark:evidence env=eval -- hybrid-on`.
+- **Web policy** (`app/graph/web_policy.py`): fallback theo mức evidence, không theo chế độ rerank.
+- Kết quả và số liệu: `changes/22-10-2026-CrossEncoderBenchmark/report.md` mục 8.2.

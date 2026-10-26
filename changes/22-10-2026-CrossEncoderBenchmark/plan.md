@@ -97,7 +97,7 @@ Task 7 docs/task sau Task 2–4
 Bối cảnh: `none`/CE không có gate "không tài liệu nào trả lời"; 5 câu demo không có tài liệu cho
 thấy nhánh normal từ chối đúng, nhánh calculation còn tự tính từ giả định. Thứ tự do review chốt.
 
-- [ ] Task 8: **Calculation gate + kiểm tra trích dẫn/số liệu sau khi sinh.** `app/graph/grounding.py`:
+- [x] Task 8: **Calculation gate + kiểm tra trích dẫn/số liệu sau khi sinh.** `app/graph/grounding.py`:
       trích số trong câu trả lời, tập "có nguồn" = câu hỏi + giá trị đã biết + chunk được trích dẫn
       (normal: chunk trích dẫn, không có trích dẫn thì toàn ngữ cảnh), chấp nhận số suy ra bằng một
       phép tính từ các số có nguồn; chỉ số `[n]` ngoài phạm vi bị loại. Nhánh calculation (LLM):
@@ -106,26 +106,26 @@ thấy nhánh normal từ chối đúng, nhánh calculation còn tự tính từ
       liệu" với 0. Nhánh normal: số không có nguồn → chú thích cuối câu trả lời (stream đã đi,
       không sinh lại) + `ANSWER_UNGROUNDED_NUMBERS`; không trích dẫn mà có số → `ANSWER_NO_CITATION`.
       Eval: `checks.ungrounded`, `checks.no_citation` từ warning_codes, cột trong summary.
-- [ ] Task 9: **Bộ câu unanswerable phân nhóm** (dataset gateway, `source_set=demo`, id d0337–d0356):
+- [x] Task 9: **Bộ câu unanswerable phân nhóm** (dataset gateway, `source_set=demo`, id d0337–d0356):
       5 nhóm × 4 câu: `not_in_corpus`, `partial`, `false_premise`, `near_miss` (đúng chủ đề, sai
       năm/chương trình/đối tượng, kèm `forbidden_source_patterns`), `calc_missing_input`. Trường mới
       `unanswerable_kind`. Metrics: pass theo nhóm (partial = trả lời phần có + nói rõ giới hạn),
       thêm `fabricated` (không từ chối và có số không nguồn hoặc trích tài liệu cấm), summary theo
       nhóm. Chạy eval **chỉ** các câu mới với `none`, `cross_encoder`, `llm`.
-- [ ] Task 10: **Auto rerank có log tín hiệu, ngưỡng từ dữ liệu.** Fusion ghi vào metadata chunk:
+- [x] Task 10: **Auto rerank có log tín hiệu, ngưỡng từ dữ liệu.** Fusion ghi vào metadata chunk:
       `rrf_score`, `dense_rank`, `bm25_rank`. `app/graph/evidence.py`: tín hiệu mỗi sub-query (cosine
       top-1, RRF top-1, khoảng cách top-1/top-2, đồng thuận dense/BM25 trong top-3, điểm CE top-1 nếu
       có) → `ok | weak | none`, log mỗi lượt. Nghiên cứu ngưỡng: chạy retrieval 139 câu, so tín hiệu
       với "tài liệu đúng trong top-8", chọn ngưỡng, ghi vào report. `CHAT_RERANK_MODE=auto`: đường
       `none`, gọi LLM rerank khi có sub-query `weak`; không ép tỷ lệ.
-- [ ] Task 11: **Tách evidence sufficiency khỏi chính sách web.** `app/graph/web_policy.py`: quyết định
+- [x] Task 11: **Tách evidence sufficiency khỏi chính sách web.** `app/graph/web_policy.py`: quyết định
       tìm web từ (sufficiency, topic speculative, cờ bật) thay vì chỉ "sub-query trống"; `none`/`weak`
       → fallback khi bật; log quyết định. Web đang tắt trong eval: test đơn vị + log, đánh giá web
       fallback là ticket riêng.
 
 ### Checkpoint: Phase 6
 
-- [ ] Eval bộ unanswerable mới ở 3 chế độ, bảng theo nhóm trong report; test/ruff/mypy sạch; push.
+- [x] Eval 20 câu unanswerable ở 3 chế độ: none 20/20, CE 20/20, llm 19/20 (1 bịa, d0350); report.md 8.2; 2693 test pass; push 26/10.
 
 ## Risks and Mitigations
 

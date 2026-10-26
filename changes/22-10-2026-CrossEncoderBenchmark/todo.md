@@ -161,8 +161,8 @@ FlagEmbedding, trường `truncated`), `report.md` 538 dòng.
 
 ## Phase 6 (26/10): chống bịa khi không còn LLM rerank — xem plan.md Phase 6
 
-- [ ] Task 8: grounding (calculation gate, kiểm tra số liệu/trích dẫn sau khi sinh, prompt, metrics)
-- [ ] Task 9: 20 câu unanswerable phân nhóm + metrics theo nhóm + eval 3 chế độ chỉ câu mới
-- [ ] Task 10: tín hiệu evidence + nghiên cứu ngưỡng + `CHAT_RERANK_MODE=auto`
-- [ ] Task 11: `web_policy` tách khỏi rerank
-- [ ] Checkpoint: report bổ sung, test/ruff/mypy, push
+- [x] Task 8: grounding — `app/graph/grounding.py`, cắm graph + calculation, prompt, eval checks (commit 0620d1d)
+- [x] Task 9: 20 câu d0337–d0356 (gateway PR #9), metrics theo nhóm + fabricated; eval: none 20/20, CE 20/20, llm 19/20 (commit 7c3b96a)
+- [x] Task 10: evidence signals + `auto` + `task benchmark:evidence` (cosine < 0,60 ≈ 10 % lượt, bắt 3/5 miss; đồng thuận không phân biệt) (commits 89d31dc, 94c5f3d)
+- [x] Task 11: `app/graph/web_policy.py` + `CHAT_WEB_SEARCH_ON_WEAK_EVIDENCE` (tắt), test đơn vị (commit 94c5f3d)
+- [x] Checkpoint: report.md 8.2, 2693 test pass, push

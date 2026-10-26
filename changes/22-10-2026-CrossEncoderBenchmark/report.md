@@ -300,6 +300,105 @@ Số liệu trên 5 câu demo không có tài liệu đúng trong ứng viên (d
 5. **Đo thay vì giả định**: thêm 15–20 câu `unanswerable` vào bộ demo, chạy judge faithfulness cho 4
    chế độ.
 
+### 8.2. Kết quả Phase 6 (26/10 chiều): bốn lớp chống bịa đã làm và đo
+
+Thực hiện theo thứ tự review: (1) grounding + calculation gate, (2) bộ unanswerable phân
+nhóm, (3) auto rerank có log tín hiệu, (4) tách chính sách web. Code: commits `0620d1d`,
+`7c3b96a`, `89d31dc`, `94c5f3d`; dataset: unisage-gateway PR #9.
+
+**(1) Kiểm tra bám nguồn sau khi sinh** (`app/graph/grounding.py`, `CHAT_GROUNDING_CHECK`)
+
+| Kiểm tra | Cách làm | Khi phát hiện |
+|---|---|---|
+| Con số không nguồn | mọi số trong câu trả lời phải có trong tài liệu được trích dẫn (không trích dẫn thì toàn ngữ cảnh), câu hỏi, giá trị đã biết, hoặc suy ra bằng một phép tính / một tổng từ các số đó; bỏ qua số ≤ 12 và năm | stream thêm dòng "Lưu ý: con số X không tìm thấy trong tài liệu được trích dẫn..." + cảnh báo `ANSWER_UNGROUNDED_NUMBERS` (nhánh calculation: `CALC_UNGROUNDED_INPUT`) |
+| Chỉ số `[n]` ngoài phạm vi | so với số nguồn đã đưa vào prompt (chunk rồi trang web) | `ANSWER_INVALID_CITATION` |
+| Có số liệu mà không trích dẫn | câu trả lời không phải từ chối, có số, không có `[n]` | `ANSWER_NO_CITATION` (chỉ AI admin) |
+
+Giới hạn: câu trả lời đã stream nên không sinh lại được, chỉ gắn lưu ý; kiểm tra số, không
+kiểm tra claim bằng chữ (entailment là việc sau). Nhánh calculation coi tài liệu, builtin rules,
+lịch sử, phép tính trước và hồ sơ khai báo là nguồn; prompt thêm luật không tự điền giả định và
+không coi "không có dữ liệu" là 0. Trên 60 lượt unanswerable bên dưới: 0 cảnh báo grounding (các
+chế độ không-LLM không bịa số), 2 `LLM_RERANK_FAILED` ở chế độ `llm`.
+
+**(2) Bộ 20 câu unanswerable phân nhóm** (d0337–d0356, `unanswerable_kind`), chạy riêng 20 câu ở
+3 chế độ, cache tắt. Chấm: `not_in_corpus`/`partial`/`false_premise`/`near_miss` đạt khi nêu rõ
+giới hạn; `calc_missing_input` đạt khi hỏi lại hoặc nêu giới hạn; **bịa** = trả lời chắc nịch (có
+số, trích tài liệu "gần đúng", hoặc số không nguồn) khi không thể trả lời.
+
+| Nhóm (4 câu mỗi nhóm) | `none` | CE | `llm` |
+|---|---|---|---|
+| not_in_corpus | 4/4 | 4/4 | 4/4 |
+| partial | 4/4 | 4/4 | 4/4 |
+| false_premise | 4/4 | 4/4 | 4/4 |
+| near_miss | 4/4 | 4/4 | 3/4, **1 bịa** |
+| calc_missing_input | 4/4 | 4/4 | 4/4 |
+| **Tổng** | **20/20** | **20/20** | 19/20 |
+| p50 cả lượt | 6,5 s | 6,9 s | 7,8 s |
+
+| Câu | Nhóm | Câu hỏi | `none` | CE | `llm` |
+|---|---|---|---|---|---|
+| d0337 | not_in_corpus | Mức phạt nộp học phí trễ hạn năm học 2025-2026 của IUH là bao nhiêu ph… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0338 | not_in_corpus | Khoa Công nghệ Thông tin có bao nhiêu suất học bổng khuyến khích học t… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0339 | not_in_corpus | Lệ phí phúc khảo một bài thi kết thúc học phần tại IUH hiện nay là bao… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0340 | not_in_corpus | Sinh viên nội trú ký túc xá IUH năm học 2026-2027 được dùng miễn phí b… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0341 | partial | Kỳ Pretest ngành Khoa học máy tính ngày 20/12/2024 do giảng viên nào c… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0342 | partial | Chương trình học bổng KHCN du học của Vingroup năm 2020 cấp tối đa bao… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0343 | partial | Theo hướng dẫn truy cập Wi-Fi IUH tháng 6/2026, người học được cấp bao… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0344 | partial | Theo thông báo mua sách của Công ty CDIMEX tháng 4/2025, văn phòng côn… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0345 | false_premise | Theo quy định của IUH, sinh viên bị cảnh báo học vụ lần thứ ba sẽ được… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0346 | false_premise | Quyết định 1035 về học phí năm học 2025-2026 giảm 50% học phí cho sinh… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0347 | false_premise | Quy chế đào tạo tiến sĩ năm 2017 của IUH miễn toàn bộ học phí năm đầu … | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0348 | false_premise | Phiếu đăng ký ưu tiên xét tuyển đại học năm 2024 của IUH yêu cầu nộp k… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0349 | near_miss | Theo quyết định học phí năm học 2026-2027 của IUH, học phí Khối Công n… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0350 | near_miss | Theo Quy chế tuyển sinh và đào tạo trình độ tiến sĩ năm 2020 của IUH, … | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | BỊA (trả lời) |
+| d0351 | near_miss | Kết quả Pretest ngành Khoa học máy tính đợt tháng 12/2025 có bao nhiêu… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0352 | near_miss | Chương trình đào tạo ngành Kiểm toán khóa 2024 của Viện Tài chính - Kế… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0353 | calc_missing_input | Học phí học kỳ này của em là bao nhiêu nếu em đăng ký 15 tín chỉ?… | đạt (hỏi lại) | đạt (hỏi lại) | đạt (hỏi lại) |
+| d0354 | calc_missing_input | Em còn thiếu bao nhiêu tín chỉ nữa để đủ điều kiện tốt nghiệp ngành Ki… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+| d0355 | calc_missing_input | Nếu em được 8 điểm bài giữa kỳ thì điểm tổng kết học phần Interpretati… | đạt (từ chối/nêu giới hạn) | đạt (hỏi lại) | đạt (từ chối/nêu giới hạn) |
+| d0356 | calc_missing_input | Tổng học phí toàn bộ 4 năm ngành Công nghệ thông tin khóa 16 là bao nh… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
+
+Câu bịa duy nhất là của chế độ `llm`, d0350: hỏi "Quy chế tiến sĩ **2020**" (chỉ có 2017 và
+2023); LLM rerank giữ lại chunk của quy chế 2017 như "trả lời được", model sinh tin theo và trả
+lời "90 tín chỉ [2]" không nói gì về năm. `none` và CE đưa cả hai quy chế vào 8 chunk, model sinh
+nhận ra không có bản 2020 và nói rõ. Đây là mặt trái của bộ lọc LLM: khi nó chọn sai, nó còn
+tước mất ngữ cảnh để model sinh nhận ra sai. Mẫu 20 câu, một lần chạy: đủ để nói "không chế độ
+nào bịa ở 4/5 nhóm", chưa đủ để xếp hạng; hướng dẫn chạy lại: `task eval:run env=eval -- --set
+demo --ids d0337,...,d0356 --variant exact --web off`.
+
+**(3) Tín hiệu evidence và chế độ `auto`** (`app/graph/evidence.py`, `task benchmark:evidence`)
+
+Fusion ghi `rrf_score`, `dense_rank`, `bm25_rank` vào từng chunk; mỗi sub-query có cosine top-1,
+RRF top-1 và khoảng cách top-1/top-2, số chunk top-3 được cả dense lẫn BM25 tìm thấy, điểm CE
+top-1 (nếu có); log mỗi lượt và ghi vào `results.jsonl` của eval. Nghiên cứu ngưỡng trên 139 câu
+`hybrid-on` (retrieval lại, không gọi LLM): 5 câu có tài liệu đúng ngoài top-8 (3 câu không có
+trong toàn bộ 16).
+
+| cosine top-1 < | thêm "không đồng thuận" | gắn cờ weak | % lượt | bắt được miss (trên 5) | báo nhầm |
+|---|---|---|---|---|---|
+| 0,55 | có | 0 | 0 | 0 | 0 |
+| 0,55 | không | 4 | 2,9 % | 1 | 3 |
+| **0,60** | **không** | **14** | **10,1 %** | **3** | **11** |
+| 0,60 | có | 1 | 0,7 % | 0 | 1 |
+| 0,65 | không | 30 | 21,6 % | 4 | 26 |
+| 0,70 | không | 78 | 56,1 % | 5 | 73 |
+
+Đọc số: **đồng thuận dense/BM25 không đánh dấu được miss** (cả 5 câu miss đều có 1–3 chunk được
+hai bên cùng tìm thấy: retrieval "tự tin" vào tài liệu sai), nên luật `weak` chốt theo cosine
+(< 0,60, và < 1,0 điểm CE nếu có), đồng thuận chỉ để log. Với ngưỡng này `auto` gọi LLM rerank ở
+~10 % lượt, bắt 3/5 miss, 11 lượt tốt bị gọi LLM vô ích. Không ép tỷ lệ: tỷ lệ là hệ quả của
+ngưỡng; đổi corpus thì chạy lại study trước khi đổi ngưỡng. `auto` đã có test wiring; chưa chạy
+e2e đầy đủ (ticket sau).
+
+**(4) Chính sách web tách khỏi rerank** (`app/graph/web_policy.py`): fallback web search nhận
+sub-query có mức `none` (không ứng viên) và sub-query LLM rerank làm trống như cũ; mức `weak` chỉ
+khi bật `CHAT_WEB_SEARCH_ON_WEAK_EVIDENCE` (mặc định tắt); chế độ speculative không đổi; log lý
+do từng sub-query. Web đang tắt trong eval nên phần này mới có test đơn vị; đánh giá web
+fallback là ticket riêng.
+
+**Còn mở sau Phase 6**: e2e đầy đủ với `auto`; kiểm tra claim-to-evidence (entailment) cho câu
+chữ, không chỉ số; đánh giá web fallback; lặp bộ unanswerable để có khoảng tin cậy.
+
 ## 9. Phụ lục: lệnh, file
 
 | Bước | Lệnh |
@@ -309,6 +408,7 @@ Số liệu trên 5 câu demo không có tài liệu đúng trong ứng viên (d
 | -p / -c CE | `... -p -c --variant cross_encoder`; `RERANKER_MAX_LENGTH=512 ...` |
 | -p LLM | `... -p --iterations 1 --warmup 2 --variant llm_rerank --variant cross_encoder_then_llm` |
 | e2e | `CHAT_RERANK_MODE=<mode> RETRIEVAL_CACHE_REDIS_URL= task eval:run env=eval -- --set demo --category normal --category calculation --variant exact --web off --out runs/<name>` (CE cần `task reranker:serve`) |
+| Phase 6 | `task eval:run env=eval -- --set demo --ids d0337,…,d0356 --variant exact --web off --out runs/unans-<mode>` với `CHAT_RERANK_MODE=none|cross_encoder|llm`; `task benchmark:evidence env=eval -- hybrid-on` |
 | Hình | `plot_recall.py`, `plot_all.py`, `plot_maxlen.py` cùng thư mục, chạy với `uv run --no-project --with matplotlib` |
 
 Báo cáo gốc từng bước: `benchmark_results/step-*` (gitignore). `report-full.md`: 14 câu lệch ở bước

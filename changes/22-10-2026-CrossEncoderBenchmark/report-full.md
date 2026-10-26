@@ -1056,3 +1056,7 @@ cross_encoder_then_llm vàng), đã qua kiểm tra mù màu.
   viên (để ứng viên vẫn lấy từ collection gốc của run).
 - Bước D báo "VRAM không nhả" là do tiến trình dự án khác (mục 2.5); service đã gỡ model.
 - Bước E1 tạm dừng ở 112/154 theo yêu cầu, chạy tiếp cùng `--out`, eval tự bỏ qua câu đã có.
+
+## 11. Phase 6 — chống bịa khi không còn LLM rerank
+
+Xem `report.md` mục 8.2 (grounding, 20 câu unanswerable × 3 chế độ, nghiên cứu ngưỡng evidence, web policy). Dữ liệu: `runs/unans-{none,ce,llm}`, nghiên cứu ngưỡng in ra từ `task benchmark:evidence env=eval -- hybrid-on`.
