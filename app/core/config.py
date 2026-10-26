@@ -328,6 +328,11 @@ class Settings(BaseSettings):
     # existing behavior; flip off in .env if the false positives outweigh
     # the (rare) real misses it exists to catch.
     CHAT_ALLOW_REPAIR_JSON: bool = True
+    # Grounding check after generation (app/graph/grounding.py): numbers in the answer that
+    # no cited source / shown source / the question contains get a caution line appended
+    # (the answer is already streamed) and an AI-admin warning; `[n]` outside the sources
+    # and answers with figures but no citation are reported to AI admins.
+    CHAT_GROUNDING_CHECK: bool = True
 
     # --- Cost tracking & budget ---
     # Must match backend-java's app.timezone: DAILY/MONTHLY budget periodKeys are cut

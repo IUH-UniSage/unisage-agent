@@ -1308,6 +1308,82 @@ async def test_none_mode_runs_neither_rerank_and_keeps_the_retrieval_order(
     assert result.admin_warnings == []
 
 
+# ── GroundingCheck (after 10_GenerationSynthesisNode) ─────────────────────────
+
+
+_FEE_CHUNK = RetrievedChunk(
+    chunk_id="fee",
+    content="Học phí Khối Công nghệ 38.350.000 đồng/năm.",
+    source="hp.pdf",
+    score=0.9,
+)
+
+
+@pytest.mark.asyncio
+async def test_a_figure_absent_from_every_source_gets_a_caution_and_a_warning(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    tokens: list[str] = []
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí là **42.500.000 đồng**/năm [1]."]),
+        retrieval=FakeRetrievalService([_FEE_CHUNK]),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink(tokens), _TRACE, _usage_recorder())
+
+    assert "42.500.000 không tìm thấy trong tài liệu" in result.response_text
+    assert "".join(tokens).endswith(result.response_text[-40:])  # the caution was streamed too
+    assert [w.code for w in result.admin_warnings] == ["ANSWER_UNGROUNDED_NUMBERS"]
+
+
+@pytest.mark.asyncio
+async def test_figures_found_in_the_cited_source_pass_the_grounding_check(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí là **38.350.000 đồng**/năm [1]."]),
+        retrieval=FakeRetrievalService([_FEE_CHUNK]),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert "Lưu ý" not in result.response_text
+    assert result.admin_warnings == []
+
+
+@pytest.mark.asyncio
+async def test_figures_without_any_citation_only_warn_admins(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí là 38.350.000 đồng/năm."]),
+        retrieval=FakeRetrievalService([_FEE_CHUNK]),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert "Lưu ý" not in result.response_text
+    assert [w.code for w in result.admin_warnings] == ["ANSWER_NO_CITATION"]
+
+
 # --- clarification panel (UNISAGE-99) ----------------------------------------------
 
 _FORM = {

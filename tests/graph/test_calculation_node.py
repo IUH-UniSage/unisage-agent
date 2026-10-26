@@ -395,7 +395,11 @@ async def test_a_result_that_does_not_fit_is_redone_by_the_llm() -> None:
         _recording(prompts, _review(False, _TWO_YEARS_ANSWER, _TWO_YEARS_ISSUE), redone)
     )
 
-    assert result.response_text == f"**{LLM_NOTICE}**\n\n{redone}"
+    # 196.000.000 comes from nowhere the model was shown (a test double): the grounding
+    # check keeps the answer, appends its caution and tells AI admins.
+    assert result.response_text.startswith(f"**{LLM_NOTICE}**\n\n{redone}")
+    assert "196.000.000 không tìm thấy trong tài liệu" in result.response_text
+    assert "CALC_UNGROUNDED_INPUT" in [warning.code for warning in result.admin_warnings]
     assert result.pending_round is None
     _review_prompt, llm_prompt = prompts
     assert '"Số tín chỉ lý thuyết của một năm học": 100' in llm_prompt

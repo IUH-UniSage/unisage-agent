@@ -296,6 +296,12 @@ def score_row(row: dict[str, Any]) -> dict[str, Any]:
         "leaked": leaked_documents(row),
         "refusal_hint": looks_like_refusal(answer),
         "asked_back": bool(row.get("asked_back")),
+        # Grounding check of the graph (app/graph/grounding.py), read from its warnings.
+        "ungrounded": bool(
+            {"ANSWER_UNGROUNDED_NUMBERS", "CALC_UNGROUNDED_INPUT"}
+            & set(row.get("warning_codes") or [])
+        ),
+        "no_citation": "ANSWER_NO_CITATION" in (row.get("warning_codes") or []),
     }
     passed: bool | None = None
     if "error" in outcome:
@@ -390,6 +396,8 @@ def summarize(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         if row.get("expect_visible") is False:
             bucket["leak_n"] += 1
             bucket["leak"] += bool(checks["leaked"])
+        bucket["ungrounded"] += bool(checks.get("ungrounded"))
+        bucket["no_citation"] += bool(checks.get("no_citation"))
         if checks["leaked"]:
             leaks.append({"id": row["id"], "persona": row.get("persona"), "docs": checks["leaked"]})
         latencies.append(row["total_ms"])

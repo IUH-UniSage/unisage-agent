@@ -43,6 +43,7 @@ from app.calculation.result import CalculationInputError, CalculationResult
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
 from app.graph.fence_redactor import FenceRedactor, take_bare_blocks
+from app.graph.grounding import caution_line, check_answer
 from app.graph.metadata_fields import canonical_field, canonical_params, is_profile_field
 from app.graph.nodes.cross_encoder_rerank import (
     CROSS_ENCODER_SKIPPED,
@@ -78,6 +79,8 @@ BUILTIN_IDS: frozenset[str] = frozenset(FORMULAS)
 UnresolvedReason = Literal["llm_disabled", "llm_failed", "form_dropped"]
 # Documents handed to the LLM for one calculation.
 LLM_CHUNKS_LIMIT = 5
+# Prefix of the AI-admin warning when the LLM calculation used numbers with no source.
+CALC_UNGROUNDED = "Phép tính dùng con số không có trong tài liệu, câu hỏi hay giá trị đã biết: "
 
 
 @dataclass(frozen=True)
@@ -727,6 +730,36 @@ async def _ask_llm(
         return Unresolved(task_id, "form_dropped")
     if not text:
         return Unresolved(task_id, "llm_failed")
+    if settings.CHAT_GROUNDING_CHECK:
+        # Numbers the model used that neither the documents, the question nor the known
+        # values contain (and that no arithmetic on them produces): an assumed input. The
+        # answer stays (it is what the user asked for) with a caution, and AI admins see it.
+        # Everything the prompt showed the model counts as a source: the documents, the
+        # built-in rules (their coefficients and percentages), the chat so far, the
+        # earlier calculations' values and the student's declared attributes.
+        shown = [
+            *(chunk.content for chunk in chunks),
+            describe_builtin_rules(),
+            *(message.content for message in deps.history),
+            *(
+                json.dumps(calculation.params, ensure_ascii=False)
+                for calculation in deps.recent_calculations
+            ),
+            " ".join(str(value) for value in deps.confirmed_metadata.values()),
+            deps.user_message or "",
+        ]
+        if deps.previous is not None:
+            shown.append(json.dumps(deps.previous.params, ensure_ascii=False))
+        report = check_answer(text, shown, question=query, known=known)
+        if report.ungrounded:
+            logger.warning(
+                "calculation.ungrounded_numbers task=%s numbers=%s", task_id, report.ungrounded
+            )
+            deps.warn(
+                "CALC_UNGROUNDED_INPUT",
+                f"{CALC_UNGROUNDED}{', '.join(report.ungrounded)} (câu: {query[:80]})",
+            )
+            text += caution_line(report.ungrounded)
     return LlmAnswered(task_id, query, text, plan, dict(known), _cited(text, chunks))
 
 

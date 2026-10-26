@@ -49,6 +49,7 @@ from app.graph.clarification_round import (
     advisory_task,
     build_round,
 )
+from app.graph.grounding import caution_line, check_answer, looks_like_refusal, numbers_in
 from app.graph.metadata_fields import (
     Scope,
     apply_updates,
@@ -138,6 +139,9 @@ from app.schemas.web_search import WebSearchResult, WebSlots
 logger = logging.getLogger(__name__)
 
 # Prefixes of the AI-admin warnings (`event: warning`) this module raises.
+_UNGROUNDED = "Câu trả lời có con số không tìm thấy trong tài liệu được trích dẫn: "
+_INVALID_CITATION = "Câu trả lời trích dẫn chỉ số nguồn không tồn tại: "
+_NO_CITATION = "Câu trả lời nêu số liệu nhưng không trích dẫn tài liệu nào."
 _WEB_SEARCH_FAILED = (
     "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
 )
@@ -1406,6 +1410,44 @@ async def _run_advisory_flow(
     response_text = keep_known_links(
         strip_source_list(generation_result.response_text), [*web_results, *web_sources]
     )
+    # GroundingCheck: numbers and [n] of the answer against the sources it was shown
+    # (chunks, then web pages, numbered in that order). The text is already streamed, so a
+    # finding adds a caution line and an AI-admin warning rather than a rewrite.
+    if settings.CHAT_GROUNDING_CHECK:
+        shown = [chunk.content for chunk in rerank_result.chunks] + [
+            page.content for page in web_results
+        ]
+        report = check_answer(response_text, shown, question=question)
+        if report.ungrounded:
+            caution = caution_line(report.ungrounded)
+            await token_sink(caution)
+            response_text += caution
+            admin_warnings.append(
+                AdminWarning(
+                    code="ANSWER_UNGROUNDED_NUMBERS",
+                    message=f"{_UNGROUNDED}{', '.join(report.ungrounded)}",
+                )
+            )
+        if report.invalid_markers:
+            admin_warnings.append(
+                AdminWarning(
+                    code="ANSWER_INVALID_CITATION",
+                    message=f"{_INVALID_CITATION}{report.invalid_markers}",
+                )
+            )
+        elif (
+            report.no_citation
+            and numbers_in(response_text)
+            and not looks_like_refusal(response_text)
+        ):
+            admin_warnings.append(AdminWarning(code="ANSWER_NO_CITATION", message=_NO_CITATION))
+        logger.info(
+            "grounding ungrounded=%s cited=%s invalid=%s no_citation=%s",
+            report.ungrounded,
+            report.cited,
+            report.invalid_markers,
+            report.no_citation,
+        )
     # Official pages the judge kept only as links: listed after the answer, as the
     # fallback lists them, instead of being lost because another page answered.
     links = source_links_block(web_sources, response_text)
