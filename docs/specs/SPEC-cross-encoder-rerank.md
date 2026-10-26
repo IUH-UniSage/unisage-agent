@@ -192,11 +192,11 @@ không import `app.*`.
 3. Độ chính xác đo hai tầng như trên; RAGAS không chạy.
 4. Giữ top-K, không gate theo điểm CE.
 5. (26/10) `max_length` mặc định 512 thay vì 1024: cùng hoặc hơn độ chính xác, nhanh 1,6 lần
-   (report.md 4.1). Dynamic batching đã thử, không tăng throughput vì GPU bão hoà compute.
+   (report-full.md 4.1). Dynamic batching đã thử, không tăng throughput vì GPU bão hoà compute.
 
 ## Kết quả đo (26/10/2026)
 
-`changes/22-10-2026-CrossEncoderBenchmark/report.md`. Tiêu chí thành công: 3/5 đạt trọn (P95 bước
+`changes/22-10-2026-CrossEncoderBenchmark/report.md` (so sánh 4 phương án; bản đầy đủ `report-full.md`). Tiêu chí thành công: 3/5 đạt trọn (P95 bước
 rerank 147 ms trên 4080; ổn định 100 %; VRAM nhả đúng), 2/5 đạt một phần: tiêu chí 2 recall@8
 0,921 so với 0,880 và NDCG@16 0,739 so với 0,608 đạt nhưng MRR 0,815 so với 0,890 không đạt;
 tiêu chí 4 normal recall@5 110/116 so với 104/116, calculation pass 20/38 so với 18/38, ticket và

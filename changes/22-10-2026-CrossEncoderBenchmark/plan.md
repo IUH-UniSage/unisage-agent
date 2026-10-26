@@ -105,7 +105,7 @@ Task 7 docs/task sau Task 2–4
 
 ## Kết quả đo (26/10/2026, RTX 4080 SUPER)
 
-Báo cáo đầy đủ, từng số liệu kèm đọc số và cách dùng: `report.md` cùng thư mục. Tóm tắt:
+Báo cáo so sánh 4 phương án: `report.md`; bản đầy đủ từng bước và từng câu: `report-full.md` (cùng thư mục). Tóm tắt:
 
 | Trục | `none` (RRF, không rerank) | `llm` (hiện tại) | `cross_encoder` | `cross_encoder_then_llm` |
 |---|---|---|---|---|
@@ -126,7 +126,7 @@ viên: trên corpus này bước rerank không còn việc để làm; `none` v�
 nhiễu ở tầng câu trả lời, cả hai hơn `llm` rõ (+6–7 câu normal, −9–10 từ chối, −10–13 % chi phí,
 nhanh hơn 0,5–0,7 s). Tiêu chí thành công của spec (cross-encoder so với LLM): 3/5 đạt trọn, 2/5
 đạt một phần (MRR 0,815 so với 0,890; calculation recall@5 20 so với 23 do mất trích dẫn).
-Chi tiết report.md 1.1–1.3, 7.7; danh sách từng câu trượt 7.6.
+Chi tiết report.md (bản so sánh 4 phương án); từng câu lệch/trượt: report-full.md 5.3, 7.6.
 
 **Khuyến nghị**: đặt `CHAT_RERANK_MODE=none` mặc định (rẻ nhất, không cần GPU, bằng cross-encoder
 về chất lượng); giữ `cross_encoder` làm lựa chọn cho corpus mà retrieval xếp kém; tắt `llm`; không
@@ -141,5 +141,5 @@ credential RERANK (70/154 lượt lỗi trong run gốc).
 
 - Passage có nên kèm `summary` không: **đã đo** — service báo `truncated=0` ở mọi request (không
   chunk nào vượt 1024 token với heading_path + content), nên chưa cần biến thể `summary`.
-- Gate web search khi không còn LLM rerank (report.md 8.2 mục 3): ticket sau.
-- Trích dẫn nhánh calculation ở chế độ `cross_encoder` (report.md 7.4): ticket sau.
+- Gate web search khi không còn LLM rerank (report-full.md 8.2 mục 3): ticket sau.
+- Trích dẫn nhánh calculation ở chế độ `cross_encoder` (report-full.md 7.4): ticket sau.
