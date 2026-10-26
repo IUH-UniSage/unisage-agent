@@ -4,7 +4,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 OUT = pathlib.Path(sys.argv[1]); OUT.mkdir(exist_ok=True)
-C = {"retrieval": "#2a78d6", "cross_encoder": "#eb6834", "llm_rerank": "#1baf7a", "cross_encoder_then_llm": "#eda100"}
+C = {"retrieval": "#2a78d6", "none": "#2a78d6", "cross_encoder": "#eb6834", "llm_rerank": "#1baf7a", "cross_encoder_then_llm": "#eda100"}
 NAME = {"retrieval": "Thứ tự retrieval (RRF)", "cross_encoder": "cross_encoder", "llm_rerank": "llm_rerank", "cross_encoder_then_llm": "cross_encoder_then_llm"}
 INK, INK2, GRID, SURF = "#1a1a19", "#5f5e57", "#e6e5df", "#fcfcfb"
 plt.rcParams.update({"font.size": 10.5, "font.family": "DejaVu Sans", "axes.edgecolor": "#c3c2b7", "axes.labelcolor": INK2, "xtick.color": INK2, "ytick.color": INK2})
@@ -134,7 +134,7 @@ ax.set_xticks(range(3)); ax.set_xticklabels(names); ax.set_ylabel("ms"); ax.set_
 save(f, "fig6-rerank-latency.png")
 
 # ---- Fig 7: e2e comparison
-E = {"llm_rerank": load("runs/hybrid-on"), "cross_encoder": load("runs/ce-on"), "cross_encoder_then_llm": load("runs/ce-then-llm")}
+E = {"none": load("runs/rrf-only"), "llm_rerank": load("runs/hybrid-on"), "cross_encoder": load("runs/ce-on"), "cross_encoder_then_llm": load("runs/ce-then-llm")}
 def e2e(rs):
     ch = lambda r: r.get("checks") or {}
     normal = [r for r in rs.values() if r["category"] == "normal"]; calc = [r for r in rs.values() if r["category"] == "calculation"]
@@ -146,28 +146,29 @@ def e2e(rs):
         p50=pct([r["total_ms"] for r in rs.values() if r.get("total_ms")], .5), p95=pct([r["total_ms"] for r in rs.values() if r.get("total_ms")], .95),
         usd=st.mean(r["usage"]["usd"] for r in rs.values() if r.get("usage"))*1000, calls=st.mean(r["usage"]["calls"] for r in rs.values() if r.get("usage")))
 S = {n: e2e(rs) for n, rs in E.items()}
-names = ["llm_rerank", "cross_encoder", "cross_encoder_then_llm"]
-f = fig(13, 4.6)
+names = ["none", "llm_rerank", "cross_encoder", "cross_encoder_then_llm"]
+SHORT = ["none\n(RRF)", "llm", "cross_\nencoder", "ce_then_\nllm"]
+f = fig(14, 4.8)
 ax = f.add_subplot(141); style(ax, "Độ chính xác e2e (%)\n154 câu, cache tắt")
 ms = [("normal_recall", "normal\nrecall@5"), ("calc_pass", "calc\npass"), ("calc_recall", "calc\nrecall@5")]
 for j, n in enumerate(names):
-    xs = [i + (j-1)*0.27 for i in range(3)]; vals = [S[n][m] for m, _ in ms]
-    ax.bar(xs, vals, width=0.25, color=C[n], label=n)
-    for xx, v in zip(xs, vals): ax.text(xx, v+1.5, f"{v:.0f}", ha="center", fontsize=8.5, color=INK)
-ax.set_xticks(range(3)); ax.set_xticklabels([l for _, l in ms]); ax.set_ylim(0, 110); ax.legend(frameon=False, fontsize=8.5, loc="upper right")
+    xs = [i + (j-1.5)*0.21 for i in range(3)]; vals = [S[n][m] for m, _ in ms]
+    ax.bar(xs, vals, width=0.2, color=C[n], label=n)
+    for xx, v in zip(xs, vals): ax.text(xx, v+1.5, f"{v:.0f}", ha="center", fontsize=8, color=INK)
+ax.set_xticks(range(3)); ax.set_xticklabels([l for _, l in ms]); ax.set_ylim(0, 118); ax.legend(frameon=False, fontsize=8, loc="upper right", ncol=2)
 ax = f.add_subplot(142); style(ax, "Số câu có dấu hiệu từ chối\n(refusal_hint) trên 154")
-vals = [S[n]["refusal"] for n in names]; ax.bar(range(3), vals, color=[C[n] for n in names], width=0.6)
+vals = [S[n]["refusal"] for n in names]; ax.bar(range(4), vals, color=[C[n] for n in names], width=0.6)
 for i, v in enumerate(vals): ax.text(i, v+1, str(v), ha="center", fontsize=9.5, color=INK)
-ax.set_xticks(range(3)); ax.set_xticklabels(["llm", "cross_\nencoder", "ce_then_\nllm"]); ax.set_ylim(0, 50)
+ax.set_xticks(range(4)); ax.set_xticklabels(SHORT); ax.set_ylim(0, 50)
 ax = f.add_subplot(143); style(ax, "Độ trễ cả lượt (ms)\np50 đậm, p95 nhạt")
 for i, n in enumerate(names):
     ax.bar(i-0.2, S[n]["p50"], width=0.38, color=C[n]); ax.bar(i+0.2, S[n]["p95"], width=0.38, color=C[n], alpha=0.45)
     ax.text(i-0.2, S[n]["p50"]+300, f"{S[n]['p50']/1000:.1f}s".replace(".", ","), ha="center", fontsize=8.5, color=INK); ax.text(i+0.2, S[n]["p95"]+300, f"{S[n]['p95']/1000:.1f}s".replace(".", ","), ha="center", fontsize=8.5, color=INK)
-ax.set_xticks(range(3)); ax.set_xticklabels(["llm", "cross_\nencoder", "ce_then_\nllm"]); ax.set_ylim(0, 21000)
+ax.set_xticks(range(4)); ax.set_xticklabels(SHORT); ax.set_ylim(0, 21000)
 ax = f.add_subplot(144); style(ax, "Chi phí LLM mỗi lượt\n(USD × 1000, số lượt gọi)")
-vals = [S[n]["usd"] for n in names]; ax.bar(range(3), vals, color=[C[n] for n in names], width=0.6)
-for i, n in enumerate(names): ax.text(i, vals[i]+0.1, f"{vals[i]:.2f}\n({S[n]['calls']:.2f} gọi)".replace(".", ","), ha="center", fontsize=8.5, color=INK)
-ax.set_xticks(range(3)); ax.set_xticklabels(["llm", "cross_\nencoder", "ce_then_\nllm"]); ax.set_ylim(0, 7.5)
+vals = [S[n]["usd"] for n in names]; ax.bar(range(4), vals, color=[C[n] for n in names], width=0.6)
+for i, n in enumerate(names): ax.text(i, vals[i]+0.1, f"{vals[i]:.2f}\n({S[n]['calls']:.2f} gọi)".replace(".", ","), ha="center", fontsize=8, color=INK)
+ax.set_xticks(range(4)); ax.set_xticklabels(SHORT); ax.set_ylim(0, 7.5)
 save(f, "fig7-e2e-comparison.png")
 
 # ---- Fig 8: failure reasons per run
@@ -190,12 +191,12 @@ for k_, (cat, fn, title, key_, order_) in enumerate((("normal", normal_reason, "
                                                       ("calculation", calc_reason, "Vì sao câu calculation trượt pass", "pass", ["R1. off-topic", "R2. không qua\nCalculationNode", "R3. hỏi lại", "R4. con số sai /\ntừ chối tính"]))):
     ax = f.add_subplot(1, 2, k_+1); style(ax, title)
     cnts = {}
-    for n in ["llm_rerank", "cross_encoder"]:
+    for n in ["llm_rerank", "cross_encoder", "none"]:
         c_ = collections.Counter(fn(r) for r in E[n].values() if r["category"] == cat and (r.get("checks") or {}).get(key_) is False)
         cnts[n] = [c_.get(o, 0) for o in order_]
     x = range(len(order_))
     for j, n in enumerate(cnts):
-        xs = [i + (j-0.5)*0.4 for i in x]; ax.bar(xs, cnts[n], width=0.38, color=C[n], label=f"{n} (tổng {sum(cnts[n])})")
+        xs = [i + (j-1)*0.28 for i in x]; ax.bar(xs, cnts[n], width=0.26, color=C[n], label=f"{n} (tổng {sum(cnts[n])})")
         for xx, v in zip(xs, cnts[n]):
             if v: ax.text(xx, v+0.15, str(v), ha="center", fontsize=9, color=INK)
     ax.set_xticks(list(x)); ax.set_xticklabels(order_, fontsize=8.5); ax.set_ylabel("số câu"); ax.legend(frameon=False)

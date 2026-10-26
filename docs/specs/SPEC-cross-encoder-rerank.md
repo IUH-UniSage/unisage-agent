@@ -65,8 +65,8 @@ thứ tự điểm (fail-open).
    - Không auth: chỉ bind `127.0.0.1` mặc định; production đặt sau mạng nội bộ.
 2. **Agent nối vào graph** (`app/integrations/cross_encoder_client.py`,
    `app/graph/nodes/cross_encoder_rerank.py`):
-   - Cài đặt: `CHAT_RERANK_MODE` ∈ {`llm` (mặc định), `cross_encoder`,
-     `cross_encoder_then_llm`}, `CROSS_ENCODER_URL` (`http://127.0.0.1:8403`),
+   - Cài đặt: `CHAT_RERANK_MODE` ∈ {`llm` (mặc định), `none` (thêm 26/10: không rerank, thứ tự
+     retrieval sau sàn dense), `cross_encoder`, `cross_encoder_then_llm`}, `CROSS_ENCODER_URL` (`http://127.0.0.1:8403`),
      `CROSS_ENCODER_TIMEOUT_SECONDS` (2.0), `CHAT_CROSS_ENCODER_KEEP` (8: số chunk giữ mỗi
      sub-query; chế độ hai tầng dùng số này làm đầu vào cho LLM rerank).
    - `cross_encoder`: mỗi sub-query gửi (câu hỏi độc lập, 16 passage = heading_path +
@@ -199,9 +199,12 @@ rerank 147 ms trên 4080; ổn định 100 %; VRAM nhả đúng), 2/5 đạt m�
 0,921 so với 0,880 và NDCG@16 0,739 so với 0,608 đạt nhưng MRR 0,815 so với 0,890 không đạt;
 tiêu chí 4 normal recall@5 110/116 so với 104/116, calculation pass 20/38 so với 18/38, ticket và
 p95 giảm đạt nhưng calculation recall@5 20 so với 23 không đạt (mất trích dẫn, không mất câu
-trả lời). Khuyến nghị bật `CHAT_RERANK_MODE=cross_encoder` mặc
-định khi có GPU; không dùng `cross_encoder_then_llm`. Mặc định trong code vẫn là `llm` cho tới khi
-có quyết định triển khai (ticket sau: registry, Windows 3060, gate web search).
+trả lời). Bước F bổ sung chế độ `none` (không rerank, thứ tự
+RRF sau sàn dense): bằng `cross_encoder` ở tầng câu trả lời (normal recall@5 111 so với 110/116,
+calculation pass 19/37 so với 20/38, từ chối 31 so với 32), rẻ nhất, không cần GPU. Khuyến nghị đặt
+`none` mặc định, giữ `cross_encoder` cho corpus mà retrieval xếp kém, tắt `llm`, không dùng
+`cross_encoder_then_llm`. Mặc định trong code vẫn là `llm` cho tới khi có quyết định triển khai
+(ticket sau: đổi mặc định, gate web search, trích dẫn nhánh calculation, Windows 3060).
 
 ## Open Questions
 

@@ -132,34 +132,50 @@ hoặc tạm giữ `llm` riêng cho nhánh này (graph đã tách hai chỗ gọ
 
 ### 1.3. Khuyến nghị
 
-**Bật `CHAT_RERANK_MODE=cross_encoder` làm mặc định cho môi trường có GPU (dev, eval, và
-production nếu máy chủ có GPU ≥ 2,5 GB trống), giữ `llm` làm fail-over tự động như đã cài.**
-Lý do bằng số, trên cùng 154 câu demo:
+**Kết quả mạnh nhất của benchmark không phải "cross-encoder thắng LLM" mà là "trên corpus này
+bước rerank không còn việc để làm".** Thứ tự RRF của hybrid retrieval đã chạm trần của bộ ứng
+viên; mọi bộ rerank chỉ có thể giữ nguyên hoặc làm hỏng. Bốn chế độ ở tầng câu trả lời, cùng
+154 câu (mục 7, 7.7):
 
-- Nhanh hơn: bước rerank 112 ms thay vì 1 696 ms (median, −93 %); cả lượt chat p50 4,6 s thay vì
-  5,3 s (−13,5 %), p95 7,5 s thay vì 9,5 s (−20 %).
-- Đúng hơn ở nhóm normal: thêm 6 câu có tài liệu đúng trong top-5 (110 so với 104), ít câu từ
-  chối trả lời hơn (32 so với 41), không còn ticket fallback (0 so với 1), độ chính xác trích
-  dẫn 0,910 so với 0,891.
-- Rẻ hơn và ổn định hơn: bớt đúng một lượt gọi LLM mỗi lượt (2,33 so với 3,32), chi phí
-  −10 % (0,00503 so với 0,00557 USD/lượt), kết quả tất định 100 % (LLM chỉ 49,6 % câu cho cùng
-  tập chunk qua 3 lần chạy), và không còn phụ thuộc rate limit 15 lượt/phút của credential
-  RERANK, thứ đã làm LLM rerank lỗi ở 70/154 lượt của run gốc.
+| | `none` (RRF, không rerank) | `cross_encoder` | `llm` (hiện tại) | `cross_encoder_then_llm` |
+|---|---|---|---|---|
+| normal recall@5 | **111/116** | 110/116 | 104/116 | 108/116 |
+| calculation pass | 19/37 (*) | **20/38** | 18/38 | **21/38** |
+| Từ chối trả lời | 31 | 32 | 41 | **29** |
+| Ticket fallback | 0 | 0 | 1 | 1 |
+| Cả lượt p50 / p95 | 4,9 s / 8,2 s (*) | **4,6 s / 7,5 s** | 5,3 s / 9,5 s | 6,6 s / 17,9 s |
+| USD / lượt | **0,00483** | 0,00503 | 0,00557 | 0,00540 |
+| Cần gì thêm | không gì | GPU 2,5 GB + service | API + rate limit | cả hai |
 
-**Không khuyến nghị `cross_encoder_then_llm`**: không chính xác hơn `llm_rerank` (0,876 so với
-0,880 ở bước rerank; 108 so với 104 ở tầng câu trả lời nhưng kém `cross_encoder` 110), vẫn tốn một
-lượt LLM, vẫn dính rate limit (32 lượt lỗi), p95 cả lượt 17,9 s trong điều kiện eval.
+(*) `none` có 1 lượt lỗi 504 của model sinh (d0316, 33 s) không liên quan rerank; bỏ lượt đó
+pass là 19/37 và p95 ~7,9 s.
 
-**Điều kiện và việc cần làm trước khi bật ở production** (chi tiết mục 8):
+`none` và `cross_encoder` **hoà trong mức nhiễu** (±1–2 câu, mức dao động của chính model sinh
+giữa hai lần chạy). Cả hai hơn `llm` rõ: +6–7 câu normal, +1–2 pass calculation, −9–10 câu từ
+chối, −10–13 % chi phí, nhanh hơn 0,5–0,7 s mỗi lượt.
 
-1. Đo lại Bảng 2 và 3 trên RTX 3060 (Windows); nếu p95 > 500 ms thì giảm `RERANKER_MAX_LENGTH`
-   xuống 512 và đo lại recall.
-2. Giữ `CHAT_WEB_SEARCH_ENABLED=false` hoặc chấp nhận rằng ở chế độ `cross_encoder` web search
-   chỉ chạy khi retrieval trả về 0 chunk (cross-encoder không bao giờ "loại hết").
-3. Theo dõi 2 điểm yếu thật của cross-encoder: bảng toàn tên riêng (d0010) và tài liệu trùng
-   tiêu đề (bộ "Kết quả thi chứng chỉ CNTT ca 1/ca 2").
-4. Sửa nguyên nhân rate limit của credential RERANK/Extraction (maxRpm 15) độc lập với ticket
-   này; nó làm méo mọi số đo của biến thể LLM.
+**Khuyến nghị theo thứ tự:**
+
+1. **Đặt `CHAT_RERANK_MODE=none` làm mặc định** ở mọi môi trường: bằng cross-encoder về chất
+   lượng, rẻ nhất, không cần GPU, không thêm tiến trình, không có gì để hỏng. Bước 09a trở thành
+   "sàn cosine 0,45 rồi lấy 8 chunk đầu theo RRF".
+2. **Giữ service cross-encoder và chế độ `cross_encoder` như lựa chọn** cho corpus/câu hỏi mà
+   retrieval xếp kém hơn (hình 1: cross-encoder chỉ có chỗ phát huy khi đường RRF chưa chạm
+   trần), hoặc khi cần điểm liên quan làm tín hiệu cho web search sau này. Bật khi có số đo trên
+   corpus đó, không bật theo mặc định.
+3. **Tắt LLM rerank** trừ khi có lý do khác ngoài độ chính xác: nó là chế độ kém nhất ở mọi cột
+   trừ MRR, không ổn định (49,6 % tái lập) và phụ thuộc rate limit.
+4. **Không triển khai `cross_encoder_then_llm`.**
+
+**Điều kiện và việc cần làm trước khi đổi mặc định** (chi tiết mục 8):
+
+1. Web search: cả `none` lẫn `cross_encoder` đều không có gate "không tài liệu nào trả lời";
+   khi bật lại `CHAT_WEB_SEARCH_ENABLED` cần một gate khác (ví dụ cosine top-1 < ngưỡng).
+2. Trích dẫn ở nhánh calculation (mục 7.4): cả hai chế độ không-LLM đều bớt gắn trích dẫn
+   (recall@5 calculation 19–20 so với 23); câu trả lời không đổi nhưng cần sửa trước khi bật cho
+   nhánh này, hoặc giữ `llm` riêng cho Calculation.
+3. Đo lại trên một corpus thứ hai (bộ official) trước khi khái quát "không cần rerank".
+4. Sửa rate limit của credential RERANK/Extraction (maxRpm 15) độc lập với ticket này.
 
 ---
 
@@ -547,27 +563,28 @@ Run gốc `runs/hybrid-on` (chế độ `llm`, 21/10), `runs/ce-on` (`cross_enco
 
 ### 7.1. Bảng tổng
 
-| Chỉ số | `llm` (hybrid-on) | `cross_encoder` (ce-on) | `cross_encoder_then_llm` (ce-then-llm) |
-|---|---|---|---|
-| normal: recall@5 | 104/116 (89,7 %) | **110/116 (94,8 %)** | 108/116 (93,1 %) |
-| normal: fail (không có tài liệu đúng) | 12 | **7** | 8 |
-| calculation: pass | 18/38 | 20/38 | **21/38** |
-| calculation: recall@5 | **23/38** | 20/38 | 20/38 |
-| Câu có dấu hiệu từ chối (`refusal_hint`) | 41 (31 normal / 10 calc) | 32 (27 / 5) | **29 (23 / 6)** |
-| Ticket fallback | 1 | **0** | 1 |
-| Citation accuracy (TB) | 0,891 | **0,910** | 0,905 |
-| Lượt có node 09a LLM / CE | 122 / 0 | 0 / 123 | 123 / 123 |
-| LLM rerank lỗi (fail-open) | 70 | 0 | 32 (31 rate limit, 1 JSON) |
-| Lượt gọi LLM / lượt chat | 3,32 | **2,33** | 3,30 |
-| Token vào / lượt (TB) | 28 155 | **25 759** | 27 789 |
-| USD / lượt (TB) · cả run | 0,00557 · 0,858 | **0,00503 · 0,774** | 0,00540 · 0,831 |
+| Chỉ số | `llm` (hybrid-on) | `cross_encoder` (ce-on) | `cross_encoder_then_llm` (ce-then-llm) | `none` (rrf-only, mục 7.7) |
+|---|---|---|---|---|
+| normal: recall@5 | 104/116 (89,7 %) | 110/116 (94,8 %) | 108/116 (93,1 %) | **111/116 (95,7 %)** |
+| normal: fail (không có tài liệu đúng) | 12 | 7 | 8 | **6** |
+| calculation: pass | 18/38 | 20/38 | **21/38** | 19/37 (1 lượt lỗi 504) |
+| calculation: recall@5 | **23/38** | 20/38 | 20/38 | 19/38 |
+| Câu có dấu hiệu từ chối (`refusal_hint`) | 41 (31 normal / 10 calc) | 32 (27 / 5) | **29 (23 / 6)** | 31 (24 / 7) |
+| Ticket fallback | 1 | **0** | 1 | **0** |
+| Citation accuracy (TB) | 0,891 | **0,910** | 0,905 | 0,909 |
+| Lượt có node 09a LLM / CE | 122 / 0 | 0 / 123 | 123 / 123 | 0 / 0 |
+| LLM rerank lỗi (fail-open) | 70 | 0 | 32 (31 rate limit, 1 JSON) | 0 |
+| Lượt gọi LLM / lượt chat | 3,32 | 2,33 | 3,30 | **2,34** |
+| Token vào / lượt (TB) | 28 155 | 25 759 | 27 789 | **25 436** |
+| USD / lượt (TB) · cả run | 0,00557 · 0,858 | 0,00503 · 0,774 | 0,00540 · 0,831 | **0,00483 · 0,744** |
 
 ![So sánh e2e ba chế độ](fig7-e2e-comparison.png)
 
-*Hình 7. Tầng câu trả lời, 154 câu, cache tắt. Từ trái: độ chính xác (normal recall@5, calculation
-pass, calculation recall@5 theo trích dẫn), số câu từ chối, độ trễ cả lượt p50/p95, chi phí LLM mỗi
-lượt và số lượt gọi. `cross_encoder` tốt nhất ở 5/6 cột; cột calculation recall@5 giảm là mất
-trích dẫn (mục 7.4). Độ trễ của hai chế độ có LLM gồm cả thời gian chờ rate limit của eval.*
+*Hình 7. Tầng câu trả lời, 154 câu, cache tắt, bốn chế độ. Từ trái: độ chính xác (normal
+recall@5, calculation pass, calculation recall@5 theo trích dẫn), số câu từ chối, độ trễ cả lượt
+p50/p95, chi phí LLM mỗi lượt và số lượt gọi. `none` và `cross_encoder` hoà trong mức nhiễu và
+cùng hơn `llm` ở mọi cột trừ calculation recall@5 (mất trích dẫn, mục 7.4). Độ trễ của hai chế
+độ có LLM gồm cả thời gian chờ rate limit của eval; p95 của `none` có một lượt lỗi 504 (33 s).*
 
 ### 7.2. Độ trễ toàn lượt (ms, 154 lượt, 3 lượt song song)
 
@@ -576,6 +593,7 @@ trích dẫn (mục 7.4). Độ trễ của hai chế độ có LLM gồm cả t
 | `llm` | 3222 | 3790 | 5345 | 6661 | 7900 | 9453 | 12158 | 4963 | 5204 / 9023 | 5737 / 12042 |
 | `cross_encoder` | 3404 | 3881 | **4623** | **5505** | **6134** | **7535** | 27803 | **4359** | **4705 / 7535** | **4558 / 8113** |
 | `cross_encoder_then_llm` | 3826 | 4899 | 6632 | 8441 | 14255 | 17917 | 34600 | 5906 | 5745 / 9908 | 11486 / 22196 |
+| `none` (mục 7.7) | 3574 | 4062 | 4860 | 5664 | 6980 | 8152 | 33751 (lỗi 504) | 4522 | 4738 / 6900 | 5545 / 33054 |
 
 **Đọc số**
 
@@ -744,7 +762,7 @@ Tổng theo nguyên nhân: {'R1': 1, 'R2': 8, 'R3': 1, 'R4': 8}
 
 ![Nguyên nhân trượt theo cấu hình](fig8-failure-reasons.png)
 
-*Hình 8. Số câu trượt theo nguyên nhân ở hai cấu hình. Normal: `cross_encoder` xoá gần hết nhóm C
+*Hình 8. Số câu trượt theo nguyên nhân ở ba cấu hình (`none` thêm ở bước F, mục 7.7). Normal: `cross_encoder` xoá gần hết nhóm C
 (rerank loại tài liệu đúng: 5 → 1) và không còn ticket; phần còn lại là off-topic (A) và retrieval
 (B), rerank không chạm tới. Calculation: nhóm định tuyến R1–R3 (10 câu) giống hệt nhau ở hai cấu
 hình; chỉ nhóm R4 đổi (10 → 8).*
@@ -781,33 +799,73 @@ hình; chỉ nhóm R4 đổi (10 → 8).*
 (A, R1–R3: 13 câu) và **retrieval/corpus** (B: 3 câu), không phải ở rerank. Muốn tăng điểm eval
 tiếp theo thì ưu tiên hai chỗ đó hơn là tinh chỉnh rerank.
 
+### 7.7. Bước F — chế độ `none`: bỏ hẳn bước rerank (`runs/rrf-only`)
+
+Thêm sau khi bước A–E cho thấy thứ tự RRF không thua cross-encoder ở bước rerank. Chế độ
+`CHAT_RERANK_MODE=none` (commit `09ef419`): giữ sàn cosine 0,45 của hybrid, lấy 8 chunk đầu theo
+thứ tự retrieval, không gọi model nào; cùng lệnh eval, cùng điều kiện với ba run trước.
+
+| Chỉ số | `none` | `cross_encoder` | Chênh |
+|---|---|---|---|
+| normal recall@5 | 111/116 | 110/116 | +1 |
+| normal fail | 6 | 7 | −1 |
+| calculation pass | 19/37 (1 lượt lỗi 504) | 20/38 | 0 (cùng 19 đúng trong 37 lượt so được) |
+| calculation recall@5 | 19/38 | 20/38 | −1 |
+| Từ chối | 31 | 32 | −1 |
+| Ticket | 0 | 0 | 0 |
+| Citation accuracy | 0,909 | 0,910 | 0 |
+| Cả lượt p50 / p95 | 4 860 / 8 152 ms | 4 623 / 7 535 ms | +237 / +617 ms |
+| USD / lượt | 0,00483 | 0,00503 | −4 % |
+
+**Đọc số**
+
+- Về chất lượng, `none` và `cross_encoder` **không phân biệt được**: 1 câu normal hơn, 1 câu
+  calculation kém, 1 câu từ chối ít hơn. 35 câu đổi trạng thái giữa hai run nhưng 25 câu chỉ đổi
+  `refusal_hint` qua lại (model sinh diễn đạt khác nhau giữa hai lần chạy), không đổi recall hay
+  pass. Đây là mức nhiễu nền của eval; chênh lệch giữa hai chế độ nhỏ hơn mức đó.
+- Độ trễ cả lượt của `none` **không thấp hơn** `cross_encoder` dù bước rerank bớt 0,11 s: chênh
+  +237 ms ở p50 nằm trong nhiễu của model sinh và rate limit credential Chat (p95 của `none` còn
+  dính một lượt 504 kéo dài 33 s ở d0316). Kết luận đúng là "cả hai cùng nhanh hơn `llm` ~0,5–0,7
+  s", không phải "cross-encoder nhanh hơn none".
+- Chi phí thấp nhất (0,00483 USD/lượt, 2,34 lượt gọi) vì không có bước rerank nào gọi LLM; chênh
+  với `cross_encoder` chỉ 4 % vì cross-encoder cũng không gọi LLM, phần còn lại là nhiễu token
+  của câu trả lời.
+- Hai câu đáng xem: d0012 (`none` đưa "Course specification Interpretation 1" lên top-5 nhờ giữ
+  thứ tự RRF hạng 1–2, cross-encoder đẩy xuống vị trí 7) và d0050 (ngược lại: `none` từ chối,
+  cross-encoder trả lời đúng nhờ "Bản mô tả CTĐT" p17). Mỗi bên một câu, đúng tính chất hoà.
+
+**Dùng để quyết định**: khi hai phương án hoà về chất lượng, chọn phương án **không cần gì
+thêm**: `none` không cần GPU, không có service để theo dõi, không có gì để hỏng, rẻ nhất. Cross-
+encoder giữ lại như công cụ cho corpus mà retrieval xếp kém (chưa gặp ở bộ demo).
+
 ---
 
 ## 8. Đánh giá tổng hợp và khuyến nghị
 
 ### 8.1. Ba biến thể theo bốn trục
 
-| Trục | `llm` (hiện tại) | `cross_encoder` | `cross_encoder_then_llm` |
-|---|---|---|---|
-| Độ trễ bước rerank p50 / p95 | 1,7 s / 3,3 s | **0,11 s / 0,15 s** | 1,7 s / 2,6 s |
-| Độ trễ cả lượt p50 / p95 (eval) | 5,3 s / 9,5 s | **4,6 s / 7,5 s** | 6,6 s / 17,9 s |
-| recall@8 bước rerank (mốc `none` 0,928) | 0,880 | **0,921** | 0,876 |
-| normal recall@5 e2e | 89,7 % | **94,8 %** | 93,1 % |
-| calculation pass e2e | 18/38 | 20/38 | **21/38** |
-| Từ chối trả lời | 41 | 32 | **29** |
-| Tái lập | 49,6 % | **100 %** | 49,6 % |
-| Chi phí LLM / lượt | 0,00557 USD | **0,00503 USD** | 0,00540 USD |
-| Phụ thuộc bên ngoài | API + rate limit | GPU local 2,5 GB | cả hai |
-| Rủi ro riêng | loại nhầm tài liệu (12 câu), nhiễu | bảng tên riêng, tài liệu trùng tên, mất gate web search | cộng rủi ro của cả hai |
+| Trục | `none` (RRF) | `llm` (hiện tại) | `cross_encoder` | `cross_encoder_then_llm` |
+|---|---|---|---|---|
+| Độ trễ bước rerank p50 / p95 | **0 ms** | 1,7 s / 3,3 s | 0,11 s / 0,15 s | 1,7 s / 2,6 s |
+| Độ trễ cả lượt p50 / p95 (eval) | 4,9 s / 8,2 s (lỗi 504) | 5,3 s / 9,5 s | **4,6 s / 7,5 s** | 6,6 s / 17,9 s |
+| recall@8 bước rerank | **0,928** (= trần) | 0,880 | 0,921 | 0,876 |
+| MRR bước rerank | 0,846 | **0,890** | 0,815 | 0,879 |
+| normal recall@5 e2e | **95,7 %** | 89,7 % | 94,8 % | 93,1 % |
+| calculation pass e2e | 19/37 | 18/38 | 20/38 | **21/38** |
+| Từ chối trả lời | 31 | 41 | 32 | **29** |
+| Tái lập | **100 %** | 49,6 % | **100 %** | 49,6 % |
+| Chi phí LLM / lượt | **0,00483 USD** | 0,00557 USD | 0,00503 USD | 0,00540 USD |
+| Phụ thuộc bên ngoài | **không** | API + rate limit | GPU local 2,5 GB | cả hai |
+| Rủi ro riêng | mất gate web search; không sửa được thứ tự khi retrieval xếp kém | loại nhầm tài liệu (12 câu), nhiễu | bảng tên riêng, tài liệu trùng tên, mất gate web search | cộng rủi ro của cả hai |
 
 ### 8.2. Khuyến nghị và điều kiện
 
-1. **Bật `CHAT_RERANK_MODE=cross_encoder` mặc định** ở dev và eval ngay; ở production khi máy chủ
-   có GPU trống ≥ 2,5 GB (3060 12 GB đạt). Fail-over về `llm` đã có sẵn: service tắt → cảnh báo
-   `CROSS_ENCODER_FAILED`, câu trả lời vẫn có (đã test ở Task 2).
+1. **Đặt `CHAT_RERANK_MODE=none` mặc định** (mục 1.3): bằng cross-encoder về chất lượng, rẻ nhất,
+   không cần GPU hay service. `cross_encoder` là lựa chọn thứ hai cho corpus mà retrieval xếp
+   kém; fail-over về `llm` của nó đã có sẵn (service tắt → cảnh báo `CROSS_ENCODER_FAILED`).
 2. **Không triển khai `cross_encoder_then_llm`**; giữ code vì rẻ và có ích cho thử nghiệm model
-   rerank khác.
-3. **Web search**: ở chế độ `cross_encoder` sub-query không bao giờ "trống", nên
+   rerank khác. **Tắt `llm`** trừ khi cần gate web search (xem mục 3).
+3. **Web search**: ở chế độ `none` và `cross_encoder` sub-query không bao giờ "trống", nên
    `CHAT_WEB_SEARCH_MODE=fallback` chỉ kích hoạt khi retrieval trả 0 chunk; `speculative` không
    đổi. Hiện `CHAT_WEB_SEARCH_ENABLED=false` nên chưa ảnh hưởng; khi bật lại web search cần một
    gate khác (ví dụ: điểm cross-encoder top-1 < 0 **và** cosine top-1 < 0,6 → coi là không có
@@ -859,6 +917,7 @@ tiếp theo thì ưu tiên hai chỗ đó hơn là tinh chỉnh rerank.
 | C | `... -a --repeats 3 --variant llm_rerank --variant cross_encoder_then_llm --out benchmark_results/step-c-llm-accuracy` (giãn cách 14/phút) | |
 | D | `... -p --iterations 1 --warmup 2 --variant llm_rerank --variant cross_encoder_then_llm --out benchmark_results/step-d-llm-perf` | |
 | E | `task reranker:serve` + `CHAT_RERANK_MODE=cross_encoder RETRIEVAL_CACHE_REDIS_URL= task eval:run env=eval -- --set demo --category normal --category calculation --variant exact --web off --out runs/ce-on`; tương tự `cross_encoder_then_llm` → `runs/ce-then-llm` | `summary.json`, `results.jsonl` |
+| F | `CHAT_RERANK_MODE=none RETRIEVAL_CACHE_REDIS_URL= task eval:run ... --out runs/rrf-only`; `task benchmark:run env=eval -- hybrid-on -a --variant none --out benchmark_results/step-a2-none` (mốc bước rerank); `CHAT_CONTEXT_MAX_CHUNKS=16 ... --variant none` (trần 0,928) | |
 
 `benchmark_results/` và `runs/` nằm trong gitignore; JSON của từng bước có từng lượt từng câu
 (`kept_ids`, `ce_scores`, `took_ms`) để soi lại.

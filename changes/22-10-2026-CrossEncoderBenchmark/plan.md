@@ -107,30 +107,32 @@ Task 7 docs/task sau Task 2–4
 
 Báo cáo đầy đủ, từng số liệu kèm đọc số và cách dùng: `report.md` cùng thư mục. Tóm tắt:
 
-| Trục | `llm` (hiện tại) | `cross_encoder` | `cross_encoder_then_llm` |
-|---|---|---|---|
-| Độ trễ bước rerank p50 / p95 | 1,7 s / 3,3 s | **0,11 s / 0,15 s** | 1,7 s / 2,6 s |
-| Độ trễ cả lượt p50 / p95 (eval, 154 câu) | 5,3 s / 9,5 s | **4,6 s / 7,5 s** | 6,6 s / 17,9 s |
-| recall@8 bước rerank (139 câu, cùng 16 ứng viên) | 0,880 | **0,921** | 0,876 |
-| normal recall@5 e2e | 104/116 | **110/116** | 108/116 |
-| calculation pass e2e | 18/38 | 20/38 | **21/38** |
-| calculation recall@5 e2e (theo trích dẫn) | **23/38** | 20/38 | 20/38 |
-| Từ chối trả lời | 41 | 32 | **29** |
-| Tái lập qua 3 lượt | 49,6 % | **100 %** | 49,6 % |
-| USD / lượt | 0,00557 | **0,00503** | 0,00540 |
-| Chịu tải service (1 câu, 30 req/mức) | — | mức 1/2/4/8: p50 146/269/538/1076 ms, ~7,3 req/s | — |
-| VRAM | — | 1 839 MiB rảnh, 2 987 MiB đỉnh, về 494 MiB sau khi tắt | — |
+| Trục | `none` (RRF, không rerank) | `llm` (hiện tại) | `cross_encoder` | `cross_encoder_then_llm` |
+|---|---|---|---|---|
+| Độ trễ bước rerank p50 / p95 | 0 ms | 1,7 s / 3,3 s | 0,11 s / 0,15 s | 1,7 s / 2,6 s |
+| Độ trễ cả lượt p50 / p95 (eval, 154 câu) | 4,9 s / 8,2 s | 5,3 s / 9,5 s | **4,6 s / 7,5 s** | 6,6 s / 17,9 s |
+| recall@8 bước rerank (139 câu, cùng ứng viên) | **0,928** (= trần) | 0,880 | 0,921 | 0,876 |
+| normal recall@5 e2e | **111/116** | 104/116 | 110/116 | 108/116 |
+| calculation pass e2e | 19/37 | 18/38 | 20/38 | **21/38** |
+| calculation recall@5 e2e (theo trích dẫn) | 19/38 | **23/38** | 20/38 | 20/38 |
+| Từ chối trả lời | 31 | 41 | 32 | **29** |
+| Tái lập qua 3 lượt | 100 % | 49,6 % | 100 % | 49,6 % |
+| USD / lượt | **0,00483** | 0,00557 | 0,00503 | 0,00540 |
+| Chịu tải service (1 câu, 30 req/mức) | — | — | mức 1/2/4/8: p50 146/269/538/1076 ms, ~7,3 req/s | — |
+| VRAM | — | — | 1 839 MiB rảnh, 2 987 MiB đỉnh, về 494 MiB sau khi tắt | — |
 
-Mốc không rerank (8 chunk đầu theo RRF) recall@8 0,935 = trần của bộ ứng viên: trên corpus này
-cross-encoder không thêm recall, nó thay LLM rerank (vốn loại nhầm tài liệu ở 12 câu) với chi phí
-gần 0. Tiêu chí thành công của spec: 3/5 đạt trọn, 2/5 đạt một phần (tiêu chí 2: MRR 0,815 so với
-0,890 dù recall@8 và NDCG vượt; tiêu chí 4: calculation recall@5 20 so với 23, 6 câu mất là mất
-trích dẫn, câu trả lời không đổi). Chi tiết report.md 1.1–1.2, danh sách từng câu trượt 7.6.
+Mốc không rerank (`none`: 8 chunk đầu theo RRF sau sàn dense) recall@8 0,928 = trần của bộ ứng
+viên: trên corpus này bước rerank không còn việc để làm; `none` và `cross_encoder` hoà trong mức
+nhiễu ở tầng câu trả lời, cả hai hơn `llm` rõ (+6–7 câu normal, −9–10 từ chối, −10–13 % chi phí,
+nhanh hơn 0,5–0,7 s). Tiêu chí thành công của spec (cross-encoder so với LLM): 3/5 đạt trọn, 2/5
+đạt một phần (MRR 0,815 so với 0,890; calculation recall@5 20 so với 23 do mất trích dẫn).
+Chi tiết report.md 1.1–1.3, 7.7; danh sách từng câu trượt 7.6.
 
-**Khuyến nghị**: bật `CHAT_RERANK_MODE=cross_encoder` mặc định ở dev/eval và ở production khi máy
-chủ có GPU trống ≥ 2,5 GB; không triển khai `cross_encoder_then_llm`. Điều kiện: đo lại Bảng 2/3
-trên 3060; khi bật lại web search cần gate khác vì cross-encoder không "loại hết"; kiểm tra trích
-dẫn nhánh calculation; sửa rate limit credential RERANK (70/154 lượt lỗi trong run gốc).
+**Khuyến nghị**: đặt `CHAT_RERANK_MODE=none` mặc định (rẻ nhất, không cần GPU, bằng cross-encoder
+về chất lượng); giữ `cross_encoder` làm lựa chọn cho corpus mà retrieval xếp kém; tắt `llm`; không
+triển khai `cross_encoder_then_llm`. Điều kiện: gate web search khác khi bật lại web search; kiểm
+tra trích dẫn nhánh calculation; đo lại trên bộ official trước khi khái quát; sửa rate limit
+credential RERANK (70/154 lượt lỗi trong run gốc).
 
 **Cần đo lại trên Windows 3060**: `-p`, `-c` (kỳ vọng p50 ~250–300 ms, p95 ~350 ms, ~3 req/s);
 `-a` không cần (tất định).
