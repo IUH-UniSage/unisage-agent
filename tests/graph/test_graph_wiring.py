@@ -1278,6 +1278,36 @@ async def test_a_dead_service_falls_over_to_the_llm_rerank_and_warns_admins(
     assert warning.message.startswith("Bỏ qua bước xếp hạng cross-encoder")
 
 
+@pytest.mark.asyncio
+async def test_none_mode_runs_neither_rerank_and_keeps_the_retrieval_order(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _cross_encoder_mode(monkeypatch, "none")
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("Lịch thi học kỳ 1"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+        rerank=mock_sync_llm_model('{"SQ1": []}'),  # would drop the chunk if it ran
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+        )
+
+    nodes = _traced_nodes(caplog)
+    assert "09_PostRetrievalRerankNode" in nodes
+    assert "09a_CrossEncoderRerankNode" not in nodes and "09a_LLMRerankNode" not in nodes
+    assert _FakeCrossEncoderClient.calls == []
+    (prompt,) = seen_prompts
+    assert "dummy retrieved content" in prompt
+    assert result.admin_warnings == []
+
+
 # --- clarification panel (UNISAGE-99) ----------------------------------------------
 
 _FORM = {

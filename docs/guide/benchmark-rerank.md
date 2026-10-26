@@ -43,7 +43,7 @@ task reranker:test          # test HTTP với scorer giả, không tải model
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `CHAT_RERANK_MODE` | `llm` | `llm`: như cũ, không gọi service. `cross_encoder`: node CE giữ top-K mỗi câu hỏi con, **bỏ** LLM rerank. `cross_encoder_then_llm`: CE cắt 16 → K, LLM rerank chấm K chunk đó |
+| `CHAT_RERANK_MODE` | `llm` | `llm`: như cũ, không gọi service. `none`: không rerank gì, sàn cosine rồi lấy thứ tự retrieval (RRF) cắt 8, mốc "không rerank" đo được e2e. `cross_encoder`: node CE giữ top-K mỗi câu hỏi con, **bỏ** LLM rerank. `cross_encoder_then_llm`: CE cắt 16 → K, LLM rerank chấm K chunk đó |
 | `CROSS_ENCODER_URL` | `http://127.0.0.1:8403` | Service |
 | `CROSS_ENCODER_TIMEOUT_SECONDS` | `2.0` | Một deadline cho cả request |
 | `CHAT_CROSS_ENCODER_KEEP` | `8` | K chunk giữ mỗi câu hỏi con |
@@ -77,7 +77,7 @@ task benchmark:help
 | Cờ | Ý nghĩa |
 |---|---|
 | `-a` / `-p` / `-c` / `--all` | Bảng 1 accuracy, Bảng 2 performance, Bảng 3 concurrency; không cờ = `--all` |
-| `--variant V` (lặp được) | `llm_rerank`, `cross_encoder`, `cross_encoder_then_llm`; mặc định cả 3 |
+| `--variant V` (lặp được) | `none`, `llm_rerank`, `cross_encoder`, `cross_encoder_then_llm`; mặc định cả 4 |
 | `--repeats N` | Số lượt `-a` của biến thể LLM (3); cross-encoder luôn 2 lượt để kiểm tra tất định |
 | `--limit N`, `--category C`, `--id ID` | Thu hẹp bộ câu |
 | `--keep K` | K của cross-encoder (mặc định `CHAT_CROSS_ENCODER_KEEP`) |

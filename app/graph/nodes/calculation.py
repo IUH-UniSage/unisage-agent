@@ -516,8 +516,11 @@ async def _search(
     models = deps.models
     # Same rerank stage as the main graph (CHAT_RERANK_MODE): cross-encoder first when
     # configured, the LLM rerank after it or instead of it, fail-over on a service error.
-    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED
-    if settings.CHAT_RERANK_MODE != "llm" and result.has_valid_context:
+    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED and settings.CHAT_RERANK_MODE != "none"
+    if (
+        settings.CHAT_RERANK_MODE in ("cross_encoder", "cross_encoder_then_llm")
+        and result.has_valid_context
+    ):
         if deps.trace is not None:
             deps.trace.step("09a_CrossEncoderRerankNode", parent="07_CalculationNode")
         ce_outcome = await cross_encoder_rerank(CrossEncoderClient(), [question], result)

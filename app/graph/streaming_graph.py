@@ -1169,10 +1169,11 @@ async def _run_advisory_flow(
     # by cross-encoder score. `cross_encoder` stops there; `cross_encoder_then_llm` hands
     # those to the LLM rerank. A service failure falls over to the LLM rerank with a
     # warning and skips the cache store: that result is not what this mode's key stands for.
-    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED
+    # `none` runs neither: the dense floor + retrieval order is the whole rerank stage.
+    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED and settings.CHAT_RERANK_MODE != "none"
     if (
         cached_result is None
-        and settings.CHAT_RERANK_MODE != "llm"
+        and settings.CHAT_RERANK_MODE in ("cross_encoder", "cross_encoder_then_llm")
         and rerank_result.has_valid_context
     ):
         trace.node("09a_CrossEncoderRerankNode")

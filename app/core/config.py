@@ -241,8 +241,10 @@ class Settings(BaseSettings):
     # `cross_encoder`: CrossEncoderRerankNode keeps each sub-query's top CROSS_ENCODER_KEEP
     # by cross-encoder score and the LLM rerank is skipped.
     # `cross_encoder_then_llm`: the cross-encoder cuts to KEEP, the LLM rerank judges those.
+    # `none`: no rerank model at all - the retrieval order (RRF for hybrid) above the dense
+    # floor, cut to CONTEXT_MAX_CHUNKS; the benchmark's "no rerank" baseline, measurable e2e.
     # A service error or timeout falls over to the LLM rerank with an AI-admin warning.
-    CHAT_RERANK_MODE: Literal["llm", "cross_encoder", "cross_encoder_then_llm"] = "llm"
+    CHAT_RERANK_MODE: Literal["llm", "cross_encoder", "cross_encoder_then_llm", "none"] = "llm"
     CROSS_ENCODER_URL: str = "http://127.0.0.1:8403"
     CROSS_ENCODER_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
     CHAT_CROSS_ENCODER_KEEP: int = Field(default=8, ge=1)

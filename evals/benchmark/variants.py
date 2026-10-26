@@ -28,7 +28,7 @@ from evals.benchmark.candidates import Candidate
 
 logger = logging.getLogger("evals.benchmark")
 
-VARIANT_NAMES = ("llm_rerank", "cross_encoder", "cross_encoder_then_llm")
+VARIANT_NAMES = ("none", "llm_rerank", "cross_encoder", "cross_encoder_then_llm")
 LLM_VARIANTS = frozenset({"llm_rerank", "cross_encoder_then_llm"})
 CE_VARIANTS = frozenset({"cross_encoder", "cross_encoder_then_llm"})
 
@@ -90,6 +90,19 @@ class Variant:
 
     async def select(self, candidate: Candidate) -> Selection:
         raise NotImplementedError
+
+
+class NoRerankVariant(Variant):
+    """The retrieval order as is, cut to the context size: what `CHAT_RERANK_MODE=none` hands
+    generation, and the floor every rerank must beat."""
+
+    name = "none"
+
+    def __init__(self, *, keep: int) -> None:
+        self._keep = keep
+
+    async def select(self, candidate: Candidate) -> Selection:
+        return Selection(kept=list(candidate.chunks[: self._keep]), took_ms=0.0)
 
 
 class CrossEncoderVariant(Variant):
@@ -246,7 +259,9 @@ async def build_variants(
         )
     built: list[Variant] = []
     for name in names:
-        if name == "cross_encoder":
+        if name == "none":
+            built.append(NoRerankVariant(keep=settings.CHAT_CONTEXT_MAX_CHUNKS))
+        elif name == "cross_encoder":
             built.append(cross_encoder)
         elif name == "llm_rerank":
             assert llm is not None

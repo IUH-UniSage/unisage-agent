@@ -298,3 +298,18 @@ async def test_llm_variant_retries_a_rate_limit_and_times_only_the_last_call(mon
     assert len(calls) == 1
     assert module.is_rate_limited("HTTP 429 Too Many Requests") is True
     assert module.is_rate_limited("kết quả lọc không đúng định dạng") is False
+
+
+@pytest.mark.asyncio
+async def test_none_variant_is_the_retrieval_order_cut_to_the_context_size(monkeypatch) -> None:
+    from app.core.config import settings
+    from evals.benchmark.variants import build_variants
+
+    monkeypatch.setattr(settings, "CHAT_CONTEXT_MAX_CHUNKS", 2)
+    (variant,) = await build_variants(["none"], keep=8, client=object())  # type: ignore[arg-type]
+
+    selection = await variant.select(_candidate())
+
+    assert variant.name == "none"
+    assert [c.chunk_id for c in selection.kept] == ["x:1", "good:1"]
+    assert selection.took_ms == 0.0
