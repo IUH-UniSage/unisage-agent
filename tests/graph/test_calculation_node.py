@@ -1273,7 +1273,7 @@ async def test_a_calc_request_in_the_answer_is_computed_by_code_and_appended(
     query = "Ngành Logistics, 4 môn đó cộng lại mấy tín?"
     credits = RetrievedChunk(
         chunk_id="ctdt:3",
-        content="Quản lý thông tin 3 tín chỉ; Giao nhận 4 tín chỉ; Phân loại 2 tín chỉ; Hải quan 3 tín chỉ",
+        content="Quản lý thông tin 3 TC; Giao nhận 4 TC; Phân loại 2 TC; Hải quan 3 TC",
         source="CTĐT.pdf",
         score=0.8,
     )
