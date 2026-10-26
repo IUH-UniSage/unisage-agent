@@ -420,19 +420,91 @@ Phải: throughput đứng ở ~7,3 req/s từ mức 2, dấu hiệu service x�
   cặp) và forward một lần; một batch 32 cặp FP16 trên 4080 thường không chậm gấp đôi batch 16, nên
   throughput có thể tăng 1,5–3 lần ở mức 2–4, đổi lại mỗi request chờ thêm cửa sổ 10–20 ms. Bảng 2
   (concurrency 1) không bị ảnh hưởng: 112 ms là độ trễ thật của một request khi không ai chen.
-  Chưa làm trong ticket này vì tải hiện tại dưới 1 lượt chat mỗi giây và khuyến nghị cuối là
-  `none`.
+  **Đã thử ngay sau đó (mục 4.1): không tăng throughput vì GPU bão hoà compute; đòn bẩy thật là
+  `max_length`.**
 - VRAM đỉnh 2 987 MiB khi chấm so với 1 839 MiB khi rảnh: activation của 16 cặp × 1024 token
   FP16 ≈ 1,1 GB. Tổng cần ~2,5 GB trống. RTX 3060 12 GB dư; `RERANKER_BATCH_SIZE=8` nếu muốn
   đỉnh thấp hơn (đổi lại chậm hơn ~10–20 %).
 - Nhả VRAM: 494 → 494 MiB sau khi tắt, cả hai lần.
 
+### 4.1. Hoàn thiện phần chịu tải (26/10 chiều): batching không giúp, `max_length` mới là đòn bẩy
+
+Sau khi Bảng 3 cho thấy service xử lý tuần tự, service được thêm **dynamic batching** (gom các
+request đang chờ thành một lần forward, chạy ở thread riêng để vòng lặp sự kiện vẫn trả lời
+`/health`; `RERANKER_BATCH_WINDOW_MS`, `RERANKER_MAX_BATCH_PAIRS`; trường `batched` trong response)
+rồi đo lại ba cách.
+
+**(a) Bảng 3 với batching, GPU rảnh** (`benchmark_results/step-b3-ce-batched-idle`):
+
+| Đồng thời | p50 ms | p95 ms | req/s | so với không batching |
+|---|---|---|---|---|
+| 1 | 157 | 162 | 6,35 | 146 / 6,79 |
+| 2 | 305 | 317 | 6,51 | 269 / 7,36 |
+| 4 | 582 | 605 | 6,80 | 538 / 7,34 |
+| 8 | 1073 | 1176 | 7,26 | 1076 / 7,26 |
+
+Không tăng throughput; độ trễ mức 1 thêm ~10 ms (cửa sổ chờ). VRAM đỉnh tăng theo mức đồng thời
+(3 928 → 5 144 MiB) xác nhận batch có lớn lên, nhưng thời gian forward cũng dài lên tương ứng.
+
+**(b) Micro-benchmark trực tiếp trên model** (`score_pairs`, FP16, 4080, không HTTP):
+
+| Token mỗi cặp | 16 cặp, batch 16 | 32 cặp, batch 32 | 64 cặp, batch 64 | Cặp/giây |
+|---|---|---|---|---|
+| ~136 | 21 ms | 40 ms | 74 ms | 750–860 |
+| ~366 | 51 ms | 101 ms | 200 ms | 315–322 |
+
+Thời gian **tỉ lệ thuận với tổng số token**, không phụ thuộc cách chia batch: GPU đã bão hoà
+compute ngay với 16 cặp × vài trăm token. Dynamic batching chỉ có ích khi GPU còn rảnh giữa các
+request nhỏ; ở đây không có. Cửa sổ batching vì thế đặt mặc định 0 ms (vẫn gom request đến đúng
+cùng lúc, không chờ thêm); giữ worker thread vì nó làm `/health` không bị kẹt khi đang chấm.
+
+**(c) Quét `max_length`** (`-a` 2 lượt + `-p` 1 vòng mỗi mức, cùng 139 câu, 6 720 passage):
+
+| max_length | recall@8 | recall@5 | NDCG@16 | MRR | p50 ms | p95 ms | req/s | passage bị cắt |
+|---|---|---|---|---|---|---|---|---|
+| 256 | 0,928 | 0,885 | 0,740 | 0,810 | 62 | 73 | 17,1 | 60 % |
+| 384 | 0,928 | **0,910** | 0,746 | 0,826 | 78 | 111 | 13,1 | 44 % |
+| **512** | **0,928** | 0,888 | **0,747** | **0,828** | 97 | 131 | 10,4 | 29 % |
+| 768 | 0,921 | 0,888 | 0,740 | 0,815 | 138 | 175 | 7,8 | 9 % |
+| 1024 (cũ) | 0,921 | 0,888 | 0,739 | 0,815 | 139 | 205 | 7,3 | 0,2 % |
+
+![Đánh đổi theo max_length](fig3b-maxlen-sweep.png)
+
+*Hình 3b. Trái: recall@8 giữ nguyên ở trần 0,928 từ 256 đến 512 rồi giảm nhẹ ở 768–1024; MRR cao
+nhất ở 384–512. Giữa: độ trễ giảm gần tuyến tính theo max_length, throughput tăng 7,3 → 17 req/s.
+Phải: tỷ lệ passage bị cắt; ở 512 gần 1/3 passage bị cắt mà độ chính xác không giảm, nghĩa là
+phần đuôi của chunk dài không giúp cross-encoder phân biệt tài liệu.*
+
+Bảng 3 ở `max_length=512` (`benchmark_results/step-b4-ce-maxlen512`, 5 vòng `-p`: p50 89 ms,
+p95 99 ms, 12,0 req/s):
+
+| Đồng thời | p50 ms | p95 ms | req/s | VRAM đỉnh MiB |
+|---|---|---|---|---|
+| 1 | 91 | 98 | 10,9 | 3120 |
+| 2 | 154 | 163 | 12,7 | 3120 |
+| 4 | 307 | 313 | 12,7 | 3120 |
+| 8 | 638 | 665 | 12,0 | 3120 |
+
+**Đọc số và quyết định**
+
+- Cắt passage ở 512 token **không làm giảm** độ chính xác trên bộ này (recall@8 từ 0,921 lên
+  0,928, MRR từ 0,815 lên 0,828) và nhanh hơn ~1,6 lần, chịu tải 12 req/s thay vì 7,3; mức 8 đồng
+  thời còn 0,64 s thay vì 1,08 s. Lý do hợp lý: chủ đề của chunk nằm ở heading + những dòng đầu;
+  phần đuôi của chunk dài (bảng nhiều trang, phụ lục) chỉ thêm nhiễu cho cross-encoder.
+- 384 còn nhanh hơn và recall@5 cao hơn (0,910), nhưng cắt 44 % passage; chênh với 512 là 3 câu
+  trên 139, tất định nhưng dễ đổi theo corpus. **Mặc định đổi sang 512** (`RERANKER_MAX_LENGTH`,
+  commit cùng báo cáo này); 384 là lựa chọn khi cần throughput và đã đo lại trên corpus đích.
+- Trên 3060 (≈ 40–45 % FLOPS FP16 của 4080): ở 512 kỳ vọng p50 ~200–240 ms, ~5 req/s, p95 vẫn
+  dưới 500 ms với nhiều dư hơn so với 1024.
+- Giới hạn còn lại để tăng tiếp: model nhỏ hơn (bge-reranker-base, ~1/5 compute), INT8, hoặc
+  GPU thứ hai; batching không còn là đòn bẩy.
+
 **Dùng để quyết định**
 
 - Với tải chat hiện tại (dưới 1 lượt/giây) 7 req/s là dư 7 lần. Ngưỡng cần để ý: nếu có **≥ 4
   lượt chat cùng lúc** đến bước rerank, mỗi lượt đợi thêm ~0,5 s; ≥ 8 thì ~1 s, vẫn nhanh hơn LLM
-  rerank (1,7 s) nhưng lợi thế co lại. Khi đó làm dynamic batching ở service (gom request trong
-  10–20 ms thành một batch) trước khi nghĩ đến GPU thứ hai.
+  rerank (1,7 s) nhưng lợi thế co lại. Dynamic batching **đã thử và không giúp** (mục 4.1); đòn
+  bẩy là `max_length=512` (12 req/s) rồi mới tới model nhỏ hơn hoặc GPU thứ hai.
 - Trên 3060 (≈ 40–45 % FLOPS FP16 của 4080 SUPER) kỳ vọng p50 ~250–300 ms, p95 ~350 ms: vẫn dưới
   500 ms, nhưng throughput chỉ ~3 req/s → với 4 lượt đồng thời đã ~1,3 s. Phải đo thật.
 
@@ -936,12 +1008,12 @@ encoder giữ lại như công cụ cho corpus mà retrieval xếp kém (chưa g
 
 ## 9. Việc cần đo lại trên Windows (RTX 3060 12 GB)
 
-- Bảng 2 và 3 (độ trễ, throughput, VRAM đỉnh): phụ thuộc GPU. Kỳ vọng p50 ~250–300 ms, p95
-  ~350 ms, throughput ~3 req/s.
+- Bảng 2 và 3 (độ trễ, throughput, VRAM đỉnh): phụ thuộc GPU. Với mặc định mới `max_length=512`
+  kỳ vọng p50 ~200–240 ms, p95 ~300 ms, ~5 req/s; ở 1024 là ~250–300 ms, ~3 req/s.
 - Bảng 1 không cần đo lại: cùng model, cùng ứng viên → cùng kết quả (đã xác nhận tất định).
 - Lệnh: `task reranker:sync` (torch CUDA wheel cho Windows; không được thì WSL2 và trỏ
   `CROSS_ENCODER_URL`), rồi `task benchmark:run env=eval -- hybrid-on -p -c --variant cross_encoder`.
-- Nếu p95 > 500 ms: thử `RERANKER_MAX_LENGTH=512`, `RERANKER_BATCH_SIZE=8`, đo lại cả `-a`.
+- Nếu p95 > 500 ms: thử `RERANKER_MAX_LENGTH=384` (mục 4.1), đo lại cả `-a`.
 
 ---
 
@@ -956,6 +1028,7 @@ encoder giữ lại như công cụ cho corpus mà retrieval xếp kém (chưa g
 | C | `... -a --repeats 3 --variant llm_rerank --variant cross_encoder_then_llm --out benchmark_results/step-c-llm-accuracy` (giãn cách 14/phút) | |
 | D | `... -p --iterations 1 --warmup 2 --variant llm_rerank --variant cross_encoder_then_llm --out benchmark_results/step-d-llm-perf` | |
 | E | `task reranker:serve` + `CHAT_RERANK_MODE=cross_encoder RETRIEVAL_CACHE_REDIS_URL= task eval:run env=eval -- --set demo --category normal --category calculation --variant exact --web off --out runs/ce-on`; tương tự `cross_encoder_then_llm` → `runs/ce-then-llm` | `summary.json`, `results.jsonl` |
+| G | `task benchmark:run env=eval -- hybrid-on -p -c --variant cross_encoder --out benchmark_results/step-b3-ce-batched-idle` (batching); `RERANKER_MAX_LENGTH=512 ... -a -p -c --out benchmark_results/step-b4-ce-maxlen512`; quét `RERANKER_MAX_LENGTH=256..1024 ... -a -p --iterations 1`; micro-benchmark `score_pairs` trong `reranker/.venv` | |
 | F | `CHAT_RERANK_MODE=none RETRIEVAL_CACHE_REDIS_URL= task eval:run ... --out runs/rrf-only`; `task benchmark:run env=eval -- hybrid-on -a --variant none --out benchmark_results/step-a2-none` (mốc bước rerank); `CHAT_CONTEXT_MAX_CHUNKS=16 ... --variant none` (trần 0,928) | |
 
 `benchmark_results/` và `runs/` nằm trong gitignore; JSON của từng bước có từng lượt từng câu

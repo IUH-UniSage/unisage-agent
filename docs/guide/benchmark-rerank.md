@@ -28,11 +28,16 @@ task reranker:test          # test HTTP với scorer giả, không tải model
 ```
 
 - `POST /rerank` `{"query", "passages": [...], "top_k"?}` → `{"scores", "ranking", "truncated",
-  "model", "took_ms"}`. `scores` theo thứ tự passage, `ranking` là chỉ số tốt nhất trước,
+  "model", "took_ms", "batched"}`. `scores` theo thứ tự passage, `ranking` là chỉ số tốt nhất trước,
   `truncated` là số passage vượt `RERANKER_MAX_LENGTH` (1024 token) bị cắt.
-- Biến môi trường của service: `RERANKER_MODEL`, `RERANKER_MAX_LENGTH`, `RERANKER_BATCH_SIZE`
-  (16), `RERANKER_DEVICE` (`cuda`/`cpu`), `RERANKER_FP16` (`true`), `RERANKER_MAX_PASSAGES` (64);
-  cổng/host qua `task reranker:serve RERANKER_PORT=8403 RERANKER_HOST=127.0.0.1`.
+- Biến môi trường của service: `RERANKER_MODEL`, `RERANKER_MAX_LENGTH` (**512**, đo 26/10: bằng
+  hoặc hơn 1024 về độ chính xác, nhanh 1,6 lần; 384 nhanh hơn nữa nhưng cắt 44 % passage),
+  `RERANKER_BATCH_SIZE` (16), `RERANKER_DEVICE` (`cuda`/`cpu`), `RERANKER_FP16` (`true`),
+  `RERANKER_MAX_PASSAGES` (64), `RERANKER_BATCH_WINDOW_MS` (0: gom các request đến cùng lúc thành
+  một forward, không chờ thêm; GPU bão hoà compute nên cửa sổ > 0 không tăng throughput),
+  `RERANKER_MAX_BATCH_PAIRS` (64); cổng/host qua `task reranker:serve RERANKER_PORT=8403
+  RERANKER_HOST=127.0.0.1`. Response có `batched` (số request chung một forward), `/health` có
+  `batches`/`requests`.
 - Ctrl+C / SIGTERM gỡ model và `torch.cuda.empty_cache()`: `nvidia-smi` về mức trước khi chạy.
   Chỉ bind `127.0.0.1`, không có auth: production đặt sau mạng nội bộ.
 - Điểm là logit (có thể âm), không phải xác suất; node không dùng ngưỡng, chỉ giữ top-K.

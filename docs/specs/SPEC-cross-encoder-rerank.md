@@ -191,6 +191,8 @@ không import `app.*`.
 2. Phạm vi: service + nối sau cờ tắt + benchmark; không registry/web.
 3. Độ chính xác đo hai tầng như trên; RAGAS không chạy.
 4. Giữ top-K, không gate theo điểm CE.
+5. (26/10) `max_length` mặc định 512 thay vì 1024: cùng hoặc hơn độ chính xác, nhanh 1,6 lần
+   (report.md 4.1). Dynamic batching đã thử, không tăng throughput vì GPU bão hoà compute.
 
 ## Kết quả đo (26/10/2026)
 
