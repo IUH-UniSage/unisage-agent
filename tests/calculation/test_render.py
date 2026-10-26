@@ -19,6 +19,25 @@ CASES: dict[FormulaId, Mapping[str, object]] = {
     },
     "grade_conversion": {"score10": "8.45"},
     "tuition_program": {"tc_lt": 100, "tc_th": 42, "don_gia_lt": 980000, "don_gia_th": 1600000},
+    "admission_score_2026": {"dtn": 22, "dgnl": 900, "dtk": 1100, "dhb": 25, "uu_tien": 0.25},
+    "transcript_score_3hk": {
+        "mon1": "Toán",
+        "m1_10": 7.5,
+        "m1_11": 8,
+        "m1_12": 8.5,
+        "m2_10": 6,
+        "m2_11": 6.5,
+        "m2_12": 7,
+        "mon3": "Lý",
+        "m3_10": 4.5,
+        "m3_11": 5,
+        "m3_12": 5.5,
+    },
+    "weighted_score": {
+        "trong_so": [20, 30, 50],
+        "diem": [9, 7, 9.2],
+        "lam_tron_thanh_phan": 0.5,
+    },
 }
 
 

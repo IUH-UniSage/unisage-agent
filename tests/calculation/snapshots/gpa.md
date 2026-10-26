@@ -3,6 +3,7 @@
 Công thức:
 - Điểm chất lượng của môn = điểm hệ 4 × số tín chỉ
 - GPA = Σ (điểm hệ 4 × số tín chỉ) / Σ số tín chỉ, làm tròn đến 0.01
+- _Phiên bản công thức 1 · nguồn: Quy chế đào tạo đại học chính quy theo tín chỉ của Trường (điểm học phần, GPA, quy đổi điểm; quy tắc chốt 09/10/2026)_
 
 Thay số:
 1. Toán: 8.5 → A → 3.8; 3.8 × 3 = 11.4

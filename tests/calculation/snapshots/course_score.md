@@ -6,6 +6,7 @@ Công thức:
 - ĐLT = 20% × TBtx + 30% × GK + 50% × CK, làm tròn đến 0.1
 - ĐTH = (TH1 + TH2 + … + THn) / n, làm tròn đến 0.1
 - ĐTKHP = (ĐLT × TCLT + ĐTH × TCTH) / (TCLT + TCTH), làm tròn đến 0.1
+- _Phiên bản công thức 1 · nguồn: Quy chế đào tạo đại học chính quy theo tín chỉ của Trường (điểm học phần, GPA, quy đổi điểm; quy tắc chốt 09/10/2026)_
 
 Thay số:
 1. Điểm thường xuyên: TBtx = 8
