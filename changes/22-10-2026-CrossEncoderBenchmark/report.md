@@ -274,6 +274,32 @@ liệu đúng" (5 → 1); phần còn lại nằm ngoài bước rerank.*
 - Ticket nhỏ: gate web search không dựa vào LLM rerank; trích dẫn nhánh calculation; rate limit
   credential RERANK.
 
+### 8.1. Khi 8 chunk không có câu trả lời (`none`/CE không có gate "loại hết")
+
+Số liệu trên 5 câu demo không có tài liệu đúng trong ứng viên (d0040, d0225, d0242, d0296, d0324):
+
+- Nhánh normal (3 câu): `none` và CE đều trả lời "chưa có thông tin", không trích dẫn, không bịa;
+  rò rỉ 0 ở cả 4 run, citation accuracy 0,91. Luật "chỉ trả lời từ ngữ cảnh" của prompt sinh đang
+  làm việc.
+- Nhánh calculation (2 câu): `none` vẫn tính ra số từ con số trong câu hỏi (d0242, d0324); CE từ
+  chối cả hai; `llm` tính ở d0242. Rủi ro thật, dạng "trả lời từ giả định trong câu hỏi", có dòng
+  cảnh báo "AI tự tính".
+- Tín hiệu để nhận ra "không có tài liệu": cosine top-1 không tách được (không có: 0,52–0,66; có:
+  p10 0,615). Điểm CE top-1 tách yếu: ngưỡng < 0 bắt 2/5, báo nhầm 5/134; < 1 bắt 2/5, nhầm 8/134.
+
+Đề xuất theo thứ tự:
+
+1. **Chế độ `auto`**: chạy `none`/CE, chỉ gọi LLM rerank khi tín hiệu yếu (CE top-1 < 1, hoặc cosine
+   top-1 < 0,6 khi không có CE). Kích hoạt ở ~8–15/139 câu demo: giữ gate "không tài liệu → web
+   search/ticket" cho phần đuôi, bỏ ~90 % lượt gọi LLM và độ trễ.
+2. **Kiểm tra trích dẫn sau khi sinh** (nhánh normal): câu trả lời khẳng định mà không có `[n]` →
+   chuyển thành "chưa có thông tin" + gợi ý ticket. Tất định, không tốn LLM.
+3. **Nhánh calculation**: chỉ tính khi ít nhất một số đầu vào lấy từ chunk có trích dẫn; nếu mọi số
+   đều từ câu hỏi thì nói rõ "kết quả chỉ dựa trên số bạn cung cấp" hoặc từ chối.
+4. **Web search**: khi bật lại, dùng điều kiện tín hiệu yếu của mục 1 làm điều kiện tìm web.
+5. **Đo thay vì giả định**: thêm 15–20 câu `unanswerable` vào bộ demo, chạy judge faithfulness cho 4
+   chế độ.
+
 ## 9. Phụ lục: lệnh, file
 
 | Bước | Lệnh |
