@@ -921,6 +921,7 @@ class OutputSpec:
 
     key: str
     label: str
+    money: bool = False  # shown as whole đồng (học phí), not as a score
 
 
 @dataclass(frozen=True)
@@ -938,6 +939,9 @@ class Formula:
     params: tuple[ParamSpec, ...]
     outputs: tuple[OutputSpec, ...]
     compute: Callable[[Mapping[str, object]], CalculationResult]
+    # The rounding the formula applies to a param before using it (0.5 for a recorded
+    # score), given the other params; None = none. The solver searches on that grid.
+    rounding_of: Callable[[Mapping[str, object], str], Decimal | None] | None = None
 
 
 def _when_present(field: str) -> Callable[[Mapping[str, object]], bool]:
@@ -1577,9 +1581,29 @@ def weighted_score(params: Mapping[str, object]) -> CalculationResult:
     )
 
 
+HALF_POINT = Decimal("0.5")
+
+
+def _course_score_rounding(params: Mapping[str, object], name: str) -> Decimal | None:
+    """Recorded component scores (TX columns, GK, CK, TH) are rounded to 0.5; a TBtx
+    given as the average is not."""
+
+    if name in ("gk", "ck", "th"):
+        return HALF_POINT
+    if name == "tbtx" and isinstance(params.get("tbtx"), list | tuple):
+        return HALF_POINT
+    return None
+
+
+def _weighted_rounding(params: Mapping[str, object], name: str) -> Decimal | None:
+    step = to_decimal(params.get("lam_tron_thanh_phan"))
+    return step if name == "diem" and step is not None and step > 0 else None
+
+
 FORMULAS: dict[FormulaId, Formula] = {
     "course_score": Formula(
         formula_id="course_score",
+        rounding_of=_course_score_rounding,
         version="1",
         source=COURSE_SCORE_SOURCE,
         outputs=(OutputSpec("dtkhp", "ĐTKHP (thang 10)"), OutputSpec("thang4", "điểm thang 4")),
@@ -1658,7 +1682,7 @@ FORMULAS: dict[FormulaId, Formula] = {
             formula_id=scope,
             version="1",
             source=TUITION_SOURCE,
-            outputs=(OutputSpec("hoc_phi", f"học phí {period} (đồng)"),),
+            outputs=(OutputSpec("hoc_phi", f"học phí {period}", money=True),),
             title=f"Học phí {period}",
             description=(
                 f"Học phí {period} từ số tín chỉ lý thuyết, thực hành và đơn giá 1 tín chỉ"
@@ -1696,6 +1720,7 @@ FORMULAS: dict[FormulaId, Formula] = {
     ),
     "weighted_score": Formula(
         formula_id="weighted_score",
+        rounding_of=_weighted_rounding,
         version="1",
         source=WEIGHTED_SOURCE,
         outputs=WEIGHTED_OUTPUTS,
