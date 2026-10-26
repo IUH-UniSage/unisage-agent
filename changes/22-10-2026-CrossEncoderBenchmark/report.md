@@ -325,15 +325,16 @@ chế độ không-LLM không bịa số), 2 `LLM_RERANK_FAILED` ở chế độ
 giới hạn; `calc_missing_input` đạt khi hỏi lại hoặc nêu giới hạn; **bịa** = trả lời chắc nịch (có
 số, trích tài liệu "gần đúng", hoặc số không nguồn) khi không thể trả lời.
 
-| Nhóm (4 câu mỗi nhóm) | `none` | CE | `llm` |
-|---|---|---|---|
-| not_in_corpus | 4/4 | 4/4 | 4/4 |
-| partial | 4/4 | 4/4 | 4/4 |
-| false_premise | 4/4 | 4/4 | 4/4 |
-| near_miss | 4/4 | 4/4 | 3/4, **1 bịa** |
-| calc_missing_input | 4/4 | 4/4 | 4/4 |
-| **Tổng** | **20/20** | **20/20** | 19/20 |
-| p50 cả lượt | 6,5 s | 6,9 s | 7,8 s |
+| Nhóm (4 câu mỗi nhóm) | `none` | CE | `llm` | `auto` |
+|---|---|---|---|---|
+| not_in_corpus | 4/4 | 4/4 | 4/4 | 4/4 |
+| partial | 4/4 | 4/4 | 4/4 | 3/4 (1 lỗi 504 credential Chat) |
+| false_premise | 4/4 | 4/4 | 4/4 | 4/4 |
+| near_miss | 4/4 | 4/4 | 3/4, **1 bịa** | 3/4, **1 bịa** |
+| calc_missing_input | 4/4 | 4/4 | 4/4 | 4/4 |
+| **Tổng** | **20/20** | **20/20** | 19/20 | 18/20 (1 lỗi, 1 bịa) |
+| p50 cả lượt | 6,5 s | 6,9 s | 7,8 s | 5,4 s |
+| LLM rerank chạy | 0 | 0 | 20 | 2 (d0345 `weak` cosine 0,587; d0347 nhánh calculation) |
 
 | Câu | Nhóm | Câu hỏi | `none` | CE | `llm` |
 |---|---|---|---|---|---|
@@ -358,13 +359,18 @@ số, trích tài liệu "gần đúng", hoặc số không nguồn) khi không 
 | d0355 | calc_missing_input | Nếu em được 8 điểm bài giữa kỳ thì điểm tổng kết học phần Interpretati… | đạt (từ chối/nêu giới hạn) | đạt (hỏi lại) | đạt (từ chối/nêu giới hạn) |
 | d0356 | calc_missing_input | Tổng học phí toàn bộ 4 năm ngành Công nghệ thông tin khóa 16 là bao nh… | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) | đạt (từ chối/nêu giới hạn) |
 
-Câu bịa duy nhất là của chế độ `llm`, d0350: hỏi "Quy chế tiến sĩ **2020**" (chỉ có 2017 và
-2023); LLM rerank giữ lại chunk của quy chế 2017 như "trả lời được", model sinh tin theo và trả
-lời "90 tín chỉ [2]" không nói gì về năm. `none` và CE đưa cả hai quy chế vào 8 chunk, model sinh
-nhận ra không có bản 2020 và nói rõ. Đây là mặt trái của bộ lọc LLM: khi nó chọn sai, nó còn
-tước mất ngữ cảnh để model sinh nhận ra sai. Mẫu 20 câu, một lần chạy: đủ để nói "không chế độ
-nào bịa ở 4/5 nhóm", chưa đủ để xếp hạng; hướng dẫn chạy lại: `task eval:run env=eval -- --set
-demo --ids d0337,...,d0356 --variant exact --web off`.
+Câu bịa duy nhất ở cả hai lần bịa là d0350: hỏi "Quy chế tiến sĩ **2020**" (chỉ có 2017 và
+2023), câu trả lời "90 tín chỉ [n]" lấy từ quy chế 2017 mà không nói gì về năm. Ở chế độ `llm`,
+LLM rerank giữ lại chunk 2017 như "trả lời được"; nhưng ở chế độ `auto` lượt này có evidence `ok`
+(cosine 0,602, vừa qua ngưỡng 0,60) nên **LLM rerank không chạy, ngữ cảnh y hệt chế độ `none`**,
+vậy mà model sinh vẫn trả lời 90 tín chỉ, trong khi lần chạy `none` nó từ chối đúng. Kết luận
+đúng là: trên câu near-miss, **model sinh không ổn định** giữa hai lần chạy cùng ngữ cảnh; LLM
+rerank không phải nguyên nhân duy nhất, nó chỉ làm mất thêm ngữ cảnh để model nhận ra sai. Hai
+lượt `auto` có LLM rerank chạy (d0345 evidence `weak`, d0347 nhánh calculation) đều cho từ chối
+đúng, tức gate hoạt động như thiết kế khi nó kích hoạt. Mẫu 20 câu, một lần chạy mỗi chế độ: đủ
+để nói "không chế độ nào bịa ở 4/5 nhóm", chưa đủ để xếp hạng; chưa chạy `auto` trên tập 154 câu
+(dừng theo yêu cầu 26/10, ước 0,8 USD). Chạy lại: `task eval:run env=eval -- --set demo --ids
+d0337,...,d0356 --variant exact --web off`.
 
 **(3) Tín hiệu evidence và chế độ `auto`** (`app/graph/evidence.py`, `task benchmark:evidence`)
 
@@ -396,7 +402,7 @@ khi bật `CHAT_WEB_SEARCH_ON_WEAK_EVIDENCE` (mặc định tắt); chế độ 
 do từng sub-query. Web đang tắt trong eval nên phần này mới có test đơn vị; đánh giá web
 fallback là ticket riêng.
 
-**Còn mở sau Phase 6**: e2e đầy đủ với `auto`; kiểm tra claim-to-evidence (entailment) cho câu
+**Còn mở sau Phase 6**: e2e đầy đủ với `auto` (tỷ lệ kích hoạt ước ~10 %, chưa đo); kiểm tra claim-to-evidence (entailment) cho câu
 chữ, không chỉ số; đánh giá web fallback; lặp bộ unanswerable để có khoảng tin cậy.
 
 ## 9. Phụ lục: lệnh, file
