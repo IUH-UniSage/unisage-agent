@@ -254,9 +254,16 @@ def _readings(token: str) -> list[float]:
     return [float(token)]
 
 
+_HOURS_MINUTES = re.compile(r"(\d+)\s*(?:giờ|h)\s*(\d{1,2})\s*(?:phút)?\b", re.IGNORECASE)
+
+
 def numbers_match(expected: Sequence[float], text: str) -> bool:
-    found = numbers_in(text)
-    return all(round(float(n), 6) in found for n in expected)
+    found = set(numbers_in(text))
+    # "37 giờ 30 phút" states 37,5 giờ; "13 giờ 10 phút" states 13,1667 giờ.
+    for hours, minutes in _HOURS_MINUTES.findall(text or ""):
+        found.add(round(int(hours) + int(minutes) / 60, 6))
+        found.add(round(int(hours) + int(minutes) / 60, 2))
+    return all(round(float(n), 6) in found or round(float(n), 2) in found for n in expected)
 
 
 _RESULT_AFTER_EQUALS = re.compile(r"=\s*([0-9][0-9.,\s]*[0-9]|[0-9])")

@@ -22,6 +22,7 @@ template: |
   3. Ngắn, mơ hồ nhưng thiên về học vụ → `academic_advisory`; câu hỏi về CHÍNH TRỢ LÝ luôn `social_chat`.
   4. Câu chào từ lượt 2 không kèm câu hỏi → `social_chat`; kèm câu hỏi học vụ → theo câu hỏi.
   5. ADVISORY vs CALCULATION: hỏi một ĐƠN GIÁ/MỨC THU có sẵn trong văn bản (giá 1 tín chỉ, học phí 1 năm, mức học bổng) là TRA CỨU → `academic_advisory`, dù có chữ số/đơn vị; hỏi lại đơn giá 1 tín chỉ sau khi hỏi học phí vẫn là tra cứu. Chỉ `academic_calculation` khi người dùng đưa SỐ LIỆU và cần TÍNH RA số mới ("18 tín chỉ thì tốn bao nhiêu", "tính GPA giúp em"). "Cần/phải đạt bao nhiêu (cuối kỳ, giữa kỳ...) để được <điểm>", "thi bao nhiêu thì qua môn" luôn `academic_calculation` (hệ thống tự tính ngược), kể cả chưa có số liệu.
+  5b. PHÉP TÍNH TRÊN SỐ LIỆU CÓ SẴN vẫn là `academic_calculation`: nguồn số liệu không quyết định nhãn, PHÉP TÍNH mới quyết định. Câu hỏi mà câu trả lời đúng là KẾT QUẢ của một phép tính (tổng, hiệu, tích, thương, phần trăm, chênh lệch, so sánh hơn/kém, đếm số ngày/giờ/lần giữa các mốc, trung bình, quy đổi) → `academic_calculation`, dù mọi con số đã nằm trong văn bản của Trường, trong lịch sử hội thoại hay trong chính câu hỏi. Chỉ là tra cứu (`academic_advisory`) khi câu trả lời là MỘT con số/mức/thời hạn đọc thẳng ra từ văn bản mà không cần tính toán gì.
 
   ## Cập nhật hồ sơ sinh viên (`metadata_updates`)
   `<declared_attributes>` là hồ sơ của CHÍNH người dùng (mọi vai trò), lưu cho các hội thoại sau. Chỉ ghi khi tin nhắn này người dùng TỰ NÓI về bản thân:
