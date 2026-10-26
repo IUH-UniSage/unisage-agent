@@ -167,3 +167,5 @@ FlagEmbedding, trường `truncated`), `report.md` 538 dòng.
 - [x] Task 11: `app/graph/web_policy.py` + `CHAT_WEB_SEARCH_ON_WEAK_EVIDENCE` (tắt), test đơn vị (commit 94c5f3d)
 - [x] Checkpoint: report.md 8.2, 2693 test pass, push
 - [x] Chạy lại sau Phase 6: calculation 38 câu `none` 19 → 23 pass; web_search 24 câu `--web on` 14/24, grounding bắt 1 bịa thật (w0002); 6 dương tính giả đã sửa (report.md 8.3)
+- [x] Sửa theo review 15 câu calc fail: phân loại rule 5b, prompt calculation (số học phổ thông vs công thức Trường, nhiều tầng theo tới cùng, tự kiểm tra, số liệu câu hỏi là nguồn hợp lệ), `numbers_match` giờ:phút; chạy lại 2 lần: 23 → 24 → 26/38, từ chối 9 → 5, routing +4 (report.md 8.3)
+- [ ] Ticket sau: chấm calculation theo con số kết luận (in đậm) thay vì toàn văn (d0309 đậu giả); siết "kết luận phải là số ra từ chuỗi công thức"

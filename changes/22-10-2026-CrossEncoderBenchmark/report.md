@@ -459,6 +459,51 @@ bội số lịch, tách đơn vị dính số, bỏ số điện thoại/máy l
 → 0 cảnh báo. Nhánh calculation giờ chỉ cảnh báo AI admin, không gắn dòng lưu ý (đã có banner
 "AI tự tính, có thể sai").
 
+**Chạy lại lần 2 và 3 (26/10 tối, sau khi sửa phân loại + prompt calculation + cách chấm giờ).**
+Mục tiêu theo review 15 câu fail của `calc-none-v2`: A (7 câu) trả lời đúng nhưng đi nhánh advisory;
+B (4) sai số học; C (3) bỏ cuộc/đọc bảng/chấm điểm; D (1) retrieval. Sửa (xem commit cùng mục):
+
+- Phân loại: thêm rule 5b "phép tính trên số liệu có sẵn vẫn là `academic_calculation`" - phép
+  tính quyết định nhãn, không phải nguồn số liệu.
+- Prompt calculation: (1) tách "công thức của Trường" (hệ số, đơn giá, ngưỡng, quy đổi) khỏi
+  "số học phổ thông" (tổng, hiệu, phần trăm, trung bình có trọng số đã cho, đếm ngày/giờ) - phần
+  sau không cần tài liệu cho phép; (2) công thức nhiều tầng: quy đổi về đúng thang/đơn vị trước
+  khi thay số, giải tới đúng đại lượng được hỏi, kiểm tra ngược; (3) tự kiểm tra số học, đọc bảng
+  bị gộp cột theo thứ tự tiêu đề; (4) số liệu người dùng nêu trong câu hỏi là nguồn hợp lệ,
+  KB không có văn bản gốc không phải lý do từ chối (thêm sau v3, vì v3 làm 3 câu từ chối kiểu này).
+- Eval: `numbers_match` quy "X giờ Y phút" về số giờ thập phân.
+
+![Calculation 38 câu qua 4 lần chạy](assets/fig9-calc-rerun.png)
+
+| | rrf-only | calc-none-v2 | calc-none-v3 | **calc-none-v4** |
+|---|---|---|---|---|
+| pass | 19 | 23 | 24 | **26** |
+| qua node calculation | 28 | 30 | 33 | 32 |
+| từ chối / nêu giới hạn | 7 | 9 | 7 | **5** |
+| hỏi lại (form) | 1 | 0 | 1 | 1 |
+| cảnh báo `CALC_UNGROUNDED_INPUT` | 0 | 4 (đều dương tính giả, đã sửa) | 2 (**đều bắt đúng** phép cộng sai) | 1 |
+| p50 cả lượt | 5,5 s | 5,1 s | 4,8 s | 5,1 s |
+
+Kết quả 15 câu mục tiêu (v2 → v4): đậu 7 (d0309, d0310, d0313, d0317, d0320, d0322 và d0316 ở v3);
+B đã đi đúng node calculation ở cả 4/4 câu, nhóm A đi node calculation 3/7 (d0316, d0317, d0318),
+4 câu còn lại (d0238 bị coi ngoài phạm vi vì là câu lập trình C, d0241, d0245, d0329) vẫn trả lời
+đúng qua nhánh advisory. Hai câu từng rớt vì cách chấm/đọc bảng (d0331, d0332) vẫn rớt: model
+cộng sai 13 h 10 × 2 + 11 h 10 (ra 31 h 40, grounding bắt được) và vẫn nói "chưa có thông tin hạn
+mức Wi-Fi của cán bộ" dù có tính được phần sinh viên.
+
+Hai điểm cần đọc kỹ, không nên xem 26/38 là con số sạch:
+
+- **d0309 (ĐGNL / nhiều tầng) "đậu" nhờ cách chấm**: model nay đi đúng chuỗi công thức
+  (Toán 8,0; Hóa 6,5; Lý cần 5,0; tổng 3 học kỳ 15,0; HK1 lớp 12 = 15,0 − 9,5 = **5,5**) nhưng sau
+  đó tự thêm một lý do "văn bản quy định làm tròn" và in đậm 7,0 (v3: 8,0). `numbers_match` chỉ
+  kiểm tra 5,5 có xuất hiện nên tính pass. Luật "theo tới cùng" đã có tác dụng (trước đây dừng ở
+  5,00), nhưng bước "kiểm tra ngược" bị bỏ qua và kết luận bị ghi đè - việc tiếp theo là chấm
+  theo con số in đậm/kết luận thay vì toàn văn, và siết "kết luận phải là số ra từ chuỗi công thức".
+- **Nhiễu model giữa hai lần chạy ±3-4 câu** (cùng prompt, cùng context): d0237 cộng 3+3+3+2 ra
+  14 ở v3 rồi đúng 12 ở v4; d0330 đúng ở v2, từ chối ở v3, cộng sai 630.000 ở v4; d0242 đậu ở v3,
+  hỏi lại ở v4. Chênh lệch dưới 4 câu giữa hai cấu hình không đủ kết luận; xu hướng chắc chắn là
+  routing (+4 câu qua node calculation) và từ chối (9 → 5).
+
 **Web search, 24 câu** (`runs/web-none`: 6 câu demo + 18 câu official không cần tài liệu, `--web
 on`, chế độ speculative, chính sách web mới):
 
