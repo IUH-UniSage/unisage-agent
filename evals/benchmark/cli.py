@@ -36,7 +36,15 @@ from evals.benchmark.runner import (
     run_performance,
 )
 from evals.benchmark.service import ensure_service
-from evals.benchmark.variants import CE_VARIANTS, LLM_VARIANTS, VARIANT_NAMES, build_variants
+from evals.benchmark.variants import (
+    CE_VARIANTS,
+    DEFAULT_LLM_RETRIES,
+    DEFAULT_LLM_RETRY_WAIT_SECONDS,
+    DEFAULT_LLM_RPM,
+    LLM_VARIANTS,
+    VARIANT_NAMES,
+    build_variants,
+)
 
 logger = logging.getLogger("evals.benchmark")
 
@@ -100,6 +108,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="K chunk cross-encoder giữ "
         f"(mặc định CHAT_CROSS_ENCODER_KEEP={settings.CHAT_CROSS_ENCODER_KEEP})",
     )
+    parser.add_argument(
+        "--llm-rpm",
+        type=float,
+        default=DEFAULT_LLM_RPM,
+        help=f"giãn cách gọi model LLM theo lượt/phút (mặc định {DEFAULT_LLM_RPM}, 0 = không giãn)",
+    )
+    parser.add_argument(
+        "--llm-retry-wait",
+        type=float,
+        default=DEFAULT_LLM_RETRY_WAIT_SECONDS,
+        help="giây chờ rồi gọi lại khi model báo hết lượt/phút",
+    )
+    parser.add_argument("--llm-retries", type=int, default=DEFAULT_LLM_RETRIES)
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)
     parser.add_argument(
         "--iterations", type=int, default=DEFAULT_PERF_ITERATIONS, help="số vòng -p qua toàn bộ câu"
@@ -146,6 +167,7 @@ def _environment(args: argparse.Namespace, run: Path, keep: int) -> dict[str, An
         "K giữ (cross-encoder)": keep,
         "CHAT_CONTEXT_MAX_CHUNKS": settings.CHAT_CONTEXT_MAX_CHUNKS,
         "Biến thể": ", ".join(args.variants),
+        "Giãn cách LLM": f"{args.llm_rpm:g} lượt/phút, chờ {args.llm_retry_wait:g}s khi hết lượt",
         "Chế độ": ", ".join(
             m
             for m, on in (("-a", args.accuracy), ("-p", args.performance), ("-c", args.concurrency))
@@ -193,7 +215,14 @@ async def run_benchmark(args: argparse.Namespace) -> int:
             from app.core.lifespan import lifespan
 
             await stack.enter_async_context(lifespan(None))  # type: ignore[arg-type]
-        variants = await build_variants(args.variants, keep=keep, client=client)
+        variants = await build_variants(
+            args.variants,
+            keep=keep,
+            client=client,
+            llm_rpm=args.llm_rpm,
+            llm_retry_wait_seconds=args.llm_retry_wait,
+            llm_retries=args.llm_retries,
+        )
         if args.accuracy:
             accuracy = await run_accuracy(candidates, variants, llm_repeats=args.repeats)
         if args.performance:

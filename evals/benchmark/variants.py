@@ -10,6 +10,7 @@ counts it as an error rather than crediting the unreranked list.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,36 @@ CE_VARIANTS = frozenset({"cross_encoder", "cross_encoder_then_llm"})
 
 class VariantError(RuntimeError):
     """The variant could not produce a selection for this question."""
+
+
+DEFAULT_LLM_RPM = 14  # the eval RERANK credential is capped at maxRpm 15
+DEFAULT_LLM_RETRY_WAIT_SECONDS = 20.0
+DEFAULT_LLM_RETRIES = 6
+_RATE_LIMIT_MARKERS = ("lượt gọi/phút", "maxrpm", "quota", "429", "rate limit", "giới hạn tốc độ")
+
+
+def is_rate_limited(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _RATE_LIMIT_MARKERS)
+
+
+class RpmPacer:
+    """Spaces call starts 60/rpm apart across every concurrent caller (rpm 0 = no pacing)."""
+
+    def __init__(self, rpm: float) -> None:
+        self._interval = 60.0 / rpm if rpm > 0 else 0.0
+        self._lock = asyncio.Lock()
+        self._next = 0.0
+
+    async def wait(self) -> None:
+        if not self._interval:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            if self._next > now:
+                await asyncio.sleep(self._next - now)
+                now = time.monotonic()
+            self._next = max(now, self._next) + self._interval
 
 
 @dataclass(frozen=True)
@@ -88,7 +119,14 @@ class LLMRerankVariant(Variant):
     name = "llm_rerank"
     uses_llm = True
 
-    def __init__(self, models: GraphModels) -> None:
+    def __init__(
+        self,
+        models: GraphModels,
+        *,
+        rpm: float = DEFAULT_LLM_RPM,
+        retry_wait_seconds: float = DEFAULT_LLM_RETRY_WAIT_SECONDS,
+        retries: int = DEFAULT_LLM_RETRIES,
+    ) -> None:
         if models.rerank is None:
             raise VariantError(
                 "no RERANK/EXTRACTION model in the registry snapshot: "
@@ -96,24 +134,54 @@ class LLMRerankVariant(Variant):
             )
         self._models = models
         self._agent = build_llm_rerank_agent(models.rerank)
+        self._pacer = RpmPacer(rpm)
+        self._retry_wait = retry_wait_seconds
+        self._retries = retries
+        self._last_call_ms = 0.0
 
     async def judge(self, question: str, result: TurnRerankResult) -> list[RetrievedChunk]:
-        outcome = await llm_rerank(
-            self._agent,
-            [question],
-            result,
-            credential=self._models.rerank_credential,
-            purpose=self._models.rerank_purpose,
-            snapshot_version=self._models.snapshot_version,
-        )
-        if outcome.failure is not None:
+        """One `llm_rerank` call, paced to the credential's rpm; a rate-limit failure waits
+        and retries (the wait is not part of the measured time)."""
+
+        for attempt in range(1, self._retries + 2):
+            await self._pacer.wait()
+            started = time.perf_counter()
+            outcome = await llm_rerank(
+                self._agent,
+                [question],
+                result,
+                credential=self._models.rerank_credential,
+                purpose=self._models.rerank_purpose,
+                snapshot_version=self._models.snapshot_version,
+            )
+            self._last_call_ms = (time.perf_counter() - started) * 1000
+            if outcome.failure is None:
+                return outcome.result.per_query[0].chunks[: settings.CHAT_CONTEXT_MAX_CHUNKS]
+            if attempt <= self._retries and is_rate_limited(outcome.failure):
+                logger.warning(
+                    "LLM rerank rate-limited (attempt %d/%d), waiting %.0fs: %s",
+                    attempt,
+                    self._retries + 1,
+                    self._retry_wait,
+                    outcome.failure[:120],
+                )
+                await asyncio.sleep(self._retry_wait)
+                continue
             raise VariantError(outcome.failure)
-        return outcome.result.per_query[0].chunks[: settings.CHAT_CONTEXT_MAX_CHUNKS]
+        raise VariantError("unreachable")
 
     async def select(self, candidate: Candidate) -> Selection:
-        started = time.perf_counter()
-        kept = await self.judge(candidate.question, _single_query(candidate))
-        return Selection(kept=kept, took_ms=(time.perf_counter() - started) * 1000)
+        kept, took_ms = await self.timed_judge(candidate.question, _single_query(candidate))
+        return Selection(kept=kept, took_ms=took_ms)
+
+    async def timed_judge(
+        self, question: str, result: TurnRerankResult
+    ) -> tuple[list[RetrievedChunk], float]:
+        """`judge` plus the time of its last attempt only (pacing and retry waits excluded)."""
+
+        self._last_call_ms = 0.0
+        kept = await self.judge(question, result)
+        return kept, self._last_call_ms
 
 
 class CrossEncoderThenLLMVariant(Variant):
@@ -126,7 +194,6 @@ class CrossEncoderThenLLMVariant(Variant):
         self._llm = llm
 
     async def select(self, candidate: Candidate) -> Selection:
-        started = time.perf_counter()
         first = await self._ce.select(candidate)
         narrowed = Candidate(
             question_id=candidate.question_id,
@@ -135,11 +202,15 @@ class CrossEncoderThenLLMVariant(Variant):
             chunks=first.kept,
             expected_document_ids=candidate.expected_document_ids,
         )
-        kept = await self._llm.judge(candidate.question, _single_query(narrowed))
+        kept, llm_ms = await self._llm.timed_judge(candidate.question, _single_query(narrowed))
         return Selection(
             kept=kept,
-            took_ms=(time.perf_counter() - started) * 1000,
-            detail={"ce_ms": round(first.took_ms, 1), "ce_kept": len(first.kept)},
+            took_ms=first.took_ms + llm_ms,
+            detail={
+                "ce_ms": round(first.took_ms, 1),
+                "llm_ms": round(llm_ms, 1),
+                "ce_kept": len(first.kept),
+            },
         )
 
 
@@ -149,6 +220,9 @@ async def build_variants(
     keep: int,
     client: CrossEncoderClient | None = None,
     models_loader: ModelsLoader | None = None,
+    llm_rpm: float = DEFAULT_LLM_RPM,
+    llm_retry_wait_seconds: float = DEFAULT_LLM_RETRY_WAIT_SECONDS,
+    llm_retries: int = DEFAULT_LLM_RETRIES,
 ) -> list[Variant]:
     """Variants in `names` order. Graph models are only resolved when an LLM variant is
     asked for (that needs the backend's model registry)."""
@@ -164,7 +238,12 @@ async def build_variants(
             from app.api.deps import get_graph_models
 
             models_loader = get_graph_models
-        llm = LLMRerankVariant(await models_loader())
+        llm = LLMRerankVariant(
+            await models_loader(),
+            rpm=llm_rpm,
+            retry_wait_seconds=llm_retry_wait_seconds,
+            retries=llm_retries,
+        )
     built: list[Variant] = []
     for name in names:
         if name == "cross_encoder":

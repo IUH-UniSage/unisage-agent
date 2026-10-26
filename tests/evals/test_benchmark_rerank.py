@@ -252,3 +252,49 @@ async def test_reports_are_written_as_markdown_and_json(tmp_path: Path) -> None:
     assert payload["accuracy"][0]["aggregate"]["recall_at_8"] == 1.0
     assert payload["accuracy"][0]["runs"][0]["kept_ids"] == ["good:1"]
     assert payload["concurrency"][0]["concurrency"] == 1
+
+
+@pytest.mark.asyncio
+async def test_llm_variant_retries_a_rate_limit_and_times_only_the_last_call(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.graph.nodes.llm_rerank import LLMRerankOutcome
+    from app.graph.nodes.post_retrieval_rerank import turn_result
+    from evals.benchmark import variants as module
+
+    calls: list[int] = []
+
+    async def fake_llm_rerank(agent, questions, result, **kwargs):
+        calls.append(1)
+        if len(calls) < 3:
+            return LLMRerankOutcome(
+                result=result, failure="Mô hình Rerank: credential đã dùng hết 15 lượt gọi/phút"
+            )
+        return LLMRerankOutcome(
+            result=turn_result([[result.per_query[0].chunks[1]]], best_scores=[0.9])
+        )
+
+    monkeypatch.setattr(module, "llm_rerank", fake_llm_rerank)
+    monkeypatch.setattr(module, "build_llm_rerank_agent", lambda model: object())
+    models = SimpleNamespace(
+        rerank=object(),
+        rerank_unavailable=None,
+        rerank_credential=None,
+        rerank_purpose="RERANK",
+        snapshot_version=None,
+    )
+    variant = module.LLMRerankVariant(models, rpm=0, retry_wait_seconds=0, retries=3)  # type: ignore[arg-type]
+
+    selection = await variant.select(_candidate())
+
+    assert len(calls) == 3
+    assert [c.chunk_id for c in selection.kept] == ["good:1"]
+    assert selection.took_ms < 1000
+
+    variant_no_retry = module.LLMRerankVariant(models, rpm=0, retry_wait_seconds=0, retries=0)  # type: ignore[arg-type]
+    calls.clear()
+    with pytest.raises(VariantError):
+        await variant_no_retry.select(_candidate())
+    assert len(calls) == 1
+    assert module.is_rate_limited("HTTP 429 Too Many Requests") is True
+    assert module.is_rate_limited("kết quả lọc không đúng định dạng") is False
