@@ -269,6 +269,31 @@ def numbers_match(expected: Sequence[float], text: str) -> bool:
 _RESULT_AFTER_EQUALS = re.compile(r"=\s*([0-9][0-9.,\s]*[0-9]|[0-9])")
 
 
+def calculation_path(row: dict[str, Any]) -> str:
+    """What computed the turn's numbers: `formula:<id>` / `arithmetic` (the calculation
+    node, from the staff trace's formula ids), `calc_request` (an advisory answer with a
+    code-computed block) or `advisory` (figures quoted, nothing computed)."""
+
+    formulas = [f for f in row.get("calculation_formulas") or [] if f]
+    if formulas:
+        first = formulas[0]
+        return "arithmetic" if first == "arithmetic" else f"formula:{first}"
+    if row.get("calculation_items"):
+        return "formula:?"
+    if "Phép tính số học" in (row.get("response") or ""):
+        return "calc_request"
+    return "advisory"
+
+
+def calculation_path_ok(expected: str, actual: str) -> bool:
+    """`advisory` accepts a quoted answer or a code-computed `calc_request` block; a
+    formula or `arithmetic` tag requires exactly that path."""
+
+    if expected == "advisory":
+        return actual in ("advisory", "calc_request")
+    return actual == expected
+
+
 def numbers_from_answer(answer: str) -> list[float]:
     """Fallback for a calculation row without `expected_numbers` (scoring-rules §2.2): the
     number after the last `=` of the answer. Empty when the answer has no `=`."""
@@ -386,13 +411,32 @@ def score_row(row: dict[str, Any]) -> dict[str, Any]:
             numbers = numbers_from_answer(row.get("expected_answer") or "")
             checks["numbers_source"] = "answer" if numbers else None
         checks["numbers_match"] = numbers_match(numbers, answer) if numbers else None
-        # A category=calculation question must take the calculation branch; one only labelled
-        # academic_calculation (e.g. "which courses, how many credits") may be answered by RAG.
-        allowed = {"calculation"} if category == "calculation" else {"calculation", "rag"}
-        if not allowed & set(outcome) or checks["asked_back"] or checks["leaked"]:
-            passed = False
-        elif checks["numbers_match"] is not None:
-            passed = checks["numbers_match"]
+        expected_path = row.get("expected_calculation")
+        checks["calc_path"] = calculation_path(row)
+        if expected_path:
+            # Tagged (26/10/2026): the question must take the expected path - a registry
+            # formula or plain arithmetic computed by code, or the advisory path (figures
+            # quoted, a calc_request block computed by code) - and the numbers must appear.
+            # On the advisory path a number the model worked out itself (strict grounding)
+            # fails the row even when it is right.
+            checks["calc_path_ok"] = calculation_path_ok(expected_path, checks["calc_path"])
+            if not checks["calc_path_ok"] or checks["asked_back"] or checks["leaked"]:
+                passed = False
+            elif expected_path == "advisory" and checks["ungrounded"]:
+                passed = False
+            elif checks["numbers_match"] is not None:
+                passed = checks["numbers_match"]
+            elif expected_path == "advisory":
+                passed = None  # correctness of a quoted answer needs the judge
+        else:
+            # A category=calculation question must take the calculation branch; one only
+            # labelled academic_calculation (e.g. "which courses, how many credits") may be
+            # answered by RAG.
+            allowed = {"calculation"} if category == "calculation" else {"calculation", "rag"}
+            if not allowed & set(outcome) or checks["asked_back"] or checks["leaked"]:
+                passed = False
+            elif checks["numbers_match"] is not None:
+                passed = checks["numbers_match"]
     else:  # normal, access visible
         if "rag" not in outcome or checks["recall_at_5"] is False or checks["leaked"]:
             passed = False

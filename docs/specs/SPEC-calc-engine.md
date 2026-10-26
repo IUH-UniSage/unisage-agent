@@ -69,6 +69,8 @@ công thức gắn với văn bản mới (biểu điểm xét tuyển năm khá
 | `admission_score_2026` | 2026.1 | Công thức tính điểm xét tuyển ĐHCQ 2026 | dtn, dhb, dgnl?, dtk (khi có dgnl), uu_tien = 0, diem_cong = 0 | ddgnl, dk, xt1, xt2, xt3, dxt |
 | `transcript_score_3hk` | 2020.1 | Bản mô tả CTĐT Kiểm toán 2020 §4.1 | mon1..3 (tên), m{i}_10, m{i}_11, m{i}_12, nguong = 19,5 | mon1..3, tong |
 | `weighted_score` | 1 | trọng số đề cương học phần | trong_so (list %), diem (list), lam_tron_thanh_phan? | diem_hp, thang4 |
+| `date_span` | 1 | cách đếm ngày theo lịch | tu_ngay, den_ngay (dd/mm/yyyy), cong_them_nam? (hạn N năm) | so_ngay, ca_hai_dau |
+| `time_span` | 1 | cộng khoảng giờ theo đồng hồ | khoang_gio ("hh:mm-hh:mm; ...") | tong_gio, tong_phut |
 
 ### `admission_score_2026`
 

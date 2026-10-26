@@ -179,7 +179,9 @@ def tasks_for(row: dict[str, Any], selected: Sequence[str] = METRICS) -> list[Ta
         )
         add("answer_relevancy", user_input=question, response=response)
         ids = {
-            "retrieved_context_ids": _unique(c.get("document_id") for c in row.get("context") or []),
+            "retrieved_context_ids": _unique(
+                c.get("document_id") for c in row.get("context") or []
+            ),
             "reference_context_ids": _unique(row.get("expected_document_ids") or []),
         }
         add("id_context_precision", **ids)
@@ -518,7 +520,9 @@ def read_keys(env_file: Path | None) -> list[str]:
 
 def load_rows(out: Path) -> list[dict[str, Any]]:
     path = out / "results.jsonl"
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
     return [row for row in rows if not row.get("quota")]
 
 
@@ -530,7 +534,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--judge-model", default=DEFAULT_MODEL)
     parser.add_argument("--judge-fallback", default=DEFAULT_FALLBACK, help="'' to disable")
     parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING)
-    parser.add_argument("--thinking", default="minimal", help="lowest thinking level the model allows")
+    parser.add_argument(
+        "--thinking", default="minimal", help="lowest thinking level the model allows"
+    )
     parser.add_argument("--rpm", type=int, default=12, help="requests per minute per key")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--max-cost", type=float, default=4.0, help="USD at list price")

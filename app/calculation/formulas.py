@@ -8,6 +8,7 @@ half-up via `round_half_up` - never Python's banker's `round()`.
 Spec: docs/specs/SPEC-calc-engine.md.
 """
 
+import datetime as _dt
 import re
 import unicodedata
 from collections.abc import Callable, Mapping
@@ -772,6 +773,8 @@ FormulaId = Literal[
     "admission_score_2026",
     "transcript_score_3hk",
     "weighted_score",
+    "date_span",
+    "time_span",
 ]
 
 
@@ -1600,6 +1603,231 @@ def _weighted_rounding(params: Mapping[str, object], name: str) -> Decimal | Non
     return step if name == "diem" and step is not None and step > 0 else None
 
 
+# ---------------------------------------------------------------------------
+# Date span (khoảng ngày giữa hai mốc) and time span (tổng giờ của các khoảng giờ)
+# ---------------------------------------------------------------------------
+
+DATE_SPAN_VERSION = "1"
+DATE_SPAN_SOURCE = (
+    "cách đếm ngày theo lịch (hiệu hai ngày; tính cả ngày đầu và ngày cuối = hiệu + 1)"
+)
+DATE_SPAN_TITLE = "Khoảng ngày giữa hai mốc"
+DATE_SPAN_FORMULA_TEXT = (
+    "Số ngày cách nhau = ngày kết thúc − ngày bắt đầu (theo lịch)",
+    "Số ngày tính cả ngày đầu và ngày cuối = số ngày cách nhau + 1",
+    "Có thời hạn N năm: mốc bắt đầu được cộng thêm N năm trước khi so với ngày kết thúc",
+)
+DATE_SPAN_OUTPUTS = (
+    OutputSpec("so_ngay", "số ngày cách nhau (không tính ngày đầu)"),
+    OutputSpec("ca_hai_dau", "số ngày tính cả ngày đầu và ngày cuối"),
+)
+DATE_SPAN_PARAMS: tuple[ParamSpec, ...] = (
+    ParamSpec(name="tu_ngay", label="Ngày bắt đầu (dd/mm/yyyy)", tab_label="Từ ngày", kind="text"),
+    ParamSpec(
+        name="den_ngay", label="Ngày kết thúc (dd/mm/yyyy)", tab_label="Đến ngày", kind="text"
+    ),
+    ParamSpec(
+        name="cong_them_nam",
+        label="Thời hạn cộng thêm vào ngày bắt đầu, tính bằng năm (bỏ trống nếu không)",
+        tab_label="Hạn (năm)",
+        kind="number",
+        required=_never,
+        min=Decimal(0),
+        max=Decimal(20),
+        step=Decimal(1),
+    ),
+)
+_DATE_TEXT = re.compile(r"^\s*(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{4})\s*$")
+
+
+def parse_date_text(value: object, field: str, errors: list[FieldError]) -> _dt.date | None:
+    match = _DATE_TEXT.match(str(value)) if isinstance(value, str) else None
+    if match is None:
+        errors.append(FieldError(field, "ngày phải viết dạng dd/mm/yyyy"))
+        return None
+    day, month, year = (int(part) for part in match.groups())
+    try:
+        return _dt.date(year, month, day)
+    except ValueError:
+        errors.append(FieldError(field, f"không có ngày {day:02d}/{month:02d}/{year}"))
+        return None
+
+
+def _shift_years(date: _dt.date, years: int) -> _dt.date:
+    try:
+        return date.replace(year=date.year + years)
+    except ValueError:  # 29/02 → 28/02
+        return date.replace(year=date.year + years, day=28)
+
+
+def _date_text(date: _dt.date) -> str:
+    return date.strftime("%d/%m/%Y")
+
+
+def date_span(params: Mapping[str, object]) -> CalculationResult:
+    errors: list[FieldError] = []
+    start = end = None
+    if params.get("tu_ngay") is None:
+        _missing("tu_ngay", errors)
+    else:
+        start = parse_date_text(params["tu_ngay"], "tu_ngay", errors)
+    if params.get("den_ngay") is None:
+        _missing("den_ngay", errors)
+    else:
+        end = parse_date_text(params["den_ngay"], "den_ngay", errors)
+    years = _optional_number(
+        params, "cong_them_nam", errors, minimum=Decimal(0), maximum=Decimal(20), default=Decimal(0)
+    )
+    if errors or start is None or end is None or years is None:
+        raise CalculationInputError(errors)
+    steps: list[Step] = []
+    inputs: list[tuple[str, str]] = [
+        ("Ngày bắt đầu", _date_text(start)),
+        ("Ngày kết thúc", _date_text(end)),
+    ]
+    anchor = start
+    if years > 0:
+        anchor = _shift_years(start, int(years))
+        inputs.append(("Thời hạn", f"{plain(years)} năm"))
+        steps.append(
+            Step(
+                label="Mốc sau thời hạn",
+                symbolic=DATE_SPAN_FORMULA_TEXT[2],
+                substituted=f"{_date_text(start)} + {plain(years)} năm = {_date_text(anchor)}",
+                value=Decimal(0),
+                display=_date_text(anchor),
+            )
+        )
+    days = (end - anchor).days
+    if days < 0:
+        raise CalculationInputError(
+            [
+                FieldError(
+                    "den_ngay", f"ngày kết thúc {_date_text(end)} trước mốc {_date_text(anchor)}"
+                )
+            ]
+        )
+    span = Decimal(days)
+    inclusive = span + 1
+    steps.append(
+        Step(
+            label="Số ngày cách nhau",
+            symbolic=DATE_SPAN_FORMULA_TEXT[0],
+            substituted=f"{_date_text(end)} − {_date_text(anchor)} = {days} ngày",
+            value=span,
+            display=str(days),
+        )
+    )
+    steps.append(
+        Step(
+            label="Tính cả ngày đầu và ngày cuối",
+            symbolic=DATE_SPAN_FORMULA_TEXT[1],
+            substituted=f"{days} + 1 = {days + 1} ngày",
+            value=inclusive,
+            display=str(days + 1),
+        )
+    )
+    return CalculationResult(
+        formula_id="date_span",
+        title=DATE_SPAN_TITLE,
+        formula_text=DATE_SPAN_FORMULA_TEXT,
+        inputs=tuple(inputs),
+        steps=tuple(steps),
+        outputs=(("Cách nhau", f"{days} ngày"), ("Tính cả hai đầu", f"{days + 1} ngày")),
+        summary=(
+            f"Từ {_date_text(anchor)} đến {_date_text(end)}: cách nhau **{days} ngày**;"
+            f" tính cả ngày đầu và ngày cuối **{days + 1} ngày**"
+        ),
+        values={"so_ngay": span, "ca_hai_dau": inclusive},
+    )
+
+
+TIME_SPAN_VERSION = "1"
+TIME_SPAN_SOURCE = "cách cộng khoảng giờ theo đồng hồ (giờ kết thúc − giờ bắt đầu, cộng các khoảng)"
+TIME_SPAN_TITLE = "Tổng thời gian của các khoảng giờ"
+TIME_SPAN_FORMULA_TEXT = (
+    "Mỗi khoảng = giờ kết thúc − giờ bắt đầu (qua nửa đêm thì cộng 24 giờ)",
+    "Tổng = cộng các khoảng, đổi ra giờ và phút",
+)
+TIME_SPAN_OUTPUTS = (
+    OutputSpec("tong_gio", "tổng số giờ (thập phân)"),
+    OutputSpec("tong_phut", "tổng số phút"),
+)
+TIME_SPAN_PARAMS: tuple[ParamSpec, ...] = (
+    ParamSpec(
+        name="khoang_gio",
+        label="Các khoảng giờ, mỗi khoảng dạng hh:mm-hh:mm, cách nhau bằng dấu chấm phẩy"
+        " (VD 06:30-19:40; 06:30-19:40; 06:30-17:40)",
+        tab_label="Khoảng giờ",
+        kind="text",
+    ),
+)
+_TIME_RANGE = re.compile(
+    r"(\d{1,2})\s*[:h]\s*(\d{2})\s*(?:-|–|—|đến|to)\s*(\d{1,2})\s*[:h]\s*(\d{2})",
+    re.IGNORECASE,  # noqa: RUF001
+)
+TIME_RANGES_MAX = 20
+
+
+def time_span(params: Mapping[str, object]) -> CalculationResult:
+    errors: list[FieldError] = []
+    raw = params.get("khoang_gio")
+    if raw is None:
+        _missing("khoang_gio", errors)
+        raise CalculationInputError(errors)
+    ranges = _TIME_RANGE.findall(str(raw))
+    if not ranges:
+        errors.append(FieldError("khoang_gio", "chưa đọc được khoảng giờ nào dạng hh:mm-hh:mm"))
+    if len(ranges) > TIME_RANGES_MAX:
+        errors.append(FieldError("khoang_gio", f"tối đa {TIME_RANGES_MAX} khoảng giờ"))
+    spans: list[tuple[str, int]] = []
+    for h1, m1, h2, m2 in ranges:
+        start, end = int(h1) * 60 + int(m1), int(h2) * 60 + int(m2)
+        if int(h1) > 23 or int(h2) > 23 or int(m1) > 59 or int(m2) > 59:
+            errors.append(FieldError("khoang_gio", f"giờ {h1}:{m1}-{h2}:{m2} không hợp lệ"))
+            continue
+        if end < start:
+            end += 24 * 60
+        spans.append((f"{int(h1):02d}:{m1}-{int(h2):02d}:{m2}", end - start))
+    if errors:
+        raise CalculationInputError(errors)
+
+    def hm(minutes: int) -> str:
+        return f"{minutes // 60} giờ {minutes % 60:02d} phút"
+
+    steps = [
+        Step(
+            label=f"Khoảng {index}",
+            symbolic=TIME_SPAN_FORMULA_TEXT[0],
+            substituted=f"{text} = {hm(minutes)}",
+            value=Decimal(minutes),
+            display=hm(minutes),
+        )
+        for index, (text, minutes) in enumerate(spans, start=1)
+    ]
+    total = sum(minutes for _, minutes in spans)
+    hours = Decimal(total) / 60
+    steps.append(
+        Step(
+            label="Tổng",
+            symbolic=TIME_SPAN_FORMULA_TEXT[1],
+            substituted=" + ".join(hm(m) for _, m in spans) + f" = {hm(total)} ({fmt(hours)} giờ)",
+            value=hours,
+            display=hm(total),
+        )
+    )
+    return CalculationResult(
+        formula_id="time_span",
+        title=TIME_SPAN_TITLE,
+        formula_text=TIME_SPAN_FORMULA_TEXT,
+        inputs=tuple((f"Khoảng {i}", text) for i, (text, _) in enumerate(spans, start=1)),
+        steps=tuple(steps),
+        outputs=(("Tổng", f"{hm(total)} ({fmt(hours)} giờ)"),),
+        summary=f"Tổng thời gian **{hm(total)}** (= **{fmt(hours)} giờ**)",
+        values={"tong_gio": hours, "tong_phut": Decimal(total)},
+    )
+
+
 FORMULAS: dict[FormulaId, Formula] = {
     "course_score": Formula(
         formula_id="course_score",
@@ -1718,6 +1946,29 @@ FORMULAS: dict[FormulaId, Formula] = {
         params=TRANSCRIPT_PARAMS,
         compute=transcript_score_3hk,
     ),
+    "date_span": Formula(
+        formula_id="date_span",
+        version=DATE_SPAN_VERSION,
+        source=DATE_SPAN_SOURCE,
+        outputs=DATE_SPAN_OUTPUTS,
+        title=DATE_SPAN_TITLE,
+        description=(
+            "Số ngày giữa hai mốc ngày (kéo dài bao nhiêu ngày, còn bao nhiêu ngày, quá hạn bao"
+            " nhiêu ngày), có hoặc không tính cả ngày đầu và ngày cuối; thời hạn N năm cộng vào mốc đầu"
+        ),
+        params=DATE_SPAN_PARAMS,
+        compute=date_span,
+    ),
+    "time_span": Formula(
+        formula_id="time_span",
+        version=TIME_SPAN_VERSION,
+        source=TIME_SPAN_SOURCE,
+        outputs=TIME_SPAN_OUTPUTS,
+        title=TIME_SPAN_TITLE,
+        description="Tổng giờ và phút của một hay nhiều khoảng giờ hh:mm-hh:mm (lịch làm việc, ca thi)",
+        params=TIME_SPAN_PARAMS,
+        compute=time_span,
+    ),
     "weighted_score": Formula(
         formula_id="weighted_score",
         rounding_of=_weighted_rounding,
@@ -1813,6 +2064,15 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
         re.compile(r"học bạ|kết quả học tập thpt"),
         re.compile(r"lớp 10.{0,60}lớp 11|học kỳ 1 lớp 12|hk1 lớp 12|hk 1 lớp 12"),
         re.compile(r"ngưỡng nhận hồ sơ"),
+    ),
+    "date_span": (
+        re.compile(r"(bao nhiêu|mấy) ngày|kéo dài|cách nhau|quá hạn|còn .{0,20}ngày"),
+        re.compile(r"\d{1,2}/\d{1,2}/\d{4}.{0,40}\d{1,2}/\d{1,2}/\d{4}"),
+    ),
+    "time_span": (
+        re.compile(
+            r"(bao nhiêu|mấy) (giờ|tiếng)|tổng thời gian|\d{1,2}h\d{2}\s*[-–]\s*\d{1,2}h\d{2}"
+        ),
     ),
     "weighted_score": (
         re.compile(r"trọng số"),

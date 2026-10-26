@@ -14,6 +14,7 @@ template: |
   - Một formula_id ở trên khi câu hỏi là phép tính của ĐÚNG công thức đó, kể cả khi chưa đủ số (hệ thống tự tra tài liệu rồi hỏi thêm). Chọn công thức theo ĐẠI LƯỢNG được hỏi: điểm tổng kết học phần theo quy chế (TX/GK/CK 20/30/50, thực hành) → `course_score`; đề cương nêu trọng số riêng (10 %, 30 %, 50 %...) → `weighted_score`; GPA/điểm trung bình tích luỹ → `gpa`; điểm chữ/thang 4 của một điểm → `grade_conversion`; học phí → `tuition_*`; điểm xét tuyển/XT1/XT2/ĐGNL quy đổi/ĐXT → `admission_score_2026`; điểm xét học bạ lớp 10, 11, HK1 lớp 12 → `transcript_score_3hk`.
   - Học phí: `tuition_semester` (một học kỳ, "kỳ này"), `tuition_year` (một năm học), `tuition_program` (cả khoá, cả ngành, đến khi ra trường). Không nêu phạm vi → `tuition_semester`. Nhiều năm chưa phải cả khoá ("2 năm đầu") → `tuition_year` kèm `pham_vi`.
   - `previous`: câu NỐI TIẾP phép tính trong `<previous_calculation>` với số mới/thay đổi ("nếu giữa kỳ 8 thì sao", "thế cuối kỳ cần bao nhiêu để được A+"). `params` CHỈ gồm số mới hoặc thay đổi; câu hỏi ngược thì thêm `solve_for` + `target`.
+  - Khoảng ngày giữa hai mốc (kéo dài/còn/quá hạn bao nhiêu ngày) → `date_span` (ngày dd/mm/yyyy; hạn hiệu lực N năm → `cong_them_nam`); tổng giờ của các khoảng hh:mm-hh:mm → `time_span` (mỗi ngày lặp lại ghi thành một khoảng riêng). Mốc ngày/giờ có thể lấy từ câu hỏi; nếu chỉ có trong tài liệu thì `none`.
   - `arithmetic`: SỐ HỌC THUẦN trên những con số NGƯỜI DÙNG TỰ NÊU trong tin nhắn, không cần tra quy định hay hệ số nào (tổng tín chỉ hai kỳ, tổng giờ họp, tổng các khoản tiền đã nêu, hiệu hai con số). Ghi `arithmetic.expression` chỉ gồm các số đó (viết liền, dấu chấm thập phân), + - * / và ngoặc; `label` tên đại lượng; `unit` đơn vị chung. KHÔNG dùng khi cần số liệu từ tài liệu (đơn giá, số tín chỉ của học phần, thống kê) hay là kết luận nghiệp vụ (học phí phải đóng, đủ điều kiện) → các trường hợp đó là `none` hoặc công thức registry.
   - `none`: KHÔNG công thức nào ở trên khớp - phép cộng/trừ/so sánh số liệu trong văn bản (tổng số đơn phúc khảo, cộng tín chỉ các học phần, còn bao nhiêu chỗ, kéo dài bao nhiêu ngày, tiền sách sau giảm giá), công thức riêng của một văn bản chưa đăng ký (điểm rèn luyện, hệ số đề tài, quy đổi chứng chỉ...). Kèm `retrieval_query`: một câu văn phong văn bản tìm tài liệu chứa công thức/số liệu đó, GIỮ NGUYÊN bậc/hệ, khoá, ngành, cơ sở người dùng nêu. Hệ thống sẽ trích tài liệu để người dùng tự tính.
   - Nếu tin nhắn có `<allowed_formula_ids>`: formula_id CHỈ được chọn trong danh sách đó (luôn được chọn `none`).
@@ -68,6 +69,15 @@ template: |
 
   User: "Sáng họp Zoom 1,5 giờ, chiều 2 giờ, tổng bao lâu?"
   {"formula_id": "arithmetic", "params": {}, "solve_for": null, "target": null, "arithmetic": {"expression": "1.5 + 2", "label": "Tổng thời gian họp", "unit": "giờ"}, "retrieval_query": null}
+
+  User: "Thời gian đăng ký đợt 1 từ 13/08/2026 đến 20/08/2026 kéo dài bao nhiêu ngày, tính cả ngày đầu và ngày cuối?"
+  {"formula_id": "date_span", "params": {"tu_ngay": "13/08/2026", "den_ngay": "20/08/2026"}, "solve_for": null, "target": null, "arithmetic": null, "retrieval_query": null}
+
+  User: "Chứng chỉ cấp ngày 20/5/2024, có giá trị 2 năm; nộp hồ sơ ngày 10/6/2026 thì quá hạn bao nhiêu ngày?"
+  {"formula_id": "date_span", "params": {"tu_ngay": "20/05/2024", "den_ngay": "10/06/2026", "cong_them_nam": 2}, "solve_for": null, "target": null, "arithmetic": null, "retrieval_query": null}
+
+  User: "Ban hỗ trợ làm việc 06h30 – 19h40 ngày 26 và 27/09, 06h30 – 17h40 ngày 28/09; tổng bao nhiêu giờ?"
+  {"formula_id": "time_span", "params": {"khoang_gio": "06:30-19:40; 06:30-19:40; 06:30-17:40"}, "solve_for": null, "target": null, "arithmetic": null, "retrieval_query": null}
 
   User: "Theo thống kê phúc khảo học kỳ I 2020-2021, toàn trường có tổng cộng bao nhiêu đơn và bao nhiêu đơn không đổi điểm?"
   {"formula_id": "none", "params": {}, "solve_for": null, "target": null, "retrieval_query": "thống kê tình hình phúc khảo học kỳ I năm học 2020-2021 số đơn trắc nghiệm, tự luận, thay đổi điểm"}

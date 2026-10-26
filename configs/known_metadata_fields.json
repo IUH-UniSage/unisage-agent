@@ -811,6 +811,46 @@
       "example_options": [],
       "priority": "low",
       "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "tu_ngay",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Ngày bắt đầu (dd/mm/yyyy)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Khoảng ngày giữa hai mốc."
+    },
+    {
+      "field": "den_ngay",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Ngày kết thúc (dd/mm/yyyy)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Khoảng ngày giữa hai mốc."
+    },
+    {
+      "field": "cong_them_nam",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Thời hạn cộng thêm vào ngày bắt đầu (năm)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Khoảng ngày: hạn hiệu lực N năm."
+    },
+    {
+      "field": "khoang_gio",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Các khoảng giờ hh:mm-hh:mm",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Tổng thời gian của các khoảng giờ."
     }
   ]
 }

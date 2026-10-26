@@ -342,3 +342,37 @@ def test_near_miss_fails_when_the_nearly_right_document_is_cited_as_the_answer()
     # A stated limit passes even though it cites the nearly-right document for context.
     assert honest["wrong_source"] is True and honest["pass"] is True
     assert honest["fabricated"] is False
+
+
+def test_a_tagged_calculation_row_must_take_its_expected_path() -> None:
+    base = dict(
+        category="calculation",
+        expected_numbers=[8],
+        response="Kéo dài **8 ngày**.",
+        context=[],
+    )
+    by_formula = _row(
+        **base,
+        nodes=["07_CalculationNode"],
+        calculation_items=[{"mode": "builtin", "status": "computed"}],
+        calculation_formulas=["date_span"],
+        expected_calculation="formula:date_span",
+    )
+    assert score_row(by_formula)["pass"] is True
+    wrong_formula = dict(by_formula, calculation_formulas=["arithmetic"])
+    assert score_row(wrong_formula)["pass"] is False
+    assert score_row(wrong_formula)["calc_path"] == "arithmetic"
+    # An advisory tag: a quoted answer passes, so does a code-computed calc_request block;
+    # a sum the model worked out itself (strict grounding) does not.
+    quoted = _row(**base, nodes=["08_RetrievalFilteringNode"], expected_calculation="advisory")
+    assert score_row(quoted)["pass"] is True
+    block = dict(
+        quoted, response="Kết quả ở dưới.\n\n**Phép tính số học: X**\n\nKết quả: **8 ngày**"
+    )
+    assert score_row(block)["calc_path"] == "calc_request" and score_row(block)["pass"] is True
+    self_computed = dict(quoted, warning_codes=["ANSWER_UNGROUNDED_NUMBERS"])
+    assert score_row(self_computed)["pass"] is False
+    assert (
+        score_row(dict(quoted, calculation_formulas=["date_span"], calculation_items=[{}]))["pass"]
+        is False
+    )

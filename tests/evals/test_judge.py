@@ -32,9 +32,7 @@ def _row(**overrides: Any) -> dict[str, Any]:
         "expected_document_ids": ["doc-a", "doc-b"],
         "response": "Học phí là 15 triệu đồng mỗi học kỳ.",
         "nodes": ["08_RetrievalFilteringNode"],
-        "context": [
-            {"document_id": "doc-a", "content": f"đoạn {i}"} for i in range(10)
-        ],
+        "context": [{"document_id": "doc-a", "content": f"đoạn {i}"} for i in range(10)],
         "web_results": [],
         "citations": [],
         "error": None,
@@ -100,11 +98,14 @@ def test_the_estimate_counts_only_llm_metrics_and_the_guard_stops_over_the_cap()
     tasks = judge.tasks_for(_row())
     estimated = judge.estimate(tasks, judge.DEFAULT_MODEL)
 
-    assert estimated["calls"] == 2 + 4 + 1 + 1 + 1  # faithfulness, factual, recall, relevancy, refusal
+    assert (
+        estimated["calls"] == 2 + 4 + 1 + 1 + 1
+    )  # faithfulness, factual, recall, relevancy, refusal
     assert estimated["usd"] > 0
-    assert judge.estimate(judge.tasks_for(_row(), ["id_context_recall"]), judge.DEFAULT_MODEL)[
-        "usd"
-    ] == 0
+    assert (
+        judge.estimate(judge.tasks_for(_row(), ["id_context_recall"]), judge.DEFAULT_MODEL)["usd"]
+        == 0
+    )
     with pytest.raises(judge.BudgetExceeded):
         judge.check_budget(estimated, max_cost=estimated["usd"] / 2)
 
@@ -129,8 +130,12 @@ def test_main_stops_before_any_call_when_the_estimate_exceeds_max_cost(tmp_path:
 
 
 class FakeScorer:
-    def __init__(self, values: dict[str, float] | None = None, quota_after: int | None = None,
-                 fallback: bool = False) -> None:
+    def __init__(
+        self,
+        values: dict[str, float] | None = None,
+        quota_after: int | None = None,
+        fallback: bool = False,
+    ) -> None:
         self.values = values or {}
         self.quota_after = quota_after
         self.fallback = fallback
@@ -141,10 +146,17 @@ class FakeScorer:
             raise QuotaExhausted(reset_at=1_000.0)
         self.calls.append((task.key, task.metric))
         value = self.values.get(task.metric, 0.9)
-        return Score(value=value, reason=None if not math.isnan(value) else "failed",
-                     usage={"model": "fallback" if self.fallback else "main",
-                            "models": {"fallback" if self.fallback else "main": 1},
-                            "fallback": self.fallback, "calls": 1, "usd": 0.001})
+        return Score(
+            value=value,
+            reason=None if not math.isnan(value) else "failed",
+            usage={
+                "model": "fallback" if self.fallback else "main",
+                "models": {"fallback" if self.fallback else "main": 1},
+                "fallback": self.fallback,
+                "calls": 1,
+                "usd": 0.001,
+            },
+        )
 
     def stats(self) -> dict[str, Any]:
         return {}
@@ -160,7 +172,9 @@ def _run(out: Path, scorers: list[FakeScorer], **kwargs: Any) -> tuple[JudgeRun,
     return JudgeRun(out=out, scorer_factory=factory, concurrency=2, **kwargs), asked
 
 
-def test_every_score_is_checkpointed_and_a_rerun_only_scores_what_is_missing(tmp_path: Path) -> None:
+def test_every_score_is_checkpointed_and_a_rerun_only_scores_what_is_missing(
+    tmp_path: Path,
+) -> None:
     tasks = judge.tasks_of([_row(id="q1"), _row(id="q2")], ["refusal", "faithfulness"])
     scorer = FakeScorer(values={"faithfulness": math.nan})
     run, _ = _run(tmp_path, [scorer])
@@ -206,8 +220,9 @@ def test_out_of_quota_waits_for_the_reset_then_scores_the_rest(tmp_path: Path) -
 
 def test_rows_scored_by_the_fallback_are_scored_again_with_the_main_model(tmp_path: Path) -> None:
     tasks = judge.tasks_of([_row(id=f"q{i}") for i in range(4)], ["refusal", "id_context_recall"])
-    run, asked = _run(tmp_path, [FakeScorer(fallback=True), FakeScorer(fallback=False)],
-                      fallback_model="fallback")
+    run, asked = _run(
+        tmp_path, [FakeScorer(fallback=True), FakeScorer(fallback=False)], fallback_model="fallback"
+    )
 
     assert asyncio.run(run.run(tasks))
     assert asked == [False, True]
@@ -229,7 +244,10 @@ def test_scores_are_merged_into_results_and_summarised(tmp_path: Path) -> None:
 
     summary = judge.summarize_scores(merged, records)
     assert summary["metrics"]["faithfulness"] == {
-        "n": 1, "mean": 0.5, "pass_rate": 0.0, "nan": 0,
+        "n": 1,
+        "mean": 0.5,
+        "pass_rate": 0.0,
+        "nan": 0,
         "by_category": {"normal": {"n": 1, "mean": 0.5, "pass_rate": 0.0}},
     }
     assert summary["usage"]["calls"] == 3
@@ -299,7 +317,11 @@ class FakeError(Exception):
 
 
 def test_errors_are_classified_from_the_code_and_the_quota_details() -> None:
-    per_day = {"error": {"details": [{"violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel"}]}]}}
+    per_day = {
+        "error": {
+            "details": [{"violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel"}]}]
+        }
+    }
     per_minute = {"error": {"details": [{"@type": "RetryInfo", "retryDelay": "34s"}]}}
     assert classify(FakeError(429, per_day)) == ("rpd", None)
     assert classify(FakeError(429, per_minute)) == ("rpm", 34.0)
@@ -339,8 +361,10 @@ def _call(caller: GeminiCaller, outcomes: dict[str, list[Any]]) -> Any:
 
 def test_429_per_minute_moves_to_another_key_and_per_day_retires_the_key() -> None:
     clock = Clock()
-    outcomes = {"key-one-123456": [FakeError(429, {"retryDelay": "20s"}), "ok"],
-                "key-two-123456": [FakeError(429, {"quotaId": "PerDay"})]}
+    outcomes = {
+        "key-one-123456": [FakeError(429, {"retryDelay": "20s"}), "ok"],
+        "key-two-123456": [FakeError(429, {"quotaId": "PerDay"})],
+    }
     caller = _caller(list(outcomes), clock, outcomes)
 
     response, state = _call(caller, outcomes)
@@ -367,8 +391,10 @@ def test_per_day_429_can_bench_a_key_only_until_a_recheck() -> None:
 
 def test_503_and_504_cool_the_key_down_and_move_on_to_another_key() -> None:
     clock = Clock()
-    outcomes = {"key-one-123456": [FakeError(503), FakeError(504), "ok"],
-                "key-two-123456": [FakeError(503), FakeError(504)]}
+    outcomes = {
+        "key-one-123456": [FakeError(503), FakeError(504), "ok"],
+        "key-two-123456": [FakeError(503), FakeError(504)],
+    }
     caller = _caller(list(outcomes), clock, outcomes)
 
     response, state = _call(caller, outcomes)

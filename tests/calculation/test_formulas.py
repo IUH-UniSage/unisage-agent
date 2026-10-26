@@ -545,3 +545,40 @@ def test_every_registered_formula_declares_version_source_and_outputs() -> None:
     for formula in formulas.FORMULAS.values():
         assert formula.version and formula.source and formula.outputs
         assert formulas.calculate is not None
+
+
+# --- date span / time span ---------------------------------------------------------
+
+
+def test_date_span_counts_calendar_days_with_and_without_both_ends() -> None:
+    result = calculate("date_span", {"tu_ngay": "13/08/2026", "den_ngay": "20/08/2026"})
+    assert result.values == {"so_ngay": Decimal(7), "ca_hai_dau": Decimal(8)}
+    assert result.summary is not None and "**8 ngày**" in result.summary
+
+
+def test_date_span_adds_a_validity_period_to_the_start_date() -> None:
+    # d0319: cấp 20/5/2024, hạn 2 năm, nộp 10/6/2026 → quá hạn 21 ngày.
+    result = calculate(
+        "date_span", {"tu_ngay": "20/5/2024", "den_ngay": "10/06/2026", "cong_them_nam": 2}
+    )
+    assert result.values["so_ngay"] == Decimal(21)
+    assert result.steps[0].substituted == "20/05/2024 + 2 năm = 20/05/2026"
+
+
+def test_date_span_rejects_bad_dates_and_reversed_order() -> None:
+    with pytest.raises(CalculationInputError) as info:
+        calculate("date_span", {"tu_ngay": "31/02/2026", "den_ngay": "hôm qua"})
+    assert _fields(info.value) == {"tu_ngay", "den_ngay"}
+    with pytest.raises(CalculationInputError) as info:
+        calculate("date_span", {"tu_ngay": "20/08/2026", "den_ngay": "13/08/2026"})
+    assert _fields(info.value) == {"den_ngay"}
+
+
+def test_time_span_sums_clock_ranges_in_hours_and_minutes() -> None:
+    # d0332: 06h30-19h40 ×2 và 06h30-17h40 → 37 giờ 30 phút.
+    result = calculate("time_span", {"khoang_gio": "06h30 – 19h40; 06:30-19:40; 06:30 đến 17:40"})
+    assert result.values == {"tong_gio": Decimal("37.5"), "tong_phut": Decimal(2250)}
+    assert result.summary == "Tổng thời gian **37 giờ 30 phút** (= **37.5 giờ**)"
+    assert calculate("time_span", {"khoang_gio": "22:00-02:00"}).values["tong_phut"] == Decimal(240)
+    with pytest.raises(CalculationInputError):
+        calculate("time_span", {"khoang_gio": "sáng đến chiều"})
