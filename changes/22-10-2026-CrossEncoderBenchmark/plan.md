@@ -13,8 +13,9 @@ bật mặc định và đăng ký registry là ticket sau.
 ## Architecture Decisions
 
 - **Service riêng, project uv riêng** (`reranker/`): agent/worker không ôm torch; Windows
-  deploy chạy native nếu torch CUDA cài được, không thì WSL2. Baseline FlagEmbedding +
-  FastAPI; chưa dùng Infinity/TEI (chưa xác minh hỗ trợ v2-m3).
+  deploy chạy native nếu torch CUDA cài được, không thì WSL2. Baseline transformers trực tiếp
+  (cùng điểm với FlagEmbedding, bỏ được datasets/peft/ir-datasets) + FastAPI; chưa dùng
+  Infinity/TEI (chưa xác minh hỗ trợ v2-m3).
 - **Chế độ rerank là một setting** (`CHAT_RERANK_MODE`), không phải cờ bật/tắt rời rạc: ba
   giá trị `llm | cross_encoder | cross_encoder_then_llm`; mọi đường đều rơi về `llm` khi
   service lỗi. Lý do: benchmark và eval cần đổi chế độ bằng một biến môi trường.
@@ -41,7 +42,7 @@ Task 7 docs/task sau Task 2–4
 
 ### Phase 1: Service
 
-- [ ] Task 1: `reranker/` (pyproject uv, `app.py` FastAPI: lifespan load FlagReranker FP16,
+- [x] Task 1: `reranker/` (pyproject uv, `app.py` FastAPI: lifespan load bge-reranker-v2-m3 FP16 qua transformers,
       `/rerank` batch + `ranking`, `/health`, giải phóng khi tắt), `taskfiles/reranker.yml`
       (`reranker:serve`, `reranker:test`), test với scorer giả, chạy thật trên 4080 một lần.
 
@@ -51,7 +52,7 @@ Task 7 docs/task sau Task 2–4
 
 ### Phase 2: Nối vào graph
 
-- [ ] Task 2: settings `CHAT_RERANK_MODE`, `CROSS_ENCODER_URL`, `CROSS_ENCODER_TIMEOUT_SECONDS`,
+- [x] Task 2: settings `CHAT_RERANK_MODE`, `CROSS_ENCODER_URL`, `CROSS_ENCODER_TIMEOUT_SECONDS`,
       `CHAT_CROSS_ENCODER_KEEP`; `cross_encoder_client.py`; node `cross_encoder_rerank.py`
       (top-K, `metadata.ce_score`, chế độ hai tầng, fail-over LLM); rẽ nhánh trong
       `streaming_graph` + trace `09a_CrossEncoderRerankNode`; fingerprint cache; tests.
@@ -63,11 +64,11 @@ Task 7 docs/task sau Task 2–4
 
 ### Phase 3: Benchmark
 
-- [ ] Task 3: `evals/benchmark/`: `candidates.py` (đọc `runs/<run>`, fetch chunk theo id),
+- [x] Task 3: `evals/benchmark/`: `candidates.py` (đọc `runs/<run>`, fetch chunk theo id),
       `variants.py` (3 biến thể gọi cùng giao diện `rerank(question, chunks) -> kept`),
       `metrics.py` (recall@k, NDCG@16, MRR, empty rate, Jaccard ổn định), `report.py`,
       `cli.py` với `-a`; `task benchmark:run`.
-- [ ] Task 4: `-p` (warm-up, iterations, sampler CPU/RAM/VRAM), `-c` (mức đồng thời,
+- [x] Task 4: `-p` (warm-up, iterations, sampler CPU/RAM/VRAM), `-c` (mức đồng thời,
       semaphore, `--include-llm`), spawn/tắt service, kiểm tra VRAM trước/sau, ghi vào báo cáo.
 
 ### Checkpoint: Benchmark

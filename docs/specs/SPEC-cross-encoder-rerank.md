@@ -25,15 +25,18 @@
 - Model `BAAI/bge-reranker-v2-m3` (568M, đa ngữ, có tiếng Việt), FP16, `max_length=1024`
   cho cặp query + passage. Tải từ Hugging Face lần đầu (~1,1 GB FP16), cache tại
   `~/.cache/huggingface`.
-- Service dùng FlagEmbedding (`FlagReranker`) + FastAPI + uvicorn, 1 worker, load model một
-  lần, chạy native trên Linux; Windows chạy native nếu torch CUDA cài được, không thì WSL2.
+- Service dùng transformers `AutoModelForSequenceClassification` trực tiếp (cùng cách tính
+  điểm với `FlagReranker.compute_score`: logit[0] của cặp) + FastAPI + uvicorn, 1 worker, load
+  model một lần, chạy native trên Linux; Windows chạy native nếu torch CUDA cài được, không thì
+  WSL2. Đã bỏ FlagEmbedding (22/10): bản 1.4.2 kéo theo datasets/peft/ir-datasets không cần.
 - Bước rerank nhận tối đa 16 ứng viên/sub-query (`CHAT_RETRIEVAL_MAX_CHUNKS`), chunk dài tới
   ~800 token; một request rerank = 16 cặp.
 - Điểm BGE là logit, không phải xác suất: không dùng ngưỡng chung; ticket này **không** dùng
   điểm làm gate (giữ top-K), hiệu chuẩn ngưỡng là việc sau khi có phân phối điểm từ benchmark.
 - Bộ ứng viên chuẩn cho benchmark lấy từ một run eval đã ghi (`runs/<run>/results.jsonl`,
   trường `retrievals` có `chunk_id` của 16 ứng viên mỗi sub-query); nội dung chunk fetch lại
-  từ Qdrant theo id với quyền SUPER_ADMIN. Ground truth = `expected_document_ids`.
+  từ Qdrant theo id với đúng filter quyền của lượt đã ghi (`access` trong results.jsonl; bộ
+  demo toàn guest nên là filter public). Ground truth = `expected_document_ids`.
 
 ## Objective
 
@@ -51,8 +54,9 @@ thứ tự điểm (fail-open).
 1. **Service reranker** (`reranker/` trong repo agent, project uv riêng, không đụng
    dependency của agent):
    - `POST /rerank` body `{"query": str, "passages": [str], "top_k"?: int}` → `{"scores":
-     [float], "ranking": [int], "model": str, "took_ms": int}`; điểm theo thứ tự passages,
-     `ranking` là chỉ số sắp giảm dần. Batch nội bộ `RERANKER_BATCH_SIZE` (mặc định 16),
+     [float], "ranking": [int], "truncated": int, "model": str, "took_ms": int}`; điểm theo
+     thứ tự passages, `ranking` là chỉ số sắp giảm dần, `truncated` là số passage vượt
+     `max_length` bị cắt (trả lời câu hỏi mở về chunk dài). Batch nội bộ `RERANKER_BATCH_SIZE` (mặc định 16),
      `max_length=1024`, FP16 khi có CUDA, CPU khi không (chậm, chỉ để test).
    - `GET /health` → `{"status","model","device","loaded":bool,"vram_used_mb"}`.
    - Load model lúc khởi động (lifespan); tắt bằng SIGTERM thì giải phóng model và
@@ -116,16 +120,17 @@ thứ tự điểm (fail-open).
 
 ## Tech Stack
 
-Service: Python 3.12, FastAPI, uvicorn, FlagEmbedding, torch (CUDA 12.x wheel), project uv
-riêng `reranker/pyproject.toml`. Agent: httpx (đã có). Benchmark: asyncio, nvidia-smi qua
-subprocess (không thêm pynvml), psutil nếu đã có trong lock, không thì đọc `/proc`.
+Service: Python 3.12, FastAPI, uvicorn, transformers + sentencepiece, torch (wheel CUDA 13 trên
+máy dev; uv chọn theo máy), project uv riêng `reranker/pyproject.toml` (`package = false`, import
+`reranker.app` từ gốc repo). Agent: httpx (đã có). Benchmark: asyncio, nvidia-smi qua subprocess
+(không thêm pynvml), psutil (đã có trong lock).
 
 ## Commands
 
 ```
 task reranker:serve                      # service 8403 (Ctrl+C giải phóng VRAM)
 task reranker:test
-task benchmark:run -- hybrid-on          # cả 3 chế độ, cả 3 biến thể
+task benchmark:run env=eval -- hybrid-on # cả 3 chế độ, cả 3 biến thể (các lệnh dưới cũng env=eval)
 task benchmark:run -- hybrid-on -a --repeats 3
 task benchmark:run -- hybrid-on -p --iterations 5
 task benchmark:run -- hybrid-on -c --concurrency-levels 1,2,4,8 --conc-requests 30
