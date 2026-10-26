@@ -280,3 +280,65 @@ def test_summary_counts_web_use_and_cache_hits() -> None:
         "linked_sources": 1,
         "wrong_scope": 0,
     }
+
+
+def _unanswerable(kind: str, response: str, **extra) -> dict:
+    row = {
+        "id": "u1",
+        "category": "unanswerable",
+        "unanswerable_kind": kind,
+        "variant": "exact",
+        "response": response,
+        "nodes": ["08_RetrievalFilteringNode", "10_GenerationSynthesisNode"],
+        "retrievals": [{"query": "q", "chunks": []}],
+        "citations": [],
+        "warning_codes": [],
+        "expected_doc_ids": [],
+        "expected_document_ids": [],
+    }
+    row.update(extra)
+    return row
+
+
+def test_unanswerable_kinds_pass_on_a_stated_limit_or_a_question_back() -> None:
+    from evals.run.metrics import score_row
+
+    refused = score_row(
+        _unanswerable("not_in_corpus", "Hiện mình chưa có thông tin về mức phạt này.")
+    )
+    confident = score_row(_unanswerable("not_in_corpus", "Mức phạt là 5% số tiền còn nợ [1]."))
+    asked = score_row(
+        _unanswerable("calc_missing_input", "Cho mình xin số tín chỉ đã học nhé.", asked_back=True)
+    )
+    computed = score_row(_unanswerable("calc_missing_input", "Bạn còn thiếu 30 tín chỉ."))
+
+    assert refused["pass"] is True and refused["fabricated"] is False
+    assert confident["pass"] is False and confident["fabricated"] is True
+    assert asked["pass"] is True
+    assert computed["pass"] is False and computed["fabricated"] is True
+
+
+def test_near_miss_fails_when_the_nearly_right_document_is_cited_as_the_answer() -> None:
+    from evals.run.metrics import score_row
+
+    wrong = score_row(
+        _unanswerable(
+            "near_miss",
+            "Học phí Khối Công nghệ là 38.350.000 đồng/năm [1].",
+            forbidden_source_patterns=["2025-2026"],
+            citations=[{"title": "Quyet Dinh 1035 - Hoc phi 2025-2026", "document_id": "x"}],
+        )
+    )
+    honest = score_row(
+        _unanswerable(
+            "near_miss",
+            "Chưa có quyết định học phí 2026-2027; mức 2025-2026 là 38.350.000 đồng [1].",
+            forbidden_source_patterns=["2025-2026"],
+            citations=[{"title": "Quyet Dinh 1035 - Hoc phi 2025-2026", "document_id": "x"}],
+        )
+    )
+
+    assert wrong["wrong_source"] is True and wrong["pass"] is False and wrong["fabricated"] is True
+    # A stated limit passes even though it cites the nearly-right document for context.
+    assert honest["wrong_source"] is True and honest["pass"] is True
+    assert honest["fabricated"] is False

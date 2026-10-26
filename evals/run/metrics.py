@@ -25,6 +25,16 @@ REFUSAL_HINTS = (
     "không có quyền",
     "tạo ticket",
     "gửi yêu cầu hỗ trợ",
+    # Stated limits (UNISAGE-106 Phase 6): a partial answer, a wrong premise, a missing year.
+    "không đủ dữ liệu",
+    "không có quy định",
+    "không tồn tại",
+    "không đề cập",
+    "chưa có quyết định",
+    "chưa có quy chế",
+    "chưa có thông báo",
+    "không có kết quả",
+    "chưa có dữ liệu",
     "liên hệ",
 )
 
@@ -87,6 +97,18 @@ def web_pages(row: dict[str, Any]) -> list[dict[str, Any]]:
     """Every web page the turn used: quoted in the answer or linked by the fallback."""
 
     return [*(row.get("web_results") or []), *(row.get("web_sources") or [])]
+
+
+def wrong_source_used(row: dict[str, Any]) -> bool | None:
+    """An `unanswerable/near_miss` question: did the answer cite a document matching one of
+    `forbidden_source_patterns` (title, case-insensitive) - the "nearly right" document used as
+    if it answered? None when the question sets no pattern."""
+
+    patterns = [pattern.lower() for pattern in row.get("forbidden_source_patterns") or []]
+    if not patterns:
+        return None
+    titles = [str(c.get("title") or "") for c in row.get("citations") or []]
+    return any(pattern in title.lower() for title in titles for pattern in patterns)
 
 
 def web_scope_ok(row: dict[str, Any]) -> bool | None:
@@ -326,8 +348,27 @@ def score_row(row: dict[str, Any]) -> dict[str, Any]:
         checks["hidden_document_used"] = hidden_document_used(row)
         passed = not checks["leaked"] and not checks["hidden_document_used"]
     elif category == "unanswerable":
+        kind = row.get("unanswerable_kind") or "legacy"
         refused = "ticket" in outcome or checks["refusal_hint"]
-        passed = not checks["leaked"] and refused
+        checks["wrong_source"] = wrong_source_used(row)
+        if kind == "calc_missing_input":
+            # Asking for the missing input is the right move; a stated limit also counts.
+            passed = not checks["leaked"] and (checks["asked_back"] or refused)
+        else:
+            # Citing the nearly-right document is fine when the limit is stated ("chỉ có
+            # quyết định 2025-2026"); it is fabrication only without that statement.
+            passed = not checks["leaked"] and refused
+        # A confident answer where none was possible: figures with no source, the wrong
+        # document, or simply numbers stated without any limit - what "bịa" looks like.
+        checks["fabricated"] = (
+            passed is False
+            and not checks["asked_back"]
+            and (
+                bool(checks["wrong_source"])
+                or checks["ungrounded"]
+                or (not refused and bool(re.search(r"\d", answer)))
+            )
+        )
     elif category == "calculation" or row.get("expected_intent") == "academic_calculation":
         numbers = row.get("expected_numbers")
         checks["numbers_source"] = "expected_numbers" if numbers else None
@@ -379,7 +420,10 @@ def summarize(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         web["answered_from_web"] += "web" in checks["outcome"]
         web["linked_sources"] += "web_source" in checks["outcome"]
         web["wrong_scope"] += checks.get("web_scope_ok") is False
-        bucket = table[(row["variant"], row["category"])]
+        label = row["category"]
+        if label == "unanswerable" and row.get("unanswerable_kind"):
+            label = f"unanswerable/{row['unanswerable_kind']}"
+        bucket = table[(row["variant"], label)]
         bucket["rows"] += 1
         if "error" in checks["outcome"]:
             bucket["error"] += 1
@@ -398,6 +442,7 @@ def summarize(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
             bucket["leak"] += bool(checks["leaked"])
         bucket["ungrounded"] += bool(checks.get("ungrounded"))
         bucket["no_citation"] += bool(checks.get("no_citation"))
+        bucket["fabricated"] += bool(checks.get("fabricated"))
         if checks["leaked"]:
             leaks.append({"id": row["id"], "persona": row.get("persona"), "docs": checks["leaked"]})
         latencies.append(row["total_ms"])
