@@ -354,21 +354,26 @@ the original question, even if only one actually needed the answer. Splitting a 
 across advisory tasks precisely is future work. (Calculation tasks resume one by one - they keep
 their own parameters.)
 
-### LLM-computed calculations can be wrong
+### Questions outside the formula registry are not computed
 
-Only the forward calculation of the 3 built-in formulas is done by Python. Target questions
-("cuối kỳ cần bao nhiêu để được A+"), formulas found in documents and follow-ups are computed
-by the LLM (`main/chat_calculation_llm.yaml`), which can misapply a rounding step, pick the
-wrong case of a formula, or take a number from the wrong earlier calculation in the chat.
-There is no pre-release eval (product decision, UNISAGE-99). Mitigations: the built-in rules
-are given verbatim (`describe_builtin_rules()`), the answer must check its result by
-substituting it back, every such answer is labelled "Kết quả do AI tự tính, có thể sai" with
-its sources, the kill switch `CHAT_CALC_LLM_ENABLED` turns it off, and Đúng/Sai feedback files
-an `AI_CALCULATION_WRONG` ticket with the staff-only trace (question, known values, full answer,
-cited chunks).
+Since 26/10/2026 (UNISAGE-106) every number comes from a registered formula computed by Python,
+forward or solved for one unknown (`app/calculation/solver.py`). A calculation question no
+formula covers (a sum over a table, a document's own formula such as điểm rèn luyện, hệ số đề
+tài) is answered on the advisory path: the documents' figures and formula with citations, the
+arithmetic left to the user. On the demo eval set that is 30 of the 38 "calculation" questions,
+whose `expected_numbers` the system now deliberately does not produce. Routing depends on the
+classifier (registry listed in its prompt) and the extractor's `none`; a question wrongly sent to
+the advisory path still answers from the documents, one wrongly sent to a formula asks for that
+formula's parameters.
 
-**When to revisit:** once tickets show a pattern - e.g. move a frequent target question back to
-deterministic code.
+Assumptions written into formulas: `admission_score_2026` takes the regional/subject priority
+points as already converted (the Ministry's taper above 22,5 is not in the KB) and the aptitude
+top score (ĐTK) from the user; `weighted_score` rounds the final score to 0.1 and converts with
+the university's grade scale even when the syllabus belongs to another regulation. The solver
+assumes each formula is monotonic in each numeric parameter (true for every registered one).
+
+**When to revisit:** when a document formula is asked often enough to register (new
+`formula_id`, version, source, tests), or when the eval set is re-tagged by `formula_id`.
 
 ### A guest's "Sai" vote creates no ticket
 

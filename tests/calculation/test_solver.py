@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.calculation.formulas import param_spec
+from app.calculation.formulas import FormulaId, param_spec
 from app.calculation.render import render_markdown
 from app.calculation.result import CalculationInputError
 from app.calculation.solver import (
@@ -21,7 +21,7 @@ from app.calculation.solver import (
 )
 
 
-def _target(formula_id, output, op, value):  # type: ignore[no-untyped-def]
+def _target(formula_id: FormulaId, output: str, op: str, value: object) -> Target:
     target = parse_target(formula_id, {"output": output, "op": op, "value": value})
     assert isinstance(target, Target), target
     return target

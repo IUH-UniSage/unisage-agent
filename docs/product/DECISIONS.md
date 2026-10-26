@@ -64,6 +64,20 @@ sai" kèm nguồn; không eval trước phát hành mà dùng công tắc `CHAT_
 LLM được đưa nguyên văn các quy tắc của 3 công thức (trọng số, làm tròn, bảng quy đổi) để hỏi ngược
 vẫn đúng quy tắc, và phải tự kiểm tra kết quả bằng cách thay ngược lại.
 
+### Vì sao 26/10/2026 bỏ nhánh LLM tự tính, chuyển hẳn sang registry công thức Python?
+
+Bốn lần đo 38 câu calculation của tập demo (UNISAGE-106, `changes/22-10-2026-CrossEncoderBenchmark/report.md`
+8.3) sau khi đã thêm grounding và siết prompt: 19 → 23 → 24 → 26/38, nhưng mỗi lần vẫn 4-5 câu LLM cộng
+sai (3 + 3 + 3 + 2 = 14, 190.000 + 240.000 + 170.000 = 630.000), ±3-4 câu đổi chiều giữa hai lần chạy
+cùng prompt và một câu "đậu" chỉ vì số đúng xuất hiện giữa bài rồi bị kết luận ghi đè. Chủ sản phẩm
+chốt: LLM không tính nhẩm nữa; mỗi công thức là một hàm Python có `version` và `source`, tính được cả
+ngược (bộ giải tìm nghiệm trên lưới bằng chính công thức xuôi - khác bộ giải bị bỏ 09/10 vốn chép công
+thức Qdrant thành biểu thức); câu không có công thức thì trích công thức/số liệu từ tài liệu để người
+dùng tự tính thay vì ra một con số có thể sai. Thêm điểm xét tuyển 2026 (ĐGNL quy đổi thang 30, ĐK =
+Max, XT1/2/3), xét học bạ 3 học kỳ và điểm theo trọng số đề cương. Công tắc `CHAT_CALC_LLM_ENABLED`,
+nhãn "AI tự tính" và nút Đúng/Sai (chỉ cho item `llm`) không còn item mới; backend/web giữ để message cũ
+hiển thị. Spec: `SPEC-calc-engine.md` (registry, solver), `SPEC-calculation-node.md`.
+
 ### Vì sao panel có state machine `OPEN → PROCESSING(claim_token, lease)` thay vì xoá state khi claim?
 
 Xoá state rồi mới gọi Java qua mạng tạo ra khoảng trống: một tin nhắn thường gửi song song sẽ thấy

@@ -1,65 +1,74 @@
 # Spec: calculation-node (unisage-agent)
 
-> **Status: Implemented** (thiết kế chốt lại 09-10-2026: Python tính xuôi 3 công thức, LLM tính phần còn lại) (UNISAGE-99, nhánh `feature/huydh-unisage-99-calculation-flow`). Rủi ro còn
-> lại nằm ở `unisage-agent/docs/specs/known-gaps.md`.
+> **Status: Implemented** (UNISAGE-99; chốt lại 26-10-2026 trong UNISAGE-106: **Python tính mọi phép
+> tính, xuôi và ngược, theo registry công thức có version; LLM chỉ định tuyến; bỏ nhánh LLM tự tính**).
+> Rủi ro còn lại nằm ở `unisage-agent/docs/specs/known-gaps.md`.
 
 Module id `calculation-node` trong [capability map](../../changes/09-10-2026-calculation-flow/capability-map.md).
 Phụ thuộc: [SPEC-calc-engine](SPEC-calc-engine.md) và [SPEC-clarification-panel](SPEC-clarification-panel.md).
 
 ## Objective
 
-Thay placeholder `CalculationNode` bằng luồng thật cho các task `academic_calculation`. Chốt lại
-(09-10-2026, sau khi thử bộ giải ngược và 7 kiểm tra công thức Qdrant):
+Luồng thật cho các task `academic_calculation`. Chốt lại 26-10-2026 (sau 4 lần đo 38 câu calculation:
+LLM tính nhẩm sai 4-5 câu mỗi lần, nhiễu ±3-4 câu giữa hai lần chạy cùng prompt - xem
+`changes/26-10-2026-FormulaRegistry/plan.md`):
 
-1. **Python chỉ tính XUÔI 3 công thức cài sẵn** (GPA, ĐTKHP, quy đổi điểm): LLM chỉ chọn công thức và
-   chép số; thiếu/sai số thì hỏi trên panel; Python render công thức và từng bước.
-2. **Mọi phép tính khác do LLM tự tính** (`main/chat_calculation_llm.yaml`): câu hỏi ngược ("cuối kỳ cần
-   bao nhiêu để được A+"), công thức trong tài liệu Qdrant (quy chế, học phí, xét tuyển, bài học...), câu
-   nối tiếp cần lịch sử chat ("quay lại môn A"). Kết quả luôn có nhãn **"Kết quả do AI tự tính, có thể
-   sai"** và nút Đúng/Sai (mục 7) - chủ sản phẩm chấp nhận LLM có thể tính sai, bắt lỗi bằng phản hồi.
-3. Câu hỏi còn thiếu (của cả hai đường) gộp với câu hỏi advisory thành một panel.
+1. **Python tính mọi phép tính**, xuôi (`formulas.calculate`) và ngược (`solver.solved_result`: "cuối kỳ
+   cần bao nhiêu để được A+", "ĐHB tối thiểu để XT1 đạt 24", "tối đa mấy tín để học phí ≤ 8 triệu"),
+   theo **registry công thức có version và nguồn** (SPEC-calc-engine). LLM chỉ chọn công thức, chép số
+   người dùng đã nói, và nêu ẩn số + mục tiêu khi hỏi ngược; thiếu/sai số thì hỏi trên panel; Python
+   render công thức, từng bước và dòng kiểm tra.
+2. **Câu hỏi không có công thức trong registry** (cộng/trừ số liệu văn bản, công thức riêng của một văn
+   bản chưa cài) → extractor trả `none` → task **đi nhánh advisory** ngay đầu lượt: node 10 trích công
+   thức/số liệu từ tài liệu và để người dùng tự tính (luật trong `chat_academic_advisory.yaml`; grounding
+   gắn caution nếu model vẫn tính). Không còn nhánh "AI tự tính".
+3. Câu hỏi còn thiếu gộp với câu hỏi advisory thành một panel.
 
 ## Luồng của một task calculation
 
 ```
- task.query ─► calculation_extractor (LLM): {formula_id: gpa|course_score|grade_conversion|previous|llm,
-                                             params, retrieval_query}
-                 │ cài sẵn / previous (tính xuôi)            │ llm
-                 ▼                                           ▼
-   formulas.missing_params / calculate            retrieve_chunks(retrieval_query) nếu có (access filter)
-                 │                                           ▼
-     NeedsInput(ParamSpec) | Computed            chat_calculation_llm (không stream): builtin rules +
-                                                 tài liệu [C1..] + known_values + lịch sử chat
-                                                             │
-                                          ask_user_form → NeedsInput (panel) | text → LlmAnswered
+ task.query ─► calculation_extractor (LLM): {formula_id: <registry id>|previous|none, params,
+                                             solve_for, target, retrieval_query}
+                 │ registry / previous                         │ none → Deferred
+                 ▼                                             ▼
+   fill_from_documents (lookup: đơn giá...)        task nhập vào advisory_tasks của lượt
+   missing_params (trừ ẩn số) → NeedsInput         (node 10 trích công thức/số liệu, không tính)
+   đủ số → calculate | solver.solved_result → Computed
 ```
 
 ### Trạng thái của task (`app/graph/nodes/calculation.py`)
 
 ```python
 class CalculationPlan:            # field `plan` của PendingCalculationTask
-    formula_id: Literal["gpa", "course_score", "grade_conversion", "llm"]
-    retrieval_query: str | None   # chỉ cho "llm"
+    formula_id: Literal[<9 id trong registry>, "llm"]   # "llm": round cũ (trước 26-10) còn đọc được
+    solve_for: str | None         # tính ngược: tham số cần tìm ("ck", "diem[4]")
+    target: CalculationTarget | None   # {output, op (>=, <=, ==), value (số hoặc điểm chữ)}
 
 TaskOutcome = (
-    Computed(task_id, result: CalculationResult, plan, params)            # Python, cài sẵn
-  | LlmAnswered(task_id, query, text, plan, known_params, sources)        # LLM tự tính
+    Computed(task_id, result: CalculationResult, plan, params, notes, sources)   # Python
   | NeedsInput(task_id, plan, known_params, questions, lead)
-  | Unresolved(task_id, reason: Literal["llm_disabled", "llm_failed"])
+  | Unresolved(task_id, reason: Literal["legacy_llm", "bad_target"])
 )
+Deferred(task_id, query, retrieval_query)   # không có công thức: graph chuyển sang advisory
 ```
 
-`run_calculation_task` (lượt thường) và `resume_calculation_task` (lượt submit) là hai hàm graph gọi.
+Graph gọi `plan_calculation` (extractor, một lần cho mọi task, trước retrieval advisory) rồi
+`run_planned_task` (lượt thường) và `resume_calculation_task` (lượt submit); `run_calculation_task` gộp
+hai bước đầu cho test.
 
 ## 1. Extractor: `agents/calculation_extractor.yaml`
 
 ```json
-{"formula_id": "course_score", "params": {"tbtx": 8, "gk": 7, "ck": 6.5, "th": [9, 8], "tclt": 2, "tcth": 1}, "retrieval_query": null}
+{"formula_id": "course_score", "params": {"tbtx": 8, "gk": 7, "tclt": 2, "tcth": 1, "th": [9, 8]},
+ "solve_for": "ck", "target": {"output": "dtkhp", "op": ">=", "value": "A+"}, "retrieval_query": null}
 ```
 
-- Công thức cài sẵn **chỉ khi tính xuôi** đúng công thức đó (kể cả chưa đủ số). `previous`: tính xuôi lại
-  phép tính trong `<previous_calculation>` với số mới. `llm`: mọi trường hợp khác, kèm `retrieval_query`
-  (câu tìm tài liệu chứa công thức) hoặc `null` khi chỉ cần công thức cài sẵn (VD hỏi ngược điểm cuối kỳ).
+- Một `formula_id` của registry khi câu hỏi là phép tính của đúng công thức đó, xuôi (`solve_for: null`)
+  hay ngược (`solve_for` = tham số cần tìm, `diem[4]` cho một vị trí trong danh sách; `target.output` =
+  key đầu ra, `op`, `value` số hoặc điểm chữ). Danh sách công thức + tham số + đầu ra render từ registry
+  (`describe_builtin_formulas()`, kèm version). `previous`: phép tính trong `<previous_calculation>` với
+  số mới (có thể kèm `solve_for`). `none`: không công thức nào khớp, kèm `retrieval_query` (câu tìm tài
+  liệu chứa công thức/số liệu) - task đi nhánh advisory.
 - Tin nhắn gửi extractor: `query` (bản classifier đã chuẩn hoá), `<original_message>` (nguyên văn người
   dùng gõ ở lượt này, chỉ khi khác `query`; lượt submit panel không có) và `<current_time>`. Hai bản khác
   nghĩa thì tin nguyên văn; số và chữ phủ định lấy theo nguyên văn (13-10-2026: classifier từng viết
@@ -70,15 +79,17 @@ TaskOutcome = (
   `tuition_year` kèm `pham_vi`; form hỏi "Số tín chỉ lý thuyết của 2 năm đầu" và kết quả có tiêu đề
   "Học phí 2 năm đầu" (SPEC-calc-engine, mục học phí). Lý do (13-10-2026): trước đó câu "2 năm đầu" ra
   form và kết quả "một năm học", lệch với câu hỏi.
-- `parse_extraction`: `llm` luôn thắng; còn lại một công thức cài sẵn duy nhất do router luật khớp sẽ
-  thắng (kể cả khi output hỏng); output hỏng/không rõ mà router không khớp → `llm` (LLM vẫn hỏi lại được).
-  `previous` chỉ nhận khi phép tính gần nhất (`recent_calculations[-1]`) là công thức cài sẵn.
+- `parse_extraction` (26-10-2026): lựa chọn công thức registry của model được giữ, kể cả khi router
+  luật khớp công thức khác (router không phân biệt được "cuối kỳ cần bao nhiêu để được B+" với quy đổi
+  điểm; chỉ log `router_disagreement`); `none` của model được giữ; output hỏng/id lạ → công thức duy nhất
+  router khớp, không có hoặc nhiều → `none`. `solve_for`/`target` hỏng → log `solve_dropped`, tính xuôi.
+  `previous` chỉ nhận khi phép tính gần nhất (`recent_calculations[-1]`) là công thức registry.
 
 ### 1.1 Định tuyến công thức cài sẵn bằng luật (trước LLM)
 
-`BUILTIN_TRIGGERS` trong `formulas.py` (NFC, chữ thường). Khớp đúng một → khoá công thức cài sẵn đó
-(trừ khi LLM chọn `llm`); khớp nhiều → đưa danh sách vào `<allowed_formula_ids>` (luôn kèm `previous`
-khi có). Test: `tests/calculation/test_builtin_triggers.py`.
+`BUILTIN_TRIGGERS` trong `formulas.py` (NFC, chữ thường). Khớp đúng một → dự phòng khi output
+extractor hỏng; khớp nhiều → đưa danh sách vào `<allowed_formula_ids>` (luôn kèm `previous` khi có).
+Test: `tests/calculation/test_builtin_triggers.py`.
 
 Câu hỏi cho công thức cài sẵn được dựng từ `ParamSpec` (`number`, `number_list`, `number_or_list`,
 `course_table`, `text`) bằng `question_for(spec, known)`, nhãn lấy từ `label_for` theo các param đã biết;
@@ -99,9 +110,31 @@ Mọi công thức cài sẵn, ở lượt hỏi lẫn lượt submit, đi qua `
    từ tài liệu kèm `[n]` (đánh số chung với các nguồn khác của tin nhắn trong `number_citations`), thêm ghi
    chú đơn giá áp dụng cho đại học chính quy tại trụ sở chính. Trace lưu các chunk nguồn.
 
-Không có tham số `lookup` nào còn thiếu thì không tìm Qdrant, không gọi model.
+Không có tham số `lookup` nào còn thiếu thì không tìm Qdrant, không gọi model. Ẩn số của phép ngược
+không bao giờ được tra hay hỏi (`skip`).
 
-## 2. LLM tự tính: `main/chat_calculation_llm.yaml`
+### 1.3 Tính ngược (`solver.solved_result`, 26-10-2026)
+
+`builtin_outcome(..., unknown, target)`: thiếu tham số (trừ ẩn số) → panel như tính xuôi; đủ → solver
+tìm giá trị nhỏ nhất/lớn nhất của ẩn số trên lưới của nó (bước của tham số hoặc bước làm tròn công thức
+áp dụng - điểm CK tìm theo 0,5) để đầu ra đạt mục tiêu, trả `CalculationResult` gồm dòng "Giá trị cần
+tìm", các bước tính xuôi tại nghiệm và dòng "Kiểm tra" với giá trị liền kề; không có nghiệm → nói rõ
+kèm giá trị biên (vẫn là `Computed`). `plan.solve_for`/`plan.target` được lưu để lượt submit tính nốt.
+Lỗi không gắn được với tham số nào (mục tiêu hỏng) → `Unresolved("bad_target")`.
+
+## 2. Không có công thức: `Deferred` → nhánh advisory (thay "LLM tự tính", 26-10-2026)
+
+`_classified_turn` gọi extractor cho mọi task calculation **trước** khi retrieval advisory bắt đầu
+(`_plan_calculations`, ~1 lần gọi phụ trợ). Task `Deferred` thành một `ClassifiedTask(academic_advisory,
+SINGLE)` nối vào `advisory_tasks` của lượt; `l1_pending`/cache coi lượt như advisory khi không còn task
+tính được. Node 10 trả lời từ tài liệu với luật (cuối `chat_academic_advisory.yaml`): câu cần tính mà
+hệ thống không có công thức → trích số liệu/công thức kèm `[n]`, nêu điều kiện và cách thay số, KHÔNG tự
+ra kết quả. Prompt phân loại cũng liệt kê registry (`{calculation_formulas}`) để các phép cộng/trừ trên số
+liệu văn bản được gán thẳng `academic_advisory`.
+
+Phần dưới đây mô tả nhánh đã bỏ, giữ để đọc round cũ:
+
+### 2.1 (Đã bỏ) LLM tự tính: `main/chat_calculation_llm.yaml`
 
 - Input: `<builtin_rules>` (`describe_builtin_rules()`: trọng số, mọi bước làm tròn, bảng quy đổi - lấy từ
   hằng số trong `formulas.py`), `<academic_context>` (≤ 5 chunk đã qua `build_access_filter`, đánh số `[1]..`,
@@ -132,12 +165,13 @@ Không có tham số `lookup` nào còn thiếu thì không tìm Qdrant, không 
 
 ```
 plan_route
-  ├─ calc_future = gather(run_calculation_task(t) for t in calculation_tasks)         (bắt đầu ngay)
+  ├─ planned = gather(plan_calculation(t) for t in calculation_tasks)   (extractor, ~1 s; Deferred → advisory_tasks)
+  ├─ calc_future = gather(run_planned_task(t) for t in planned if PlannedTask)        (bắt đầu ngay)
   └─ advisory: query transformation → retrieval → rerank → web search                 (song song với calc)
                                     │
                          ══ BARRIER: await calc_future ══
                                     │
-     1. stream khối tính cho mỗi Computed (Python render) / LlmAnswered (nhãn AI), theo thứ tự T1..T3
+     1. stream khối tính cho mỗi Computed (Python render), theo thứ tự T1..T3
      2. stream câu cố định cho mỗi Unresolved
      3. node 10 generation (qua FenceRedactor) → token ra client
      4. build_round → panel (theo thứ tự SPEC-clarification-panel §2.6)
@@ -180,29 +214,16 @@ gọi bước này. **Số do Python tính, AI chỉ kiểm tra và viết lời
    → `rejected`, bỏ toàn bộ phần AI viết, log `calculation.review_rejected`.
 4. JSON hỏng, lỗi gọi model, timeout → bỏ phần AI viết (log `calculation.review_failed` /
    `calculation.review_unreadable`). Không bao giờ chặn câu trả lời: khối Python vẫn hiện.
-5. `fits = false` → **LLM tự tính lại** (`redo_with_llm`, chốt 13-10-2026): mọi `Computed` của lượt đi
-   vào `llm_outcome` (mục 2) với `CalculationPlan(formula_id="llm", retrieval_query=<câu hỏi của task>)`.
-   `known_values` (`known_for_llm`) dùng khoá là **câu đã hỏi sinh viên** (`label_for`, VD "Số tín chỉ lý
-   thuyết của một năm học": 100) để LLM thấy giá trị nhập cho phạm vi khác, kèm khoá "Lưu ý: kết quả công
-   thức cài sẵn không khớp câu hỏi" = `issue`. `chat_calculation_llm.yaml` dặn: tính lại đúng câu hỏi;
-   giá trị của phạm vi khác thì hỏi lại bằng `ask_user_form`, đơn giá/khoá/khối dùng lại được.
-   - Kết quả: khối "AI tự tính, có thể sai" (nút Đúng/Sai) thay cho khối Python, không có phần review;
-     hoặc panel nếu LLM cần thêm số (task lưu `plan.formula_id = "llm"`, lượt submit đi thẳng đường LLM,
-     không review lại, nên không có vòng lặp).
-   - `CHAT_CALC_LLM_ENABLED = false` hoặc LLM lỗi (`Unresolved`) → giữ khối Python, hiện như mục 6.
-   - Một lần review cho cả lượt: khi lượt có nhiều kết quả cài sẵn mà review báo lệch, tất cả đều tính
-     lại bằng LLM.
-6. Thứ tự hiển thị khi giữ khối Python (`Review.lead`):
-   - `fits = false` (đường LLM tắt hoặc lỗi) → `**Lưu ý:** {issue}`, rồi `answer`, rồi khối Python.
+5. `fits = false` → **giữ khối Python và hiện "Lưu ý"** (26-10-2026; trước đó LLM tính lại
+   `redo_with_llm` - đã bỏ cùng nhánh LLM tự tính).
+6. Thứ tự hiển thị (`Review.lead`):
+   - `fits = false` → `**Lưu ý:** {issue}`, rồi `answer`, rồi khối Python.
    - `fits = true` → `answer`, rồi khối Python.
    - Không có phần AI viết → chỉ khối Python.
 7. Vì phần AI viết đứng trước, khối Python chỉ được stream sau khi bước kiểm tra xong: token đầu tiên đến
-   muộn hơn khoảng một lần gọi LLM (khi tính lại bằng LLM: thêm lần tìm tài liệu, LLM rerank và lần gọi
-   `chat_calculation_llm`). Phần review hiện ra luôn qua kiểm tra số (bước 3); kết quả LLM tự tính luôn
-   mang nhãn "AI tự tính".
-8. Trace staff (7.2) của mỗi item `builtin`, và của item được LLM tính lại: `review: {fits, issue,
-   rejected}` và `prompt_versions.chat_calculation_review`; item tính lại có thêm `redone_from` =
-   `formula_id` cài sẵn bị thay.
+   muộn hơn khoảng một lần gọi LLM. Phần review hiện ra luôn qua kiểm tra số (bước 3).
+8. Trace staff (7.2) của mỗi item: `review: {fits, issue, rejected}` và
+   `prompt_versions.chat_calculation_review`.
 
 ## 4. Gộp câu hỏi thành một panel
 
@@ -224,8 +245,8 @@ answers → nhóm theo question.task_id
   mọi câu trả lời: field → canonical_field (tên chuẩn trong known_metadata_fields.json)
       field scope profile (hoặc field advisory lạ) → hồ sơ, giá trị chuẩn hoá (khoa_nhap_hoc = năm)
   PendingCalculationTask: values = hồ sơ (tham số scope profile) ∪ known_params ∪ {field: answer}
-      cài sẵn → formulas.calculate (không gọi LLM)
-      llm     → chat_calculation_llm lại với known_values mới (không gọi extractor, không qua classifier)
+      registry → builtin_task: tra tài liệu lại nếu cần, calculate hoặc solver theo plan.solve_for/target
+      llm (round lưu trước 26-10-2026) → Unresolved("legacy_llm"): câu cố định, mời hỏi lại
   PendingAdvisoryTask: hồ sơ đã cập nhật → _run_advisory_flow
 ```
 
@@ -235,22 +256,19 @@ Còn thiếu thì tạo panel mới với `chain_depth + 1` (không giới hạn
 
 | File | Nội dung |
 |---|---|
-| `agents/calculation_extractor.yaml` | mục 1: cài sẵn (xuôi) / previous / llm |
-| `main/chat_calculation_llm.yaml` | mục 2: LLM tự tính, `ask_user_form` khi thiếu số |
+| `agents/calculation_extractor.yaml` | mục 1: registry (xuôi / ngược: `solve_for`, `target`) / previous / none |
+| `main/chat_academic_advisory.yaml` (luật cuối) | mục 2: câu cần tính không có công thức → trích số liệu/công thức, không tự tính |
 | `main/chat_calculation_review.yaml` | kiểm tra kết quả cài sẵn có khớp câu hỏi và viết câu trả lời mở đầu (mục 3.2) |
-| `agents/message_classification.yaml` | quy tắc 1c nối tiếp phép tính, `<previous_calculation_turn>` (mục 9) |
+| `agents/message_classification.yaml` | quy tắc 1c nối tiếp phép tính, `<previous_calculation_turn>` (mục 9); `{calculation_formulas}` = registry, quy tắc 5: chỉ công thức registry mới là `academic_calculation` |
 | `common/response_style.yaml` | phép nhân viết `×` |
 | `main/chat_academic_advisory.yaml`, `main/chat_multi_intent_synthesis.yaml` | `{calculation_results}`: chỉ tiêu đề phép tính đã hiện |
 
-## 7. Công tắc, trace và phản hồi cho phép tính do LLM
+## 7. Trace và phản hồi
 
-Không có eval trước khi phát hành (đã chốt 09-10-2026): công tắc tắt khẩn cấp, trace đầy đủ, và phản hồi
-Đúng/Sai tạo ticket để admin điều tra.
+### 7.1 (Đã bỏ 26-10-2026) Công tắc `CHAT_CALC_LLM_ENABLED`
 
-### 7.1 Công tắc `CHAT_CALC_LLM_ENABLED` (mặc định `True`)
-
-`False`: chỉ 3 công thức cài sẵn được tính xuôi; mọi phép tính khác trả câu cố định (mục 2). Đổi qua
-biến môi trường rồi restart agent.
+Không còn nhánh LLM tự tính nên không còn công tắc. Mọi item có `mode = "builtin"`; `mode = "llm"` chỉ
+còn trong message cũ (client vẫn nhận enum cả hai).
 
 ### 7.2 Trace: tách phần công khai và phần chỉ staff đọc được
 
@@ -292,9 +310,10 @@ giờ đi qua `GET /messages/...` hay SSE.
    "prompt_versions": {"agent_calculation_extractor": "sha256:<12>", "chat_calculation_llm": "sha256:<12>"}}
   ```
 
-  Với `mode = "builtin"`: `formula_id`, `formula_hash`, `inputs`, `outputs`, và khi lượt chỉ có
-  calculation đã qua bước kiểm tra (mục 3.2): `review: {"fits", "issue", "rejected"}`. Item `llm` do
-  LLM tính lại sau review lệch: thêm `review` và `redone_from`.
+  Với `mode = "builtin"` (mọi item từ 26-10-2026): `formula_id`, `formula_version`, `formula_hash`
+  (hash của `id@version`), `solve_for`, `target`, `inputs`, `outputs`, `sources` (chunk của số liệu tra
+  từ tài liệu), và khi lượt chỉ có calculation đã qua bước kiểm tra (mục 3.2): `review: {"fits",
+  "issue", "rejected"}`.
 
 - Không có API public nào đọc bảng này. Staff xem trace **thông qua ticket** (7.3), không đọc thẳng
   bảng. Dữ liệu tự xoá theo message nhờ cascade; chính sách lưu trữ riêng (nếu cần) để ticket sau.
@@ -305,8 +324,8 @@ giờ đi qua `GET /messages/...` hay SSE.
 
 ### 7.3 Phản hồi Đúng/Sai
 
-Áp dụng cho **mỗi item có `mode = "llm"` và `status = "computed"`**. Công thức cài sẵn (Python) không có
-nút này.
+Áp dụng cho **mỗi item có `mode = "llm"` và `status = "computed"`** - từ 26-10-2026 không còn item nào
+như vậy được tạo (mọi phép tính do Python); backend và web giữ nguyên để message cũ vẫn hiển thị.
 
 - Khối kết quả có nhãn đầu là **"Kết quả do AI tự tính, có thể sai..."**, cuối khối có hai nút **Đúng**
   và **Sai**.
@@ -367,9 +386,6 @@ trong `description`, nên không cần màn hình mới, và staff chỉ thấy 
 - Thứ tự ưu tiên tham số của công thức cài sẵn: số gõ ở lượt này (extractor) > hồ sơ sinh viên (tham số
   scope `profile`: `khoa_nhap_hoc`, `khoi_nganh`) > số của phép tính trước. Câu giả định "khoá 2021 thì
   sao" không bị hồ sơ ghi đè; khoá đã sửa trong hồ sơ thay khoá cũ của phép tính trước.
-- LLM tự tính nhận `<recent_calculations>` (mỗi phép tính một dòng, kèm số) và bảng tên field chuẩn mọi
-  scope; quy tắc "ĐỌC TRƯỚC KHI HỎI": dùng hồ sơ và số của phép tính gần đây (chỉ khi cùng phép tính/cùng
-  phạm vi), chỉ hỏi field còn thiếu, dùng đúng tên trong bảng. Code chặn lại lần nữa (`llm_questions`).
 - Node 10 không nhận số: `{calculation_results}` chỉ có tên phép tính kèm `[đã có: <tên field>]`, và câu
   hỏi form của node 10 có field nằm trong danh sách đó bị bỏ.
 
@@ -420,31 +436,36 @@ và lượt resume dùng ngay. Khối thay cho
 
 ## Testing Strategy
 
-- **Extractor** (`tests/graph/test_calculation_task.py`): `llm` không bị router ghi đè; router khoá công
-  thức cài sẵn kể cả khi output hỏng; output hỏng không có router → `llm`; `previous` cần
-  phép tính gần nhất cài sẵn; `llm_questions` bỏ field đã biết (mọi alias)/có trong hồ sơ/trùng/sai kiểu.
-- **Công thức cài sẵn:** đủ số → `Computed`; thiếu → `NeedsInput` từ `ParamSpec`; điểm 11 → hỏi lại kèm lý do.
+- **Extractor** (`tests/graph/test_calculation_task.py`): lựa chọn registry của model được giữ; router
+  chỉ điền khi output hỏng; `none` giữ `retrieval_query`; `solve_for`/`target` đọc được và hỏng; `previous`
+  cần phép tính gần nhất registry; task `none` → `Deferred`; phép ngược → `Computed` với `plan.solve_for`;
+  ẩn số không bị hỏi; resume plan ngược; resume plan `llm` cũ → `legacy_llm`.
+- **Công thức registry:** đủ số → `Computed`; thiếu → `NeedsInput` từ `ParamSpec`; điểm 11 → hỏi lại kèm lý do.
+- **Solver** (`tests/calculation/test_solver.py`): các câu ngược của tập eval (d0308, d0309, d0311, d0313),
+  điểm chữ làm mục tiêu, tín chỉ tối đa dưới ngân sách, tham số giảm, mục tiêu `==`, không đạt được.
 - **Graph** (`tests/graph/test_calculation_node.py`): lượt chỉ có tính toán (khối tính + nhận xét đã
   kiểm tra số); thiếu số → panel; lượt hỗn hợp → một panel, khối tính trước advisory; câu hỏi ngược sau
-  một phép tính → LLM nhận builtin rules + lịch sử, có nhãn AI, `mode = "llm"`; LLM hỏi số bằng
-  `ask_user_form` → panel → resume không gọi classifier/extractor, có `Nguồn:` cho `[C1]`.
+  một phép tính → Python giải, trace `solve_for`/`target`/`formula_version`; câu không có công thức → đi
+  advisory, không có item calculation; lookup tài liệu được lọc như advisory.
 - **Classifier:** `<previous_calculation_turn>` được gửi; quy tắc 1c và ví dụ còn trong prompt.
 
 ## Boundaries
 
-- **Always:** Python tính xuôi 3 công thức cài sẵn; mọi kết quả LLM tự tính có nhãn AI + nút Đúng/Sai;
-  chunk qua access filter trước khi tới LLM; mọi câu hỏi lại đi qua panel.
-- **Ask first:** thêm công thức cài sẵn thứ 4; bỏ nhãn AI; stream câu trả lời LLM tự tính.
-- **Never:** để LLM nghĩ câu hỏi cho công thức cài sẵn; gọi lại extractor khi resume; đưa con số phép
-  tính vào prompt node 10.
+- **Always:** mọi con số kết quả do Python tính từ công thức registry (xuôi hoặc solver); chunk qua access
+  filter trước khi tới LLM; mọi câu hỏi lại đi qua panel; mỗi công thức có `version` và `source`.
+- **Ask first:** thêm/đổi công thức registry (nghiệp vụ); đổi cách hiển thị "không có công thức".
+- **Never:** để LLM tính nhẩm hay nghĩ câu hỏi cho công thức registry; gọi lại extractor khi resume; đưa
+  con số phép tính vào prompt node 10.
 
 ## Success Criteria
 
 - [x] Câu ĐTKHP đủ số → khối tính `7.5 / B / 3.0`, không có panel.
 - [x] GPA không kèm điểm → panel `course_table`; submit → GPA 2 chữ số thập phân.
-- [x] "Cuối kỳ cần bao nhiêu để được A+" → LLM tự tính, có nhãn AI và nút Đúng/Sai.
-- [x] Học phí/xét tuyển: LLM tính theo tài liệu tìm được (kèm nguồn) hoặc nói không tìm thấy công thức;
-      thiếu số hoặc nhiều trường hợp → panel.
+- [x] "Cuối kỳ cần bao nhiêu để được A+" → Python giải trên lưới 0,5, có dòng kiểm tra giá trị liền kề.
+- [x] Điểm xét tuyển 2026 (xuôi: 25,4; ngược ĐHB: 25,5), học bạ 3 học kỳ (HK1 Lý: 5,5), trọng số đề
+      cương (6,8; ngược 7,1 / 9,5) do Python tính; thiếu số → panel.
+- [x] Câu không có công thức ("tổng số đơn phúc khảo") → trả lời advisory từ tài liệu, không có item
+      calculation, không có con số do model tính.
 
 ## Decisions (09-10-2026)
 
@@ -465,3 +486,10 @@ và lượt resume dùng ngay. Khối thay cho
   (`expression.py`, `provenance.py`, formula agent, verifier). Python chỉ tính xuôi 3 công thức cài sẵn;
   mọi phép tính khác do LLM tự tính với nhãn "AI tự tính, có thể sai" và nút Đúng/Sai. Công tắc đổi
   tên thành `CHAT_CALC_LLM_ENABLED`; `mode` của item đổi từ `retrieved` thành `llm`.
+- (26-10-2026, UNISAGE-106) **Đảo lại: bỏ nhánh LLM tự tính, quay về Python cho cả tính ngược** - nhưng
+  với bộ giải mới đơn giản (tìm nghiệm trên lưới của tham số bằng chính công thức xuôi, không có
+  evaluator biểu thức) và registry công thức có version thay vì chép công thức Qdrant. Lý do: 4 lần đo 38
+  câu (19 → 26/38) cho thấy LLM tính nhẩm sai 4-5 câu mỗi lần và nhiễu ±3-4 câu giữa hai lần chạy cùng
+  prompt; một câu "đậu" chỉ nhờ cách chấm toàn văn. Câu không có công thức registry không được tính hộ
+  mà hiển thị công thức/số liệu từ tài liệu. Thêm `admission_score_2026`, `transcript_score_3hk`,
+  `weighted_score`.
