@@ -114,12 +114,12 @@ Bốn phương án cho bước 09a (rerank) của graph, đặt bằng `CHAT_RER
 | `llm` | 0,880 | 0,880 | 0,608 | **0,890** | 2,7 % | 2,6 | 49,6 % |
 | CE → LLM | 0,876 | 0,876 | 0,550 | 0,879 | 2,6 % | 2,1 | 49,6 % |
 
-![Đường cong recall@k](recall-at-k.png)
+![Đường cong recall@k](assets/recall-at-k.png)
 
 *Hình 1. recall@k, k = 1..8. `none` chạm trần từ k = 7; CE xuất phát thấp hơn ở k = 1 nhưng gần trần
 ở k = 8; hai đường LLM cao ở k = 1–2 rồi phẳng từ k = 3 vì chỉ giữ median 2 chunk.*
 
-![Bốn chỉ số xếp hạng](fig4-rank-metrics.png)
+![Bốn chỉ số xếp hạng](assets/fig4-rank-metrics.png)
 
 *Hình 4. Cùng 139 câu × 16 ứng viên. `none` và CE cao ở recall và NDCG (giữ đủ 8), LLM cao ở MRR.*
 
@@ -144,7 +144,7 @@ Bốn phương án cho bước 09a (rerank) của graph, đặt bằng `CHAT_RER
 | `llm` | 139 | 1 696 ms | 3 295 ms | 3 745 ms | 3 776 ms | 1 834 ms |
 | CE → LLM | 139 | 1 697 ms | 2 649 ms | 2 934 ms | 4 057 ms | 1 742 ms |
 
-![Độ trễ bước rerank](fig6-rerank-latency.png)
+![Độ trễ bước rerank](assets/fig6-rerank-latency.png)
 
 *Hình 6. CE 0,11 s so với 1,7 s của hai phương án LLM; CE → LLM có đuôi p95 ngắn hơn vì LLM đọc 8
 chunk thay vì 16.*
@@ -163,7 +163,7 @@ fail-open 3,9 s: ở tầng người dùng LLM rerank tốn ~2,3 s.
 | 768 | 0,921 | 0,888 | 0,815 | 138 ms | 7,8 | 9 % |
 | 1024 (cũ) | 0,921 | 0,888 | 0,815 | 139 ms | 7,3 | 0,2 % |
 
-![Đánh đổi theo max_length](fig3b-maxlen-sweep.png)
+![Đánh đổi theo max_length](assets/fig3b-maxlen-sweep.png)
 
 *Hình 3b. recall@8 giữ ở trần từ 256 đến 512, giảm nhẹ ở 768–1024; độ trễ giảm gần tuyến tính; 512
 cắt 29 % passage mà không mất độ chính xác.*
@@ -179,7 +179,7 @@ cắt 29 % passage mà không mất độ chính xác.*
 
 VRAM đỉnh 2 987 MiB (1024) / 3 120 MiB (512), GPU bận 85–90 %, 0 lỗi ở mọi mức.
 
-![Độ trễ và chịu tải CE](fig3-ce-latency-concurrency.png)
+![Độ trễ và chịu tải CE](assets/fig3-ce-latency-concurrency.png)
 
 *Hình 3. Trái: phân phối 695 phép đo ở 1024. Giữa: độ trễ tăng tuyến tính theo mức đồng thời. Phải:
 throughput phẳng.*
@@ -230,7 +230,7 @@ Mỗi chế độ một run eval đầy đủ (cùng 154 câu: 116 normal, 38 ca
 | Lượt gọi LLM / lượt | **2,34** | 2,33 | 3,32 | 3,30 |
 | USD / lượt (API, chưa gồm GPU CE) | **0,00483** | 0,00503 | 0,00557 | 0,00540 |
 
-![So sánh e2e](fig7-e2e-comparison.png)
+![So sánh e2e](assets/fig7-e2e-comparison.png)
 
 *Hình 7. `none` và CE hoà trong mức nhiễu và cùng hơn `llm` ở mọi cột trừ calculation recall@5
 (mất trích dẫn). Độ trễ của hai chế độ có LLM gồm thời gian chờ rate limit.*
@@ -250,7 +250,7 @@ Mỗi chế độ một run eval đầy đủ (cùng 154 câu: 116 normal, 38 ca
   giống hệt ở mọi chế độ. Muốn tăng điểm eval thì sửa phân loại/định tuyến và retrieval, không phải
   rerank.
 
-![Nguyên nhân trượt](fig8-failure-reasons.png)
+![Nguyên nhân trượt](assets/fig8-failure-reasons.png)
 
 *Hình 8. Số câu trượt theo nguyên nhân ở ba cấu hình. CE và `none` xoá gần hết nhóm "rerank loại tài
 liệu đúng" (5 → 1); phần còn lại nằm ngoài bước rerank.*
@@ -409,7 +409,7 @@ chữ, không chỉ số; đánh giá web fallback; lặp bộ unanswerable đ�
 | -p LLM | `... -p --iterations 1 --warmup 2 --variant llm_rerank --variant cross_encoder_then_llm` |
 | e2e | `CHAT_RERANK_MODE=<mode> RETRIEVAL_CACHE_REDIS_URL= task eval:run env=eval -- --set demo --category normal --category calculation --variant exact --web off --out runs/<name>` (CE cần `task reranker:serve`) |
 | Phase 6 | `task eval:run env=eval -- --set demo --ids d0337,…,d0356 --variant exact --web off --out runs/unans-<mode>` với `CHAT_RERANK_MODE=none|cross_encoder|llm`; `task benchmark:evidence env=eval -- hybrid-on` |
-| Hình | `plot_recall.py`, `plot_all.py`, `plot_maxlen.py` cùng thư mục, chạy với `uv run --no-project --with matplotlib` |
+| Hình | `assets/plot_recall.py`, `assets/plot_all.py`, `assets/plot_maxlen.py`, chạy với `uv run --no-project --with matplotlib`, ghi vào `assets/` |
 
 Báo cáo gốc từng bước: `benchmark_results/step-*` (gitignore). `report-full.md`: 14 câu lệch ở bước
 rerank, danh sách đầy đủ câu trượt e2e của từng cấu hình, hình phân phối điểm CE và số chunk giữ,

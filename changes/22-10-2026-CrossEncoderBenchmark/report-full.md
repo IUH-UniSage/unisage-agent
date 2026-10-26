@@ -304,7 +304,7 @@ Tất định: 2 lượt cho cùng thứ tự ở 139/139 câu (Jaccard 1,000, l
 | thứ tự retrieval (RRF) = `none` | **0.745** | **0.831** | **0.860** | **0.896** | **0.917** | **0.924** | **0.928** | **0.928** |
 | cross_encoder | 0.712 | 0.766 | 0.831 | 0.871 | 0.888 | 0.906 | 0.914 | 0.921 |
 
-![Đường cong recall@k của 4 cách xếp trên cùng 16 ứng viên](recall-at-k.png)
+![Đường cong recall@k của 4 cách xếp trên cùng 16 ứng viên](assets/recall-at-k.png)
 
 *Hình 1. recall@k (k = 1..8) trên cùng 16 ứng viên của 139 câu. Đường xanh dương là thứ tự
 retrieval không rerank, chạm trần 0,928 từ k = 7. Cross-encoder (cam) xuất phát thấp hơn ở k = 1
@@ -363,7 +363,7 @@ Ba điều hay bị đọc nhầm ở mục này:
   (đúng giả định spec). Có thể dùng điểm để *ưu tiên* nhưng không để *loại*.
 - Độ trễ 111 ms median cho 16 chunk thật, 103 ms cho câu calculation (ít ứng viên hơn).
 
-![Phân phối điểm cross-encoder của chunk hạng 1](fig2-ce-score-distribution.png)
+![Phân phối điểm cross-encoder của chunk hạng 1](assets/fig2-ce-score-distribution.png)
 
 *Hình 2. Điểm cross-encoder (logit) của chunk hạng 1 ở 139 câu, tách theo chunk đó có thuộc tài liệu
 kỳ vọng không. Hai phân phối chồng nhau rộng: không có ngưỡng điểm nào tách được đúng/sai, nên
@@ -399,7 +399,7 @@ Bảng 3 — 1 câu cố định `d0002` (16 ứng viên), 30 request mỗi mứ
 | 4 | 538 | 542 | 7.34 | 0% | 2987 | 86.2 |
 | 8 | 1076 | 1085 | 7.26 | 0% | 2987 | 87.2 |
 
-![Độ trễ và chịu tải của service cross-encoder](fig3-ce-latency-concurrency.png)
+![Độ trễ và chịu tải của service cross-encoder](assets/fig3-ce-latency-concurrency.png)
 
 *Hình 3. Trái: phân phối 695 phép đo độ trễ bước rerank (concurrency 1), p50 112 ms, p95 147 ms,
 không có đuôi dài. Giữa: p50/p95 tăng tuyến tính theo mức đồng thời (146 → 269 → 538 → 1076 ms).
@@ -468,7 +468,7 @@ cùng lúc, không chờ thêm); giữ worker thread vì nó làm `/health` khô
 | 768 | 0,921 | 0,888 | 0,740 | 0,815 | 138 | 175 | 7,8 | 9 % |
 | 1024 (cũ) | 0,921 | 0,888 | 0,739 | 0,815 | 139 | 205 | 7,3 | 0,2 % |
 
-![Đánh đổi theo max_length](fig3b-maxlen-sweep.png)
+![Đánh đổi theo max_length](assets/fig3b-maxlen-sweep.png)
 
 *Hình 3b. Từ trái: recall@8 giữ nguyên ở trần 0,928 từ 256 đến 512 rồi giảm nhẹ ở 768–1024, MRR
 cao nhất ở 384–512; độ trễ p50 giảm gần tuyến tính theo max_length; throughput tăng 7,3 → 17 req/s;
@@ -552,14 +552,14 @@ Phân phối số chunk giữ (417 lượt): `llm_rerank` 0:11, 1:110, 2:100, 3:
 7:4, 8:16 (median 2); `cross_encoder_then_llm` 0:11, 1:150, 2:119, 3:89, 4:25, 5:13, 6:5, 7:2,
 8:3 (median 2). Cross-encoder luôn 8.
 
-![Bốn chỉ số xếp hạng của bốn cách xếp](fig4-rank-metrics.png)
+![Bốn chỉ số xếp hạng của bốn cách xếp](assets/fig4-rank-metrics.png)
 
 *Hình 4. recall@8, recall@5, NDCG@16, MRR trên cùng 139 câu × 16 ứng viên. Cross-encoder cao nhất
 ở recall và NDCG (giữ đủ 8 chunk); hai biến thể LLM cao nhất ở MRR (khi giữ được tài liệu đúng
 thì đặt lên hạng 1) nhưng thấp ở recall vì loại nhầm. Thứ tự retrieval không có NDCG vì không
 "chọn" gì.*
 
-![Phân phối số chunk giữ và độ tái lập](fig5-kept-stability.png)
+![Phân phối số chunk giữ và độ tái lập](assets/fig5-kept-stability.png)
 
 *Hình 5. Trái: LLM rerank giữ median 2 chunk (11 lượt loại hết), cross-encoder luôn 8: đây là gốc
 của chênh lệch recall và NDCG. Phải: cross-encoder tái lập 100 %; hai biến thể LLM chỉ 49,6 % câu
@@ -642,7 +642,7 @@ chỉ tính thời gian lần gọi thành công (không tính giãn cách 14 l�
 
 (*) gồm 1 420 MiB của hai tiến trình dự án khác khởi động trong lúc đo (mục 2.5).
 
-![Độ trễ bước rerank của ba biến thể](fig6-rerank-latency.png)
+![Độ trễ bước rerank của ba biến thể](assets/fig6-rerank-latency.png)
 
 *Hình 6. Phân phối độ trễ riêng bước rerank (hộp = tứ phân vị, vạch = median, chấm = ngoại lệ).
 Cross-encoder 0,11 s so với 1,7 s của hai biến thể LLM; `cross_encoder_then_llm` có đuôi p95 ngắn
@@ -689,7 +689,7 @@ Run gốc `runs/hybrid-on` (chế độ `llm`, 21/10), `runs/ce-on` (`cross_enco
 | Token vào / lượt (TB) | 28 155 | 25 759 | 27 789 | **25 436** |
 | USD / lượt (TB) · cả run | 0,00557 · 0,858 | 0,00503 · 0,774 | 0,00540 · 0,831 | **0,00483 · 0,744** |
 
-![So sánh e2e ba chế độ](fig7-e2e-comparison.png)
+![So sánh e2e ba chế độ](assets/fig7-e2e-comparison.png)
 
 *Hình 7. Tầng câu trả lời, 154 câu, cache tắt, bốn chế độ. Từ trái: độ chính xác (normal
 recall@5, calculation pass, calculation recall@5 theo trích dẫn), số câu từ chối, độ trễ cả lượt
@@ -871,7 +871,7 @@ Tổng theo nguyên nhân: {'A.': 1, 'B.': 3, 'C.': 1, 'D.': 1}
 
 Tổng theo nguyên nhân: {'R1': 1, 'R2': 8, 'R3': 1, 'R4': 8}
 
-![Nguyên nhân trượt theo cấu hình](fig8-failure-reasons.png)
+![Nguyên nhân trượt theo cấu hình](assets/fig8-failure-reasons.png)
 
 *Hình 8. Số câu trượt theo nguyên nhân ở ba cấu hình (`none` thêm ở bước F, mục 7.7). Normal: `cross_encoder` xoá gần hết nhóm C
 (rerank loại tài liệu đúng: 5 → 1) và không còn ticket; phần còn lại là off-topic (A) và retrieval
@@ -1036,12 +1036,12 @@ encoder giữ lại như công cụ cho corpus mà retrieval xếp kém (chưa g
 
 ### 10.2. Vẽ lại hình
 
-Hình 1: `plot_recall.py`; hình 2–8: `plot_all.py` (cùng thư mục, đọc `benchmark_results/step-*` và
+Hình 1: `assets/plot_recall.py`; hình 2–8: `assets/plot_all.py`; hình 3b: `assets/plot_maxlen.py` ( đọc `benchmark_results/step-*` và
 `runs/*`). Chạy từ gốc repo, không cần thêm dependency vào project:
 
 ```
-uv run --no-project --with matplotlib python changes/22-10-2026-CrossEncoderBenchmark/plot_all.py changes/22-10-2026-CrossEncoderBenchmark
-uv run --no-project --with matplotlib python changes/22-10-2026-CrossEncoderBenchmark/plot_recall.py changes/22-10-2026-CrossEncoderBenchmark/recall-at-k.png
+uv run --no-project --with matplotlib python changes/22-10-2026-CrossEncoderBenchmark/assets/plot_all.py changes/22-10-2026-CrossEncoderBenchmark/assets
+uv run --no-project --with matplotlib python changes/22-10-2026-CrossEncoderBenchmark/assets/plot_recall.py changes/22-10-2026-CrossEncoderBenchmark/assets/recall-at-k.png
 ```
 
 Bảng màu cố định theo biến thể (retrieval xanh dương, cross_encoder cam, llm_rerank lục,
