@@ -130,6 +130,37 @@ xuống dưới giới hạn, model trả lời từ số đã có trong câu h�
 lời, mất khả năng kiểm chứng nguồn; là lỗi cần sửa trước khi bật mặc định cho nhánh calculation,
 hoặc tạm giữ `llm` riêng cho nhánh này (graph đã tách hai chỗ gọi, đổi được độc lập).
 
+### 1.2b. Số liệu đã đủ chứng minh cross-encoder thay được LLM rerank chưa
+
+Đủ để kết luận "thay được mà không xấu đi" trên corpus demo; chưa đủ để nói "tốt hơn một cách
+chắc chắn" hay khái quát sang corpus khác.
+
+**Đã chứng minh được**
+
+| Khía cạnh | Bằng chứng | Mức tin cậy |
+|---|---|---|
+| Bước rerank không mất tài liệu đúng so với LLM | cùng 139 câu, cùng 16 ứng viên: recall@8 0,921 so với 0,880, chênh +4,1 điểm = 12 câu LLM loại nhầm; LLM lặp 3 lượt, lệch recall@8 giữa các lượt chỉ 0,018 | cao: chênh lớn hơn nhiễu lặp nhiều lần, cùng đầu vào (mục 5) |
+| Tầng câu trả lời không xấu đi | normal recall@5 110 so với 104, từ chối 32 so với 41, ticket 0 so với 1, calculation pass 20 so với 18 | trung bình: một lần chạy mỗi chế độ, nhiễu nền của eval khoảng ±2 câu, nhưng chênh +6 câu normal và −9 từ chối vượt mức đó (mục 7) |
+| Nhanh hơn, rẻ hơn, ổn định hơn | 0,11 s so với 1,7 s (695 và 139 phép đo), −10 % chi phí, tái lập 100 % so với 49,6 % | cao (mục 4, 5, 6) |
+| Không rò VRAM, chịu tải đủ cho tải hiện tại | 494 → 494 MiB mọi lần; 7,3 req/s | cao trên 4080, 3060 chưa đo (mục 4, 9) |
+
+**Chưa chứng minh được, và vì sao**
+
+| Khoảng trống | Vì sao | Cần gì để lấp |
+|---|---|---|
+| "Tốt hơn" ở tầng câu trả lời chưa có độ tin cậy thống kê | 154 câu, một lần chạy mỗi chế độ; model sinh tự dao động ±2 câu giữa hai lần chạy cùng cấu hình (35 câu đổi trạng thái giữa `none` và `cross_encoder` dù hai chế độ tương đương, mục 7.7) | lặp e2e 3 lần mỗi chế độ, hoặc bộ official lớn hơn |
+| Mốc LLM bị pha | 70/154 lượt của run gốc LLM rerank lỗi rate limit và fail-open: "LLM hiện tại" ở e2e thực ra là 55 % LLM + 45 % xếp theo điểm; mốc LLM sạch chỉ có ở bước rerank (bước C), nơi cross-encoder vẫn hơn | nâng maxRpm hoặc thêm credential RERANK rồi chạy lại `llm` |
+| Một corpus | hybrid retrieval ở bộ demo chạm trần (recall@8 0,928); trên bộ official hoặc câu hỏi thật, vị trí của cross-encoder và LLM có thể đổi | e2e trên bộ official với `none`, `cross_encoder`, `llm` |
+| Hai điểm yếu chưa định lượng tần suất ngoài eval | bảng toàn tên riêng (d0010), tài liệu trùng tiêu đề; mất gate web search | theo dõi log sau khi bật; gate thay thế trước khi bật web search |
+| Trích dẫn nhánh calculation giảm | recall@5 theo trích dẫn 20 so với 23, con số trả lời vẫn đúng hơn, chưa rõ nguyên nhân (mục 7.4) | ghi `context` ở nhánh calculation rồi so |
+
+**Kết luận thực dụng**: số liệu đủ để **bỏ LLM rerank** ở bộ demo một cách an toàn; nếu phải chọn
+giữa cross-encoder và LLM, cross-encoder thắng ở mọi trục trừ MRR. Nhưng cùng bộ số liệu cho thấy
+`none` bằng cross-encoder (mục 7.7), nên câu hỏi để triển khai không còn là "cross-encoder thay LLM
+được chưa" mà là "có cần rerank không". Ba việc còn thiếu theo thứ tự giá trị: e2e trên bộ
+official với ba chế độ; lặp bộ demo thêm 2 lần để có khoảng tin cậy; đo trên 3060 nếu chọn
+cross-encoder.
+
 ### 1.3. Khuyến nghị
 
 **Kết quả mạnh nhất của benchmark không phải "cross-encoder thắng LLM" mà là "trên corpus này
