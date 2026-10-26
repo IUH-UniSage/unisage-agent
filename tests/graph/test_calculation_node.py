@@ -1240,7 +1240,7 @@ async def test_a_deferred_turn_flags_a_sum_the_model_states_itself(
     query = "Ngành Logistics, 4 môn đó cộng lại mấy tín?"
     credits = RetrievedChunk(
         chunk_id="ctdt:3",
-        content="Quản lý thông tin 3 tín chỉ; Giao nhận 4 tín chỉ; Phân loại 2 tín chỉ; Hải quan 7 TC",
+        content="Quản lý thông tin 3 TC; Giao nhận 4 TC; Phân loại 2 TC; Hải quan 7 TC",
         source="CTĐT.pdf",
         score=0.8,
     )
