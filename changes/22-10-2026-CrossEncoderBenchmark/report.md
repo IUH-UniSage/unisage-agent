@@ -32,7 +32,7 @@ trong các bảng: mục 0.
 | Lỗi | lượt biến thể không trả kết quả (service lỗi, model lỗi, JSON hỏng, rate limit) | trong benchmark không fail-open; trong graph thật thì fail-open |
 | Lượt | số lần chạy = số câu × số lần lặp (cross-encoder 2, LLM 3) | |
 | mốc không rerank | lấy 8 chunk đầu theo thứ tự retrieval, không rerank gì | mức mà bước rerank phải vượt để có ích |
-| trần (ceiling) | recall cao nhất có thể khi chỉ chọn trong 16 ứng viên = tài liệu kỳ vọng có trong 16 ứng viên | không biến thể nào vượt được; 0,935 trên bộ này |
+| trần (ceiling) | recall cao nhất có thể khi chỉ chọn trong 16 ứng viên = tài liệu kỳ vọng có trong 16 ứng viên | không biến thể nào vượt được; 0,928 trên bộ ứng viên fetch lại |
 | RRF | Reciprocal Rank Fusion: cách hybrid trộn danh sách dense và BM25 (điểm = Σ 1/(k + hạng)) | thứ tự "retrieval" trong báo cáo là thứ tự RRF |
 | dense / cosine | tìm theo vector ngữ nghĩa, điểm cosine 0–1 (`score` của chunk) | 0,70 là điểm gán cho chunk chỉ BM25 tìm thấy |
 | BM25 / hybrid | tìm theo từ khoá; hybrid = dense + BM25 trộn bằng RRF | bật qua `RETRIEVAL_HYBRID_ENABLED` |
@@ -107,7 +107,7 @@ tiêu chí nào trượt ở ý chính (độ trễ, recall@8, recall@5 normal, 
 **MRR 0,815 so với 0,890 (tiêu chí 2).** MRR = 1/hạng của chunk đúng đầu tiên. LLM rerank chỉ giữ
 median 2 chunk và khi nó giữ được tài liệu đúng thì gần như luôn đặt ở hạng 1 (recall@1 0,829);
 cross-encoder giữ đủ 8 và ở 23 câu đặt chunk đúng ở hạng 2–4 (recall@1 0,712, thấp hơn cả thứ
-tự retrieval 0,752). Nói cách khác, cross-encoder **không xếp tốt hơn RRF ở hạng 1**, nó chỉ
+tự retrieval 0,745). Nói cách khác, cross-encoder **không xếp tốt hơn RRF ở hạng 1**, nó chỉ
 *không loại nhầm* như LLM. MRR của LLM còn được "lợi" bởi cách tính: 12 câu LLM loại hết tài
 liệu đúng cho MRR = 0 nhưng kéo trung bình xuống ít hơn so với việc cross-encoder xếp đúng ở
 hạng 3 ở nhiều câu. Hệ quả thực tế: ở tầng câu trả lời (prompt đọc cả 8 chunk) MRR thấp hơn
@@ -177,12 +177,15 @@ lượt LLM, vẫn dính rate limit (32 lượt lỗi), p95 cả lượt 17,9 s 
   dùng với các chunk còn lại. 117 câu có 16 ứng viên, 19 câu có 8, 3 câu có 6.
 - Ground truth: `expected_document_ids` của câu. Một chunk "đúng" khi `document_id` của nó nằm
   trong tập kỳ vọng. 130 câu có 1 tài liệu kỳ vọng, 9 câu có 2.
-- **Trần**: tài liệu kỳ vọng có mặt trong 16 ứng viên ở mức recall 0,935. Không biến thể nào
-  vượt được số này: 5 câu (d0040, d0225, d0242, d0296, d0324) không có tài liệu kỳ vọng trong
-  ứng viên; 9 câu có 2 tài liệu kỳ vọng nhưng retrieval chỉ lấy được 1.
-- **Mốc không rerank**: lấy 8 chunk đầu theo thứ tự retrieval → recall@8 0,935 (= trần),
-  recall@5 0,924, MRR 0,854. Mọi bước rerank phải so với mốc này: trên bộ này thứ tự RRF của
-  hybrid đã đưa tài liệu đúng vào top-8 ở mọi câu có thể.
+- **Trần**: tài liệu kỳ vọng có mặt trong các ứng viên fetch lại được ở mức recall **0,928**
+  (0,935 nếu tính cả 37 chunk đã ghi nhưng không còn trong collection; mọi biến thể chỉ thấy
+  bộ fetch lại nên dùng 0,928). Không biến thể nào vượt được số này: 5 câu (d0040, d0225, d0242,
+  d0296, d0324) không có tài liệu kỳ vọng trong ứng viên; 9 câu có 2 tài liệu kỳ vọng nhưng
+  retrieval chỉ lấy được 1.
+- **Mốc không rerank** (biến thể `none` của harness, = `CHAT_RERANK_MODE=none`): lấy 8 chunk đầu
+  theo thứ tự retrieval → recall@8 **0,928 (= trần)**, recall@5 0,917, NDCG@16 0,733, MRR 0,846.
+  Mọi bước rerank phải so với mốc này: trên bộ này thứ tự RRF của hybrid đã đưa tài liệu đúng
+  vào top-8 ở mọi câu có thể.
 
 ### 2.2. Ba biến thể, một chữ ký `select(candidate) -> kept`
 
@@ -240,7 +243,7 @@ Báo cáo gốc: `benchmark_results/step-a-ce-accuracy/` (gitignore). 2 lượt 
 
 | Biến thể | Nhóm | Câu | Lượt | recall@8 | recall@5 | NDCG@16 | MRR | Loại hết | Giữ TB | Lỗi | p50 ms | p95 ms |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| mốc không rerank | tất cả | 139 | — | 0.935 | 0.924 | — | 0.854 | 0% | 8 | — | 0 | 0 |
+| none (mốc không rerank) | tất cả | 139 | 278 | 0.928 | 0.917 | 0.733 | 0.846 | 0.0% | 8.0 | 0 | 0 | 0 |
 | cross_encoder | tất cả | 139 | 278 | 0.921 | 0.888 | 0.739 | 0.815 | 0.0% | 8.0 | 0 | 111 | 147 |
 | cross_encoder | calculation | 26 | 52 | 0.923 | 0.923 | 0.740 | 0.849 | 0.0% | 8.0 | 0 | 103 | 136 |
 | cross_encoder | normal | 113 | 226 | 0.920 | 0.881 | 0.739 | 0.807 | 0.0% | 7.9 | 0 | 111 | 149 |
@@ -251,13 +254,13 @@ Tất định: 2 lượt cho cùng thứ tự ở 139/139 câu (Jaccard 1,000, l
 
 | k | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|---|---|
-| thứ tự retrieval (RRF) | 0.752 | 0.838 | 0.867 | 0.903 | 0.924 | 0.932 | 0.935 | 0.935 |
+| thứ tự retrieval (RRF) = `none` | 0.745 | 0.831 | 0.860 | 0.896 | 0.917 | 0.924 | 0.928 | 0.928 |
 | cross_encoder | 0.712 | 0.766 | 0.831 | 0.871 | 0.888 | 0.906 | 0.914 | 0.921 |
 
 ![Đường cong recall@k của 4 cách xếp trên cùng 16 ứng viên](recall-at-k.png)
 
 *Hình 1. recall@k (k = 1..8) trên cùng 16 ứng viên của 139 câu. Đường xanh dương là thứ tự
-retrieval không rerank, chạm trần 0,935 từ k = 7. Cross-encoder (cam) xuất phát thấp hơn ở k = 1
+retrieval không rerank, chạm trần 0,928 từ k = 7. Cross-encoder (cam) xuất phát thấp hơn ở k = 1
 nhưng tiến gần trần ở k = 8. Hai biến thể LLM (lục, vàng) cao nhất ở k = 1–2 rồi phẳng từ k = 3 vì
 chúng chỉ giữ median 2 chunk: phần tài liệu đúng bị loại không bao giờ quay lại dù k tăng. Số của
 hai đường LLM lấy từ bước C (mục 5), vẽ chung để so.*
@@ -266,8 +269,8 @@ hai đường LLM lấy từ bước C (mục 5), vẽ chung để so.*
 
 | Chỉ số | Dùng để chứng minh | Số đo | Kết luận rút ra |
 |---|---|---|---|
-| recall@8 so với **mốc không rerank** và **trần** | Cross-encoder có làm mất tài liệu đúng không khi thay LLM | 0,921 so với mốc 0,935 và trần 0,935 | Mất 1,4 điểm, do 2 câu cụ thể (d0010 bảng tên riêng, d0287 tài liệu trùng tên). Retrieval đã đưa tài liệu đúng vào top-8 ở mọi câu có thể, nên cross-encoder không có chỗ để thêm recall, chỉ có thể giữ hoặc làm rơi |
-| recall@5, MRR, recall@1, đường cong recall@k | Cross-encoder xếp tài liệu đúng cao hơn hay thấp hơn thứ tự RRF | recall@1 0,712 so với 0,752; MRR 0,815 so với 0,854 | Xếp hạng 1 kém RRF một chút: cross-encoder không phải bộ xếp tốt hơn hybrid; giá trị của nó nằm ở chỗ không loại nhầm như LLM (mục 5) |
+| recall@8 so với **mốc không rerank** và **trần** | Cross-encoder có làm mất tài liệu đúng không khi thay LLM | 0,921 so với mốc 0,928 = trần 0,928 | Mất 0,7 điểm, do 2 câu cụ thể (d0010 bảng tên riêng, d0287 tài liệu trùng tên). Retrieval đã đưa tài liệu đúng vào top-8 ở mọi câu có thể, nên cross-encoder không có chỗ để thêm recall, chỉ có thể giữ hoặc làm rơi |
+| recall@5, MRR, recall@1, đường cong recall@k | Cross-encoder xếp tài liệu đúng cao hơn hay thấp hơn thứ tự RRF | recall@1 0,712 so với 0,745; MRR 0,815 so với 0,846 | Xếp hạng 1 kém RRF một chút: cross-encoder không phải bộ xếp tốt hơn hybrid; giá trị của nó nằm ở chỗ không loại nhầm như LLM (mục 5) |
 | Đường cong recall@k từ 1 đến 8 | Chọn K bao nhiêu là đủ | k = 6: 0,906; k = 8: 0,921 | Giữ K = 8; giảm K mất recall |
 | Loại hết 0 %, Giữ TB 8,0 | Cross-encoder không bao giờ làm rỗng sub-query | 0/278 lượt | Mất gate "không tài liệu nào trả lời → web search"; hệ quả thiết kế, xử lý ở mục 8.2 |
 | Jaccard 1,000, cùng thứ tự 100 % ở 2 lượt | Kết quả tất định, tái lập được | 139/139 câu | Eval chạy lại cho cùng số; không cần lặp nhiều lần như LLM |
@@ -284,19 +287,19 @@ Ba điều hay bị đọc nhầm ở mục này:
 - **RRF có mặt vì nó là mốc "không rerank"**: thứ tự retrieval hybrid trả sẵn, miễn phí. Mọi bộ
   rerank phải so với nó; không hơn RRF thì bước rerank chỉ tốn thời gian. Trên corpus này RRF đã
   chạm trần từ k = 7, nên **rerank không thể tăng recall**, chỉ có thể giữ hoặc làm hỏng.
-- **Trần 0,935 không phải "K = 8 thắng LLM"**: trần là giới hạn của bộ ứng viên (tài liệu kỳ vọng
-  có trong 16 ứng viên ở 93,5 % câu). Nó chỉ cho biết cross-encoder (0,921) còn cách tối đa 1,4
-  điểm, tức gần như không làm rơi gì.
+- **Trần 0,928 không phải "K = 8 thắng LLM"**: trần là giới hạn của bộ ứng viên (tài liệu kỳ vọng
+  có trong các ứng viên fetch lại ở 92,8 % câu). Nó chỉ cho biết cross-encoder (0,921) còn cách
+  tối đa 0,7 điểm, tức gần như không làm rơi gì.
 - **Lập luận đúng để thay LLM**: "RRF đã gần tối ưu; cross-encoder giữ nguyên mức đó với 0,11 s;
   LLM rerank làm rơi 4 điểm recall@8 với 1,7 s" (số LLM ở mục 5, câu trả lời cuối ở mục 7). Hình 1
   vẽ chung bốn đường để nhìn một lần, nhưng hai đường LLM là số của mục 5.
 
 **Đọc số**
 
-- Cross-encoder **thấp hơn mốc không rerank** 1,4 điểm recall@8, 3,6 điểm recall@5 và 3,9 điểm
+- Cross-encoder **thấp hơn mốc không rerank** 0,7 điểm recall@8, 2,9 điểm recall@5 và 3,1 điểm
   MRR. Trên bộ này thứ tự RRF của hybrid đã xếp tài liệu đúng cao; cross-encoder xếp lại không
   thêm tài liệu nào (không thể, vì trần = mốc) mà làm rơi 2 câu và đẩy chunk đúng xuống vài
-  hạng ở một số câu (recall@1 0,712 so với 0,752).
+  hạng ở một số câu (recall@1 0,712 so với 0,745).
 - 2 câu rơi (tài liệu đúng trong top-8 retrieval nhưng cross-encoder chấm ra ngoài):
   - **d0010** "đề tài triển khai an ninh mạng ... do giảng viên nào hướng dẫn": tài liệu đúng là
     bảng danh sách hội đồng poster (retrieval hạng 1–4, 6, 13, 14); cross-encoder cho điểm cao
@@ -307,7 +310,7 @@ Ba điều hay bị đọc nhầm ở mục này:
   - **d0287** "điều kiện Đạt chứng chỉ ứng dụng CNTT": kỳ vọng là tài liệu "ca 2", cross-encoder
     giữ 5 chunk của "ca 1" và "phúc khảo" (cùng câu điều kiện). Metric theo document_id phạt;
     câu trả lời thực tế đúng. Lỗi áp lên mọi biến thể như nhau.
-- 13 câu còn lại dưới 1,0 là do bộ ứng viên (trần 0,935), không phải lỗi rerank.
+- 13 câu còn lại dưới 1,0 là do bộ ứng viên (trần 0,928), không phải lỗi rerank.
 - Phân phối điểm (logit) của chunk top-1: khi đúng median 5,73 (min −0,83); khi sai median 3,54
   (max 8,28). Hai phân phối chồng nhau nhiều → **không** dùng ngưỡng điểm làm gate thay LLM
   (đúng giả định spec). Có thể dùng điểm để *ưu tiên* nhưng không để *loại*.
@@ -390,7 +393,7 @@ vì rate limit, kết quả đó bị bỏ, không tính.
 
 | Biến thể | Nhóm | Câu | Lượt | recall@8 | recall@5 | NDCG@16 | MRR | Loại hết | Giữ TB | Lỗi | p50 ms | p95 ms |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| mốc không rerank | tất cả | 139 | — | 0.935 | 0.924 | — | 0.854 | 0% | 8 | — | 0 | 0 |
+| none (mốc không rerank) | tất cả | 139 | 278 | 0.928 | 0.917 | 0.733 | 0.846 | 0.0% | 8.0 | 0 | 0 | 0 |
 | cross_encoder | tất cả | 139 | 278 | 0.921 | 0.888 | 0.739 | 0.815 | 0.0% | 8.0 | 0 | 111 | 147 |
 | llm_rerank | tất cả | 139 | 417 | 0.880 | 0.880 | 0.608 | 0.890 | 2.7% | 2.6 | 2 | 1819 | 3183 |
 | llm_rerank | calculation | 26 | 78 | 0.922 | 0.922 | 0.641 | 0.883 | 3.9% | 3.0 | 1 | 1812 | 3415 |
@@ -403,7 +406,7 @@ vì rate limit, kết quả đó bị bỏ, không tính.
 
 | k | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|---|---|
-| thứ tự retrieval | 0.752 | 0.838 | 0.867 | 0.903 | 0.924 | 0.932 | 0.935 | 0.935 |
+| thứ tự retrieval = `none` | 0.745 | 0.831 | 0.860 | 0.896 | 0.917 | 0.924 | 0.928 | 0.928 |
 | cross_encoder | 0.712 | 0.766 | 0.831 | 0.871 | 0.888 | 0.906 | 0.914 | 0.921 |
 | llm_rerank | 0.829 | 0.868 | 0.879 | 0.880 | 0.880 | 0.880 | 0.880 | 0.880 |
 | cross_encoder_then_llm | 0.811 | 0.860 | 0.872 | 0.874 | 0.876 | 0.876 | 0.876 | 0.876 |
@@ -439,8 +442,8 @@ cho cùng tập giữ qua 3 lượt (Jaccard 0,82).*
 
 - **LLM rerank là bộ lọc, không phải bộ xếp**: giữ median 2 chunk trên 16. Vì thế recall@8 =
   recall@5 = recall@3 (0,880), đường cong phẳng từ k=3. Nó thấp hơn cross-encoder 4,1 điểm và
-  mốc không rerank 5,5 điểm vì **loại bỏ** tài liệu đúng ở 12 câu mà cross-encoder còn giữ.
-- **LLM xếp đúng hơn ở đầu danh sách**: recall@1 0,829 so với 0,712 của cross-encoder và 0,752
+  mốc không rerank 4,8 điểm vì **loại bỏ** tài liệu đúng ở 12 câu mà cross-encoder còn giữ.
+- **LLM xếp đúng hơn ở đầu danh sách**: recall@1 0,829 so với 0,712 của cross-encoder và 0,745
   của retrieval; MRR 0,890 so với 0,815. Khi LLM giữ được tài liệu đúng, nó đặt đúng chunk lên
   đầu. Giá trị này chỉ có nghĩa nếu model sinh chịu ảnh hưởng mạnh bởi thứ tự; với prompt 8
   chunk thì recall@8 quyết định nhiều hơn (mục 7 xác nhận: tầng câu trả lời theo cross-encoder
@@ -788,7 +791,7 @@ tiếp theo thì ưu tiên hai chỗ đó hơn là tinh chỉnh rerank.
 |---|---|---|---|
 | Độ trễ bước rerank p50 / p95 | 1,7 s / 3,3 s | **0,11 s / 0,15 s** | 1,7 s / 2,6 s |
 | Độ trễ cả lượt p50 / p95 (eval) | 5,3 s / 9,5 s | **4,6 s / 7,5 s** | 6,6 s / 17,9 s |
-| recall@8 bước rerank | 0,880 | **0,921** | 0,876 |
+| recall@8 bước rerank (mốc `none` 0,928) | 0,880 | **0,921** | 0,876 |
 | normal recall@5 e2e | 89,7 % | **94,8 %** | 93,1 % |
 | calculation pass e2e | 18/38 | 20/38 | **21/38** |
 | Từ chối trả lời | 41 | 32 | **29** |

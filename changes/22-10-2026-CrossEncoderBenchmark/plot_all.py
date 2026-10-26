@@ -71,7 +71,7 @@ ax.set_xticks(levels); ax.set_ylim(0, 10); ax.set_xlabel("số request đồng t
 save(f, "fig3-ce-latency-concurrency.png")
 
 # ---- Fig 4: metrics grouped bars (step A + C + baseline)
-base = {"recall@8": 0.935, "recall@5": 0.924, "NDCG@16": None, "MRR": 0.854}
+base = {"recall@8": 0.928, "recall@5": 0.917, "NDCG@16": 0.733, "MRR": 0.846}
 aggs = {"cross_encoder": ce["aggregate"]}
 for v in Cj["accuracy"]: aggs[v["variant"]] = v["aggregate"]
 metrics = ["recall@8", "recall@5", "NDCG@16", "MRR"]
