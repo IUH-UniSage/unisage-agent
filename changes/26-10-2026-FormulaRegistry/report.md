@@ -60,7 +60,42 @@ câu này ghi 46–70 s vì rate limit credential eval (max_rpm 15, hai lượt 
 | cảnh báo grounding | 1 | 2 (`ANSWER_UNGROUNDED_NUMBERS`) + 1 `ANSWER_NO_CITATION` |
 | p50 câu công thức (chạy riêng) | 5,1 s | 4,8 s |
 
-## 3. Ngoài phạm vi / việc tiếp
+## 3. Bổ sung tối 26/10: năng lực số học thuần (`pure_arithmetic`) và grounding chặt
+
+Theo chính sách 3 mức người dùng chốt (A số học thuần → code; B phụ thuộc quy định → registry/hỏi lại;
+C chưa cài → chỉ trích dẫn; grounding không phải quyền tính). Triển khai: `app/calculation/arithmetic.py`
+(parser whitelist, không eval), node nhận `formula_id: arithmetic` khi mọi số hạng nằm trong câu hỏi,
+câu trả lời tư vấn gửi khối `calc_request` để `app/graph/calc_requests.py` kiểm tra căn cứ rồi nối khối
+Python; lượt có task không công thức hoặc có `calc_request` bật grounding chặt (tổng/hiệu model tự tính
+cũng bị gắn caution + `ANSWER_UNGROUNDED_NUMBERS`).
+
+### 3.1 Chạy lại 38 câu (`runs/calc-registry-v2`, trước khi thêm grounding chặt)
+
+| | registry-v1 | registry-v2 (+ số học thuần) |
+|---|---|---|
+| pass theo thang đo cũ | 14/38 | 20/37 (1 câu lỗi rate limit) |
+| qua node calculation | 7 | 17 (7 công thức + 10 số học thuần trên số trong câu hỏi) |
+| câu trả lời tư vấn có khối `calc_request` tính được | 0 | 13 |
+| `calc_request` bị từ chối (số hạng không có căn cứ / không phải số) | — | 4 (d0329, d0330, d0332, d0336: đếm ngày, giờ:phút - không phải biểu thức số) |
+| p50 cả lượt | 12,5 s | 8,4 s |
+
+Số học thuần trên số trong câu hỏi tính đúng cả 10 câu (d0244 100 − 10 = 90; d0322 140 − (20 + 25 + 21
++ 22 + 21) = 31; d0333 0,5 × 20 + 1 × 2 = 12...). Khối `calc_request` tính đúng khi số hạng có căn cứ
+(d0321 15 − 6 = 9; d0237 3 + 4 + 2 + 3 = 12).
+
+Vấn đề còn lại: model vẫn **tự nêu kết quả trong câu chữ** ở một số câu dù đã có khối (d0330 "590.000"
+sai, khối tính đúng 600.000; d0317 "382" sai; d0332 "33 giờ 20 phút" sai). Chạy grounding chặt offline
+trên 20 câu trả lời tư vấn của v2: chế độ thường gắn caution 2 câu, chế độ chặt 8 câu (bắt đủ d0317,
+d0330, d0332, d0319) - đã bật cho các lượt này (chưa chạy lại eval).
+
+### 3.2 Giới hạn
+
+- Đếm ngày giữa hai mốc và cộng giờ:phút không phải biểu thức số → `calc_request` từ chối (đúng thiết
+  kế); nếu cần, thêm công thức registry "khoảng ngày" sau.
+- Model có thể vẫn viết kết quả tự tính trong câu chữ; grounding chặt chỉ gắn caution, không xoá.
+- Thang đo eval cũ vẫn chưa gắn nhãn theo `formula_id`/`arithmetic`.
+
+## 4. Ngoài phạm vi / việc tiếp
 
 - Gắn lại nhãn eval calculation theo `formula_id`, tách 30 câu số học văn bản sang category riêng.
 - Chốt hướng (a)/(b) ở 2.2.

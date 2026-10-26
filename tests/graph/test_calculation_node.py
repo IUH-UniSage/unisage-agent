@@ -1225,3 +1225,87 @@ async def test_a_query_equal_to_the_message_is_not_repeated() -> None:
     )
 
     assert "<original_message>" not in classification[1]
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_turn_flags_a_sum_the_model_states_itself(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict grounding on a deferred calculation question: "16 tín chỉ" is 3 + 4 + 2 + 7,
+    derivable in a normal turn, but here the model was told to request the sum - the
+    caution line and the AI-admin warning follow."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    query = "Ngành Logistics, 4 môn đó cộng lại mấy tín?"
+    credits = RetrievedChunk(
+        chunk_id="ctdt:3",
+        content="Quản lý thông tin 3 tín chỉ; Giao nhận 4 tín chỉ; Phân loại 2 tín chỉ; Hải quan 7 TC",
+        source="CTĐT.pdf",
+        score=0.8,
+    )
+    result = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "none", "params": {}, "retrieval_query": None},
+            ),
+            query_transformation=_echo_model(),
+            generation=mock_streaming_llm_model(["Tổng là 16 tín chỉ (3 + 4 + 2 + 7) [1]."]),
+            retrieval=_RecordingRetrieval([credits]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert "> Lưu ý: con số 16 không tìm thấy trong tài liệu được trích dẫn" in result.response_text
+    assert "ANSWER_UNGROUNDED_NUMBERS" in [warning.code for warning in result.admin_warnings]
+
+
+@pytest.mark.asyncio
+async def test_a_calc_request_in_the_answer_is_computed_by_code_and_appended(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    query = "Ngành Logistics, 4 môn đó cộng lại mấy tín?"
+    credits = RetrievedChunk(
+        chunk_id="ctdt:3",
+        content="Quản lý thông tin 3 tín chỉ; Giao nhận 4 tín chỉ; Phân loại 2 tín chỉ; Hải quan 3 tín chỉ",
+        source="CTĐT.pdf",
+        score=0.8,
+    )
+    block = (
+        '```json\n{"type": "calc_request", "label": "Tổng tín chỉ 4 học phần", '
+        '"expression": "3 + 4 + 2 + 3", "unit": "tín chỉ", "sources": [1]}\n```'
+    )
+    tokens: list[str] = []
+    result = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "none", "params": {}, "retrieval_query": None},
+            ),
+            query_transformation=_echo_model(),
+            generation=mock_streaming_llm_model(
+                ["4 học phần lần lượt 3, 4, 2 và 3 tín chỉ [1]; tổng tính ở dưới.\n\n", block]
+            ),
+            retrieval=_RecordingRetrieval([credits]),
+        ),
+        _sink(tokens),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert "calc_request" not in result.response_text
+    assert "**Phép tính số học: Tổng tín chỉ 4 học phần**" in result.response_text
+    assert "3 + 4 + 2 + 3 = 12" in result.response_text
+    assert "Kết quả: Tổng tín chỉ 4 học phần: **12 tín chỉ**" in result.response_text
+    # The streamed tokens keep the blank line before the (redacted) block; the stored
+    # text is right-stripped before the Python block is appended.
+    assert "".join(tokens).replace("\n\n\n\n", "\n\n") == result.response_text
+    assert "ANSWER_UNGROUNDED_NUMBERS" not in [warning.code for warning in result.admin_warnings]
+    assert result.calculation_items == []

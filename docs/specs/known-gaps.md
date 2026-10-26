@@ -354,14 +354,17 @@ the original question, even if only one actually needed the answer. Splitting a 
 across advisory tasks precisely is future work. (Calculation tasks resume one by one - they keep
 their own parameters.)
 
-### Questions outside the formula registry are not computed
+### Questions outside the formula registry are not computed by the model
 
-Since 26/10/2026 (UNISAGE-106) every number comes from a registered formula computed by Python,
-forward or solved for one unknown (`app/calculation/solver.py`). A calculation question no
-formula covers (a sum over a table, a document's own formula such as điểm rèn luyện, hệ số đề
-tài) is answered on the advisory path: the documents' figures and formula with citations, the
-arithmetic left to the user. On the demo eval set that is 30 of the 38 "calculation" questions,
-whose `expected_numbers` the system now deliberately does not produce. Routing depends on the
+Since 26/10/2026 (UNISAGE-106) every number comes from code: a registered formula computed
+forward or solved for one unknown (`app/calculation/solver.py`), or plain arithmetic
+(`app/calculation/arithmetic.py`) over numbers the student stated (node) or figures the
+answer cited (`calc_request` blocks, `app/graph/calc_requests.py`). A document's own
+formula (điểm rèn luyện, hệ số đề tài) or a business total whose applicable items are
+unclear is answered on the advisory path with the documents' figures and formula, the
+conclusion left to the user. Whether the model emits a `calc_request` instead of
+computing in its head is a prompt rule, so some answers still state a sum themselves; an
+operand no cited document holds makes the request fail closed. Routing depends on the
 classifier (registry listed in its prompt) and the extractor's `none`; a question wrongly sent to
 the advisory path still answers from the documents, one wrongly sent to a formula asks for that
 formula's parameters.

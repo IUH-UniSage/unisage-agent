@@ -417,6 +417,7 @@ async def _classified_turn(
         advisory=advisory,
         original_query=advisory_question or graph_input.user_message,
         previous_round=None,
+        strict_numbers=len(runnable) < len(planned),
     )
 
 
@@ -629,6 +630,9 @@ async def _turn_with_calculations(
     cache_ctx: TurnCacheContext | None = None,
     cached_turn: CachedTurn | None = None,
     l1_pending: L1Pending | None = None,
+    # A calculation question joined the advisory part: numbers the model works out
+    # itself are flagged, since code was supposed to compute them.
+    strict_numbers: bool = False,
 ) -> GraphOutput:
     """Stream order: calculation blocks (Python) → advisory answer (node 10, which only
     starts after the blocks were sent) → one panel for everything still missing. A
@@ -673,6 +677,7 @@ async def _turn_with_calculations(
                 cache_ctx=cache_ctx,
                 cached_turn=cached_turn,
                 l1_pending=l1_pending,
+                strict_numbers=strict_numbers,
             )
             output = replace(
                 output,
@@ -1064,6 +1069,7 @@ async def _run_advisory_flow(
     cache_ctx: TurnCacheContext | None = None,
     cached_turn: CachedTurn | None = None,
     l1_pending: L1Pending | None = None,
+    strict_numbers: bool = False,
 ) -> GraphOutput:
     """Advisory branch: query transformation → retrieval → rerank → web search
     for the sub-queries rerank left empty → generation (or ticket fallback
@@ -1445,7 +1451,11 @@ async def _run_advisory_flow(
         shown = [chunk.content for chunk in rerank_result.chunks] + [
             page.content for page in web_results
         ]
-        report = check_answer(response_text, shown, question=question)
+        # Strict when the arithmetic of this turn belongs to code (a deferred calculation
+        # question, or the answer requested calc blocks): a sum the model states itself is
+        # ungrounded, not "derivable".
+        strict = strict_numbers or bool(generation_result.calc_requests)
+        report = check_answer(response_text, shown, question=question, strict=strict)
         if report.ungrounded:
             caution = caution_line(report.ungrounded)
             await token_sink(caution)

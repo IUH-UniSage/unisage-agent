@@ -88,6 +88,22 @@ nghiệm trong miền → kết quả nói rõ "không đạt được dù tối
 (hiện số liệu, không tính). Chạy lại 38 câu một lần để ghi nhận hiện trạng; tiêu chí `pass` của
 category calculation cần gắn lại theo công thức (`formula_id` kỳ vọng) ở ticket sau.
 
+## Bổ sung 26/10 tối: năng lực số học thuần (`pure_arithmetic`)
+
+Chính sách 3 mức do người dùng chốt: (A) số học thuần trên số người dùng nêu → code tính, không cần
+registry; (B) phép tính phụ thuộc quy định (đơn giá, trọng số, làm tròn) → công thức registry hoặc hỏi
+lại; (C) công thức nghiệp vụ chưa cài, nhiều điều kiện, số liệu mâu thuẫn → chỉ trích dẫn. Grounding
+không phải quyền tính: hai quyết định độc lập (được phép tính? căn cứ đủ?).
+
+- `app/calculation/arithmetic.py`: parser whitelist (`+ - × ÷`, ngoặc, thập phân), không eval, Decimal,
+  giới hạn; kết quả là `CalculationResult` (formula_id `arithmetic`).
+- Node: extractor `formula_id: arithmetic` + `arithmetic.expression/label/unit`; code kiểm tra mọi số
+  hạng nằm trong câu hỏi (`missing_operands`), không thì Deferred.
+- Advisory: khối ```json {"type": "calc_request", ...}``` (FenceRedactor giữ lại) → `calc_requests.py`
+  kiểm tra biểu thức + căn cứ (câu hỏi hoặc chunk [n] được dẫn), nối khối Python dưới câu trả lời, log
+  biểu thức/số hạng/kết quả/nguồn; từ chối → dòng cố định + `CALC_REQUEST_REJECTED`. Tối đa 3 khối.
+- Prompt phân loại/extractor/advisory/multi-intent cập nhật theo 3 mức.
+
 ## Ngoài phạm vi
 
 - Điểm ưu tiên khu vực/đối tượng theo công thức giảm dần của Bộ GD&ĐT (từ 22,5 điểm): văn bản của

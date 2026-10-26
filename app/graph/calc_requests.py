@@ -1,7 +1,7 @@
 """`calc_request` blocks of the advisory answer: the model asks for a plain arithmetic
 result over figures it cited instead of computing it in its head (26/10/2026).
 
-Two independent decisions, as the policy asks: (1) permission - only a plain `+ - × ÷`
+Two independent decisions, as the policy asks: (1) permission - only a plain `+ - * /`
 expression with a label and a unit, at most `REQUESTS_MAX` per answer; (2) evidence -
 every operand must be a number the question or one of the cited documents states.
 A request that fails either is not computed: the answer keeps the figures it quoted,

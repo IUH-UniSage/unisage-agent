@@ -27,6 +27,7 @@ app/calculation/
 ├── formulas.py     # TOÀN BỘ business rule: bảng quy đổi, làm tròn, 9 công thức, ParamSpec, OutputSpec,
 │                   # Formula (version, source, rounding_of), FORMULAS (registry), BUILTIN_TRIGGERS (router luật)
 ├── solver.py       # tính ngược: Unknown, Target, solve/solved_result trên lưới của tham số
+├── arithmetic.py   # số học thuần: parser whitelist + - × ÷, evaluate, arithmetic_result
 ├── result.py       # CalculationResult (values, version, source), Step, CalculationInputError (dataclass, frozen)
 └── render.py       # CalculationResult -> markdown (deterministic, không LLM), dòng phiên bản + nguồn
 tests/calculation/
@@ -109,6 +110,18 @@ solved_result(...) -> CalculationResult
   xuôi tại nghiệm, bước "Kiểm tra" (nghiệm → đạt; giá trị liền kề → không đạt, hiện 4 chữ số khi 2 chữ số
   trông bằng nhau), `outputs` có thêm nghiệm, `values["nghiem"]`. Không có nghiệm → tiêu đề không có
   "tối thiểu", dòng kết quả nêu giá trị biên, cảnh báo "Mục tiêu không đạt được".
+
+## Số học thuần (`arithmetic.py`, 26-10-2026)
+
+Năng lực riêng, độc lập với registry và advisory (chính sách 3 mức: A số học thuần trên số người dùng
+nêu → code tính; B phép tính phụ thuộc quy định → công thức registry hoặc hỏi lại; C công thức nghiệp vụ
+chưa cài → chỉ trích dẫn). `evaluate(expression)`: tokenizer + parser đệ quy, whitelist số (dấu chấm
+thập phân; "1.200.000" đọc là hàng nghìn), `+ - × ÷`, ngoặc; không `eval`/`ast`; `Decimal`; giới hạn 200
+ký tự, 20 số hạng, 8 tầng ngoặc; chia 0 và ký tự lạ bị từ chối (`ArithmeticError`); phép chia dài cắt ở
+9 chữ số. `arithmetic_result(request, evaluation, source)` → `CalculationResult` (formula_id
+`arithmetic`, version 1, một dòng thay số, đơn vị: tiền hiện bằng đồng, giờ lẻ kèm "giờ phút"). Ai được
+yêu cầu và số hạng có căn cứ hay không do bên gọi quyết định (`calculation-node`: số trong câu hỏi;
+`app/graph/calc_requests.py`: số trong câu hỏi hoặc chunk được dẫn) - grounding không cấp quyền tính.
 
 ## Business contract: 3 công thức cài sẵn ban đầu
 

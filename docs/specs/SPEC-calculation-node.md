@@ -18,22 +18,30 @@ LLM tính nhẩm sai 4-5 câu mỗi lần, nhiễu ±3-4 câu giữa hai lần c
    theo **registry công thức có version và nguồn** (SPEC-calc-engine). LLM chỉ chọn công thức, chép số
    người dùng đã nói, và nêu ẩn số + mục tiêu khi hỏi ngược; thiếu/sai số thì hỏi trên panel; Python
    render công thức, từng bước và dòng kiểm tra.
-2. **Câu hỏi không có công thức trong registry** (cộng/trừ số liệu văn bản, công thức riêng của một văn
-   bản chưa cài) → extractor trả `none` → task **đi nhánh advisory** ngay đầu lượt: node 10 trích công
-   thức/số liệu từ tài liệu và để người dùng tự tính (luật trong `chat_academic_advisory.yaml`; grounding
-   gắn caution nếu model vẫn tính). Không còn nhánh "AI tự tính".
-3. Câu hỏi còn thiếu gộp với câu hỏi advisory thành một panel.
+2. **Số học thuần** (chính sách 3 mức, chốt 26-10-2026 tối): số người dùng tự nêu ("18 tín kỳ này, 15
+   tín kỳ sau, tổng bao nhiêu") → extractor trả `arithmetic` + biểu thức → code kiểm tra mọi số hạng có
+   trong câu hỏi rồi tính (`app/calculation/arithmetic.py`), không qua LLM. Số liệu phải lấy từ văn bản
+   → câu đi nhánh advisory, node 10 **không tự tính** mà viết khối `calc_request` (biểu thức + nhãn +
+   đơn vị + [n]) để `app/graph/calc_requests.py` kiểm tra căn cứ (mọi số hạng có trong câu hỏi hoặc chunk
+   được dẫn) và nối khối Python dưới câu trả lời; từ chối → dòng cố định + cảnh báo admin
+   `CALC_REQUEST_REJECTED`. Kết luận nghiệp vụ (phải đóng bao nhiêu, đủ điều kiện không) và công thức có
+   hệ số/điều kiện riêng → chỉ trích dẫn, giải thích biến. Grounding là một phần của kiểm tra căn cứ,
+   không phải quyền tính.
+3. **Câu hỏi không có công thức trong registry** → extractor trả `none` → task **đi nhánh advisory**
+   ngay đầu lượt (mục 2 ở trên áp dụng). Không còn nhánh "AI tự tính".
+4. Câu hỏi còn thiếu gộp với câu hỏi advisory thành một panel.
 
 ## Luồng của một task calculation
 
 ```
- task.query ─► calculation_extractor (LLM): {formula_id: <registry id>|previous|none, params,
-                                             solve_for, target, retrieval_query}
-                 │ registry / previous                         │ none → Deferred
-                 ▼                                             ▼
-   fill_from_documents (lookup: đơn giá...)        task nhập vào advisory_tasks của lượt
-   missing_params (trừ ẩn số) → NeedsInput         (node 10 trích công thức/số liệu, không tính)
-   đủ số → calculate | solver.solved_result → Computed
+ task.query ─► calculation_extractor (LLM): {formula_id: <registry id>|previous|arithmetic|none,
+                                             params, solve_for, target, arithmetic, retrieval_query}
+                 │ registry / previous        │ arithmetic              │ none → Deferred
+                 ▼                            ▼                         ▼
+   fill_from_documents (lookup)       số hạng ⊆ số trong câu hỏi?   task nhập vào advisory_tasks
+   missing_params (trừ ẩn số)         có → evaluate → Computed      (node 10 trích dẫn; số học thuần
+   → NeedsInput; đủ số →              không → Deferred               trên số đã dẫn → calc_request →
+   calculate | solver → Computed                                      calc_requests.py tính, nối khối)
 ```
 
 ### Trạng thái của task (`app/graph/nodes/calculation.py`)
@@ -47,9 +55,10 @@ class CalculationPlan:            # field `plan` của PendingCalculationTask
 TaskOutcome = (
     Computed(task_id, result: CalculationResult, plan, params, notes, sources)   # Python
   | NeedsInput(task_id, plan, known_params, questions, lead)
-  | Unresolved(task_id, reason: Literal["legacy_llm", "bad_target"])
+  | Unresolved(task_id, reason: Literal["legacy_llm", "bad_target", "not_resumable"])
 )
 Deferred(task_id, query, retrieval_query)   # không có công thức: graph chuyển sang advisory
+ArithmeticTask(task_id, query, request, evaluation)   # số học thuần trên số người dùng nêu
 ```
 
 Graph gọi `plan_calculation` (extractor, một lần cho mọi task, trước retrieval advisory) rồi
@@ -257,7 +266,7 @@ Còn thiếu thì tạo panel mới với `chain_depth + 1` (không giới hạn
 | File | Nội dung |
 |---|---|
 | `agents/calculation_extractor.yaml` | mục 1: registry (xuôi / ngược: `solve_for`, `target`) / previous / none |
-| `main/chat_academic_advisory.yaml` (luật cuối) | mục 2: câu cần tính không có công thức → trích số liệu/công thức, không tự tính |
+| `main/chat_academic_advisory.yaml`, `main/chat_multi_intent_synthesis.yaml` (luật cuối) | mục 2: số học thuần trên số đã dẫn → khối `calc_request` (code tính, nối khối dưới câu trả lời); kết luận nghiệp vụ/công thức có điều kiện → chỉ trích dẫn |
 | `main/chat_calculation_review.yaml` | kiểm tra kết quả cài sẵn có khớp câu hỏi và viết câu trả lời mở đầu (mục 3.2) |
 | `agents/message_classification.yaml` | quy tắc 1c nối tiếp phép tính, `<previous_calculation_turn>` (mục 9); `{calculation_formulas}` = registry, quy tắc 5: chỉ công thức registry mới là `academic_calculation` |
 | `common/response_style.yaml` | phép nhân viết `×` |

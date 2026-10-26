@@ -110,3 +110,14 @@ def test_phone_numbers_and_extensions_are_not_figures() -> None:
         ungrounded_numbers("Gọi 028 3588 2679 hoặc máy lẻ 112, Ext: 3894.", ["không có số"]) == []
     )
     assert numbers_in("hotline 0283 894 0390, học phí 1.150.000") == {"1.150.000": 1150000.0}
+
+
+def test_strict_mode_treats_a_sum_the_model_worked_out_as_ungrounded() -> None:
+    from app.graph.grounding import check_answer
+
+    sources = [
+        "Quản lý thông tin 3 tín chỉ; Giao nhận 4 tín chỉ; Phân loại 2 tín chỉ; Hải quan 7 TC"
+    ]
+    answer = "Tổng số tín chỉ của 4 học phần là 16 tín chỉ (3 + 4 + 2 + 7) [1]."
+    assert check_answer(answer, sources).ungrounded == []
+    assert check_answer(answer, sources, strict=True).ungrounded == ["16"]

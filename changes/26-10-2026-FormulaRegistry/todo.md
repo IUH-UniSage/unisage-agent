@@ -22,3 +22,10 @@
 - [x] SPEC-calculation-node.md, SPEC-calc-engine.md, known-gaps, rag-pipeline, DECISIONS, PRODUCT, dev-onboard
 - [x] Chạy lại 38 câu calculation (`none`) → report.md (7/8 câu công thức đúng bằng Python; 30 câu còn lại đi advisory, luật "không tự tính" chưa đủ mạnh - chờ chốt)
 - [x] Commit theo nhóm (calculation / solver / node+graph+prompt / docs), push, PR xếp chồng trên PR #28
+
+## Phase 5: số học thuần (`pure_arithmetic`, 26/10 tối)
+- [x] `app/calculation/arithmetic.py` parser whitelist + `arithmetic_result`; tests (`test_arithmetic.py`)
+- [x] Node: extractor `arithmetic`, `_plan_arithmetic` kiểm tra số hạng trong câu hỏi, `ArithmeticTask`; plan `arithmetic` không resume
+- [x] Advisory: `calc_request` (FenceRedactor, `GenerationResult.calc_requests`, `app/graph/calc_requests.py`), nối khối sau grounding; tests (`test_calc_requests.py`)
+- [x] Prompt 4 file theo 3 mức; snapshot advisory; docs spec/known-gaps/plan
+- [x] Chạy lại 38 câu (`runs/calc-registry-v2`) → report.md mục 3; grounding chặt cho lượt deferred/calc_request (đo offline 2 → 8 caution)

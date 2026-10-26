@@ -90,9 +90,11 @@ _DATE_FULL = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
 _TIME = re.compile(r"\b(\d{1,2})[h:](\d{2})\b")
 
 
-def _date_time_spans(texts: Iterable[str]) -> list[float]:
+def _date_time_spans(texts: Iterable[str], *, multiples: bool = True) -> list[float]:
     """Day counts between any two dates and hour/minute spans between any two clock times
-    written in `texts`: what "quá hạn 21 ngày", "730 ngày", "13 giờ 10 phút" come from."""
+    written in `texts`: what "quá hạn 21 ngày", "730 ngày", "13 giờ 10 phút" come from.
+    `multiples=False` (strict grounding) keeps the date and clock spans - no code computes
+    those - but not the calendar multiples (2 năm → 730 ngày), which are arithmetic."""
 
     import datetime as dt
 
@@ -115,8 +117,9 @@ def _date_time_spans(texts: Iterable[str]) -> list[float]:
         for v in numbers_in(text).values()
         if v.is_integer() and 1 <= v <= 10
     }
-    for n in small:
-        out += [n * 365.0, n * 366.0, n * 12.0, n * 30.0, n * 7.0]
+    if multiples:
+        for n in small:
+            out += [n * 365.0, n * 366.0, n * 12.0, n * 30.0, n * 7.0]
     shifted = []
     for date in set(dates):
         for n in small:
@@ -211,15 +214,19 @@ def ungrounded_numbers(
     *,
     question: str = "",
     known: Mapping[str, object] | None = None,
+    allow_derived: bool = True,
 ) -> list[str]:
     """Numbers written in `answer` that no source, the question or a known value contains
-    and that cannot be derived from them. Order of first appearance."""
+    and that cannot be derived from them. Order of first appearance. `allow_derived=False`
+    (strict): a sum or difference the model worked out itself is ungrounded too - for a
+    turn whose arithmetic belongs to code (`calc_request`, a deferred calculation task),
+    where the model was told not to state results of its own (26/10/2026)."""
 
     source_values: set[float] = set()
     texts = [*sources, question, *(str(v) for v in (known or {}).values())]
     for text in texts:
         source_values.update(numbers_in(text).values())
-    source_values.update(_date_time_spans(texts))
+    source_values.update(_date_time_spans(texts, multiples=allow_derived))
     grounded = sorted(source_values)
     out: list[str] = []
     # Two passes: a number derived from sources (a subtotal) can ground the next one
@@ -231,7 +238,9 @@ def ungrounded_numbers(
     for _ in range(2):
         for token, value in list(pending.items()):
             in_answer = [v for v in answer_values if any(_close(v, g) for g in grounded)]
-            if any(_close(value, g) for g in grounded) or _derivable(value, grounded, in_answer):
+            if any(_close(value, g) for g in grounded) or (
+                allow_derived and _derivable(value, grounded, in_answer)
+            ):
                 grounded.append(value)
                 pending.pop(token)
     for token in numbers_in(answer):
@@ -246,16 +255,21 @@ def check_answer(
     *,
     question: str = "",
     known: Mapping[str, object] | None = None,
+    strict: bool = False,
 ) -> GroundingReport:
     """`source_texts[i]` is source `[i+1]` as shown to the model. Numbers are checked
-    against the cited sources when the answer cites any, else against every source."""
+    against the cited sources when the answer cites any, else against every source.
+    `strict`: numbers the model derived itself count as ungrounded (see
+    `ungrounded_numbers`)."""
 
     citations = check_citations(answer, len(source_texts))
     scope = (
         [source_texts[i - 1] for i in citations.cited] if citations.cited else list(source_texts)
     )
     return GroundingReport(
-        ungrounded=ungrounded_numbers(answer, scope, question=question, known=known),
+        ungrounded=ungrounded_numbers(
+            answer, scope, question=question, known=known, allow_derived=not strict
+        ),
         cited=citations.cited,
         invalid_markers=citations.invalid,
         no_citation=not citations.cited and bool(source_texts),
