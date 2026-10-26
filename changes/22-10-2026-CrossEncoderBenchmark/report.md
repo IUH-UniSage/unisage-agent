@@ -860,7 +860,20 @@ tiếp theo thì ưu tiên hai chỗ đó hơn là tinh chỉnh rerank.
 `benchmark_results/` và `runs/` nằm trong gitignore; JSON của từng bước có từng lượt từng câu
 (`kept_ids`, `ce_scores`, `took_ms`) để soi lại.
 
-### 10.2. Sự cố trong lúc đo và cách xử lý
+### 10.2. Vẽ lại hình
+
+Hình 1: `plot_recall.py`; hình 2–8: `plot_all.py` (cùng thư mục, đọc `benchmark_results/step-*` và
+`runs/*`). Chạy từ gốc repo, không cần thêm dependency vào project:
+
+```
+uv run --no-project --with matplotlib python changes/22-10-2026-CrossEncoderBenchmark/plot_all.py changes/22-10-2026-CrossEncoderBenchmark
+uv run --no-project --with matplotlib python changes/22-10-2026-CrossEncoderBenchmark/plot_recall.py changes/22-10-2026-CrossEncoderBenchmark/recall-at-k.png
+```
+
+Bảng màu cố định theo biến thể (retrieval xanh dương, cross_encoder cam, llm_rerank lục,
+cross_encoder_then_llm vàng), đã qua kiểm tra mù màu.
+
+### 10.3. Sự cố trong lúc đo và cách xử lý
 
 - Lần đầu bước C: 404/417 lượt gọi LLM lỗi "credential đã dùng hết 15 lượt gọi/phút" → thêm
   `RpmPacer` (`--llm-rpm 14`), chờ và gọi lại khi rate limit (`--llm-retry-wait 20`,
