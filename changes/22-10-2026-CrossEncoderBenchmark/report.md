@@ -99,7 +99,7 @@ này**, và việc bỏ LLM rerank không làm hệ thống bịa nhiều hơn.
 | Chịu tải CE (-c) | tuần tự, 7,3 req/s ở 1024, 12 req/s ở 512; batching không giúp (GPU bão hoà compute) | `RERANKER_MAX_LENGTH=512`; model nhỏ hơn hoặc GPU thứ hai nếu cần hơn |
 | Tầng câu trả lời (154 câu) | `none` 111/116 normal, CE 110, `llm` 104; từ chối 31/32/41; chi phí −10–13 % | `none` ≈ CE > `llm` |
 | Chống bịa (20 câu unanswerable, 5 nhóm) | `none` 20/20, CE 20/20, `llm` 19/20, `auto` 18/20; mọi lần bịa đều là d0350 (near-miss), kể cả khi không có LLM rerank → nhiễu của model sinh | bỏ LLM rerank không tăng bịa; near-miss là nhóm cần theo dõi |
-| Grounding sau khi sinh | 0 cảnh báo trên 80 lượt unanswerable; test bắt được số bịa, `[n]` sai, số không trích dẫn | bật mặc định (`CHAT_GROUNDING_CHECK`) |
+| Grounding sau khi sinh | 0 cảnh báo trên 80 lượt unanswerable; trên 62 lượt calculation + web: bắt 1 câu bịa thật (w0002: 35.340.000 không có trong QĐ 1035), 6 dương tính giả đã sửa và có test (ngày/giờ, đơn vị dính số, số điện thoại) | bật mặc định (`CHAT_GROUNDING_CHECK`) |
 | Tín hiệu evidence / `auto` | cosine < 0,60 gắn cờ ~10 % lượt, bắt 3/5 miss; đồng thuận dense/BM25 không phân biệt được; `auto` kích hoạt 2/20 lượt unanswerable, cả hai đúng | `auto` là phương án khi cần gate web search/từ chối; chưa đo e2e đầy đủ |
 | Web policy | tách khỏi rerank, mặc định không tìm web vì evidence yếu | đánh giá riêng khi bật web |
 
@@ -434,6 +434,51 @@ fallback là ticket riêng.
 
 **Còn mở sau Phase 6**: e2e đầy đủ với `auto` (tỷ lệ kích hoạt ước ~10 %, chưa đo); kiểm tra claim-to-evidence (entailment) cho câu
 chữ, không chỉ số; đánh giá web fallback; lặp bộ unanswerable để có khoảng tin cậy.
+
+### 8.3. Chạy lại sau Phase 6 (26/10 tối): calculation và web_search ở chế độ `none`
+
+**Calculation, 38 câu** (`runs/calc-none-v2`, sau khi sửa prompt và thêm grounding; so với
+`runs/rrf-only` cùng chế độ trước khi sửa):
+
+| | Trước (rrf-only) | Sau (calc-none-v2) |
+|---|---|---|
+| pass | 19/38 (1 lỗi 504) | **23/38** (0 lỗi) |
+| fail | 18 | 15 |
+| hỏi lại (form) | 1 | 0 |
+| từ chối / nêu giới hạn | 7 | 9 |
+| recall@5 theo trích dẫn | 19 | 20 |
+| p50 cả lượt | 5,5 s | 5,1 s |
+| cảnh báo grounding | — | 4 (`CALC_UNGROUNDED_INPUT`) |
+
+Đổi chiều ở 22 câu (nhiễu model sinh ±3–4 câu là bình thường giữa hai lần chạy); ròng +4 pass,
+không có dấu hiệu luật prompt mới làm model từ chối ồ ạt (từ chối +2) hay hỏi lại nhiều hơn
+(−1). 4 cảnh báo grounding đều là **dương tính giả** trên câu trả lời đúng: 730 ngày (= 2 năm),
+21 ngày quá hạn (hiệu hai mốc ngày), 13 giờ (hiệu hai giờ), 190.000 (= 250.000đ − 60.000đ, đơn
+vị "đ" dính vào số làm regex bỏ sót). Đã sửa grounding (commit sau run): suy ra từ ngày/giờ và
+bội số lịch, tách đơn vị dính số, bỏ số điện thoại/máy lẻ; chạy lại kiểm tra offline trên 4 câu
+→ 0 cảnh báo. Nhánh calculation giờ chỉ cảnh báo AI admin, không gắn dòng lưu ý (đã có banner
+"AI tự tính, có thể sai").
+
+**Web search, 24 câu** (`runs/web-none`: 6 câu demo + 18 câu official không cần tài liệu, `--web
+on`, chế độ speculative, chính sách web mới):
+
+| Chỉ số | Giá trị |
+|---|---|
+| pass | 14/24 |
+| trả lời từ web | 11; web được dùng ở 15 lượt; cache hit 2 |
+| sai phạm vi nguồn (`wrong_scope`) | 0 |
+| p50 / p95 cả lượt | 9,5 s / 12,7 s (gồm tìm web + web judge) |
+| cảnh báo grounding | 3, trong đó **1 bịa thật**: w0002 trả lời "35.340.000 đồng/năm [3]" cho học phí CNTT, số này không có trong Quyết định 1035 (Khối Công nghệ là 38.350.000); 2 còn lại là số điện thoại/máy lẻ (dương tính giả, đã sửa) |
+
+10 câu fail đều là "chưa có thông tin" sau khi tìm web (học phí 2026-2027, điểm chuẩn 2026, xếp
+hạng, nghỉ lễ 2/9): web judge không chấp nhận trang nào. Không có run web nào trước đó để so, nên
+đây là mốc đầu cho chính sách web; mức `weak` chưa kích hoạt tìm web (cờ tắt) nên không ảnh
+hưởng kết quả. Đánh giá web fallback đầy đủ (bật `CHAT_WEB_SEARCH_ON_WEAK_EVIDENCE`, so với
+`llm`) là ticket riêng.
+
+**Điều đáng ghi nhất**: lớp grounding đã bắt được một câu bịa số thật trong lúc chạy e2e
+(w0002), đúng việc nó được thiết kế để làm; và các dương tính giả tìm thấy (ngày/giờ, đơn vị
+dính số, số điện thoại) đều đã có test hồi quy.
 
 ## 9. Phụ lục: lệnh, file
 
