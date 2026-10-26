@@ -38,12 +38,16 @@ def test_results_of_one_arithmetic_step_or_a_sum_are_accepted() -> None:
     answer = "Cần thêm 6 tín chỉ, tức 2 học phần; 15 tín chỉ x 1.150.000 = 17.250.000 đồng."
 
     assert ungrounded_numbers(answer, [CREDITS, FEE], question="15 tín chỉ") == []
+    sources = ["HK1 20, HK2 25, HK3 21, HK4 22, HK5 21; tổng 140"]
+    # A total whose terms the answer lists is derivable; a bare total is not (the reader
+    # cannot verify it either), and neither is a remainder built on it.
     assert (
         ungrounded_numbers(
-            "Tổng 109 tín chỉ, còn 31.", ["HK1 20, HK2 25, HK3 21, HK4 22, HK5 21; tổng 140"]
+            "Đã học 20 + 25 + 21 + 22 + 21 = 109 tín chỉ, còn 140 − 109 = 31.", sources
         )
         == []
     )
+    assert ungrounded_numbers("Tổng 109 tín chỉ, còn 31.", sources) == ["109", "31"]
 
 
 def test_small_integers_and_years_are_not_flagged() -> None:
@@ -70,3 +74,20 @@ def test_markers_outside_the_sources_are_reported() -> None:
 
 def test_caution_line_lists_the_numbers() -> None:
     assert "42.500.000" in caution_line(["42.500.000"]) and "kiểm tra lại" in caution_line(["1"])
+
+
+def test_a_number_rich_table_does_not_make_invented_figures_derivable() -> None:
+    import random
+
+    random.seed(0)
+    table = " ".join(
+        f"{random.randint(1, 99)}.{random.randint(100, 999)}.000 đồng" for _ in range(300)
+    )
+    invented = ["487.213.000", "612.907.000", "73.456.000"]
+
+    flagged = ungrounded_numbers("Phải nộp " + ", ".join(invented) + " đồng [1].", [table])
+
+    # 73.456.000 happens to equal 71.748.000 + 1.708.000 in this table: an additive
+    # collision the check accepts by design (one step from two source numbers). The two
+    # multiplicative near-misses (51,006 x a fee) are caught since ratios must be exact.
+    assert flagged == invented[:2]

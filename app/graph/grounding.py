@@ -102,24 +102,46 @@ def _verifiable(token: str, value: float) -> bool:
 
 
 def _close(a: float, b: float) -> bool:
-    return abs(a - b) <= max(0.051, abs(b) * 0.0005)
+    # Half a rounding step for grades (7,9 vs 7,85) plus float noise; never a relative
+    # window - 0,05 % of 500 triệu is 250 nghìn, wide enough to "derive" any invented fee.
+    return abs(a - b) <= 0.051 or abs(a - b) <= abs(b) * 1e-6
 
 
-def _derivable(value: float, grounded: Sequence[float]) -> bool:
-    """One arithmetic step from two grounded numbers (reuse allowed), a sum of up to
-    `_SUM_MAX_TERMS` of them, or a percentage of one - the shapes a calculation answer
-    legitimately produces."""
+class _Lookup:
+    """Membership with the `_close` tolerance in O(1): keys rounded to 0,01 and probed at
+    the value and ±0,05."""
+
+    def __init__(self, values: Sequence[float]) -> None:
+        self._keys = {round(v, 2) for v in values}
+
+    def has(self, value: float, *, exact: bool = False) -> bool:
+        """`exact`: no rounding window - for multiplicative relations, where a ±0,05 window
+        lets 609.878.000 / 11.957.000 = 51,006 pass as "51 x a fee" in a number-rich table."""
+
+        if value != value or abs(value) > 1e15:  # NaN / absurd
+            return False
+        if exact:
+            return round(value, 2) in self._keys and any(
+                abs(value - k) <= abs(k) * 1e-6 + 1e-9 for k in (round(value, 2),)
+            )
+        return any(round(value + d, 2) in self._keys for d in (0.0, 0.05, -0.05, 0.01, -0.01))
+
+
+def _derivable(value: float, grounded: Sequence[float], in_answer: Sequence[float]) -> bool:
+    """One arithmetic step from two grounded numbers (a+b, a-b, a*b, a/b, a% of b), or a
+    sum of 3-`_SUM_MAX_TERMS` numbers that the *answer itself* states and that are grounded
+    ("3 + 4 + 2 + 3 = 12"). Sums are not drawn from the whole source pool: a fee table holds
+    hundreds of figures and almost any amount is some sum of six of them. O(pool) per value
+    thanks to the lookup, so a table-heavy context stays cheap."""
 
     pool = sorted(set(grounded))
-    for a, b in itertools.combinations_with_replacement(pool, 2):
-        candidates = [a + b, a - b, b - a, a * b, a * b / 100]
-        if b:
-            candidates.append(a / b)
-        if a:
-            candidates.append(b / a)
-        if any(_close(value, c) for c in candidates):
+    lookup = _Lookup(pool)
+    for a in pool:
+        if lookup.has(value - a) or lookup.has(a - value):
             return True
-    terms = [g for g in pool if 0 < g <= value * 1.0001][:30]
+        if a and (lookup.has(value / a, exact=True) or lookup.has(value * 100 / a, exact=True)):
+            return True
+    terms = sorted({g for g in in_answer if 0 < g <= value * 1.0001})[:12]
     for n in range(3, _SUM_MAX_TERMS + 1):
         for combo in itertools.combinations_with_replacement(terms, n):
             if _close(value, sum(combo)):
@@ -147,9 +169,11 @@ def ungrounded_numbers(
     pending = {
         token: value for token, value in numbers_in(answer).items() if _verifiable(token, value)
     }
+    answer_values = list(numbers_in(answer).values())
     for _ in range(2):
         for token, value in list(pending.items()):
-            if any(_close(value, g) for g in grounded) or _derivable(value, grounded):
+            in_answer = [v for v in answer_values if any(_close(v, g) for g in grounded)]
+            if any(_close(value, g) for g in grounded) or _derivable(value, grounded, in_answer):
                 grounded.append(value)
                 pending.pop(token)
     for token in numbers_in(answer):
