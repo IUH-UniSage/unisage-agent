@@ -49,6 +49,7 @@ from app.graph.clarification_round import (
     advisory_task,
     build_round,
 )
+from app.graph.evidence import levels_for
 from app.graph.grounding import caution_line, check_answer, looks_like_refusal, numbers_in
 from app.graph.metadata_fields import (
     Scope,
@@ -1168,13 +1169,30 @@ async def _run_advisory_flow(
         )
         rerank_ok = True
 
+    # EvidenceSignals: how confident retrieval is per sub-query, logged every turn; `auto`
+    # runs the LLM rerank only when a sub-query is weak (app/graph/evidence.py).
+    evidence = levels_for([result.chunks for result in rerank_result.per_query])
+    evidence_rows = [
+        {"sub_query": index + 1, "level": level, **signals.as_dict()}
+        for index, (signals, level) in enumerate(evidence)
+    ]
+    logger.info(
+        "evidence mode=%s %s",
+        settings.CHAT_RERANK_MODE,
+        "; ".join(f"SQ{i + 1} {lvl} {sig.describe()}" for i, (sig, lvl) in enumerate(evidence)),
+    )
+    weak_evidence = any(level == "weak" for _, level in evidence)
+
     # CrossEncoderRerankNode (CHAT_RERANK_MODE cross_encoder / cross_encoder_then_llm,
     # docs/specs/SPEC-cross-encoder-rerank.md): each sub-query's top CHAT_CROSS_ENCODER_KEEP
     # by cross-encoder score. `cross_encoder` stops there; `cross_encoder_then_llm` hands
     # those to the LLM rerank. A service failure falls over to the LLM rerank with a
     # warning and skips the cache store: that result is not what this mode's key stands for.
     # `none` runs neither: the dense floor + retrieval order is the whole rerank stage.
-    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED and settings.CHAT_RERANK_MODE != "none"
+    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED and (
+        settings.CHAT_RERANK_MODE not in ("none", "auto")
+        or (settings.CHAT_RERANK_MODE == "auto" and weak_evidence)
+    )
     if (
         cached_result is None
         and settings.CHAT_RERANK_MODE in ("cross_encoder", "cross_encoder_then_llm")
@@ -1466,4 +1484,5 @@ async def _run_advisory_flow(
         context_web=context_web,
         used_web_search=bool(web_results),
         admin_warnings=admin_warnings,
+        evidence=evidence_rows,
     )

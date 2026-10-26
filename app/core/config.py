@@ -244,10 +244,22 @@ class Settings(BaseSettings):
     # `none`: no rerank model at all - the retrieval order (RRF for hybrid) above the dense
     # floor, cut to CONTEXT_MAX_CHUNKS; the benchmark's "no rerank" baseline, measurable e2e.
     # A service error or timeout falls over to the LLM rerank with an AI-admin warning.
-    CHAT_RERANK_MODE: Literal["llm", "cross_encoder", "cross_encoder_then_llm", "none"] = "llm"
+    # `auto`: the `none` path, plus the LLM rerank only for a turn whose evidence signals
+    # (app/graph/evidence.py) call a sub-query weak - the gate "no document answers this"
+    # kept for the risky tail at a fraction of the LLM calls.
+    CHAT_RERANK_MODE: Literal["llm", "cross_encoder", "cross_encoder_then_llm", "none", "auto"] = (
+        "llm"
+    )
     CROSS_ENCODER_URL: str = "http://127.0.0.1:8403"
     CROSS_ENCODER_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
     CHAT_CROSS_ENCODER_KEEP: int = Field(default=8, ge=1)
+    # Evidence sufficiency (app/graph/evidence.py), logged every turn and the trigger of
+    # `auto`: a sub-query is `weak` when its best dense cosine is below MIN_COSINE and no
+    # chunk of its top-3 was found by both dense and BM25 - and, when a cross-encoder score
+    # exists, that score is below MIN_CE too. Provisional values; the threshold study in
+    # changes/22-10-2026-CrossEncoderBenchmark/report.md (Phase 6) is what sets them.
+    CHAT_EVIDENCE_MIN_COSINE: float = Field(default=0.60, ge=0.0, le=1.0)
+    CHAT_EVIDENCE_MIN_CE: float = 1.0
     # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
     # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),

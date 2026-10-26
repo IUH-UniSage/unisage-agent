@@ -202,6 +202,7 @@ def result_row(
         "citations": output.citations if output else [],
         "used_ticket_fallback": bool(output and output.used_ticket_fallback),
         "used_web_search": bool(output and output.used_web_search),
+        "evidence": output.evidence if output else [],
         "asked_back": bool(output and output.pending_round is not None),
         "calculation_items": output.calculation_items if output else [],
         "nodes": recording.nodes,

@@ -42,6 +42,7 @@ from app.calculation.formulas import (
 from app.calculation.result import CalculationInputError, CalculationResult
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace
+from app.graph.evidence import levels_for
 from app.graph.fence_redactor import FenceRedactor, take_bare_blocks
 from app.graph.grounding import caution_line, check_answer
 from app.graph.metadata_fields import canonical_field, canonical_params, is_profile_field
@@ -519,7 +520,16 @@ async def _search(
     models = deps.models
     # Same rerank stage as the main graph (CHAT_RERANK_MODE): cross-encoder first when
     # configured, the LLM rerank after it or instead of it, fail-over on a service error.
-    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED and settings.CHAT_RERANK_MODE != "none"
+    evidence = levels_for([r.chunks for r in result.per_query])
+    logger.info(
+        "calculation.evidence mode=%s %s",
+        settings.CHAT_RERANK_MODE,
+        "; ".join(f"{lvl} {sig.describe()}" for sig, lvl in evidence),
+    )
+    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED and (
+        settings.CHAT_RERANK_MODE not in ("none", "auto")
+        or (settings.CHAT_RERANK_MODE == "auto" and any(level == "weak" for _, level in evidence))
+    )
     if (
         settings.CHAT_RERANK_MODE in ("cross_encoder", "cross_encoder_then_llm")
         and result.has_valid_context

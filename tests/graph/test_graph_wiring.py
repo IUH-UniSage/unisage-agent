@@ -1308,6 +1308,31 @@ async def test_none_mode_runs_neither_rerank_and_keeps_the_retrieval_order(
     assert result.admin_warnings == []
 
 
+@pytest.mark.asyncio
+async def test_auto_mode_calls_the_llm_rerank_only_on_weak_evidence(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _cross_encoder_mode(monkeypatch, "auto")
+    monkeypatch.setattr(settings, "CHAT_EVIDENCE_MIN_COSINE", 0.60)
+    weak_chunk = RetrievedChunk(chunk_id="w", content="mờ", source="s", score=0.52)
+
+    for chunk, expect_llm in ((_DUMMY_CHUNK, False), (weak_chunk, True)):
+        caplog.clear()
+        models = _models(mock_sync_llm_model, mock_streaming_llm_model)
+        models.retrieval = FakeRetrievalService([chunk])
+        models.rerank = mock_sync_llm_model('{"SQ1": {"C1": "đúng"}}')
+        with caplog.at_level("INFO", logger="unisage.graph"):
+            result = await run_graph(
+                _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+            )
+        assert ("09a_LLMRerankNode" in _traced_nodes(caplog)) is expect_llm
+        assert result.evidence[0]["level"] == ("weak" if expect_llm else "ok")
+        assert "evidence mode=auto" in caplog.text
+
+
 # ── GroundingCheck (after 10_GenerationSynthesisNode) ─────────────────────────
 
 

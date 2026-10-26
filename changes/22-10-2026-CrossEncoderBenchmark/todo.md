@@ -158,3 +158,11 @@ FlagEmbedding, trường `truncated`), `report.md` 538 dòng.
 
 - [x] `task test`, `uv run ruff check app evals tests`, `uv run mypy app evals` sạch trên file đổi.
 - [x] PR lên `main`.
+
+## Phase 6 (26/10): chống bịa khi không còn LLM rerank — xem plan.md Phase 6
+
+- [ ] Task 8: grounding (calculation gate, kiểm tra số liệu/trích dẫn sau khi sinh, prompt, metrics)
+- [ ] Task 9: 20 câu unanswerable phân nhóm + metrics theo nhóm + eval 3 chế độ chỉ câu mới
+- [ ] Task 10: tín hiệu evidence + nghiên cứu ngưỡng + `CHAT_RERANK_MODE=auto`
+- [ ] Task 11: `web_policy` tách khỏi rerank
+- [ ] Checkpoint: report bổ sung, test/ruff/mypy, push

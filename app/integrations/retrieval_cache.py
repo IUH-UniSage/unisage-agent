@@ -158,6 +158,8 @@ def config_fingerprint(layer: Layer) -> str:
         # depends on the mode and on how many the cross-encoder keeps.
         "rerank_mode": settings.CHAT_RERANK_MODE,
         "ce_keep": settings.CHAT_CROSS_ENCODER_KEEP,
+        "evidence_min_cosine": settings.CHAT_EVIDENCE_MIN_COSINE,
+        "evidence_min_ce": settings.CHAT_EVIDENCE_MIN_CE,
         "rerank_template": _sha(templates.agent_reranker_compressor),
         # Hybrid retrieval (SPEC-hybrid-retrieval.md): a different candidate set per setting.
         "hybrid": settings.RETRIEVAL_HYBRID_ENABLED,
