@@ -412,8 +412,16 @@ Phải: throughput đứng ở ~7,3 req/s từ mức 2, dấu hiệu service x�
   nhiều cái sát 1024 token), không phải số passage. Phân phối hẹp (p10 66 → p99 169), không có
   đuôi dài: độ trễ dự đoán được.
 - Service xử lý **tuần tự**: p50 tăng tuyến tính theo mức đồng thời (146 → 269 → 538 → 1076 ms)
-  còn throughput đứng ở ~7,3 req/s; GPU đã bận 85 % nên nghẽn ở compute, không ở vòng lặp sự
-  kiện. Muốn hơn phải gom nhiều request vào một lần forward (dynamic batching) hoặc thêm GPU.
+  còn throughput đứng ở ~7,3 req/s. **Bảng 3 đo năng lực của service bản hiện tại, không phải
+  giới hạn của cross-encoder nói chung.** Endpoint `/rerank` là hàm `async` gọi scorer đồng bộ,
+  mỗi request chiếm vòng lặp sự kiện tới khi xong; kể cả chuyển sang threadpool thì các lần
+  forward vẫn xếp hàng trên một GPU stream (GPU đã bận 85 %). Muốn req/s tăng theo mức đồng thời
+  phải **dynamic batching**: gom request đến trong cửa sổ 10–20 ms thành một batch (2 × 16, 4 × 16
+  cặp) và forward một lần; một batch 32 cặp FP16 trên 4080 thường không chậm gấp đôi batch 16, nên
+  throughput có thể tăng 1,5–3 lần ở mức 2–4, đổi lại mỗi request chờ thêm cửa sổ 10–20 ms. Bảng 2
+  (concurrency 1) không bị ảnh hưởng: 112 ms là độ trễ thật của một request khi không ai chen.
+  Chưa làm trong ticket này vì tải hiện tại dưới 1 lượt chat mỗi giây và khuyến nghị cuối là
+  `none`.
 - VRAM đỉnh 2 987 MiB khi chấm so với 1 839 MiB khi rảnh: activation của 16 cặp × 1024 token
   FP16 ≈ 1,1 GB. Tổng cần ~2,5 GB trống. RTX 3060 12 GB dư; `RERANKER_BATCH_SIZE=8` nếu muốn
   đỉnh thấp hơn (đổi lại chậm hơn ~10–20 %).
