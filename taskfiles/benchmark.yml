@@ -15,3 +15,9 @@ tasks:
     desc: "Các tuỳ chọn của benchmark"
     cmds:
       - '{{.UV_RUN}} evals.benchmark --help'
+
+  evidence:
+    desc: "Nghiên cứu ngưỡng tín hiệu evidence trên một run (retrieval lại, không gọi LLM). Vd task benchmark:evidence env=eval -- hybrid-on"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} evals.benchmark.evidence_study {{.CLI_ARGS}}'

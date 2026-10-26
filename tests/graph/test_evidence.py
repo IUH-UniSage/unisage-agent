@@ -48,17 +48,17 @@ def test_levels_none_weak_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "CHAT_EVIDENCE_MIN_COSINE", 0.60)
     monkeypatch.setattr(settings, "CHAT_EVIDENCE_MIN_CE", 1.0)
     weak = [_chunk(0.52, rrf=0.5, dense=1), _chunk(0.50, rrf=0.33, dense=2)]
-    agreed = [_chunk(0.52, rrf=0.9, dense=1, bm25=1)]  # low cosine but both lists found it
+    agreed = [_chunk(0.52, rrf=0.9, dense=1, bm25=1)]  # agreement is logged, not a verdict
     confident = [_chunk(0.81, rrf=0.5, dense=1)]
     rescued_by_ce = [_chunk(0.52, rrf=0.5, dense=1, ce=3.5)]
     lexical_only = [_chunk(0.70, rrf=0.5, bm25=1, lexical_only=True)]
 
     assert signals_for([]).level() == "none"
     assert signals_for(weak).level() == "weak"
-    assert signals_for(agreed).level() == "ok"
+    assert signals_for(agreed).level() == "weak"
     assert signals_for(confident).level() == "ok"
     assert signals_for(rescued_by_ce).level() == "ok"
-    assert signals_for(lexical_only).level() == "weak"  # no cosine, no agreement, no CE
+    assert signals_for(lexical_only).level() == "weak"  # no cosine, no CE
     assert [lvl for _, lvl in levels_for([weak, confident, []])] == ["weak", "ok", "none"]
 
 

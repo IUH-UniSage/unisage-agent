@@ -196,6 +196,7 @@ def result_row(
         "expected_web_outcome": question.get("expected_web_outcome"),
         "expected_source_hosts": question.get("expected_source_hosts") or [],
         "forbidden_source_patterns": question.get("forbidden_source_patterns") or [],
+        "unanswerable_kind": question.get("unanswerable_kind"),
         "access": access,
         "web": web,
         "response": result.response_text,

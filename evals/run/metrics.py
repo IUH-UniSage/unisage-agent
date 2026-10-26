@@ -27,6 +27,9 @@ REFUSAL_HINTS = (
     "gửi yêu cầu hỗ trợ",
     # Stated limits (UNISAGE-106 Phase 6): a partial answer, a wrong premise, a missing year.
     "không đủ dữ liệu",
+    "chưa có đủ thông tin",
+    "chưa đủ thông tin",
+    "chưa đủ dữ liệu",
     "không có quy định",
     "không tồn tại",
     "không đề cập",

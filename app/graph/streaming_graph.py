@@ -124,6 +124,7 @@ from app.graph.streaming_state import (
     GraphOutput,
     ResumeInput,
 )
+from app.graph.web_policy import decide_fallback
 from app.integrations.cross_encoder_client import CrossEncoderClient
 from app.rag.prompting.citations import (
     build_citations,
@@ -1270,7 +1271,12 @@ async def _run_advisory_flow(
 
     # WebSearchNode + WebJudgeNode: judged alongside rerank for every sub-query (fast-
     # changing topic), else only for the sub-queries left with no chunk.
-    failed = set(rerank_result.failed_query_indexes)
+    # Fallback scope: the policy decides from the evidence levels and what the rerank
+    # emptied, apart from which rerank mode ran (app/graph/web_policy.py).
+    web_decision = decide_fallback(
+        [level for _, level in evidence], emptied_by_rerank=rerank_result.failed_query_indexes
+    )
+    failed = set(web_decision.sub_queries)
     web_results: list[WebSearchResult] = []
     web_sources: list[WebSearchResult] = []
     outcomes: list[WebSearchOutcome] = []

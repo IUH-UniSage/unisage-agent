@@ -9,9 +9,11 @@ Per sub-query, from the chunks the rerank stage kept (retrieval order):
 - `ce_top1`: the cross-encoder's score of the first chunk when that stage ran;
 - `lexical_only_top1`: the first chunk was found by BM25 alone.
 
-`level()` folds them into `ok | weak | none`. It is a *relative* signal (RRF scores and
-gaps are not probabilities), so every turn logs its signals next to the level and the
-thresholds are set from data (UNISAGE-106 Phase 6 study), never by hand. Used by
+`level()` folds them into `ok | weak | none`: `weak` when the best cosine is under
+`CHAT_EVIDENCE_MIN_COSINE` and, if a cross-encoder scored the top chunk, that score is
+under `CHAT_EVIDENCE_MIN_CE`. It is a *relative* signal (RRF scores and gaps are not
+probabilities), so every turn logs all signals next to the level and the thresholds come
+from data (UNISAGE-106 Phase 6 study: `task benchmark:evidence`), never by hand. Used by
 `CHAT_RERANK_MODE=auto` (LLM rerank only when a sub-query is weak) and by the web search
 policy (`app/graph/web_policy.py`).
 """
@@ -43,10 +45,12 @@ class EvidenceSignals:
             return "none"
         min_cosine = settings.CHAT_EVIDENCE_MIN_COSINE if min_cosine is None else min_cosine
         min_ce = settings.CHAT_EVIDENCE_MIN_CE if min_ce is None else min_ce
+        # Threshold study (139 câu demo, report Phase 6): the 5 questions whose document is
+        # not in the top-8 all had dense/BM25 agreement 1-3, so agreement does not mark a
+        # miss; cosine < 0,60 flags 10 % of turns and catches 3/5. Agreement stays logged.
         cosine_weak = self.top1_cosine is None or self.top1_cosine < min_cosine
-        agreement_weak = self.agreement_top3 == 0
         ce_weak = self.ce_top1 is None or self.ce_top1 < min_ce
-        return "weak" if cosine_weak and agreement_weak and ce_weak else "ok"
+        return "weak" if cosine_weak and ce_weak else "ok"
 
     def describe(self) -> str:
         return (

@@ -254,10 +254,11 @@ class Settings(BaseSettings):
     CROSS_ENCODER_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
     CHAT_CROSS_ENCODER_KEEP: int = Field(default=8, ge=1)
     # Evidence sufficiency (app/graph/evidence.py), logged every turn and the trigger of
-    # `auto`: a sub-query is `weak` when its best dense cosine is below MIN_COSINE and no
-    # chunk of its top-3 was found by both dense and BM25 - and, when a cross-encoder score
-    # exists, that score is below MIN_CE too. Provisional values; the threshold study in
-    # changes/22-10-2026-CrossEncoderBenchmark/report.md (Phase 6) is what sets them.
+    # `auto`: a sub-query is `weak` when its best dense cosine is below MIN_COSINE and, when
+    # a cross-encoder score exists, that score is below MIN_CE too. 0,60 from the threshold
+    # study (139 câu demo, 26/10/2026): flags ~10 % of turns, catches 3 of the 5 questions
+    # whose document is not in the top-8 (report Phase 6); re-run `task benchmark:evidence`
+    # on a new corpus before changing it.
     CHAT_EVIDENCE_MIN_COSINE: float = Field(default=0.60, ge=0.0, le=1.0)
     CHAT_EVIDENCE_MIN_CE: float = 1.0
     # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
@@ -265,6 +266,10 @@ class Settings(BaseSettings):
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),
     # however long the question or however many sub-queries it split into.
     CHAT_WEB_SEARCH_ENABLED: bool = False
+    # Fallback web search policy (app/graph/web_policy.py): besides sub-queries the LLM
+    # rerank emptied or retrieval found nothing for, also search those whose evidence is
+    # only `weak` (app/graph/evidence.py). Off by default: measure the fallback on its own.
+    CHAT_WEB_SEARCH_ON_WEAK_EVIDENCE: bool = False
     # `speculative`: for a task whose topic is in SPECULATIVE_TOPICS (fees, admission,
     # notices, contacts - what changes every year and is posted on the website first),
     # the search starts with the advisory branch, alongside query transformation, retrieval
