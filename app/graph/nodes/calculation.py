@@ -261,8 +261,15 @@ def _solving(
     return unknown, target
 
 
+_DIGIT = re.compile(r"\d")
+
+
 def parse_extraction(
-    raw: str, *, allowed: list[str], previous: LastCalculation | None = None
+    raw: str,
+    *,
+    allowed: list[str],
+    previous: LastCalculation | None = None,
+    question: str = "",
 ) -> Extraction:
     """The model's choice of a registered formula is kept (it saw the whole registry and
     the question's target; a keyword router cannot tell "cuối kỳ cần bao nhiêu để được
@@ -282,7 +289,15 @@ def parse_extraction(
         return Extraction("previous", params, None, unknown, target)
     routed = [formula for formula in allowed if formula in BUILTIN_IDS]
     if formula_id == "none":
-        return _none_extraction(params, data)
+        # "tính điểm xét tuyển giúp em": no number to compute from the documents, and the
+        # router matched exactly one registered formula - the student is asking for that
+        # formula, so its panel asks for the inputs (seen 27/10/2026: gpt-5-mini answered
+        # `none` and the turn drifted to the advisory path, which cannot ask for numbers).
+        if len(routed) == 1 and not _DIGIT.search(question or ""):
+            logger.info("calculation.router_recovers_bare_request formula=%s", routed[0])
+            formula_id = routed[0]
+        else:
+            return _none_extraction(params, data)
     if formula_id == "arithmetic":
         request = parse_request(data.get("arithmetic"))
         if request is None:
@@ -357,7 +372,7 @@ async def extract_request(query: str, deps: CalculationDeps) -> Extraction:
     except Exception:
         logger.warning("calculation.extractor_failed", exc_info=True)
         raw = ""
-    return parse_extraction(raw, allowed=allowed, previous=previous)
+    return parse_extraction(raw, allowed=allowed, previous=previous, question=query)
 
 
 # ---------------------------------------------------------------------------

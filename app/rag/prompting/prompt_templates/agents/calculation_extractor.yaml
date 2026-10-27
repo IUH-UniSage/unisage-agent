@@ -11,7 +11,7 @@ template: |
   {"formula_id": "<formula_id ở trên | previous | arithmetic | none>", "params": {...}, "solve_for": null | "<tên tham số>" | "<tham số danh sách>[<vị trí>]", "target": null | {"output": "<key đầu ra>", "op": ">=" | "<=" | "==", "value": <số hoặc điểm chữ>}, "arithmetic": null | {"expression": "<biểu thức>", "label": "<tên đại lượng>", "unit": "<đơn vị>"}, "retrieval_query": null | "<câu tìm tài liệu, chỉ khi none>"}
 
   ## Chọn `formula_id`
-  - Một formula_id ở trên khi câu hỏi là phép tính của ĐÚNG công thức đó, kể cả khi chưa đủ số (hệ thống tự tra tài liệu rồi hỏi thêm). Chọn công thức theo ĐẠI LƯỢNG được hỏi: điểm tổng kết học phần theo quy chế (TX/GK/CK 20/30/50, thực hành) → `course_score`; đề cương nêu trọng số riêng (10 %, 30 %, 50 %...) → `weighted_score`; GPA/điểm trung bình tích luỹ → `gpa`; điểm chữ/thang 4 của một điểm → `grade_conversion`; học phí → `tuition_*`; điểm xét tuyển/XT1/XT2/ĐGNL quy đổi/ĐXT → `admission_score_2026`; điểm xét học bạ lớp 10, 11, HK1 lớp 12 → `transcript_score_3hk`.
+  - Một formula_id ở trên khi câu hỏi là phép tính của ĐÚNG công thức đó, KỂ CẢ KHI CHƯA CÓ SỐ NÀO ("tính điểm xét tuyển giúp em", "tính GPA", "học phí kỳ này bao nhiêu"): vẫn chọn công thức với `params` rỗng - hệ thống tự tra tài liệu rồi mở panel hỏi số còn thiếu. KHÔNG trả `none` chỉ vì người dùng chưa đưa số. Chọn công thức theo ĐẠI LƯỢNG được hỏi: điểm tổng kết học phần theo quy chế (TX/GK/CK 20/30/50, thực hành) → `course_score`; đề cương nêu trọng số riêng (10 %, 30 %, 50 %...) → `weighted_score`; GPA/điểm trung bình tích luỹ → `gpa`; điểm chữ/thang 4 của một điểm → `grade_conversion`; học phí → `tuition_*`; điểm xét tuyển/XT1/XT2/ĐGNL quy đổi/ĐXT → `admission_score_2026`; điểm xét học bạ lớp 10, 11, HK1 lớp 12 → `transcript_score_3hk`.
   - Học phí: `tuition_semester` (một học kỳ, "kỳ này"), `tuition_year` (một năm học), `tuition_program` (cả khoá, cả ngành, đến khi ra trường). Không nêu phạm vi → `tuition_semester`. Nhiều năm chưa phải cả khoá ("2 năm đầu") → `tuition_year` kèm `pham_vi`.
   - `previous`: câu NỐI TIẾP phép tính trong `<previous_calculation>` với số mới/thay đổi ("nếu giữa kỳ 8 thì sao", "thế cuối kỳ cần bao nhiêu để được A+"). `params` CHỈ gồm số mới hoặc thay đổi; câu hỏi ngược thì thêm `solve_for` + `target`.
   - Khoảng ngày giữa hai mốc (kéo dài/còn/quá hạn bao nhiêu ngày) → `date_span` (ngày dd/mm/yyyy; hạn hiệu lực N năm → `cong_them_nam`); tổng giờ của các khoảng hh:mm-hh:mm → `time_span` (mỗi ngày lặp lại ghi thành một khoảng riêng). Mốc ngày/giờ có thể lấy từ câu hỏi; nếu chỉ có trong tài liệu thì `none`.
@@ -41,6 +41,9 @@ template: |
 
   User: "Em học Toán 3 tín 8.5, Lý 2 tín B+, Hóa 4 tín 3.9 thì GPA bao nhiêu?"
   {"formula_id": "gpa", "params": {"courses": [{"name": "Toán", "credits": 3, "score": 8.5}, {"name": "Lý", "credits": 2, "score": "B+"}, {"name": "Hóa", "credits": 4, "score": 3.9}]}, "solve_for": null, "target": null, "retrieval_query": null}
+
+  User: "tính điểm xét tuyển giúp em"
+  {"formula_id": "admission_score_2026", "params": {}, "solve_for": null, "target": null, "arithmetic": null, "retrieval_query": null}
 
   User: "nếu giữa kỳ 8 thì sao"
   <previous_calculation>{"formula_id": "previous", "formula": "Điểm tổng kết học phần (lý thuyết + thực hành)", "params": {"tclt": 3, "tcth": 1, "tbtx": [9, 8, 7], "gk": 9, "ck": 8, "th": [6, 9, 9]}}</previous_calculation>

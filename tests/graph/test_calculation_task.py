@@ -113,9 +113,11 @@ def test_the_router_fills_in_only_for_unreadable_or_unknown_output() -> None:
 
 
 def test_an_explicit_none_is_never_overridden_by_the_router() -> None:
-    # "điểm xét tuyển năm nay bao nhiêu" (a cutoff score) matches the admission trigger.
+    # "điểm xét tuyển ngành CNTT năm 2026 bao nhiêu" (a cutoff score) matches the admission
+    # trigger; the year is a digit, so this is a lookup and the model's `none` stands.
     raw = '{"formula_id": "none", "params": {}, "retrieval_query": "điểm chuẩn 2026"}'
-    extraction = parse_extraction(raw, allowed=["admission_score_2026"])
+    question = "điểm xét tuyển ngành CNTT năm 2026 bao nhiêu"
+    extraction = parse_extraction(raw, allowed=["admission_score_2026"], question=question)
     assert (extraction.formula_id, extraction.retrieval_query) == ("none", "điểm chuẩn 2026")
 
 
@@ -336,3 +338,26 @@ def test_every_registry_formula_is_a_valid_plan() -> None:
 
     for formula_id in FORMULAS:
         assert CalculationPlan(formula_id=formula_id).formula_id == formula_id  # type: ignore[arg-type]
+
+
+def test_a_bare_request_for_a_routed_formula_is_not_deferred() -> None:
+    """ "tính điểm xét tuyển giúp em": the model answered `none` (no numbers), but the router
+    matched exactly one formula and the question holds no digit - the formula's panel asks
+    for the inputs instead of the advisory path answering with prose."""
+
+    raw = '{"formula_id": "none", "params": {}, "retrieval_query": "công thức điểm xét tuyển"}'
+    question = "tính điểm xét tuyển giúp em"
+    assert route_builtin(question) == ["admission_score_2026"]
+    extraction = parse_extraction(raw, allowed=route_builtin(question), question=question)
+    assert extraction.formula_id == "admission_score_2026" and extraction.params == {}
+    # With numbers in the question the model's `none` stands (figures may come from documents).
+    with_numbers = "điểm chuẩn ngành CNTT năm 2025 là 24, năm 2026 bao nhiêu?"
+    assert (
+        parse_extraction(raw, allowed=route_builtin(with_numbers), question=with_numbers).formula_id
+        == "none"
+    )
+    # Several routed formulas: the model's `none` stands too.
+    assert (
+        parse_extraction(raw, allowed=["gpa", "course_score"], question=question).formula_id
+        == "none"
+    )
