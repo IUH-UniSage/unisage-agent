@@ -1013,6 +1013,9 @@ ADMISSION_SCALE = Decimal(30)
 ADMISSION_WEIGHT_DK = Decimal("0.7")
 ADMISSION_WEIGHT_DHB = Decimal("0.3")
 APTITUDE_SCORE_MAX = Decimal(1200)
+# The top score of the 1200-point test is never below this: a smaller "ĐTK" read from a
+# document (the "30" of "thang điểm 30") is a misread, not a top score.
+APTITUDE_TOP_MIN = Decimal(600)
 BONUS_MAX = Decimal(10)
 ADMISSION_2026_FORMULA_TEXT = (
     f"ĐĐGNL = kết quả thi ĐGNL {TIMES} 30 / ĐTK (ĐTK: điểm thủ khoa kỳ thi ĐGNL năm 2026)",
@@ -1063,12 +1066,12 @@ ADMISSION_2026_PARAMS: tuple[ParamSpec, ...] = (
     ),
     ParamSpec(
         name="dtk",
-        label="Điểm thủ khoa kỳ thi đánh giá năng lực năm 2026 (ĐTK)",
+        label="Điểm thủ khoa kỳ thi đánh giá năng lực năm 2026 (ĐTK, thang 1200)",
         tab_label="ĐTK",
         kind="number",
         required=_when_positive("dgnl"),
         lookup="điểm thủ khoa kỳ thi đánh giá năng lực năm 2026 điểm cao nhất",
-        min=Decimal(1),
+        min=APTITUDE_TOP_MIN,
         max=APTITUDE_SCORE_MAX,
         step=Decimal("0.01"),
     ),
@@ -1116,10 +1119,20 @@ def admission_score_2026(params: Mapping[str, object]) -> CalculationResult:
     dtk: Decimal | None = None
     if dgnl is not None:
         dtk = _optional_number(
-            params, "dtk", errors, minimum=Decimal(1), maximum=APTITUDE_SCORE_MAX, default=None
+            params,
+            "dtk",
+            errors,
+            minimum=APTITUDE_TOP_MIN,
+            maximum=APTITUDE_SCORE_MAX,
+            default=None,
         )
         if dtk is not None and dgnl > dtk:
-            errors.append(FieldError("dgnl", "kết quả ĐGNL không thể lớn hơn điểm thủ khoa"))
+            errors.append(
+                FieldError(
+                    "dtk",
+                    f"điểm thủ khoa phải lớn hơn hoặc bằng kết quả thi {plain(dgnl)} bạn đã nêu",
+                )
+            )
     uu_tien = _optional_number(
         params, "uu_tien", errors, minimum=SCORE_MIN, maximum=BONUS_MAX, default=Decimal(0)
     )

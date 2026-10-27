@@ -625,6 +625,16 @@ def _whole_number(value: object) -> int | None:
     return None
 
 
+def _in_range(spec: ParamSpec, number: int) -> bool:
+    """A document value outside the param's own bounds is a misread (a "thang điểm 30" read
+    as a 1200-point top score), never a value to compute with."""
+
+    value = Decimal(number)
+    if spec.min is not None and value < spec.min:
+        return False
+    return not (spec.max is not None and value > spec.max)
+
+
 def _amounts(text: str) -> set[int]:
     """Every whole number written in `text`, thousands separators read as such."""
 
@@ -732,11 +742,14 @@ async def fill_from_documents(
             continue
         number = _whole_number(item.get("value"))
         index = item.get("chunk")
+        spec = param_spec(formula_id, name)
         if (
             number is None
+            or spec is None
             or not isinstance(index, int)
             or not 1 <= index <= len(chunks)
             or number not in _amounts(chunks[index - 1].content)
+            or not _in_range(spec, number)
         ):
             rejected.append(name)
             continue

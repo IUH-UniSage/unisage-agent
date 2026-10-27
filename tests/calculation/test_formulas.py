@@ -459,9 +459,14 @@ def test_admission_2026_needs_the_top_score_once_an_aptitude_result_is_given() -
     with pytest.raises(CalculationInputError) as info:
         calculate("admission_score_2026", {"dtn": 22, "dhb": 25, "dgnl": 900})
     assert _fields(info.value) == {"dtk"}
+    # The top score is the inconsistent one (it may have been misread from a document): the
+    # student's own result is kept and ĐTK is asked again.
     with pytest.raises(CalculationInputError) as info:
         calculate("admission_score_2026", {"dtn": 22, "dhb": 25, "dgnl": 1200, "dtk": 1100})
-    assert _fields(info.value) == {"dgnl"}
+    assert _fields(info.value) == {"dtk"}
+    with pytest.raises(CalculationInputError) as info:
+        calculate("admission_score_2026", {"dtn": 22, "dhb": 25, "dgnl": 1100, "dtk": 30})
+    assert _fields(info.value) == {"dtk"}  # 30 is below the 1200-point test's possible top score
 
 
 def test_admission_2026_rejects_scores_outside_the_30_point_scale() -> None:
