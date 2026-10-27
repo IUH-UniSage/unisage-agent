@@ -25,7 +25,7 @@ template: |
   - TÍNH NGƯỢC: người dùng hỏi "cần/phải/tối thiểu/tối đa bao nhiêu <tham số> để <đầu ra> đạt <mốc>" → `solve_for` = tên tham số cần tìm (đúng tên ở trên; với tham số danh sách ghi vị trí 1-based, VD `diem[4]` là điểm thành phần thứ 4), `target.output` = key đầu ra ở trên, `op` `>=` cho "đạt/được/từ ... trở lên", `<=` cho "không quá/tối đa", `==` chỉ khi hỏi đúng bằng; `value` là số hoặc điểm chữ ("A+", "B"). KHÔNG đưa tham số cần tìm vào `params`; với danh sách thì để `null` ở vị trí đó.
 
   ## `params`
-  - CHỈ ghi những con số người dùng ĐÃ NÓI RÕ. Không suy đoán, không điền mặc định, không tự tính giá trị trung gian. Chưa nói thì BỎ khỏi `params`. Người dùng nói rõ "không có điểm ưu tiên/điểm cộng", "không thi ĐGNL" → `uu_tien: 0` / `diem_cong: 0` / bỏ `dgnl`.
+  - CHỈ ghi những con số người dùng ĐÃ NÓI RÕ. Không suy đoán, không điền mặc định, không tự tính giá trị trung gian. Chưa nói thì BỎ khỏi `params` (hệ thống sẽ hỏi trên panel). Người dùng nói rõ "không có điểm ưu tiên/điểm cộng", "không thi ĐGNL" → `uu_tien: 0` / `diem_cong: 0` / `dgnl: 0` (0 = không có); không nhắc tới thì KHÔNG ghi 0.
   - Đúng tên tham số ở trên. Điểm giữ nguyên như người dùng viết (8.5, "B+"); dấu phẩy thập phân đổi thành dấu chấm. `tbtx`: một SỐ nếu người dùng nói sẵn điểm trung bình thường xuyên, DANH SÁCH nếu kể từng cột.
   - `weighted_score`: `trong_so` là danh sách % theo thứ tự đề cương, `diem` cùng thứ tự; đề bài nói "điểm thi làm tròn đến 0,5" → `lam_tron_thanh_phan: 0.5`.
   - `transcript_score_3hk`: mỗi môn một bộ `m<i>_10`, `m<i>_11`, `m<i>_12` (TB cả năm lớp 10, TB cả năm lớp 11, TB học kỳ 1 lớp 12) và tên môn `mon<i>`; ngưỡng khác 19.5 thì ghi `nguong`.
@@ -56,10 +56,10 @@ template: |
   {"formula_id": "tuition_semester", "params": {"tc_th": 0}, "solve_for": "tc_lt", "target": {"output": "hoc_phi", "op": "<=", "value": 8000000}, "retrieval_query": null}
 
   User: "Thi tốt nghiệp 3 môn được 24, không thi ĐGNL, học bạ 3 môn 27, ưu tiên 0,5, không có điểm cộng thì điểm xét tuyển 2026 bao nhiêu?"
-  {"formula_id": "admission_score_2026", "params": {"dtn": 24, "dhb": 27, "uu_tien": 0.5, "diem_cong": 0}, "solve_for": null, "target": null, "retrieval_query": null}
+  {"formula_id": "admission_score_2026", "params": {"dtn": 24, "dgnl": 0, "dhb": 27, "uu_tien": 0.5, "diem_cong": 0}, "solve_for": null, "target": null, "retrieval_query": null}
 
   User: "Điểm thi 3 môn 23, ưu tiên 0,25, không điểm cộng, không thi ĐGNL. Tổng điểm học bạ 3 môn tối thiểu bao nhiêu để XT1 đạt 24?"
-  {"formula_id": "admission_score_2026", "params": {"dtn": 23, "uu_tien": 0.25, "diem_cong": 0}, "solve_for": "dhb", "target": {"output": "xt1", "op": ">=", "value": 24}, "retrieval_query": null}
+  {"formula_id": "admission_score_2026", "params": {"dtn": 23, "dgnl": 0, "uu_tien": 0.25, "diem_cong": 0}, "solve_for": "dhb", "target": {"output": "xt1", "op": ">=", "value": 24}, "retrieval_query": null}
 
   User: "Xét học bạ tổ hợp A00, ngưỡng 19,5: Toán 7,5 - 8,0 - 8,5; Hóa 6,0 - 6,5 - 7,0; Lý lớp 10 là 4,5, lớp 11 là 5,0. HK1 lớp 12 môn Lý tối thiểu bao nhiêu?"
   {"formula_id": "transcript_score_3hk", "params": {"mon1": "Toán", "m1_10": 7.5, "m1_11": 8, "m1_12": 8.5, "mon2": "Hóa", "m2_10": 6, "m2_11": 6.5, "m2_12": 7, "mon3": "Lý", "m3_10": 4.5, "m3_11": 5, "nguong": 19.5}, "solve_for": "m3_12", "target": {"output": "tong", "op": ">=", "value": 19.5}, "retrieval_query": null}

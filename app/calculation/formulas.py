@@ -947,10 +947,15 @@ class Formula:
     rounding_of: Callable[[Mapping[str, object], str], Decimal | None] | None = None
 
 
-def _when_present(field: str) -> Callable[[Mapping[str, object]], bool]:
-    """Needed only once another param was given (ĐTK once a ĐGNL result is)."""
+def _when_positive(field: str) -> Callable[[Mapping[str, object]], bool]:
+    """Needed only once another param is a positive number (ĐTK once a ĐGNL result is;
+    "0" there means the student did not sit the test)."""
 
-    return lambda params: params.get(field) is not None
+    def required(params: Mapping[str, object]) -> bool:
+        value = to_decimal(params.get(field))
+        return value is not None and value > 0
+
+    return required
 
 
 def _optional_number(
@@ -1019,8 +1024,8 @@ ADMISSION_2026_FORMULA_TEXT = (
 )
 ADMISSION_2026_WARNINGS = (
     "Đ(Kv;Đt) là điểm ưu tiên khu vực/đối tượng theo quy định của Bộ GD&ĐT (từ 22,5 điểm trở"
-    " lên mức ưu tiên giảm dần) - nhập mức đã quy đổi; không nêu thì tính 0.",
-    "ĐC là điểm cộng (điểm thưởng, điểm xét thưởng, điểm khuyến khích); không nêu thì tính 0.",
+    " lên mức ưu tiên giảm dần) - kết quả dùng đúng mức bạn đã nhập.",
+    "ĐC là điểm cộng (điểm thưởng, điểm xét thưởng, điểm khuyến khích) theo quy định của Trường.",
 )
 ADMISSION_2026_OUTPUTS = (
     OutputSpec("ddgnl", "điểm ĐGNL quy đổi về thang 30"),
@@ -1049,10 +1054,9 @@ ADMISSION_2026_PARAMS: tuple[ParamSpec, ...] = (
     _score30_spec("dhb", "Tổng điểm học bạ 3 môn trong tổ hợp (ĐHB)", "ĐHB"),
     ParamSpec(
         name="dgnl",
-        label="Kết quả thi đánh giá năng lực (bỏ trống nếu không dự thi)",
+        label="Kết quả thi đánh giá năng lực (nhập 0 nếu không dự thi)",
         tab_label="ĐGNL",
         kind="number",
-        required=_never,
         min=SCORE_MIN,
         max=APTITUDE_SCORE_MAX,
         step=Decimal("0.01"),
@@ -1062,27 +1066,29 @@ ADMISSION_2026_PARAMS: tuple[ParamSpec, ...] = (
         label="Điểm thủ khoa kỳ thi đánh giá năng lực năm 2026 (ĐTK)",
         tab_label="ĐTK",
         kind="number",
-        required=_when_present("dgnl"),
+        required=_when_positive("dgnl"),
+        lookup="điểm thủ khoa kỳ thi đánh giá năng lực năm 2026 điểm cao nhất",
         min=Decimal(1),
         max=APTITUDE_SCORE_MAX,
         step=Decimal("0.01"),
     ),
     ParamSpec(
         name="uu_tien",
-        label="Điểm ưu tiên khu vực/đối tượng Đ(Kv;Đt), 0 nếu không có",
+        label=(
+            "Điểm ưu tiên khu vực/đối tượng Đ(Kv;Đt), đã quy đổi theo quy định của Bộ"
+            " (nhập 0 nếu không có)"
+        ),
         tab_label="Ưu tiên",
         kind="number",
-        required=_never,
         min=SCORE_MIN,
         max=BONUS_MAX,
         step=Decimal("0.01"),
     ),
     ParamSpec(
         name="diem_cong",
-        label="Điểm cộng ĐC (thưởng, khuyến khích), 0 nếu không có",
+        label="Điểm cộng ĐC (thưởng, xét thưởng, khuyến khích; nhập 0 nếu không có)",
         tab_label="Điểm cộng",
         kind="number",
-        required=_never,
         min=SCORE_MIN,
         max=BONUS_MAX,
         step=Decimal("0.01"),
@@ -1104,9 +1110,9 @@ def admission_score_2026(params: Mapping[str, object]) -> CalculationResult:
         params, "dhb", errors, minimum=SCORE_MIN, maximum=ADMISSION_SCALE, default=None
     )
     dgnl = _optional_number(
-        params, "dgnl", errors, minimum=SCORE_MIN, maximum=APTITUDE_SCORE_MAX, default=Decimal(-1)
+        params, "dgnl", errors, minimum=SCORE_MIN, maximum=APTITUDE_SCORE_MAX, default=Decimal(0)
     )
-    dgnl = None if dgnl is not None and dgnl < 0 else dgnl
+    dgnl = None if dgnl is not None and dgnl <= 0 else dgnl  # 0 = did not sit the test
     dtk: Decimal | None = None
     if dgnl is not None:
         dtk = _optional_number(
@@ -1613,7 +1619,7 @@ DATE_SPAN_SOURCE = (
 )
 DATE_SPAN_TITLE = "Khoảng ngày giữa hai mốc"
 DATE_SPAN_FORMULA_TEXT = (
-    "Số ngày cách nhau = ngày kết thúc − ngày bắt đầu (theo lịch)",
+    "Số ngày cách nhau = ngày kết thúc \u2212 ngày bắt đầu (theo lịch)",
     "Số ngày tính cả ngày đầu và ngày cuối = số ngày cách nhau + 1",
     "Có thời hạn N năm: mốc bắt đầu được cộng thêm N năm trước khi so với ngày kết thúc",
 )
@@ -1713,7 +1719,7 @@ def date_span(params: Mapping[str, object]) -> CalculationResult:
         Step(
             label="Số ngày cách nhau",
             symbolic=DATE_SPAN_FORMULA_TEXT[0],
-            substituted=f"{_date_text(end)} − {_date_text(anchor)} = {days} ngày",
+            substituted=f"{_date_text(end)} \u2212 {_date_text(anchor)} = {days} ngày",
             value=span,
             display=str(days),
         )
@@ -1743,10 +1749,12 @@ def date_span(params: Mapping[str, object]) -> CalculationResult:
 
 
 TIME_SPAN_VERSION = "1"
-TIME_SPAN_SOURCE = "cách cộng khoảng giờ theo đồng hồ (giờ kết thúc − giờ bắt đầu, cộng các khoảng)"
+TIME_SPAN_SOURCE = (
+    "cách cộng khoảng giờ theo đồng hồ (giờ kết thúc \u2212 giờ bắt đầu, cộng các khoảng)"
+)
 TIME_SPAN_TITLE = "Tổng thời gian của các khoảng giờ"
 TIME_SPAN_FORMULA_TEXT = (
-    "Mỗi khoảng = giờ kết thúc − giờ bắt đầu (qua nửa đêm thì cộng 24 giờ)",
+    "Mỗi khoảng = giờ kết thúc \u2212 giờ bắt đầu (qua nửa đêm thì cộng 24 giờ)",
     "Tổng = cộng các khoảng, đổi ra giờ và phút",
 )
 TIME_SPAN_OUTPUTS = (
@@ -1763,8 +1771,8 @@ TIME_SPAN_PARAMS: tuple[ParamSpec, ...] = (
     ),
 )
 _TIME_RANGE = re.compile(
-    r"(\d{1,2})\s*[:h]\s*(\d{2})\s*(?:-|–|—|đến|to)\s*(\d{1,2})\s*[:h]\s*(\d{2})",
-    re.IGNORECASE,  # noqa: RUF001
+    r"(\d{1,2})\s*[:h]\s*(\d{2})\s*(?:-|\u2013|\u2014|đến|to)\s*(\d{1,2})\s*[:h]\s*(\d{2})",
+    re.IGNORECASE,
 )
 TIME_RANGES_MAX = 20
 
@@ -1954,7 +1962,8 @@ FORMULAS: dict[FormulaId, Formula] = {
         title=DATE_SPAN_TITLE,
         description=(
             "Số ngày giữa hai mốc ngày (kéo dài bao nhiêu ngày, còn bao nhiêu ngày, quá hạn bao"
-            " nhiêu ngày), có hoặc không tính cả ngày đầu và ngày cuối; thời hạn N năm cộng vào mốc đầu"
+            " nhiêu ngày), có hoặc không tính cả ngày đầu và ngày cuối; thời hạn N năm cộng vào"
+            " mốc đầu"
         ),
         params=DATE_SPAN_PARAMS,
         compute=date_span,
@@ -1965,7 +1974,9 @@ FORMULAS: dict[FormulaId, Formula] = {
         source=TIME_SPAN_SOURCE,
         outputs=TIME_SPAN_OUTPUTS,
         title=TIME_SPAN_TITLE,
-        description="Tổng giờ và phút của một hay nhiều khoảng giờ hh:mm-hh:mm (lịch làm việc, ca thi)",
+        description=(
+            "Tổng giờ và phút của một hay nhiều khoảng giờ hh:mm-hh:mm (lịch làm việc, ca thi)"
+        ),
         params=TIME_SPAN_PARAMS,
         compute=time_span,
     ),
@@ -2071,7 +2082,7 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
     ),
     "time_span": (
         re.compile(
-            r"(bao nhiêu|mấy) (giờ|tiếng)|tổng thời gian|\d{1,2}h\d{2}\s*[-–]\s*\d{1,2}h\d{2}"
+            r"(bao nhiêu|mấy) (giờ|tiếng)|tổng thời gian|\d{1,2}h\d{2}\s*[-\u2013]\s*\d{1,2}h\d{2}"
         ),
     ),
     "weighted_score": (

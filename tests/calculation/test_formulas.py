@@ -575,10 +575,44 @@ def test_date_span_rejects_bad_dates_and_reversed_order() -> None:
 
 
 def test_time_span_sums_clock_ranges_in_hours_and_minutes() -> None:
-    # d0332: 06h30-19h40 ×2 và 06h30-17h40 → 37 giờ 30 phút.
-    result = calculate("time_span", {"khoang_gio": "06h30 – 19h40; 06:30-19:40; 06:30 đến 17:40"})
+    # d0332: 06h30-19h40 x2 và 06h30-17h40 → 37 giờ 30 phút.
+    ranges = "06h30 \u2013 19h40; 06:30-19:40; 06:30 đến 17:40"
+    result = calculate("time_span", {"khoang_gio": ranges})
     assert result.values == {"tong_gio": Decimal("37.5"), "tong_phut": Decimal(2250)}
     assert result.summary == "Tổng thời gian **37 giờ 30 phút** (= **37.5 giờ**)"
     assert calculate("time_span", {"khoang_gio": "22:00-02:00"}).values["tong_phut"] == Decimal(240)
     with pytest.raises(CalculationInputError):
         calculate("time_span", {"khoang_gio": "sáng đến chiều"})
+
+
+def test_admission_2026_asks_every_input_the_student_must_supply() -> None:
+    """ĐGNL, ưu tiên and điểm cộng change the result, so the panel asks them explicitly
+    ("0 nếu không có") instead of assuming 0; ĐTK only once a ĐGNL result (> 0) is given."""
+
+    from app.calculation.formulas import missing_params
+
+    assert [spec.name for spec in missing_params("admission_score_2026", {})] == [
+        "dtn",
+        "dhb",
+        "dgnl",
+        "uu_tien",
+        "diem_cong",
+    ]
+    assert [
+        spec.name
+        for spec in missing_params(
+            "admission_score_2026", {"dtn": 24, "dhb": 27, "dgnl": 0, "uu_tien": 0, "diem_cong": 0}
+        )
+    ] == []
+    assert [
+        spec.name
+        for spec in missing_params(
+            "admission_score_2026",
+            {"dtn": 24, "dhb": 27, "dgnl": 900, "uu_tien": 0, "diem_cong": 0},
+        )
+    ] == ["dtk"]
+    # ĐGNL 0 means "did not sit the test": no conversion, ĐK = ĐTN.
+    result = calculate(
+        "admission_score_2026", {"dtn": 24, "dhb": 27, "dgnl": 0, "uu_tien": 0.5, "diem_cong": 0}
+    )
+    assert result.values["dk"] == Decimal(24) and "ddgnl" not in result.values

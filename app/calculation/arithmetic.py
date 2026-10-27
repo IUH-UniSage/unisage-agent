@@ -3,7 +3,8 @@ amounts the student (or a cited document) already states, computed by code from 
 whitelisted expression - never by the LLM in its head, and never as a business
 conclusion.
 
-The LLM only writes the expression (`+ - × ÷`, parentheses, decimals) with a label and a
+The LLM only writes the expression (`+ - * /`, their typographic forms, parentheses and
+decimals) with a label and a
 unit; this module parses it with a hand-written recursive-descent parser (no `eval`, no
 `ast` on model text), evaluates it in `Decimal`, and turns it into the same
 `CalculationResult` the registry formulas produce, so the panel, the review and the
@@ -40,7 +41,16 @@ UNIT_MAX = 20
 _MONEY_UNITS = frozenset({"đồng", "vnđ", "vnd", "đ"})
 _HOUR_UNITS = frozenset({"giờ", "h", "tiếng"})
 _NORMALISE = str.maketrans(
-    {"×": "*", "·": "*", "x": "*", "X": "*", "÷": "/", ":": "/", "−": "-", "–": "-"}
+    {
+        "\u00d7": "*",
+        "\u00b7": "*",
+        "x": "*",
+        "X": "*",
+        "\u00f7": "/",
+        ":": "/",
+        "\u2212": "-",
+        "\u2013": "-",
+    }
 )
 _TOKEN = re.compile(r"\s*(\d+(?:[.,]\d+)*|[-+*/()])")
 _THOUSANDS = re.compile(r"^\d{1,3}(?:\.\d{3})+$")
@@ -61,7 +71,7 @@ class ArithmeticRequest:
 
 @dataclass(frozen=True)
 class Evaluation:
-    expression: str  # normalised, as shown to the student (× ÷, no spaces around numbers)
+    expression: str  # normalised, as shown to the student (typographic signs, spaced)
     operands: tuple[Decimal, ...]
     value: Decimal
 
@@ -201,9 +211,9 @@ class _Parser:
 
 def _display_token(token: str) -> str:
     if token == "*":
-        return "×"
+        return "\u00d7"
     if token == "/":
-        return "÷"
+        return "\u00f7"
     if token in "+-()":
         return token
     return plain(_number(token))
@@ -221,7 +231,7 @@ def evaluate(expression: str) -> Evaluation:
         raise ArithmeticError("phép tính không thực hiện được") from exc
     if not value.is_finite():
         raise ArithmeticError("kết quả không hữu hạn")
-    # A division's unending expansion (10/60) is cut at 9 places so 13 h 10 × 2 + 11 h 10
+    # A division's unending expansion (10/60) is cut at 9 places so 13 h 10 x 2 + 11 h 10
     # is exactly 37.5, not 37.4999…; the student sees at most 2 decimals anyway.
     value = round_half_up(value, 9)
     shown = " ".join(_display_token(token) for token in tokens)
@@ -248,6 +258,10 @@ def display(value: Decimal, unit: str | None) -> str:
     return text
 
 
+def _short_value(value: Decimal) -> str:
+    return fixed(value, 2).rstrip("0").rstrip(".")
+
+
 def arithmetic_result(
     request: ArithmeticRequest, evaluation: Evaluation, *, source: str
 ) -> CalculationResult:
@@ -269,7 +283,7 @@ def arithmetic_result(
             Step(
                 label=request.label,
                 symbolic=evaluation.expression,
-                substituted=f"{evaluation.expression} = {fixed(evaluation.value, 2).rstrip('0').rstrip('.')}",
+                substituted=f"{evaluation.expression} = {_short_value(evaluation.value)}",
                 value=evaluation.value,
                 display=shown,
             ),

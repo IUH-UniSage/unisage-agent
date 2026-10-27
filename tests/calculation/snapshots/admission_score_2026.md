@@ -17,5 +17,5 @@ Thay số:
 6. Điểm xét tuyển: ĐXT = Max(24.93; 22.25; 24.8) = 24.93 (XT1)
 
 Kết quả: ĐXT **≈ 24.93** / 30 (lấy theo XT1)
-> Đ(Kv;Đt) là điểm ưu tiên khu vực/đối tượng theo quy định của Bộ GD&ĐT (từ 22,5 điểm trở lên mức ưu tiên giảm dần) - nhập mức đã quy đổi; không nêu thì tính 0.
-> ĐC là điểm cộng (điểm thưởng, điểm xét thưởng, điểm khuyến khích); không nêu thì tính 0.
+> Đ(Kv;Đt) là điểm ưu tiên khu vực/đối tượng theo quy định của Bộ GD&ĐT (từ 22,5 điểm trở lên mức ưu tiên giảm dần) - kết quả dùng đúng mức bạn đã nhập.
+> ĐC là điểm cộng (điểm thưởng, điểm xét thưởng, điểm khuyến khích) theo quy định của Trường.
