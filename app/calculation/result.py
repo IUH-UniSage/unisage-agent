@@ -38,6 +38,9 @@ class CalculationResult:
     # document, shown under the formula lines.
     version: str = ""
     source: str = ""
+    # The same formula as display math (one LaTeX expression per line), rendered by the
+    # client with KaTeX inside `$$ … $$`; empty = text lines only.
+    formula_latex: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

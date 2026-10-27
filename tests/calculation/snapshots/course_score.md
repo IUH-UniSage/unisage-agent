@@ -1,6 +1,26 @@
 **Điểm tổng kết học phần (lý thuyết + thực hành)**
 
 Công thức:
+
+$$
+\text{TBtx} = \frac{TX_1 + TX_2 + \dots + TX_n}{n}
+$$
+
+
+$$
+\text{ĐLT} = 0{,}2 \times \text{TBtx} + 0{,}3 \times \text{GK} + 0{,}5 \times \text{CK}
+$$
+
+
+$$
+\text{ĐTH} = \frac{TH_1 + TH_2 + \dots + TH_n}{n}
+$$
+
+
+$$
+\text{ĐTKHP} = \frac{\text{ĐLT} \times \text{TCLT} + \text{ĐTH} \times \text{TCTH}}{\text{TCLT} + \text{TCTH}}
+$$
+
 - Điểm từng cột TX, GK, CK, TH làm tròn đến 0.5 (lẻ dưới 0.25 → 0; từ 0.25 đến dưới 0.75 → 0.5; từ 0.75 → 1)
 - TBtx = (TX1 + TX2 + … + TXn) / n, làm tròn đến 0.1 (hoặc TBtx bạn nhập sẵn)
 - ĐLT = 20% × TBtx + 30% × GK + 50% × CK, làm tròn đến 0.1

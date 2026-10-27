@@ -271,6 +271,13 @@ def grade_conversion(params: Mapping[str, object]) -> CalculationResult:
 # Course score (học phần tích hợp lý thuyết + thực hành)
 # ---------------------------------------------------------------------------
 
+COURSE_SCORE_FORMULA_LATEX = (
+    r"\text{TBtx} = \frac{TX_1 + TX_2 + \dots + TX_n}{n}",
+    r"\text{ĐLT} = 0{,}2 \times \text{TBtx} + 0{,}3 \times \text{GK} + 0{,}5 \times \text{CK}",
+    r"\text{ĐTH} = \frac{TH_1 + TH_2 + \dots + TH_n}{n}",
+    r"\text{ĐTKHP} = \frac{\text{ĐLT} \times \text{TCLT} + \text{ĐTH} \times \text{TCTH}}"
+    r"{\text{TCLT} + \text{TCTH}}",
+)
 COURSE_SCORE_FORMULA_TEXT = (
     "Điểm từng cột TX, GK, CK, TH làm tròn đến 0.5 (lẻ dưới 0.25 → 0; từ 0.25 đến dưới 0.75 → 0.5;"
     " từ 0.75 → 1)",
@@ -487,6 +494,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
         formula_id="course_score",
         title="Điểm tổng kết học phần (lý thuyết + thực hành)",
         formula_text=COURSE_SCORE_FORMULA_TEXT,
+        formula_latex=COURSE_SCORE_FORMULA_LATEX,
         inputs=tuple(inputs),
         steps=tuple(steps),
         outputs=(
@@ -506,6 +514,9 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
 GPA_COURSES_MAX = 30
 COURSE_CREDIT_MIN = 1
 COURSE_CREDIT_MAX = 10
+GPA_FORMULA_LATEX = (
+    r"\text{GPA} = \frac{\sum_i \text{điểm thang 4}_i \times \text{TC}_i}{\sum_i \text{TC}_i}",
+)
 GPA_FORMULA_TEXT = (
     f"Điểm chất lượng của môn = điểm hệ 4 {TIMES} số tín chỉ",
     f"GPA = Σ (điểm hệ 4 {TIMES} số tín chỉ) / Σ số tín chỉ, làm tròn đến 0.01",
@@ -613,6 +624,7 @@ def gpa(params: Mapping[str, object]) -> CalculationResult:
         formula_id="gpa",
         title="Điểm trung bình (GPA) thang 4",
         formula_text=GPA_FORMULA_TEXT,
+        formula_latex=GPA_FORMULA_LATEX,
         inputs=tuple(
             (name, f"{credits} TC, điểm {score_text.split(' → ')[0]}")
             for name, credits, score_text, _ in rows
@@ -635,6 +647,10 @@ TUITION_SCOPES: dict[TuitionScope, str] = {
     "tuition_year": "một năm học",
     "tuition_program": "cả khoá học",
 }
+TUITION_FORMULA_LATEX = (
+    r"\text{Học phí} = \text{TC}_{LT} \times \text{đơn giá}_{LT}"
+    r" + \text{TC}_{TH} \times \text{đơn giá}_{TH}",
+)
 TUITION_FORMULA_TEXT = (
     f"Học phí = TC lý thuyết {TIMES} đơn giá 1 TC lý thuyết"
     f" + TC thực hành {TIMES} đơn giá 1 TC thực hành",
@@ -721,6 +737,7 @@ def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], Calculatio
             formula_id=scope,
             title=title,
             formula_text=TUITION_FORMULA_TEXT,
+            formula_latex=TUITION_FORMULA_LATEX,
             inputs=(
                 ("TC lý thuyết", str(lt)),
                 ("TC thực hành", str(th)),
@@ -1017,6 +1034,14 @@ APTITUDE_SCORE_MAX = Decimal(1200)
 # document (the "30" of "thang điểm 30") is a misread, not a top score.
 APTITUDE_TOP_MIN = Decimal(600)
 BONUS_MAX = Decimal(10)
+ADMISSION_2026_FORMULA_LATEX = (
+    r"\text{ĐĐGNL} = \frac{\text{Kết quả thi ĐGNL} \times 30}{\text{ĐTK}}",
+    r"\text{ĐK} = \max(\text{ĐTN},\ \text{ĐĐGNL})",
+    r"\text{XT1} = 0{,}7 \times \text{ĐK} + 0{,}3 \times \text{ĐHB} + \text{Đ(Kv;Đt)} + \text{ĐC}",
+    r"\text{XT2} = \text{ĐTN} + \text{Đ(Kv;Đt)} + \text{ĐC}",
+    r"\text{XT3} = \text{ĐĐGNL} + \text{Đ(Kv;Đt)} + \text{ĐC}",
+    r"\text{ĐXT} = \max(\text{XT1},\ \text{XT2},\ \text{XT3})",
+)
 ADMISSION_2026_FORMULA_TEXT = (
     f"ĐĐGNL = kết quả thi ĐGNL {TIMES} 30 / ĐTK (ĐTK: điểm thủ khoa kỳ thi ĐGNL năm 2026)",
     "ĐK = Max(ĐTN, ĐĐGNL); ĐTN: tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp xét tuyển",
@@ -1024,6 +1049,12 @@ ADMISSION_2026_FORMULA_TEXT = (
     " ĐHB: tổng điểm học bạ 3 môn trong tổ hợp",
     "XT2 = ĐTN + Đ(Kv;Đt) + ĐC; XT3 = ĐĐGNL + Đ(Kv;Đt) + ĐC",
     "ĐXT = Max(XT1, XT2, XT3), thang điểm 30",
+)
+ADMISSION_2026_FORMULA_NOTES = (
+    "ĐTN: tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp; ĐHB: tổng điểm học bạ 3 môn trong"
+    " tổ hợp; ĐTK: điểm thủ khoa kỳ thi ĐGNL năm 2026; Đ(Kv;Đt): điểm ưu tiên khu vực, đối tượng;"
+    " ĐC: điểm cộng",
+    "Thang điểm 30",
 )
 ADMISSION_2026_WARNINGS = (
     "Đ(Kv;Đt) là điểm ưu tiên khu vực/đối tượng theo quy định của Bộ GD&ĐT (từ 22,5 điểm trở"
@@ -1239,7 +1270,8 @@ def admission_score_2026(params: Mapping[str, object]) -> CalculationResult:
     return CalculationResult(
         formula_id="admission_score_2026",
         title=ADMISSION_2026_TITLE,
-        formula_text=text,
+        formula_text=ADMISSION_2026_FORMULA_NOTES,
+        formula_latex=ADMISSION_2026_FORMULA_LATEX,
         inputs=tuple(inputs),
         steps=tuple(steps),
         outputs=outputs,
@@ -1261,6 +1293,11 @@ TRANSCRIPT_SOURCE = (
 TRANSCRIPT_TITLE = "Điểm xét tuyển học bạ THPT (lớp 10, lớp 11, học kỳ 1 lớp 12)"
 TRANSCRIPT_THRESHOLD = Decimal("19.5")
 TRANSCRIPT_SUBJECTS = (1, 2, 3)
+TRANSCRIPT_FORMULA_LATEX = (
+    r"\text{Điểm môn} = \frac{\text{TB cả năm lớp 10} + \text{TB cả năm lớp 11}"
+    r" + \text{TB HK1 lớp 12}}{3}",
+    r"\text{Tổng} = \text{Môn}_1 + \text{Môn}_2 + \text{Môn}_3 \ \ge\ \text{ngưỡng nhận hồ sơ}",
+)
 TRANSCRIPT_FORMULA_TEXT = (
     "Điểm môn = (TB cả năm lớp 10 + TB cả năm lớp 11 + TB học kỳ 1 lớp 12) / 3",
     "Tổng điểm xét tuyển = điểm môn 1 + điểm môn 2 + điểm môn 3 (tổ hợp 3 môn)",
@@ -1402,6 +1439,7 @@ def transcript_score_3hk(params: Mapping[str, object]) -> CalculationResult:
         formula_id="transcript_score_3hk",
         title=TRANSCRIPT_TITLE,
         formula_text=TRANSCRIPT_FORMULA_TEXT,
+        formula_latex=TRANSCRIPT_FORMULA_LATEX,
         inputs=tuple(inputs),
         steps=tuple(steps),
         outputs=(
@@ -1425,6 +1463,7 @@ WEIGHTED_TITLE = "Điểm học phần theo trọng số đề cương"
 WEIGHTED_COMPONENTS_MAX = 10
 WEIGHT_TOTAL = Decimal(100)
 WEIGHT_TOLERANCE = Decimal("0.5")
+WEIGHTED_FORMULA_LATEX = (r"\text{Điểm học phần} = \sum_{i} \frac{w_i}{100} \times \text{điểm}_i",)
 WEIGHTED_FORMULA_TEXT = (
     f"Điểm học phần = Σ (trọng số i / 100 {TIMES} điểm thành phần i), làm tròn đến 0.1",
     "Điểm thành phần làm tròn theo bước đã nêu (VD 0.5) trước khi nhân trọng số, nếu có",
@@ -1588,6 +1627,7 @@ def weighted_score(params: Mapping[str, object]) -> CalculationResult:
         formula_id="weighted_score",
         title=WEIGHTED_TITLE,
         formula_text=WEIGHTED_FORMULA_TEXT,
+        formula_latex=WEIGHTED_FORMULA_LATEX,
         inputs=tuple(
             (f"TP{i} ({plain(weight)} %)", plain(score))
             for i, (weight, score) in enumerate(zip(weights, given, strict=True), start=1)

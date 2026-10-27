@@ -14,6 +14,10 @@ def render_markdown(result: CalculationResult, *, notice: str | None = None) -> 
     if notice:
         lines += [f"**{notice}**", ""]
     lines += [f"**{result.title}**", "", "Công thức:"]
+    for tex in result.formula_latex:
+        # Each expression is its own display-math block (blank lines around `$$` keep it
+        # out of the surrounding list for every markdown reader).
+        lines += ["", "$$", tex, "$$", ""]
     lines += [f"- {line}" for line in result.formula_text]
     if result.version:
         lines.append(f"- _Phiên bản công thức {result.version} · nguồn: {result.source}_")

@@ -1,11 +1,38 @@
 **Điểm xét tuyển đại học chính quy 2026 (thang 30)**
 
 Công thức:
-- ĐĐGNL = kết quả thi ĐGNL × 30 / ĐTK (ĐTK: điểm thủ khoa kỳ thi ĐGNL năm 2026)
-- ĐK = Max(ĐTN, ĐĐGNL); ĐTN: tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp xét tuyển
-- XT1 = 0.7 × ĐK + 0.3 × ĐHB + Đ(Kv;Đt) + ĐC; ĐHB: tổng điểm học bạ 3 môn trong tổ hợp
-- XT2 = ĐTN + Đ(Kv;Đt) + ĐC; XT3 = ĐĐGNL + Đ(Kv;Đt) + ĐC
-- ĐXT = Max(XT1, XT2, XT3), thang điểm 30
+
+$$
+\text{ĐĐGNL} = \frac{\text{Kết quả thi ĐGNL} \times 30}{\text{ĐTK}}
+$$
+
+
+$$
+\text{ĐK} = \max(\text{ĐTN},\ \text{ĐĐGNL})
+$$
+
+
+$$
+\text{XT1} = 0{,}7 \times \text{ĐK} + 0{,}3 \times \text{ĐHB} + \text{Đ(Kv;Đt)} + \text{ĐC}
+$$
+
+
+$$
+\text{XT2} = \text{ĐTN} + \text{Đ(Kv;Đt)} + \text{ĐC}
+$$
+
+
+$$
+\text{XT3} = \text{ĐĐGNL} + \text{Đ(Kv;Đt)} + \text{ĐC}
+$$
+
+
+$$
+\text{ĐXT} = \max(\text{XT1},\ \text{XT2},\ \text{XT3})
+$$
+
+- ĐTN: tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp; ĐHB: tổng điểm học bạ 3 môn trong tổ hợp; ĐTK: điểm thủ khoa kỳ thi ĐGNL năm 2026; Đ(Kv;Đt): điểm ưu tiên khu vực, đối tượng; ĐC: điểm cộng
+- Thang điểm 30
 - _Phiên bản công thức 2026.1 · nguồn: Công thức tính điểm xét tuyển đại học chính quy năm 2026 của Trường_
 
 Thay số:

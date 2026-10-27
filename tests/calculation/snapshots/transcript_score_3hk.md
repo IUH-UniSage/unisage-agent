@@ -1,6 +1,16 @@
 **Điểm xét tuyển học bạ THPT (lớp 10, lớp 11, học kỳ 1 lớp 12)**
 
 Công thức:
+
+$$
+\text{Điểm môn} = \frac{\text{TB cả năm lớp 10} + \text{TB cả năm lớp 11} + \text{TB HK1 lớp 12}}{3}
+$$
+
+
+$$
+\text{Tổng} = \text{Môn}_1 + \text{Môn}_2 + \text{Môn}_3 \ \ge\ \text{ngưỡng nhận hồ sơ}
+$$
+
 - Điểm môn = (TB cả năm lớp 10 + TB cả năm lớp 11 + TB học kỳ 1 lớp 12) / 3
 - Tổng điểm xét tuyển = điểm môn 1 + điểm môn 2 + điểm môn 3 (tổ hợp 3 môn)
 - Ngưỡng nhận hồ sơ: tổng 3 môn tối thiểu 19.50 (theo bản mô tả CTĐT 2020)

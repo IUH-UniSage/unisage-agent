@@ -1,6 +1,11 @@
 **Điểm học phần theo trọng số đề cương**
 
 Công thức:
+
+$$
+\text{Điểm học phần} = \sum_{i} \frac{w_i}{100} \times \text{điểm}_i
+$$
+
 - Điểm học phần = Σ (trọng số i / 100 × điểm thành phần i), làm tròn đến 0.1
 - Điểm thành phần làm tròn theo bước đã nêu (VD 0.5) trước khi nhân trọng số, nếu có
 - Điểm chữ và thang 4 theo bảng quy đổi của Trường

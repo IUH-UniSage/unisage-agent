@@ -58,3 +58,11 @@ def test_notice_comes_first() -> None:
         calculate("grade_conversion", {"score10": 7}), notice="Kết quả tham khảo theo quy chế"
     )
     assert rendered.startswith("**Kết quả tham khảo theo quy chế**\n\n**Quy đổi")
+
+
+def test_formula_latex_is_rendered_as_display_math_blocks() -> None:
+    rendered = render_markdown(calculate("admission_score_2026", CASES["admission_score_2026"]))
+    assert "\n$$\n\\text{ĐXT} = \\max(\\text{XT1},\\ \\text{XT2},\\ \\text{XT3})\n$$\n" in rendered
+    assert rendered.index("$$") < rendered.index("- ĐTN: tổng điểm 3 môn")
+    # A formula without LaTeX keeps its text lines only.
+    assert "$$" not in render_markdown(calculate("grade_conversion", {"score10": 8}))

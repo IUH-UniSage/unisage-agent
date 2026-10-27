@@ -1,6 +1,11 @@
 **Điểm trung bình (GPA) thang 4**
 
 Công thức:
+
+$$
+\text{GPA} = \frac{\sum_i \text{điểm thang 4}_i \times \text{TC}_i}{\sum_i \text{TC}_i}
+$$
+
 - Điểm chất lượng của môn = điểm hệ 4 × số tín chỉ
 - GPA = Σ (điểm hệ 4 × số tín chỉ) / Σ số tín chỉ, làm tròn đến 0.01
 - _Phiên bản công thức 1 · nguồn: Quy chế đào tạo đại học chính quy theo tín chỉ của Trường (điểm học phần, GPA, quy đổi điểm; quy tắc chốt 09/10/2026)_
