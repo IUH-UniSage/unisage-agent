@@ -5,8 +5,6 @@ Công thức:
 $$
 \text{Điểm môn} = \frac{\text{TB cả năm lớp 10} + \text{TB cả năm lớp 11} + \text{TB HK1 lớp 12}}{3}
 $$
-
-
 $$
 \text{Tổng} = \text{Môn}_1 + \text{Môn}_2 + \text{Môn}_3 \ \ge\ \text{ngưỡng nhận hồ sơ}
 $$

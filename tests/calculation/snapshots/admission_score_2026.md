@@ -5,28 +5,18 @@ Công thức:
 $$
 \text{ĐĐGNL} = \frac{\text{Kết quả thi ĐGNL} \times 30}{\text{ĐTK}}
 $$
-
-
 $$
 \text{ĐK} = \max(\text{ĐTN},\ \text{ĐĐGNL})
 $$
-
-
 $$
 \text{XT1} = 0{,}7 \times \text{ĐK} + 0{,}3 \times \text{ĐHB} + \text{Đ(Kv;Đt)} + \text{ĐC}
 $$
-
-
 $$
 \text{XT2} = \text{ĐTN} + \text{Đ(Kv;Đt)} + \text{ĐC}
 $$
-
-
 $$
 \text{XT3} = \text{ĐĐGNL} + \text{Đ(Kv;Đt)} + \text{ĐC}
 $$
-
-
 $$
 \text{ĐXT} = \max(\text{XT1},\ \text{XT2},\ \text{XT3})
 $$

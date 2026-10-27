@@ -5,18 +5,12 @@ Công thức:
 $$
 \text{TBtx} = \frac{TX_1 + TX_2 + \dots + TX_n}{n}
 $$
-
-
 $$
 \text{ĐLT} = 0{,}2 \times \text{TBtx} + 0{,}3 \times \text{GK} + 0{,}5 \times \text{CK}
 $$
-
-
 $$
 \text{ĐTH} = \frac{TH_1 + TH_2 + \dots + TH_n}{n}
 $$
-
-
 $$
 \text{ĐTKHP} = \frac{\text{ĐLT} \times \text{TCLT} + \text{ĐTH} \times \text{TCTH}}{\text{TCLT} + \text{TCTH}}
 $$
