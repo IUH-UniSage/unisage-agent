@@ -1070,6 +1070,8 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
                 "Đại học chính quy (chương trình chuẩn)",
                 "Đại học chính quy tăng cường tiếng Anh",
                 "Đại học liên thông, văn bằng 2",
+                "Cao học",
+                "Nghiên cứu sinh",
             ),
         ),
         ParamSpec(

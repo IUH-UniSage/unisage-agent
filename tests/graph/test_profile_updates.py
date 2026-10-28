@@ -246,6 +246,84 @@ async def test_a_follow_up_after_a_correction_recomputes_with_the_new_intake() -
 
 
 @pytest.mark.asyncio
+async def test_a_corrected_training_type_reprices_the_tuition_instead_of_reusing_old_prices() -> (
+    None
+):
+    """28/10/2026: "tôi nhầm, tôi học cao học" after a tuition result must save the new
+    training type and look the prices up again for that row - the previous turn's prices
+    belonged to the undergraduate row."""
+
+    previous = LastCalculation(
+        plan=CalculationPlan(formula_id="tuition_semester"),
+        params={
+            "tc_lt": 12,
+            "tc_th": 4,
+            "don_gia_lt": 930000,
+            "don_gia_th": 980000,
+            "khoa_nhap_hoc": "2025-2026",
+            "khoi_nganh": "Khối Công nghệ",
+            "he_dao_tao": "Đại học chính quy",
+        },
+        title="Học phí một học kỳ",
+    )
+    result = await run_graph(
+        _input(
+            "tôi nhầm, tôi học cao học",
+            confirmed_metadata={"khoa_nhap_hoc": "2025", "khoi_nganh": "Khối Công nghệ"},
+            recent_calculations=[previous],
+        ),
+        _tuition_models(
+            {
+                "tasks": [
+                    {"intent": "academic_calculation", "query": "Tính lại học phí, hệ Cao học"}
+                ],
+                "metadata_updates": {"he_dao_tao": "Cao học"},
+            },
+            {"formula_id": "previous", "params": {"he_dao_tao": "Cao học"}},
+            _PRICES_FOUND,
+            chunks=[_FEE_TABLE],
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert result.confirmed_metadata["he_dao_tao"] == "Cao học"
+    assert result.last_calculation is not None
+    params = result.last_calculation.params
+    assert params["he_dao_tao"] == "Cao học"
+    # Read again for the new row (the lookup answered 980.000 / 1.600.000), not reused.
+    assert (params["don_gia_lt"], params["don_gia_th"]) == (980000, 1600000)
+
+
+def test_a_row_selector_written_differently_is_the_same_row() -> None:
+    from pydantic import JsonValue
+
+    from app.graph.nodes.calculation import drop_stale_lookups
+
+    earlier: dict[str, JsonValue] = {
+        "khoa_nhap_hoc": "2025-2026",
+        "khoi_nganh": "Khối Công nghệ",
+        "don_gia_lt": 1,
+    }
+    same = drop_stale_lookups(
+        "tuition_semester", earlier, {**earlier, "khoa_nhap_hoc": "2025"}, keep=set()
+    )
+    assert same["don_gia_lt"] == 1
+    other = drop_stale_lookups(
+        "tuition_semester", earlier, {**earlier, "khoi_nganh": "Khối Kinh tế"}, keep=set()
+    )
+    assert "don_gia_lt" not in other
+    typed = drop_stale_lookups(
+        "tuition_semester",
+        earlier,
+        {**earlier, "khoi_nganh": "Khối Kinh tế"},
+        keep={"don_gia_lt"},
+    )
+    assert typed["don_gia_lt"] == 1  # the student gave it this turn
+
+
+@pytest.mark.asyncio
 async def test_a_lecturer_declaring_their_own_degree_is_saved_like_a_student() -> None:
     """The profile is the caller's own, whatever the role: "tôi là tiến sĩ" picks the
     branch of a lecturer's own regulation next time."""

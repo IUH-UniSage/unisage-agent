@@ -56,6 +56,10 @@ template: |
   <previous_calculation>{"formula_id": "previous", "formula": "Học phí một học kỳ", "params": {"tc_lt": 12, "tc_th": 4, "don_gia_lt": 930000, "don_gia_th": 980000, "khoa_nhap_hoc": "2025-2026"}}</previous_calculation>
   {"formula_id": "previous", "params": {"gom_qpan": "có"}, "solve_for": null, "target": null, "retrieval_query": null}
 
+  User: "tôi nhầm, tôi học cao học"
+  <previous_calculation>{"formula_id": "previous", "formula": "Học phí một học kỳ", "params": {"tc_lt": 12, "tc_th": 4, "don_gia_lt": 930000, "don_gia_th": 980000, "khoa_nhap_hoc": "2024-2025", "khoi_nganh": "Khối Kinh tế", "he_dao_tao": "Đại học chính quy"}}</previous_calculation>
+  {"formula_id": "previous", "params": {"he_dao_tao": "Cao học"}, "solve_for": null, "target": null, "retrieval_query": null}
+
   User: "Đăng ký tối đa mấy tín lý thuyết để học phí kỳ này không quá 8 triệu? Kỳ này em không có môn thực hành"
   {"formula_id": "tuition_semester", "params": {"tc_th": 0}, "solve_for": "tc_lt", "target": {"output": "hoc_phi", "op": "<=", "value": 8000000}, "retrieval_query": null}
 

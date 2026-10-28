@@ -122,6 +122,8 @@ async def test_a_price_is_never_read_for_an_assumed_row() -> None:
         "Đại học chính quy (chương trình chuẩn)",
         "Đại học chính quy tăng cường tiếng Anh",
         "Đại học liên thông, văn bằng 2",
+        "Cao học",
+        "Nghiên cứu sinh",
     ]
 
 
@@ -270,5 +272,6 @@ async def test_training_type_choices_keep_the_fee_schedule_sections() -> None:
         "Đại học chính quy (chương trình chuẩn)",
         "Đại học chính quy tăng cường tiếng Anh",
         "Đại học liên thông, văn bằng 2",
-        "Cao học",
+        "Cao học",  # the document's "Cao học" repeats this one: listed once
+        "Nghiên cứu sinh",
     ]

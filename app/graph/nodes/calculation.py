@@ -949,12 +949,50 @@ async def plan_calculation(task_id: str, query: str, deps: CalculationDeps) -> P
     # gave, even when the router picked another formula.
     assert formula_id is not None
     reusable = previous is not None and previous_formula(previous) is not None
+    earlier = _builtin_params(formula_id, previous.params) if reusable and previous else {}
     params = {
-        **(_builtin_params(formula_id, previous.params) if reusable and previous else {}),
+        **earlier,
         **profile_params(formula_id, deps.confirmed_metadata),
         **extraction.params,
     }
+    params = drop_stale_lookups(formula_id, earlier, params, keep=set(extraction.params))
     return PlannedTask(task_id, query, formula_id, params, extraction.unknown, extraction.target)
+
+
+def drop_stale_lookups(
+    formula_id: FormulaId,
+    earlier: Mapping[str, JsonValue],
+    params: Mapping[str, JsonValue],
+    *,
+    keep: set[str],
+) -> dict[str, JsonValue]:
+    """A follow-up that changes the row a value was read for ("tôi nhầm, tôi học cao
+    học", another intake or faculty group) must not reuse that value: the unit prices of
+    the old row are dropped and looked up again for the new one. A value the student
+    gave this turn (`keep`) stays."""
+
+    result = dict(params)
+    for spec in FORMULAS[formula_id].params:
+        if not spec.selected_by or spec.name in keep or spec.name not in result:
+            continue
+        changed = any(
+            _row_text(name, earlier.get(name)) != _row_text(name, result.get(name))
+            for name in spec.selected_by
+            if earlier.get(name) is not None
+        )
+        if changed:
+            del result[spec.name]
+    return result
+
+
+def _row_text(name: str, value: object) -> str:
+    """A row selector as compared across turns: the intake by its year ("2025-2026" from a
+    panel and "2025" from the profile are the same row), anything else as folded text."""
+
+    text = " ".join(str(value or "").split()).casefold()
+    if name == "khoa_nhap_hoc" and (year := re.search(r"20\d{2}", text)):
+        return year.group(0)
+    return text
 
 
 def _plan_arithmetic(
