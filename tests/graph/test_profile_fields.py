@@ -39,7 +39,12 @@ from tests.graph.test_calculation_node import (
     _usage_recorder,
 )
 
-_PROFILE = {"khoa_nhap_hoc": "2022", "khoi_nganh": "Khối Công nghệ", "nganh_hoc": "CNTT"}
+_PROFILE = {
+    "khoa_nhap_hoc": "2022",
+    "khoi_nganh": "Khối Công nghệ",
+    "he_dao_tao": "Đại học chính quy",
+    "nganh_hoc": "CNTT",
+}
 _PRICES = {
     "values": {
         "don_gia_lt": {"value": 980000, "chunk": 1},
@@ -115,6 +120,7 @@ def test_profile_params_are_only_the_formulas_profile_scoped_ones() -> None:
     assert profile_params("tuition_semester", _PROFILE) == {
         "khoa_nhap_hoc": "2022",
         "khoi_nganh": "Khối Công nghệ",
+        "he_dao_tao": "Đại học chính quy",
     }
     assert profile_params("grade_conversion", _PROFILE) == {}
 

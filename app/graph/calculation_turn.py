@@ -20,7 +20,8 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
-from app.calculation.render import render_markdown
+from app.calculation.formulas import FORMULAS
+from app.calculation.render import formula_lines, render_markdown
 from app.calculation.result import CalculationResult
 from app.core.config import settings
 from app.graph.clarification_round import TaskQuestions
@@ -33,6 +34,7 @@ from app.graph.nodes.calculation import (
     TaskOutcome,
     Unresolved,
     load_json_object,
+    registry_id,
 )
 from app.graph.streaming import generation_model_settings, run_agent_text_with_failover
 from app.rag.prompting import build_calculation_review_prompt, get_templates
@@ -90,9 +92,31 @@ def number_citations(
     return numbered, citations
 
 
+def formula_preview(outcome: NeedsInput) -> str:
+    """The formula a task will compute, shown before its inputs are asked so the student
+    sees why each one is needed; "" for a formula without a preview."""
+
+    formula_id = registry_id(outcome.plan.formula_id)
+    formula = FORMULAS[formula_id] if formula_id else None
+    if formula is None or formula.preview is None:
+        return ""
+    latex, text = formula.preview(outcome.known_params)
+    return "\n".join(
+        formula_lines(
+            formula.title,
+            latex,
+            text,
+            version=formula.version,
+            source=formula.source,
+            source_url=formula.source_url,
+        )
+    )
+
+
 def render_outcome(outcome: TaskOutcome) -> str:
-    """Markdown for one task; a task that needs input is asked on the panel (only its
-    own lead, if any, is shown here)."""
+    """Markdown for one task; a task that needs input is asked on the panel. Above the
+    panel: its formula when the formula has a preview, then its own lead (else the
+    generic one)."""
 
     if isinstance(outcome, Computed):
         rendered = render_markdown(outcome.result)
@@ -102,6 +126,9 @@ def render_outcome(outcome: TaskOutcome) -> str:
         return f"{rendered}\n\nSố liệu lấy từ tài liệu:\n{lines}"
     if isinstance(outcome, Unresolved):
         return UNRESOLVED_MESSAGES[outcome.reason]
+    preview = formula_preview(outcome)
+    if preview:
+        return f"{preview}\n\n{outcome.lead or NEEDS_INPUT_LEAD}"
     return outcome.lead or ""
 
 

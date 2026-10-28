@@ -8,7 +8,7 @@ $$
 
 - Học phí = TC lý thuyết × đơn giá 1 TC lý thuyết + TC thực hành × đơn giá 1 TC thực hành
 - Đơn giá theo khoá tuyển sinh và giữ nguyên suốt khoá học; chỉ khoá mới có đơn giá khác
-- _Phiên bản công thức 1 · nguồn: Quyết định mức thu học phí theo năm học của Trường (biểu phí theo khoá, khối ngành)_
+- _Phiên bản công thức 2 · nguồn: Quyết định mức thu học phí theo năm học của Trường (biểu phí theo khoá, khối ngành)_
 
 Thay số:
 1. Học phí lý thuyết: 100 × 980.000 đồng = 98.000.000 đồng
