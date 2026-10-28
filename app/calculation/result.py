@@ -38,6 +38,8 @@ class CalculationResult:
     # document, shown under the formula lines.
     version: str = ""
     source: str = ""
+    # Link to the source document; set = the source name renders as a hyperlink.
+    source_url: str = ""
     # The same formula as display math (one LaTeX expression per line), rendered by the
     # client with KaTeX inside `$$ … $$`; empty = text lines only.
     formula_latex: tuple[str, ...] = ()
