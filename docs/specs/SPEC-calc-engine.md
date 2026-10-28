@@ -8,33 +8,124 @@ Thuần Python: không gọi LLM, không I/O, không phụ thuộc graph. Graph 
 
 ## Objective
 
-Tính đúng và **giải thích được** phép tính XUÔI của các công thức cài sẵn (`formulas.py`):
-`course_score`, `grade_conversion`, `gpa` và học phí `tuition_semester` / `tuition_year` /
-`tuition_program` (thêm 13-10-2026). Mỗi kết quả kèm công thức và từng bước đã thế số, để sinh viên tự
+Tính đúng và **giải thích được** mọi phép tính của **registry công thức** (`formulas.py`), xuôi và
+ngược: `course_score`, `grade_conversion`, `gpa`, học phí `tuition_semester` / `tuition_year` /
+`tuition_program` (13-10-2026), và từ 26-10-2026 `admission_score_2026`, `transcript_score_3hk`,
+`weighted_score`. Mỗi kết quả kèm công thức, phiên bản + nguồn, và từng bước đã thế số, để sinh viên tự
 đối chiếu. Module này không trích nguồn; số liệu học phí lấy từ tài liệu được `calculation-node` trích
 dẫn.
 
-Mọi phép tính khác (câu hỏi ngược, công thức trong tài liệu Qdrant) do LLM tự tính ở `calculation-node`
-(chốt 09-10-2026). Module này chỉ cung cấp cho LLM bản mô tả đầy đủ các quy tắc
-(`describe_builtin_rules()`: trọng số, mọi bước làm tròn, bảng quy đổi) để nó tính ngược đúng quy tắc.
+Tính ngược (`solver.py`, 26-10-2026): tìm một tham số để một đầu ra đạt mục tiêu bằng cách chạy chính
+công thức xuôi trên lưới của tham số đó. Không có LLM nào tính nhẩm nữa (`describe_builtin_rules()` giữ
+lại cho tài liệu/prompt khi cần).
 
 ## Project Structure
 
 ```
 app/calculation/
 ├── __init__.py
-├── formulas.py     # TOÀN BỘ business rule: bảng quy đổi, làm tròn, 3 công thức, ParamSpec, BUILTIN_TRIGGERS (router luật)
-├── result.py       # CalculationResult, Step, CalculationInputError (dataclass, frozen)
-└── render.py       # CalculationResult -> markdown (deterministic, không LLM)
+├── formulas.py     # TOÀN BỘ business rule: bảng quy đổi, làm tròn, 9 công thức, ParamSpec, OutputSpec,
+│                   # Formula (version, source, rounding_of), FORMULAS (registry), BUILTIN_TRIGGERS (router luật)
+├── solver.py       # tính ngược: Unknown, Target, solve/solved_result trên lưới của tham số
+├── arithmetic.py   # số học thuần: parser whitelist + - × ÷, evaluate, arithmetic_result
+├── result.py       # CalculationResult (values, version, source), Step, CalculationInputError (dataclass, frozen)
+└── render.py       # CalculationResult -> markdown (deterministic, không LLM), dòng phiên bản + nguồn
 tests/calculation/
 ├── test_formulas.py
-└── test_render.py
+├── test_solver.py
+├── test_builtin_triggers.py
+└── test_render.py  (+ snapshots/)
 ```
 
 Mọi hằng số nghiệp vụ (bảng điểm, trọng số 20/30/50, số chữ số làm tròn, giới hạn input) chỉ được
 khai báo trong `formulas.py`. Các file khác import từ đó.
 
-## Business contract: 3 công thức cài sẵn
+## Registry công thức có version (26-10-2026)
+
+```python
+@dataclass(frozen=True)
+class OutputSpec:   key: str; label: str; money: bool = False      # đầu ra làm mục tiêu khi tính ngược
+@dataclass(frozen=True)
+class Formula:
+    formula_id: FormulaId
+    version: str      # "<năm văn bản>.<lần sửa>" khi gắn với một văn bản ("2026.1"), "1", "2"... cho quy tắc chung
+    source: str       # văn bản gốc, hiện dưới công thức và trong trace staff
+    title, description, params: tuple[ParamSpec, ...], outputs: tuple[OutputSpec, ...]
+    compute: Callable[[Mapping], CalculationResult]
+    rounding_of: Callable[[Mapping, str], Decimal | None] | None   # bước làm tròn công thức áp cho một tham số (CK: 0,5)
+```
+
+`calculate()` đóng dấu `version`/`source` lên kết quả; `CalculationResult.values` giữ giá trị số của
+từng đầu ra (solver và trace dùng). Đổi quy tắc của một công thức = tăng `version` (và ghi vào Decisions);
+công thức gắn với văn bản mới (biểu điểm xét tuyển năm khác) = id mới (`admission_score_2027`), không ghi
+đè. Danh sách cho prompt render từ registry (`describe_builtin_formulas()`, `describe_registry()`).
+
+| formula_id | version | nguồn | tham số | đầu ra (`values`) |
+|---|---|---|---|---|
+| `course_score` | 1 | quy chế đào tạo (quy tắc chốt 09/10/2026) | tclt, tcth, tbtx, gk, ck, th | dtkhp, thang4 |
+| `gpa` | 1 | quy chế đào tạo | courses | gpa, tong_tin_chi |
+| `grade_conversion` | 1 | quy chế đào tạo | score10 | diem10, thang4 |
+| `tuition_semester/_year/_program` | 1 | quyết định mức thu học phí | tc_lt, tc_th, don_gia_lt, don_gia_th (+ khoa_nhap_hoc, khoi_nganh, pham_vi) | hoc_phi (money) |
+| `admission_score_2026` | 2026.1 | Công thức tính điểm xét tuyển ĐHCQ 2026 | dtn, dhb, dgnl?, dtk (khi có dgnl), uu_tien = 0, diem_cong = 0 | ddgnl, dk, xt1, xt2, xt3, dxt |
+| `transcript_score_3hk` | 2020.1 | Bản mô tả CTĐT Kiểm toán 2020 §4.1 | mon1..3 (tên), m{i}_10, m{i}_11, m{i}_12, nguong = 19,5 | mon1..3, tong |
+| `weighted_score` | 1 | trọng số đề cương học phần | trong_so (list %), diem (list), lam_tron_thanh_phan? | diem_hp, thang4 |
+| `date_span` | 1 | cách đếm ngày theo lịch | tu_ngay, den_ngay (dd/mm/yyyy), cong_them_nam? (hạn N năm) | so_ngay, ca_hai_dau |
+| `time_span` | 1 | cộng khoảng giờ theo đồng hồ | khoang_gio ("hh:mm-hh:mm; ...") | tong_gio, tong_phut |
+
+### `admission_score_2026`
+
+ĐĐGNL = ĐGNL × 30 / ĐTK; ĐK = Max(ĐTN, ĐĐGNL); XT1 = 0,7 × ĐK + 0,3 × ĐHB + Đ(Kv;Đt) + ĐC;
+XT2 = ĐTN + Đ(Kv;Đt) + ĐC; XT3 = ĐĐGNL + Đ(Kv;Đt) + ĐC; ĐXT = Max(XT1, XT2, XT3). Văn bản không nêu làm
+tròn → giữ giá trị chính xác, hiển thị ≤ 2 chữ số (`fmt`). ĐTN/ĐHB ∈ [0; 30]; ĐGNL ∈ [0; 1200] và ≤ ĐTK;
+ĐTK chỉ cần khi có ĐGNL. Ưu tiên/điểm cộng không nêu → 0, có dòng cảnh báo (mức ưu tiên từ 22,5 điểm
+giảm dần theo quy định Bộ: người dùng nhập mức đã quy đổi - không có công thức của Bộ trong KB).
+
+### `transcript_score_3hk`
+
+Điểm môn = (TB cả năm lớp 10 + TB cả năm lớp 11 + TB HK1 lớp 12) / 3 (chính xác, không làm tròn);
+tổng 3 môn so với ngưỡng (mặc định 19,5 theo CTĐT Kiểm toán 2020); dòng kết quả nói đủ/chưa đủ điều kiện.
+
+### `weighted_score`
+
+Điểm = Σ (trọng số_i / 100 × điểm_i), làm tròn 0,1, rồi điểm chữ/thang 4 theo `GRADE_SCALE`. Trọng số
+nhận % hoặc phân số (tổng ≈ 1), tổng phải bằng 100 % (±0,5). `lam_tron_thanh_phan` (VD 0,5) làm tròn
+từng điểm thành phần trước khi nhân, như quy chế làm tròn điểm thi; solver tìm điểm thành phần theo bước
+này. Đây là công thức "theo số liệu người dùng/đề cương nêu", không phải quy định riêng của Trường.
+
+## Tính ngược (`solver.py`, 26-10-2026)
+
+```python
+Unknown(name, index | None)        # "ck", hoặc "diem[4]" = vị trí 4 (1-based) của danh sách
+Target(output, op ∈ {">=", "<=", "=="}, value: Decimal)   # điểm chữ → ngưỡng thang 10 (dtkhp/diem10/diem_hp) hoặc thang 4
+solve(formula_id, params, unknown, target) -> Solution(value | None, result, output, checked, maximum)
+solved_result(...) -> CalculationResult
+```
+
+- Lưới: `[ParamSpec.min; max]` theo bước = max(`ParamSpec.step`, `Formula.rounding_of(params, name)`):
+  điểm CK/GK/TH và cột TX của `course_score` tìm theo 0,5; `diem` của `weighted_score` theo
+  `lam_tron_thanh_phan`. Vùng hợp lệ (công thức từ chối một đầu: 0 tín chỉ, ĐGNL > ĐTK) tìm bằng nhị
+  phân; cả hai đầu bị từ chối → lỗi của các tham số khác được ném ra.
+- Chiều đo bằng hai đầu lưới (không giả định); mọi công thức registry đơn điệu theo từng tham số số.
+  `>=`/`<=` → giá trị nhỏ nhất (điểm cần đạt) hoặc lớn nhất (tín chỉ tối đa) thoả mục tiêu; `==` tìm như
+  `>=` rồi kiểm tra bằng.
+- Kết quả: tiêu đề "<tham số> tối thiểu/tối đa để <đầu ra> ≥ <mốc>", bước "Giá trị cần tìm", các bước
+  xuôi tại nghiệm, bước "Kiểm tra" (nghiệm → đạt; giá trị liền kề → không đạt, hiện 4 chữ số khi 2 chữ số
+  trông bằng nhau), `outputs` có thêm nghiệm, `values["nghiem"]`. Không có nghiệm → tiêu đề không có
+  "tối thiểu", dòng kết quả nêu giá trị biên, cảnh báo "Mục tiêu không đạt được".
+
+## Số học thuần (`arithmetic.py`, 26-10-2026)
+
+Năng lực riêng, độc lập với registry và advisory (chính sách 3 mức: A số học thuần trên số người dùng
+nêu → code tính; B phép tính phụ thuộc quy định → công thức registry hoặc hỏi lại; C công thức nghiệp vụ
+chưa cài → chỉ trích dẫn). `evaluate(expression)`: tokenizer + parser đệ quy, whitelist số (dấu chấm
+thập phân; "1.200.000" đọc là hàng nghìn), `+ - × ÷`, ngoặc; không `eval`/`ast`; `Decimal`; giới hạn 200
+ký tự, 20 số hạng, 8 tầng ngoặc; chia 0 và ký tự lạ bị từ chối (`ArithmeticError`); phép chia dài cắt ở
+9 chữ số. `arithmetic_result(request, evaluation, source)` → `CalculationResult` (formula_id
+`arithmetic`, version 1, một dòng thay số, đơn vị: tiền hiện bằng đồng, giờ lẻ kèm "giờ phút"). Ai được
+yêu cầu và số hạng có căn cứ hay không do bên gọi quyết định (`calculation-node`: số trong câu hỏi;
+`app/graph/calc_requests.py`: số trong câu hỏi hoặc chunk được dẫn) - grounding không cấp quyền tính.
+
+## Business contract: 3 công thức cài sẵn ban đầu
 
 ### Quy tắc chung
 
@@ -204,9 +295,9 @@ dòng kết quả (`CalculationResult.summary`), ví dụ
 
 ## Code Style
 
-Theo `AGENTS.md`: Python 3.12, type hint đầy đủ, dataclass frozen, không thêm abstraction (không
-registry/plugin). Ba công thức là ba hàm thường, được dispatch bằng một `dict[str, ...]` trong
-`formulas.py`.
+Theo `AGENTS.md`: Python 3.12, type hint đầy đủ, dataclass frozen. Mỗi công thức là một hàm thường;
+`FORMULAS: dict[FormulaId, Formula]` trong `formulas.py` là registry duy nhất (không plugin, không
+nạp động).
 
 ```python
 def course_score(params: CourseScoreParams) -> CalculationResult:
@@ -229,7 +320,10 @@ Dùng pytest, đặt trong `tests/calculation/`, không mock gì vì module là 
   chỉ lý thuyết, chỉ thực hành, tổng tín chỉ bằng 0, điểm 10.01, tín chỉ 1.5.
 - **GPA:** có môn F, nhập điểm chữ lẫn điểm số, 1 môn, 30 môn, 31 môn bị từ chối.
 - **`missing_params`:** đúng thứ tự, `th` chỉ bắt buộc khi `tcth > 0`.
-- **Render:** snapshot markdown của 3 công thức cài sẵn.
+- **Render:** snapshot markdown của 7 công thức (`tests/calculation/snapshots/`).
+- **Solver** (`test_solver.py`): d0308 (ĐHB ≥ 25,5), d0309 (HK1 Lý = 5,5), d0311 (cuối kỳ 9,5 theo bước
+  0,5), d0313 (7,1 vì 6,95 → 7,0), CK = 10 để A+, 8 tín chỉ tối đa dưới 8 triệu, ĐTK tối đa 1080 (tham số
+  giảm), `==`, không đạt được, lỗi tham số khác được ném ra, ẩn số phải là số.
 
 ## Boundaries
 
@@ -238,7 +332,8 @@ Dùng pytest, đặt trong `tests/calculation/`, không mock gì vì module là 
 - **Ask first:** đổi bảng quy đổi, đổi trọng số 20/30/50, đổi số chữ số làm tròn (đây là thay đổi
   nghiệp vụ, không phải refactor).
 - **Never:** dùng `eval`/`exec`/`compile` lên chuỗi từ LLM; dùng `float` trong phép tính; để LLM tính
-  thay Python phép tính xuôi của 3 công thức cài sẵn.
+  thay Python bất kỳ phép tính nào (xuôi hay ngược) của công thức registry; sửa quy tắc một công thức mà
+  không tăng `version`.
 
 ## Success Criteria
 
@@ -252,3 +347,5 @@ Dùng pytest, đặt trong `tests/calculation/`, không mock gì vì module là 
 - GPA không tự loại môn nào (GDTC, GDQP...); sinh viên tự chọn môn đưa vào bảng.
 - Bỏ `expression.py` (evaluator công thức Qdrant) và bộ giải ngược `solver.py`/`target.py`: phần đó giao
   cho LLM tự tính (nhãn "AI tự tính, có thể sai" + nút Đúng/Sai), xem SPEC-calculation-node.
+- (26-10-2026) Quay lại Python cho tính ngược, nhưng bằng tìm nghiệm trên lưới với chính công thức xuôi
+  (không evaluator biểu thức, không chép công thức Qdrant); registry có version/nguồn; thêm 3 công thức.

@@ -4,6 +4,7 @@ import pytest
 
 from app.calculation import formulas
 from app.calculation.formulas import (
+    calculate,
     course_score,
     fmt,
     grade_band,
@@ -426,3 +427,197 @@ def test_parse_money_refuses_shorthand_instead_of_misreading_it(raw: str) -> Non
     errors: list[formulas.FieldError] = []
     assert formulas.parse_money(raw, "x", errors) is None
     assert [error.field for error in errors] == ["x"]
+
+
+# --- admission score 2026 ------------------------------------------------------
+
+
+def test_admission_2026_without_aptitude_result_matches_the_published_example() -> None:
+    # d0307: ĐTN 24, ĐHB 27, ưu tiên 0,5 → XT1 25,4; XT2 24,5; ĐXT 25,4.
+    result = calculate("admission_score_2026", {"dtn": 24, "dhb": 27, "uu_tien": 0.5})
+    assert result.values["xt1"] == Decimal("25.4")
+    assert result.values["xt2"] == Decimal("24.5")
+    assert result.values["dxt"] == Decimal("25.4")
+    assert "xt3" not in result.values
+    assert dict(result.outputs)["ĐXT"] == "25.4"
+    assert result.version == "2026.1" and "2026" in result.source
+
+
+def test_admission_2026_converts_the_aptitude_score_to_30_before_anything_else() -> None:
+    result = calculate(
+        "admission_score_2026", {"dtn": 22, "dgnl": 990, "dtk": 1100, "dhb": 25, "diem_cong": 0.5}
+    )
+    assert result.values["ddgnl"] == Decimal("27")  # 990 * 30 / 1100
+    assert result.values["dk"] == Decimal("27")  # Max(22, 27)
+    assert result.values["xt1"] == Decimal("0.7") * 27 + Decimal("0.3") * 25 + Decimal("0.5")
+    assert result.values["xt3"] == Decimal("27.5")
+    assert result.values["dxt"] == max(result.values["xt1"], Decimal("22.5"), Decimal("27.5"))
+    assert result.steps[0].label == "Quy đổi ĐGNL về thang 30"
+
+
+def test_admission_2026_needs_the_top_score_once_an_aptitude_result_is_given() -> None:
+    with pytest.raises(CalculationInputError) as info:
+        calculate("admission_score_2026", {"dtn": 22, "dhb": 25, "dgnl": 900})
+    assert _fields(info.value) == {"dtk"}
+    # The top score is the inconsistent one (it may have been misread from a document): the
+    # student's own result is kept and ĐTK is asked again.
+    with pytest.raises(CalculationInputError) as info:
+        calculate("admission_score_2026", {"dtn": 22, "dhb": 25, "dgnl": 1200, "dtk": 1100})
+    assert _fields(info.value) == {"dtk"}
+    with pytest.raises(CalculationInputError) as info:
+        calculate("admission_score_2026", {"dtn": 22, "dhb": 25, "dgnl": 1100, "dtk": 30})
+    assert _fields(info.value) == {"dtk"}  # 30 is below the 1200-point test's possible top score
+
+
+def test_admission_2026_rejects_scores_outside_the_30_point_scale() -> None:
+    with pytest.raises(CalculationInputError) as info:
+        calculate("admission_score_2026", {"dtn": 31, "dhb": -1})
+    assert _fields(info.value) == {"dtn", "dhb"}
+
+
+# --- transcript score (lớp 10, 11, HK1 lớp 12) -----------------------------------
+
+_TRANSCRIPT = {
+    "mon1": "Toán",
+    "m1_10": 7.5,
+    "m1_11": 8,
+    "m1_12": 8.5,
+    "mon2": "Hóa",
+    "m2_10": 6,
+    "m2_11": 6.5,
+    "m2_12": 7,
+    "mon3": "Lý",
+    "m3_10": 4.5,
+    "m3_11": 5,
+    "m3_12": 5.5,
+}
+
+
+def test_transcript_score_averages_each_subject_then_sums() -> None:
+    result = calculate("transcript_score_3hk", _TRANSCRIPT)
+    assert result.values["mon1"] == Decimal("8")
+    assert result.values["mon2"] == Decimal("6.5")
+    assert result.values["mon3"] == Decimal("5")
+    assert result.values["tong"] == Decimal("19.5")
+    assert result.summary is not None and "đủ điều kiện" in result.summary
+    assert result.inputs[0] == ("Môn 1 (Toán)", "7.5 - 8 - 8.5")
+
+
+def test_transcript_score_below_the_threshold_says_so() -> None:
+    result = calculate("transcript_score_3hk", {**_TRANSCRIPT, "m3_12": 5})
+    assert result.values["tong"] == Decimal("19.5") - Decimal("0.5") / 3
+    assert result.summary is not None and "chưa đạt" in result.summary
+
+
+def test_transcript_score_lists_every_missing_term() -> None:
+    with pytest.raises(CalculationInputError) as info:
+        calculate("transcript_score_3hk", {"m1_10": 7, "m1_11": 8})
+    assert _fields(info.value) == {"m1_12", "m2_10", "m2_11", "m2_12", "m3_10", "m3_11", "m3_12"}
+
+
+# --- weighted score ------------------------------------------------------------
+
+
+def test_weighted_score_follows_the_syllabus_weights() -> None:
+    # d0312: 10/10/30/50 with 8, 9, 7, 6 → 6,8.
+    result = calculate("weighted_score", {"trong_so": [10, 10, 30, 50], "diem": [8, 9, 7, 6]})
+    assert result.values["diem_hp"] == Decimal("6.8")
+    assert dict(result.outputs)["Điểm chữ"] == "C+"
+
+
+def test_weighted_score_accepts_fractions_and_rounds_components_when_asked() -> None:
+    result = calculate(
+        "weighted_score",
+        {"trong_so": [0.2, 0.3, 0.5], "diem": [9, 7, 9.2], "lam_tron_thanh_phan": 0.5},
+    )
+    assert result.steps[0].substituted == "TP3 9.2 → 9"
+    assert result.values["diem_hp"] == Decimal("8.4")
+
+
+def test_weighted_score_rejects_weights_that_do_not_sum_to_100() -> None:
+    with pytest.raises(CalculationInputError) as info:
+        calculate("weighted_score", {"trong_so": [10, 30, 50], "diem": [8, 7, 6]})
+    assert _fields(info.value) == {"trong_so"}
+
+
+def test_weighted_score_needs_one_score_per_weight() -> None:
+    with pytest.raises(CalculationInputError) as info:
+        calculate("weighted_score", {"trong_so": [50, 50], "diem": [8, None]})
+    assert [error.reason for error in info.value.errors] == ["còn thiếu điểm thành phần thứ 2"]
+
+
+def test_every_registered_formula_declares_version_source_and_outputs() -> None:
+    for formula in formulas.FORMULAS.values():
+        assert formula.version and formula.source and formula.outputs
+        assert formulas.calculate is not None
+
+
+# --- date span / time span ---------------------------------------------------------
+
+
+def test_date_span_counts_calendar_days_with_and_without_both_ends() -> None:
+    result = calculate("date_span", {"tu_ngay": "13/08/2026", "den_ngay": "20/08/2026"})
+    assert result.values == {"so_ngay": Decimal(7), "ca_hai_dau": Decimal(8)}
+    assert result.summary is not None and "**8 ngày**" in result.summary
+
+
+def test_date_span_adds_a_validity_period_to_the_start_date() -> None:
+    # d0319: cấp 20/5/2024, hạn 2 năm, nộp 10/6/2026 → quá hạn 21 ngày.
+    result = calculate(
+        "date_span", {"tu_ngay": "20/5/2024", "den_ngay": "10/06/2026", "cong_them_nam": 2}
+    )
+    assert result.values["so_ngay"] == Decimal(21)
+    assert result.steps[0].substituted == "20/05/2024 + 2 năm = 20/05/2026"
+
+
+def test_date_span_rejects_bad_dates_and_reversed_order() -> None:
+    with pytest.raises(CalculationInputError) as info:
+        calculate("date_span", {"tu_ngay": "31/02/2026", "den_ngay": "hôm qua"})
+    assert _fields(info.value) == {"tu_ngay", "den_ngay"}
+    with pytest.raises(CalculationInputError) as info:
+        calculate("date_span", {"tu_ngay": "20/08/2026", "den_ngay": "13/08/2026"})
+    assert _fields(info.value) == {"den_ngay"}
+
+
+def test_time_span_sums_clock_ranges_in_hours_and_minutes() -> None:
+    # d0332: 06h30-19h40 x2 và 06h30-17h40 → 37 giờ 30 phút.
+    ranges = "06h30 \u2013 19h40; 06:30-19:40; 06:30 đến 17:40"
+    result = calculate("time_span", {"khoang_gio": ranges})
+    assert result.values == {"tong_gio": Decimal("37.5"), "tong_phut": Decimal(2250)}
+    assert result.summary == "Tổng thời gian **37 giờ 30 phút** (= **37.5 giờ**)"
+    assert calculate("time_span", {"khoang_gio": "22:00-02:00"}).values["tong_phut"] == Decimal(240)
+    with pytest.raises(CalculationInputError):
+        calculate("time_span", {"khoang_gio": "sáng đến chiều"})
+
+
+def test_admission_2026_asks_every_input_the_student_must_supply() -> None:
+    """ĐGNL, ưu tiên and điểm cộng change the result, so the panel asks them explicitly
+    ("0 nếu không có") instead of assuming 0; ĐTK only once a ĐGNL result (> 0) is given."""
+
+    from app.calculation.formulas import missing_params
+
+    assert [spec.name for spec in missing_params("admission_score_2026", {})] == [
+        "dtn",
+        "dhb",
+        "dgnl",
+        "uu_tien",
+        "diem_cong",
+    ]
+    assert [
+        spec.name
+        for spec in missing_params(
+            "admission_score_2026", {"dtn": 24, "dhb": 27, "dgnl": 0, "uu_tien": 0, "diem_cong": 0}
+        )
+    ] == []
+    assert [
+        spec.name
+        for spec in missing_params(
+            "admission_score_2026",
+            {"dtn": 24, "dhb": 27, "dgnl": 900, "uu_tien": 0, "diem_cong": 0},
+        )
+    ] == ["dtk"]
+    # ĐGNL 0 means "did not sit the test": no conversion, ĐK = ĐTN.
+    result = calculate(
+        "admission_score_2026", {"dtn": 24, "dhb": 27, "dgnl": 0, "uu_tien": 0.5, "diem_cong": 0}
+    )
+    assert result.values["dk"] == Decimal(24) and "ddgnl" not in result.values

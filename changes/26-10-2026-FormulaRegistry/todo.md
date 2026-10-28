@@ -1,0 +1,37 @@
+# Todo - registry công thức, bỏ LLM tự tính (26/10/2026)
+
+## Phase 1: registry + công thức mới
+- [x] `Formula` thêm `version`, `source`, `outputs`; `CalculationResult.values`, `.version`; các công thức cũ điền `values` (commit 65eef87)
+- [x] `admission_score_2026` (xuôi), `transcript_score_3hk`, `weighted_score` + triggers (docs: SPEC-calc-engine)
+- [x] Tests formulas (d0307 = 25,4; học bạ Kiểm toán; weighted d0312 = 6,8)
+
+## Phase 2: solver tính ngược
+- [x] `app/calculation/solver.py` (commit 9e84e89): lưới theo bước làm tròn (`Formula.rounding_of`), vùng hợp lệ nhị phân, điểm chữ, kiểm tra liền kề, không có nghiệm
+- [x] Tests: CK = 10 để A+; ĐHB ≥ 25,5 (d0308); HK1 Lý = 5,5 (d0309); 8 tín chỉ dưới 8 triệu; weighted d0313 = 7,1 (6,95 → 7,0), d0311 = 9,5
+
+## Phase 3: node + graph + prompt
+- [x] Extractor schema mới (`solve_for`, `target`, `none`), prompt viết lại, `parse_extraction` (model thắng router) (commit ce3ab25)
+- [x] Bỏ nhánh LLM: `LlmAnswered`, `_ask_llm`, `llm_outcome`, handoff, review-redo, template, settings, `.env.example`, `docs/guide/cau-hinh.md`
+- [x] `none` → `Deferred` → advisory_tasks đầu lượt (`_plan_calculations`); resume plan cũ `llm` → `legacy_llm`
+- [x] `CalculationPlan` thêm `solve_for`/`target` (`CalculationTarget`); Literal formula_id mới
+- [x] Prompt phân loại: registry qua `{calculation_formulas}`, bỏ rule 5b; prompt advisory: luật "hiển thị công thức, không tự tính"
+- [x] Tests graph: 15 test nhánh LLM bỏ, 7 test mới (none→advisory, giải ngược qua graph, resume inverse, lookup lọc như advisory)
+- [x] ruff sạch (trừ lỗi cũ không liên quan), mypy sạch trên file đã sửa, 2723 test pass
+
+## Phase 4: docs + eval + PR
+- [x] SPEC-calculation-node.md, SPEC-calc-engine.md, known-gaps, rag-pipeline, DECISIONS, PRODUCT, dev-onboard
+- [x] Chạy lại 38 câu calculation (`none`) → report.md (7/8 câu công thức đúng bằng Python; 30 câu còn lại đi advisory, luật "không tự tính" chưa đủ mạnh - chờ chốt)
+- [x] Commit theo nhóm (calculation / solver / node+graph+prompt / docs), push, PR xếp chồng trên PR #28
+
+## Phase 5: số học thuần (`pure_arithmetic`, 26/10 tối)
+- [x] `app/calculation/arithmetic.py` parser whitelist + `arithmetic_result`; tests (`test_arithmetic.py`)
+- [x] Node: extractor `arithmetic`, `_plan_arithmetic` kiểm tra số hạng trong câu hỏi, `ArithmeticTask`; plan `arithmetic` không resume
+- [x] Advisory: `calc_request` (FenceRedactor, `GenerationResult.calc_requests`, `app/graph/calc_requests.py`), nối khối sau grounding; tests (`test_calc_requests.py`)
+- [x] Prompt 4 file theo 3 mức; snapshot advisory; docs spec/known-gaps/plan
+- [x] Chạy lại 38 câu (`runs/calc-registry-v2`) → report.md mục 3; grounding chặt cho lượt deferred/calc_request (đo offline 2 → 8 caution)
+
+## Phase 6: nhãn eval, date/time span, siết advisory (26/10 đêm)
+- [x] `expected_calculation` cho 38 câu (gateway PR #9), metrics chấm theo đường, runner ghi `calculation_formulas`
+- [x] `date_span`, `time_span` + Literal plan + test chặn; v3 + chạy lại: 24/38 theo nhãn
+- [x] Prompt advisory/multi-intent: mục số học bắt buộc + `{arithmetic_notice}` theo lượt; 14 câu advisory 6 → 7 pass, tự tính 4 → 2
+- [ ] Ticket sau: date_span cộng/trừ N ngày (d0335); routing câu số học thuần còn lọt sang tư vấn; đọc sai số liệu bảng

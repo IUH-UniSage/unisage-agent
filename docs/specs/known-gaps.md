@@ -354,21 +354,29 @@ the original question, even if only one actually needed the answer. Splitting a 
 across advisory tasks precisely is future work. (Calculation tasks resume one by one - they keep
 their own parameters.)
 
-### LLM-computed calculations can be wrong
+### Questions outside the formula registry are not computed by the model
 
-Only the forward calculation of the 3 built-in formulas is done by Python. Target questions
-("cuối kỳ cần bao nhiêu để được A+"), formulas found in documents and follow-ups are computed
-by the LLM (`main/chat_calculation_llm.yaml`), which can misapply a rounding step, pick the
-wrong case of a formula, or take a number from the wrong earlier calculation in the chat.
-There is no pre-release eval (product decision, UNISAGE-99). Mitigations: the built-in rules
-are given verbatim (`describe_builtin_rules()`), the answer must check its result by
-substituting it back, every such answer is labelled "Kết quả do AI tự tính, có thể sai" with
-its sources, the kill switch `CHAT_CALC_LLM_ENABLED` turns it off, and Đúng/Sai feedback files
-an `AI_CALCULATION_WRONG` ticket with the staff-only trace (question, known values, full answer,
-cited chunks).
+Since 26/10/2026 (UNISAGE-106) every number comes from code: a registered formula computed
+forward or solved for one unknown (`app/calculation/solver.py`), or plain arithmetic
+(`app/calculation/arithmetic.py`) over numbers the student stated (node) or figures the
+answer cited (`calc_request` blocks, `app/graph/calc_requests.py`). A document's own
+formula (điểm rèn luyện, hệ số đề tài) or a business total whose applicable items are
+unclear is answered on the advisory path with the documents' figures and formula, the
+conclusion left to the user. Whether the model emits a `calc_request` instead of
+computing in its head is a prompt rule, so some answers still state a sum themselves; an
+operand no cited document holds makes the request fail closed. Routing depends on the
+classifier (registry listed in its prompt) and the extractor's `none`; a question wrongly sent to
+the advisory path still answers from the documents, one wrongly sent to a formula asks for that
+formula's parameters.
 
-**When to revisit:** once tickets show a pattern - e.g. move a frequent target question back to
-deterministic code.
+Assumptions written into formulas: `admission_score_2026` takes the regional/subject priority
+points as already converted (the Ministry's taper above 22,5 is not in the KB) and the aptitude
+top score (ĐTK) from the user; `weighted_score` rounds the final score to 0.1 and converts with
+the university's grade scale even when the syllabus belongs to another regulation. The solver
+assumes each formula is monotonic in each numeric parameter (true for every registered one).
+
+**When to revisit:** when a document formula is asked often enough to register (new
+`formula_id`, version, source, tests), or when the eval set is re-tagged by `formula_id`.
 
 ### A guest's "Sai" vote creates no ticket
 

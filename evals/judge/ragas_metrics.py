@@ -1,12 +1,12 @@
-"""RAGAS metrics on Gemini, for `evals.judge` (Task 11). Needs the judge environment
-(`evals/judge/requirements.txt`): RAGAS 0.4 and `google-genai`.
+"""RAGAS metrics for `evals.judge` (Task 11), on whichever provider adapter the run picked
+(`evals.judge.providers`). Needs the judge environment (`evals/judge/requirements.txt`).
 
 The metrics are RAGAS' own (`ragas.metrics.collections`: Faithfulness, FactualCorrectness,
 ContextRecall, AnswerRelevancy; ID-based context precision/recall; a `DiscreteMetric` for
-refusal, the 0.4 form of AspectCritic). Only the model they talk to is ours: `GeminiJudgeLLM`
-sends every structured-output request through the key pool of `evals.judge.gemini_pool`, switches to
-the fallback model when the main one stays overloaded, and books tokens, cost, model and key
-per score.
+refusal, the 0.4 form of AspectCritic). Only the model they talk to is ours: `JudgeLLM` sends
+every structured-output request to the adapter, switches to the fallback model when the main
+one stays unavailable, parses the JSON into the metric's model and books tokens, cost, model
+and key per score (`evals.judge.ledger`).
 
 The example parts of the RAGAS prompts are translated to Vietnamese once
 (`--adapt-prompts`, RAGAS `BasePrompt.adapt`) and cached in `evals/judge/prompts/`; later runs
@@ -14,19 +14,14 @@ load the cache, so the judge reads Vietnamese examples next to Vietnamese answer
 """
 
 import asyncio
-import contextvars
 import json
 import math
-import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from google import genai
-from google.genai import types
-from pydantic import BaseModel
 from ragas.dataset_schema import SingleTurnSample
 from ragas.embeddings.base import BaseRagasEmbedding
 from ragas.llms.base import InstructorBaseRagasLLM
@@ -42,15 +37,10 @@ from ragas.metrics.collections import (
 from ragas.metrics.utils import fbeta_score
 from ragas.prompt.metrics.base_prompt import BasePrompt
 
-from evals.judge.gemini_pool import (
-    CallFailed,
-    GeminiCaller,
-    KeyPool,
-    KeyState,
-    ModelUnavailable,
-    QuotaExhausted,
-)
-from evals.judge.cli import PRICES, Score, Task
+from evals.judge import ledger
+from evals.judge.providers.base import JudgeAdapter, extract_json
+from evals.judge.providers.pool import CallFailed, ModelUnavailable, QuotaExhausted
+from evals.judge.tasks import Score, Task
 
 LANGUAGE = "vietnamese"
 REFUSAL_PROMPT = (
@@ -62,121 +52,42 @@ REFUSAL_PROMPT = (
     "THAY VÌ đưa ra nội dung trả lời câu hỏi. Chọn 'refused' nếu từ chối, 'answered' nếu câu trả "
     "lời có nội dung trả lời câu hỏi (kể cả khi kèm gợi ý liên hệ)."
 )
-_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
-
-_ledger: contextvars.ContextVar["Ledger | None"] = contextvars.ContextVar(
-    "judge_ledger", default=None
-)
 
 
-@dataclass
-class Ledger:
-    """What one score cost: calls, tokens, USD, and which models/keys produced it."""
+class JudgeLLM(InstructorBaseRagasLLM):
+    """Structured output for the RAGAS metrics from any adapter, with model fallback."""
 
-    fallback_model: str | None = None
-    embedding_model: str | None = None
-    calls: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    usd: float = 0.0
-    models: Counter[str] = field(default_factory=Counter)
-    keys: set[str] = field(default_factory=set)
-
-    def book(self, model: str, key: KeyState, tokens_in: int, tokens_out: int) -> None:
-        price_in, price_out = PRICES.get(model, (0.0, 0.0))
-        self.calls += 1
-        self.input_tokens += tokens_in
-        self.output_tokens += tokens_out
-        self.usd += (tokens_in * price_in + tokens_out * price_out) / 1_000_000
-        self.models[model] += 1
-        self.keys.add(key.masked)
-
-    def as_usage(self) -> dict[str, Any]:
-        # the judge model is the LLM that scored; embeddings (answer_relevancy) are not one
-        llm_models = Counter({m: n for m, n in self.models.items() if m != self.embedding_model})
-        return {
-            "model": llm_models.most_common(1)[0][0] if llm_models else None,
-            "models": dict(self.models),
-            "keys": sorted(self.keys),
-            "fallback": bool(self.fallback_model and self.fallback_model in self.models),
-            "calls": self.calls,
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "usd": round(self.usd, 6),
-        }
-
-
-def _book(model: str, key: KeyState, response: Any) -> None:
-    ledger = _ledger.get()
-    if ledger is None:
-        return
-    usage = getattr(response, "usage_metadata", None)
-    tokens_in = int(getattr(usage, "prompt_token_count", 0) or 0)
-    # thinking tokens are billed as output
-    tokens_out = int(getattr(usage, "candidates_token_count", 0) or 0) + int(
-        getattr(usage, "thoughts_token_count", 0) or 0
-    )
-    ledger.book(model, key, tokens_in, tokens_out)
-
-
-def _thinking(model: str, level: str) -> types.ThinkingConfig | None:
-    if not level:
-        return None
-    if "gemini-3" in model:
-        return types.ThinkingConfig(thinking_level=level)
-    # 2.x models take a token budget; 0 turns thinking off where the model allows it
-    return types.ThinkingConfig(thinking_budget=0)
-
-
-class GeminiJudgeLLM(InstructorBaseRagasLLM):
-    """Structured output from Gemini for the RAGAS metrics, through the key pool."""
-
-    def __init__(
-        self, caller: GeminiCaller, model: str, fallback: str | None, thinking: str
-    ) -> None:
-        self.caller = caller
+    def __init__(self, adapter: JudgeAdapter, model: str, fallback: str | None) -> None:
+        self.adapter = adapter
         self.model = model
         self.fallback = fallback
-        self.thinking = thinking
-
-    def _config(self, model: str, response_model: type[BaseModel]) -> types.GenerateContentConfig:
-        return types.GenerateContentConfig(
-            temperature=0.0,
-            response_mime_type="application/json",
-            response_json_schema=response_model.model_json_schema(),
-            thinking_config=_thinking(model, self.thinking),
-        )
 
     async def agenerate(self, prompt: str, response_model: type[Any]) -> Any:
         models = [self.model, *([self.fallback] if self.fallback else [])]
+        schema = response_model.model_json_schema()
         last: Exception | None = None
         for model in models:
-            config = self._config(model, response_model)
             try:
-                response, key = await self.caller.call(
-                    model,
-                    lambda client, m=model, c=config: client.aio.models.generate_content(
-                        model=m, contents=prompt, config=c
-                    ),
-                )
+                answer = await self.adapter.generate_json(model, prompt, schema)
             except ModelUnavailable as error:
                 last = error
                 continue
-            _book(model, key, response)
-            text = _FENCE.sub("", (response.text or "").strip())
-            return response_model.model_validate_json(text)
+            ledger.book(model, answer.key, answer.input_tokens, answer.output_tokens)
+            parsed = response_model.model_validate_json(extract_json(answer.text))
+            ledger.step(response_model.__name__, parsed)
+            return parsed
         raise last or ModelUnavailable(self.model)
 
     def generate(self, prompt: str, response_model: type[Any]) -> Any:
         raise NotImplementedError("the judge is async: use agenerate")
 
 
-class GeminiEmbeddings(BaseRagasEmbedding):
-    """Gemini embeddings (for AnswerRelevancy) through the key pool."""
+class JudgeEmbeddings(BaseRagasEmbedding):
+    """Embeddings (for AnswerRelevancy) from any adapter that can embed."""
 
-    def __init__(self, caller: GeminiCaller, model: str) -> None:
+    def __init__(self, adapter: JudgeAdapter, model: str) -> None:
         super().__init__(cache=None)
-        self.caller = caller
+        self.adapter = adapter
         self.model = model
 
     def embed_text(self, text: str, **kwargs: Any) -> list[float]:
@@ -186,12 +97,9 @@ class GeminiEmbeddings(BaseRagasEmbedding):
         return (await self.aembed_texts([text]))[0]
 
     async def aembed_texts(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
-        response, key = await self.caller.call(
-            self.model,
-            lambda client: client.aio.models.embed_content(model=self.model, contents=texts),
-        )
-        _book(self.model, key, response)
-        return [list(embedding.values) for embedding in response.embeddings]
+        result = await self.adapter.embed(self.model, texts)
+        ledger.book(self.model, result.key, result.input_tokens)
+        return result.vectors
 
 
 class AnswerCorrectness(FactualCorrectness):
@@ -238,7 +146,7 @@ def _load(prompt: BasePrompt, data: dict[str, Any]) -> None:
     ]
 
 
-async def localize(metrics: dict[str, Any], llm: GeminiJudgeLLM, folder: Path, adapt: bool) -> int:
+async def localize(metrics: dict[str, Any], llm: JudgeLLM, folder: Path, adapt: bool) -> int:
     """Load the cached Vietnamese prompts; with `adapt`, translate and cache what is missing.
     Returns how many prompts are in Vietnamese."""
 
@@ -265,9 +173,9 @@ async def localize(metrics: dict[str, Any], llm: GeminiJudgeLLM, folder: Path, a
 
 @dataclass
 class RagasScorer:
-    llm: GeminiJudgeLLM
+    llm: JudgeLLM
     metrics: dict[str, Any]
-    caller: GeminiCaller
+    adapters: list[JudgeAdapter]
     fallback_model: str | None = None
     embedding_model: str | None = None
     ready: asyncio.Event = field(default_factory=asyncio.Event)
@@ -276,8 +184,10 @@ class RagasScorer:
     async def score(self, task: Task) -> Score:
         if self.setup is not None and not self.ready.is_set():
             await self.setup(self)
-        ledger = Ledger(fallback_model=self.fallback_model, embedding_model=self.embedding_model)
-        token = _ledger.set(ledger)
+        booked = ledger.Ledger(
+            fallback_model=self.fallback_model, embedding_model=self.embedding_model
+        )
+        token = ledger.current.set(booked)
         try:
             value, reason, extra = await self._run(task)
         except QuotaExhausted:
@@ -287,8 +197,10 @@ class RagasScorer:
         except Exception as error:  # a metric that cannot score this row: NaN + why
             value, reason, extra = math.nan, f"{type(error).__name__}: {str(error)[:300]}", {}
         finally:
-            _ledger.reset(token)
-        return Score(value=value, reason=reason, usage=ledger.as_usage(), extra=extra)
+            ledger.current.reset(token)
+        return Score(
+            value=value, reason=reason, usage=booked.as_usage(), extra=extra, steps=booked.steps
+        )
 
     async def _run(self, task: Task) -> tuple[float, str | None, dict[str, float]]:
         inputs = task.inputs
@@ -317,48 +229,54 @@ class RagasScorer:
         return float(result.value), getattr(result, "reason", None), {}
 
     def stats(self) -> dict[str, Any]:
-        return self.caller.stats()
+        return merge_stats(self.adapters)
+
+
+def merge_stats(adapters: list[JudgeAdapter]) -> dict[str, Any]:
+    """{model: {masked key: counts}} summed over the adapters (judge + embeddings)."""
+
+    merged: dict[str, Any] = {}
+    for adapter in dict.fromkeys(adapters):
+        for model, keys in adapter.stats().items():
+            bucket = merged.setdefault(model, {})
+            for key, counts in keys.items():
+                total = Counter(bucket.get(key, {}))
+                total.update(counts)
+                bucket[key] = dict(total)
+    return merged
 
 
 @dataclass
 class RagasScorerFactory:
-    """Builds the scorer `evals.judge.JudgeRun` asks for (main model only, when asked)."""
+    """Builds the scorer `JudgeRun` asks for (main model only, when asked), on the adapters
+    the CLI picked: `adapter` judges, `embedder` embeds for answer_relevancy (None when
+    answer_relevancy is not scored)."""
 
-    keys: list[str]
+    adapter: JudgeAdapter
     model: str
     fallback: str | None
-    embedding_model: str
-    thinking: str
-    rpm: int
     prompts_dir: Path
     adapt_prompts: bool
-    metrics: list[str]
-    rpd_recheck_s: float = 0.0
-    _callers: list[GeminiCaller] = field(default_factory=list)
+    embedder: JudgeAdapter | None = None
+    embedding_model: str | None = None
 
     def __call__(self, primary_only: bool) -> RagasScorer:
-        models = {self.model, self.embedding_model, *([self.fallback] if self.fallback else [])}
-        caller = GeminiCaller(
-            pools={model: KeyPool(self.keys, rpm=self.rpm) for model in models},
-            client_for=_client_cache(),
-            rpd_recheck_s=self.rpd_recheck_s,
-        )
-        self._callers.append(caller)
-        llm = GeminiJudgeLLM(
-            caller, self.model, None if primary_only else self.fallback, self.thinking
-        )
-        embeddings = GeminiEmbeddings(caller, self.embedding_model)
+        llm = JudgeLLM(self.adapter, self.model, None if primary_only else self.fallback)
         metrics: dict[str, Any] = {
             "faithfulness": Faithfulness(llm=llm),
             "answer_coverage": AnswerCorrectness(llm=llm, mode="f1"),
             "context_recall": ContextRecall(llm=llm),
-            "answer_relevancy": AnswerRelevancy(llm=llm, embeddings=embeddings, strictness=1),
             "id_context_precision": IDBasedContextPrecision(),
             "id_context_recall": IDBasedContextRecall(),
             "refusal": DiscreteMetric(
                 name="refusal", prompt=REFUSAL_PROMPT, allowed_values=["refused", "answered"]
             ),
         }
+        if self.embedder is not None and self.embedding_model:
+            embeddings = JudgeEmbeddings(self.embedder, self.embedding_model)
+            metrics["answer_relevancy"] = AnswerRelevancy(
+                llm=llm, embeddings=embeddings, strictness=1
+            )
         lock = asyncio.Lock()
 
         async def setup(scorer: RagasScorer) -> None:
@@ -377,30 +295,15 @@ class RagasScorerFactory:
         return RagasScorer(
             llm=llm,
             metrics=metrics,
-            caller=caller,
+            adapters=[a for a in (self.adapter, self.embedder) if a is not None],
             fallback_model=self.fallback,
             embedding_model=self.embedding_model,
             setup=setup,
         )
 
     def stats(self) -> dict[str, Any]:
-        merged: dict[str, Any] = {}
-        for caller in self._callers:
-            for model, keys in caller.stats().items():
-                bucket = merged.setdefault(model, {})
-                for key, counts in keys.items():
-                    total = Counter(bucket.get(key, {}))
-                    total.update(counts)
-                    bucket[key] = dict(total)
-        return merged
+        return merge_stats([a for a in (self.adapter, self.embedder) if a is not None])
 
-
-def _client_cache() -> Any:
-    clients: dict[str, genai.Client] = {}
-
-    def client_for(key: str) -> genai.Client:
-        if key not in clients:
-            clients[key] = genai.Client(api_key=key)
-        return clients[key]
-
-    return client_for
+    async def aclose(self) -> None:
+        for adapter in dict.fromkeys(a for a in (self.adapter, self.embedder) if a):
+            await adapter.aclose()

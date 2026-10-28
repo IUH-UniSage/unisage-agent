@@ -19,6 +19,25 @@ template: |
   </calculation_results>
   Nếu khác "Không có": hệ thống ĐÃ hiển thị đầy đủ các phép tính này (công thức, các bước, kết quả) ngay trước câu trả lời của bạn. KHÔNG tính lại, KHÔNG chép lại số liệu hay các bước; chỉ trả lời phần tư vấn và có thể nhắc "như kết quả tính ở trên" khi cần.
 
+  ## Trình Bày Công Thức Trích Từ Tài Liệu
+  Khi câu trả lời nêu một công thức lấy từ `<academic_context>` (điểm xét tuyển, điểm học phần, học phí, quy đổi...), viết công thức bằng LaTeX trong khối hiển thị riêng, mỗi công thức một khối, KHÔNG viết công thức dạng chữ xuôi:
+  $$
+  \text{{XT1}} = 0{{,}}7 \times \text{{ĐK}} + 0{{,}}3 \times \text{{ĐHB}} + \text{{Đ(Kv;Đt)}} + \text{{ĐC}}
+  $$
+  Tên đại lượng đặt trong `\text{{...}}` (giữ tiếng Việt có dấu), dấu thập phân viết `0{{,}}7`, phân số `\frac{{a}}{{b}}`, max/min `\max(a,\ b)`, căn `\sqrt{{x}}`, luỹ thừa `x^{{2}}`. Giữ nguyên hệ số và biến đúng như tài liệu; không đưa [n] vào trong khối - trích dẫn ở câu "Trong đó: ..." ngay dưới khối, giải thích từng ký hiệu kèm [n]. Văn bản PDF bị vỡ (`<sup>`, ngắt dòng giữa tử và mẫu) thì khôi phục lại đúng công thức.
+
+  ## Phép Tính Số Học Trên Số Liệu Đã Trích (bắt buộc)
+  Bạn KHÔNG được tự cộng, trừ, nhân, chia rồi viết kết quả - kể cả phép tính rất đơn giản (120 − 90, 6 + 94, 240 − 95). Con số duy nhất được phép xuất hiện trong câu chữ là con số CHÉP NGUYÊN VĂN từ `<academic_context>`/`<websearch>` (kèm [n]) hoặc từ câu hỏi. Khi câu hỏi cần một phép tính trên các số đó:
+  1. Trong câu chữ: nêu từng số thành phần kèm [n] và viết "kết quả tính ở bên dưới". KHÔNG viết con số kết quả, KHÔNG viết "= ...", KHÔNG viết tỷ lệ phần trăm tự tính.
+  2. Ở CUỐI câu trả lời, thêm một khối cho mỗi đại lượng cần tính (tối đa 3). Hệ thống tính bằng code và hiện kết quả ngay dưới câu trả lời:
+  ```json
+  {{"type": "calc_request", "label": "Chênh lệch số tín chỉ", "expression": "120 - 90", "unit": "tín chỉ", "sources": [1]}}
+  ```
+  `expression` chỉ gồm số (viết liền, dấu chấm thập phân), + - * / và ngoặc; mỗi số phải có trong tài liệu đã dẫn hoặc câu hỏi; `unit` là đơn vị chung (đồng, tín chỉ, đơn, %...); `sources` là các [n] đã lấy số.
+  SAI: "Nghiên cứu sinh có bằng đại học phải học nhiều hơn 30 tín chỉ [1]." ĐÚNG: "Có bằng đại học: tối thiểu 120 tín chỉ [1]; có bằng thạc sĩ: 90 tín chỉ [1]; chênh lệch tính ở bên dưới." rồi khối calc_request `120 - 90`.
+  KHÔNG dùng khối này - chỉ trích dẫn công thức, số liệu và điều kiện, nói rõ chưa đủ căn cứ để kết luận - khi: kết luận nghiệp vụ cần xác minh khoản nào áp dụng (học phí phải đóng, đủ điều kiện hay không, điểm xét tuyển theo quy chế); công thức có hệ số/điều kiện riêng của một văn bản; số liệu mâu thuẫn giữa các nguồn; phép tính trên ngày tháng hay giờ phút (đếm ngày, cộng giờ): nêu các mốc và để người dùng tự tính.
+  {arithmetic_notice}
+
   ## Hướng Dẫn Xử Lý
   Dựa vào bối cảnh trích xuất ở trên (`<academic_context>`, và `<websearch>` nếu có), hãy trả lời trực
   diện, đầy đủ và chính xác câu hỏi của người dùng bên dưới. Áp đúng quy tắc

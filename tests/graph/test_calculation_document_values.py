@@ -137,3 +137,23 @@ async def test_nothing_to_look_up_means_no_search() -> None:
     await fill_from_documents("tuition_semester", "học phí", known, deps)
 
     assert deps.models.retrieval.queries == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_a_document_value_outside_the_params_range_is_dropped() -> None:
+    """The 2026 formula sheet says "thang điểm 30"; a model that reads that 30 as the
+    aptitude test's top score (ĐTK, a 1200-point scale) is overruled by the param's range -
+    otherwise the student is asked their own result again and again (seen 27/10/2026)."""
+
+    sheet = RetrievedChunk(
+        chunk_id="xt:1",
+        content="Thang điểm: 30 điểm. ĐĐGNL = (Kết quả thi đánh giá năng lực) x 30 / ĐTK",
+        source="Công thức tính điểm xét tuyển 2026",
+        score=0.9,
+    )
+    deps, _ = _deps({"values": {"dtk": {"value": 30, "chunk": 1}}, "ask": []}, [sheet])
+    known = {"dtn": 26, "dhb": 30, "dgnl": 1100, "uu_tien": 1, "diem_cong": 0}
+
+    found = await fill_from_documents("admission_score_2026", "tính điểm xét tuyển", known, deps)
+
+    assert found.values == {} and found.questions == []

@@ -206,6 +206,15 @@ def result_row(
         "evidence": output.evidence if output else [],
         "asked_back": bool(output and output.pending_round is not None),
         "calculation_items": output.calculation_items if output else [],
+        "calculation_formulas": (
+            [
+                str((trace.get("trace") or {}).get("formula_id") or "")
+                for trace in output.calculation_traces
+            ]
+            if output
+            else []
+        ),
+        "expected_calculation": question.get("expected_calculation"),
         "nodes": recording.nodes,
         "prompts": {
             name: texts

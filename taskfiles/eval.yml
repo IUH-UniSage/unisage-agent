@@ -59,6 +59,6 @@ tasks:
         {{.UV_RUN}} evals.run --dataset "$dataset" --set "{{.SET}}" {{.CLI_ARGS}}
 
   judge:
-    desc: "Chấm RAGAS các lượt đã chạy (môi trường riêng, key GEMINI_API_KEYS trong .env.eval). Vd task eval:judge -- --out runs/<run> --limit 20 (thêm --dry-run để chỉ ước tính chi phí)"
+    desc: "Chấm RAGAS các lượt đã chạy (môi trường riêng; giám khảo chọn theo JUDGE_PROVIDER trong .env.eval, gemini mặc định, hoặc --judge-provider). Vd task eval:judge -- --out runs/<run> --limit 20 (thêm --dry-run để chỉ ước tính chi phí)"
     cmds:
       - uv run --isolated --no-project --with-requirements evals/judge/requirements.txt python -m evals.judge --env-file .env.eval {{.CLI_ARGS}}

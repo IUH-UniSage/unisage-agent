@@ -14,7 +14,17 @@ def render_markdown(result: CalculationResult, *, notice: str | None = None) -> 
     if notice:
         lines += [f"**{notice}**", ""]
     lines += [f"**{result.title}**", "", "Công thức:"]
+    if result.formula_latex:
+        # Each expression is its own display-math block; one blank line before the first
+        # and after the last keeps them out of the surrounding list, none between
+        # consecutive blocks (the client spaces them itself).
+        lines.append("")
+        for tex in result.formula_latex:
+            lines += ["$$", tex, "$$"]
+        lines.append("")
     lines += [f"- {line}" for line in result.formula_text]
+    if result.version:
+        lines.append(f"- _Phiên bản công thức {result.version} · nguồn: {result.source}_")
     if result.steps:
         lines += ["", "Thay số:"]
         lines += [

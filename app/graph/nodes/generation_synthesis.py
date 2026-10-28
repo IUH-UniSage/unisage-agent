@@ -168,6 +168,9 @@ class GenerationResult:
     response_text: str
     # The ```json ask_user_form blocks the model emitted (or the repair call added).
     ask_forms: tuple[dict[str, Any], ...] = ()
+    # The ```json calc_request blocks: plain arithmetic over cited figures the model asks
+    # the graph to compute (app/graph/calc_requests.py) instead of doing it itself.
+    calc_requests: tuple[dict[str, Any], ...] = ()
 
 
 async def run_generation_synthesis(
@@ -184,6 +187,9 @@ async def run_generation_synthesis(
     history: Sequence[HistoryMessage] = (),
     sub_queries: Sequence[str] | None = None,
     calculation_titles: Sequence[str] = (),
+    # The turn is a calculation question without a registry formula: the prompt carries the
+    # per-turn reminder to hand the arithmetic to a calc_request block.
+    strict_arithmetic: bool = False,
     purpose: str | None = None,
     credential: CredentialConfig | None = None,
     snapshot_version: int | None = None,
@@ -204,6 +210,7 @@ async def run_generation_synthesis(
             web_results=web_results,
             history=history,
             calculation_titles=calculation_titles,
+            arithmetic_notice=strict_arithmetic,
         )
     else:
         full_prompt = build_system_prompt(
@@ -215,6 +222,7 @@ async def run_generation_synthesis(
             web_results=web_results,
             history=history,
             calculation_titles=calculation_titles,
+            arithmetic_notice=strict_arithmetic,
         )
     # Only the two per-request blocks are worth dumping - the rest of the
     # prompt is static YAML that can be read from the templates directly.
@@ -270,6 +278,9 @@ async def run_generation_synthesis(
         response_text="".join(visible).rstrip(),
         ask_forms=tuple(
             block for block in redactor.captured if block.get("type") == "ask_user_form"
+        ),
+        calc_requests=tuple(
+            block for block in redactor.captured if block.get("type") == "calc_request"
         ),
     )
 

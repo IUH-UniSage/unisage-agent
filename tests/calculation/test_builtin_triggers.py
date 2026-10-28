@@ -89,3 +89,34 @@ def test_tuition_questions(question: str, formula_id: str) -> None:
 @pytest.mark.parametrize("question", NONE)
 def test_other_questions_are_not_routed(question: str) -> None:
     assert route_builtin(question) == []
+
+
+ADMISSION = [
+    "Điểm xét tuyển của em là bao nhiêu nếu thi tốt nghiệp được 24 điểm, học bạ 27?",
+    "thi ĐGNL 900 điểm thì quy đổi về thang 30 được bao nhiêu",
+    "XT1 của em bao nhiêu khi điểm thi 23, học bạ 25,5, ưu tiên 0,25",
+    "ĐXT năm 2026 tính sao nếu không thi đánh giá năng lực",
+]
+TRANSCRIPT = [
+    "xét học bạ: Toán lớp 10 là 7,5, lớp 11 là 8, học kỳ 1 lớp 12 là 8,5 thì Toán bao nhiêu",
+    "Lý HK1 lớp 12 cần tối thiểu bao nhiêu để tổng 3 môn đạt ngưỡng nhận hồ sơ 19,5?",
+]
+WEIGHTED = [
+    "Môn này trọng số trắc nghiệm 10%, giữa kỳ 30%, cuối kỳ 50% thì tổng kết bao nhiêu",
+    "theo đề cương Interpretation 1, Mid-term Test 30% Final Test 50%, cuối kỳ cần bao nhiêu",
+]
+
+
+@pytest.mark.parametrize("question", ADMISSION)
+def test_admission_questions_route_to_the_2026_formula(question: str) -> None:
+    assert "admission_score_2026" in route_builtin(question)
+
+
+@pytest.mark.parametrize("question", TRANSCRIPT)
+def test_transcript_questions_route_to_the_three_term_formula(question: str) -> None:
+    assert "transcript_score_3hk" in route_builtin(question)
+
+
+@pytest.mark.parametrize("question", WEIGHTED)
+def test_syllabus_weight_questions_offer_the_weighted_formula(question: str) -> None:
+    assert "weighted_score" in route_builtin(question)

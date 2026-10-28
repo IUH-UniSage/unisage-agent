@@ -302,7 +302,10 @@ def test_a_5xx_on_the_job_status_is_retried_before_failing(tmp_path: Path) -> No
 
 
 def test_rechunk_sends_done_rows_back_and_drops_their_old_points_first(tmp_path: Path) -> None:
-    rows = [_row(document_id="doc-1", ingest_status="done"), _row(file_id="b2", ingest_status="done")]
+    rows = [
+        _row(document_id="doc-1", ingest_status="done"),
+        _row(file_id="b2", ingest_status="done"),
+    ]
     (tmp_path / "files" / "pdt").mkdir(parents=True)
     write_csv(tmp_path / "manifest.csv", list(rows[0]), rows)
     state = DownloadState(tmp_path)
