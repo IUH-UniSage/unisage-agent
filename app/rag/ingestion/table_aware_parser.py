@@ -36,7 +36,7 @@ from app.rag.ingestion.table_merger import (
 )
 from app.rag.ingestion.table_normalizer import build_page_table
 from app.rag.ingestion.table_normalizer import (
-    markdown_row_cells as _markdown_row_cells,  # noqa: F401  (kept importable from here for existing callers/tests)
+    markdown_row_cells as _markdown_row_cells,
 )
 from app.schemas.ingestion import HeaderSource, RegionType, SourceType
 
@@ -525,7 +525,9 @@ def _regions_from_pdf_pages(
         )
         raw_title = heading_match.group(2) if heading_match else stripped
         title = _clean_heading_title(raw_title)
-        if (heading_match or is_promoted_heading) and len(title) > settings.INGEST_MAX_HEADING_CHARS:
+        if (heading_match or is_promoted_heading) and len(
+            title
+        ) > settings.INGEST_MAX_HEADING_CHARS:
             # No real section title is this long (a form's fill-in line, a bold paragraph):
             # as a heading it would be prefixed into every chunk below it. Keep it as text.
             heading_match, is_promoted_heading = None, False
@@ -682,8 +684,7 @@ def _finalize_pdf_tables(
                 and len(region.table.header_row or []) != previous_columns
             ):
                 candidate = (
-                    reproject_columns(region.table, column_edges(evidence), layout)
-                    or region.table
+                    reproject_columns(region.table, column_edges(evidence), layout) or region.table
                 )
             decision = decide_merge(
                 MergeCandidate(
@@ -714,9 +715,7 @@ def _finalize_pdf_tables(
                     ),
                 )
                 chain_evidence[last_table] = evidence
-                chain_layout[last_table] = _layout_of(
-                    output[last_table].table, evidence, layout
-                )
+                chain_layout[last_table] = _layout_of(output[last_table].table, evidence, layout)
                 between = []
                 continue
             if decision.borderline:

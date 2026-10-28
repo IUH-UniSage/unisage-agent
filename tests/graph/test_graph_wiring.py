@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -1163,6 +1164,249 @@ async def test_missing_extraction_model_skips_the_llm_rerank_and_warns_admins(
     (warning,) = result.admin_warnings
     assert warning.code == "LLM_RERANK_UNAVAILABLE"
     assert warning.message.endswith("Mô hình Extraction chưa được cấu hình.")
+
+
+# ── CrossEncoderRerankNode (09a, CHAT_RERANK_MODE) ─────────────────────────
+
+
+class _FakeCrossEncoderClient:
+    """Stands in for `CrossEncoderClient()` in the graph: scores every passage 1.0, or
+    raises when the service is "down"."""
+
+    down = False
+    calls: ClassVar[list[tuple[str, int]]] = []
+
+    async def rerank(self, query: str, passages: list[str], *, top_k: int | None = None):
+        from app.integrations.cross_encoder_client import (
+            CrossEncoderScores,
+            CrossEncoderUnavailableError,
+        )
+
+        _FakeCrossEncoderClient.calls.append((query, len(passages)))
+        if _FakeCrossEncoderClient.down:
+            raise CrossEncoderUnavailableError("Không kết nối được tới service cross-encoder.")
+        return CrossEncoderScores(
+            scores=[1.0] * len(passages),
+            ranking=list(range(len(passages))),
+            truncated=0,
+            took_ms=1,
+            model="fake",
+        )
+
+
+def _cross_encoder_mode(monkeypatch: pytest.MonkeyPatch, mode: str, *, down: bool = False) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_RERANK_MODE", mode)
+    monkeypatch.setattr("app.graph.streaming_graph.CrossEncoderClient", _FakeCrossEncoderClient)
+    _FakeCrossEncoderClient.down = down
+    _FakeCrossEncoderClient.calls = []
+
+
+@pytest.mark.asyncio
+async def test_cross_encoder_mode_ranks_with_the_service_and_skips_the_llm_rerank(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _cross_encoder_mode(monkeypatch, "cross_encoder")
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("Lịch thi học kỳ 1"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+        # Would drop the chunk if it ran.
+        rerank=mock_sync_llm_model('{"SQ1": []}'),
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+        )
+
+    nodes = _traced_nodes(caplog)
+    assert "09a_CrossEncoderRerankNode" in nodes and "09a_LLMRerankNode" not in nodes
+    assert _FakeCrossEncoderClient.calls == [("Lịch thi học kỳ 1", 1)]
+    (prompt,) = seen_prompts
+    assert "dummy retrieved content" in prompt
+    assert result.used_ticket_fallback is False
+    assert [w.code for w in result.admin_warnings] == []
+
+
+@pytest.mark.asyncio
+async def test_two_stage_mode_runs_the_llm_rerank_after_the_cross_encoder(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _cross_encoder_mode(monkeypatch, "cross_encoder_then_llm")
+    models = _models(mock_sync_llm_model, mock_streaming_llm_model)
+    models.rerank = mock_sync_llm_model('{"SQ1": {"C1": "đúng lịch thi"}}')
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+        )
+
+    nodes = _traced_nodes(caplog)
+    assert nodes.index("09a_CrossEncoderRerankNode") < nodes.index("09a_LLMRerankNode")
+    assert result.response_text == "Câu trả lời cuối cùng [1]."
+
+
+@pytest.mark.asyncio
+async def test_a_dead_service_falls_over_to_the_llm_rerank_and_warns_admins(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _cross_encoder_mode(monkeypatch, "cross_encoder", down=True)
+    models = _models(mock_sync_llm_model, mock_streaming_llm_model)
+    models.rerank = mock_sync_llm_model('{"SQ1": {"C1": "đúng lịch thi"}}')
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+        )
+
+    nodes = _traced_nodes(caplog)
+    assert "09a_CrossEncoderRerankNode" in nodes and "09a_LLMRerankNode" in nodes
+    assert result.response_text == "Câu trả lời cuối cùng [1]."
+    (warning,) = result.admin_warnings
+    assert warning.code == "CROSS_ENCODER_FAILED"
+    assert warning.message.startswith("Bỏ qua bước xếp hạng cross-encoder")
+
+
+@pytest.mark.asyncio
+async def test_none_mode_runs_neither_rerank_and_keeps_the_retrieval_order(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _cross_encoder_mode(monkeypatch, "none")
+    seen_prompts: list[str] = []
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("Lịch thi học kỳ 1"),
+        generation=_capturing_generation_model(seen_prompts),
+        retrieval=FakeRetrievalService([_DUMMY_CHUNK]),
+        rerank=mock_sync_llm_model('{"SQ1": []}'),  # would drop the chunk if it ran
+    )
+
+    with caplog.at_level("INFO", logger="unisage.graph"):
+        result = await run_graph(
+            _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+        )
+
+    nodes = _traced_nodes(caplog)
+    assert "09_PostRetrievalRerankNode" in nodes
+    assert "09a_CrossEncoderRerankNode" not in nodes and "09a_LLMRerankNode" not in nodes
+    assert _FakeCrossEncoderClient.calls == []
+    (prompt,) = seen_prompts
+    assert "dummy retrieved content" in prompt
+    assert result.admin_warnings == []
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_calls_the_llm_rerank_only_on_weak_evidence(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _cross_encoder_mode(monkeypatch, "auto")
+    monkeypatch.setattr(settings, "CHAT_EVIDENCE_MIN_COSINE", 0.60)
+    weak_chunk = RetrievedChunk(chunk_id="w", content="mờ", source="s", score=0.52)
+
+    for chunk, expect_llm in ((_DUMMY_CHUNK, False), (weak_chunk, True)):
+        caplog.clear()
+        models = _models(mock_sync_llm_model, mock_streaming_llm_model)
+        models.retrieval = FakeRetrievalService([chunk])
+        models.rerank = mock_sync_llm_model('{"SQ1": {"C1": "đúng"}}')
+        with caplog.at_level("INFO", logger="unisage.graph"):
+            result = await run_graph(
+                _single_question_input(), models, _sink([]), _TRACE, _usage_recorder()
+            )
+        assert ("09a_LLMRerankNode" in _traced_nodes(caplog)) is expect_llm
+        assert result.evidence[0]["level"] == ("weak" if expect_llm else "ok")
+        assert "evidence mode=auto" in caplog.text
+
+
+# ── GroundingCheck (after 10_GenerationSynthesisNode) ─────────────────────────
+
+
+_FEE_CHUNK = RetrievedChunk(
+    chunk_id="fee",
+    content="Học phí Khối Công nghệ 38.350.000 đồng/năm.",
+    source="hp.pdf",
+    score=0.9,
+)
+
+
+@pytest.mark.asyncio
+async def test_a_figure_absent_from_every_source_gets_a_caution_and_a_warning(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    tokens: list[str] = []
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí là **42.500.000 đồng**/năm [1]."]),
+        retrieval=FakeRetrievalService([_FEE_CHUNK]),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink(tokens), _TRACE, _usage_recorder())
+
+    assert "42.500.000 không tìm thấy trong tài liệu" in result.response_text
+    assert "".join(tokens).endswith(result.response_text[-40:])  # the caution was streamed too
+    assert [w.code for w in result.admin_warnings] == ["ANSWER_UNGROUNDED_NUMBERS"]
+
+
+@pytest.mark.asyncio
+async def test_figures_found_in_the_cited_source_pass_the_grounding_check(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí là **38.350.000 đồng**/năm [1]."]),
+        retrieval=FakeRetrievalService([_FEE_CHUNK]),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert "Lưu ý" not in result.response_text
+    assert result.admin_warnings == []
+
+
+@pytest.mark.asyncio
+async def test_figures_without_any_citation_only_warn_admins(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí là 38.350.000 đồng/năm."]),
+        retrieval=FakeRetrievalService([_FEE_CHUNK]),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink([]), _TRACE, _usage_recorder())
+
+    assert "Lưu ý" not in result.response_text
+    assert [w.code for w in result.admin_warnings] == ["ANSWER_NO_CITATION"]
 
 
 # --- clarification panel (UNISAGE-99) ----------------------------------------------

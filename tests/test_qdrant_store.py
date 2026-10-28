@@ -292,7 +292,10 @@ def test_search_chunks_queries_all_three_named_vectors_with_payload_attached() -
 
     points = search_chunks(client, query_vector=[0.1, 0.2], limit=5)
 
-    assert points == [scored_point]
+    # The fused point carries its rank for the evidence signals.
+    assert points == [
+        scored_point.model_copy(update={"payload": {"chunk_id": "c1", "dense_rank": 1}})
+    ]
     client.query_batch_points.assert_called_once()
     call = client.query_batch_points.call_args
     assert call.kwargs["collection_name"] == settings.QDRANT_COLLECTION
@@ -363,7 +366,8 @@ def test_search_chunks_batch_keeps_each_querys_results_apart() -> None:
 
     results = search_chunks_batch(client, query_vectors=[[0.1], [0.2]], limits=[5, 5])
 
-    assert results == [[first], [second]]
+    ranked = [p.model_copy(update={"payload": {"dense_rank": 1}}) for p in (first, second)]
+    assert results == [[ranked[0]], [ranked[1]]]
     client.query_batch_points.assert_called_once()
     assert [
         request.query for request in client.query_batch_points.call_args.kwargs["requests"]

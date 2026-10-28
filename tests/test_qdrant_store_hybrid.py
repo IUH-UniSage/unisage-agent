@@ -143,7 +143,10 @@ def test_a_bm25_only_hit_enters_the_result_with_the_lexical_score(
     assert set(by_id) == {"a", "code-chunk"}
     assert by_id["code-chunk"].score == 0.66
     # The stand-in score is not a cosine: the hit says so in its payload.
-    assert by_id["code-chunk"].payload == {"chunk_id": "code-chunk", "lexical_only": True}
+    payload = dict(by_id["code-chunk"].payload or {})
+    assert payload.pop("rrf_score") > 0 and payload.pop("dense_rank") is None
+    assert payload.pop("bm25_rank") == 1
+    assert payload == {"chunk_id": "code-chunk", "lexical_only": True}
     assert by_id["a"].score == 0.80
     assert "lexical_only" not in (by_id["a"].payload or {})
 

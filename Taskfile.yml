@@ -66,6 +66,12 @@ includes:
   eval:
     taskfile: ./taskfiles/eval.yml
     optional: false
+  reranker:
+    taskfile: ./taskfiles/reranker.yml
+    optional: false
+  benchmark:
+    taskfile: ./taskfiles/benchmark.yml
+    optional: true
 
 tasks:
   default:

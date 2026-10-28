@@ -50,7 +50,7 @@ flowchart TD
     N03 --> N04{"04 IntentRouting"}
     N04 -->|social| Social["Static social template"]
     N04 -->|off-topic| N05["05 OffTopicReject<br/>static template"]
-    N04 -->|calculation| N07["07 Calculation (concurrent)<br/>rule router → extractor LLM → built-in formula<br/>or Qdrant formula + 7 checks → Python computes"]
+    N04 -->|calculation| N07["07 Calculation (concurrent)<br/>extractor LLM → registered formula (version)<br/>Python: forward or solved for one unknown<br/>no formula → joins advisory"]
     N04 -->|advisory| N06["06 QueryTransformation (LLM)<br/>SINGLE: HyDE · MULTI: decompose into sub-queries"]
     Resume --> N07
     Resume --> N06
@@ -93,10 +93,12 @@ Notes:
   lease that outlives the claimed turn's hard deadline. Java's `messages.metadata` is only a
   projection; the event is sent after both are written.
 - **Calculation** (`docs/specs/SPEC-calculation-node.md`, `app/calculation/`): Python computes
-  the forward calculation of the built-in formulas (GPA, course score, grade conversion) in
-  `formulas.py`. Everything else (target questions, formulas from documents, follow-ups) is
-  computed by the LLM (`main/chat_calculation_llm.yaml`), labelled "Kết quả do AI tự tính, có thể
-  sai" with Đúng/Sai feedback (kill switch `CHAT_CALC_LLM_ENABLED`). Node 10 only gets the titles
+  every number from the formula registry (`formulas.py`: GPA, course score, grade conversion,
+  tuition, admission score 2026, transcript score, syllabus-weighted score - each with a version
+  and a source), forward or solved for one unknown (`solver.py`: "cuối kỳ cần bao nhiêu để được
+  A+"). The LLM only routes and copies the user's numbers. A question no formula covers joins
+  the advisory part: node 10 shows the documents' formula and figures and leaves the arithmetic
+  to the user (since 26/10/2026; the "AI tự tính" path is retired). Node 10 only gets the titles
   of what was computed, never a number.
 
 ## Ingestion Flow

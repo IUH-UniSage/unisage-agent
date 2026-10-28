@@ -224,5 +224,9 @@ def _to_retrieved_chunk(point: ScoredPoint | Record, score: float) -> RetrievedC
             "region_type": payload.get("region_type"),
             # Hybrid: BM25 found it, no dense cosine was measured; `score` is a stand-in.
             "lexical_only": bool(payload.get(qdrant_store.LEXICAL_ONLY_FLAG, False)),
+            # Evidence signals (app/graph/evidence.py); None on a fetched or dense-only point.
+            "rrf_score": payload.get(qdrant_store.RRF_SCORE_KEY),
+            "dense_rank": payload.get(qdrant_store.DENSE_RANK_KEY),
+            "bm25_rank": payload.get(qdrant_store.BM25_RANK_KEY),
         },
     )

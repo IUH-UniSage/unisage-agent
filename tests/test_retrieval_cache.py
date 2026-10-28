@@ -129,6 +129,15 @@ def test_config_fingerprint_tracks_settings_and_templates(monkeypatch: pytest.Mo
     assert rc.config_fingerprint("l1") != before_l1
 
 
+def test_config_fingerprint_changes_with_the_rerank_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    before = rc.config_fingerprint("l2")
+    monkeypatch.setattr(settings, "CHAT_RERANK_MODE", "cross_encoder")
+    with_ce = rc.config_fingerprint("l2")
+    assert with_ce != before
+    monkeypatch.setattr(settings, "CHAT_CROSS_ENCODER_KEEP", settings.CHAT_CROSS_ENCODER_KEEP + 1)
+    assert rc.config_fingerprint("l2") != with_ce
+
+
 def test_ttl_with_jitter_stays_within_ten_percent() -> None:
     rng = random.Random(7)
     for _ in range(50):

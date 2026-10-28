@@ -1,22 +1,18 @@
-"""A pool of Gemini API keys for the judge (Task 11, `spec.md` §5).
+"""A pool of API keys shared by every judge adapter (Task 11, `spec.md` §5).
 
-Free-tier quotas apply per project and per model: each key gets its own client-side request
-limit (≤ 12 RPM by default) and the keys are used round-robin. What happens on an error:
+Each key gets its own client-side request limit (≤ `rpm` per 60 s) and the keys are used
+round-robin. An adapter's client raises errors carrying `.code` (HTTP status) and `.details`;
+`classify` reads them by duck typing, so the pool knows no provider SDK. What happens:
 
 - 429 out of requests per minute: wait the `retryDelay` the error gives, on another key;
-- 429 out of requests per day: the key sits out until the daily reset (midnight Pacific time),
-  or only `rpd_recheck_s` when set - Google's free tier sometimes answers per-day 429 for a key
-  that still has quota, so the key is tried again later;
-- 503 / 500 / 504 / client timeout: the key cools down 2-32 s (backoff with jitter) and the call
-  moves on to another key; after `max_unavailable` / `max_timeouts` tries `ModelUnavailable`
-  (the caller can switch to the fallback model) or `CallFailed`;
-- 401 / 403 (the key's project is blocked, "Your project has been denied access"): the key is
-  dropped from the pool for the rest of the run and the call moves on to another key;
-  `CallFailed` once no key is left;
+- 429 out of requests per day (Gemini free tier): the key sits out until the daily reset
+  (midnight Pacific time), or only `rpd_recheck_s` when set;
+- 5xx (proxy 52x included) / client timeout: the key cools down 2-32 s (backoff with jitter) and
+  the call moves on to another key; after `max_unavailable` / `max_timeouts` tries
+  `ModelUnavailable` (the caller can switch to the fallback model) or `CallFailed`;
+- 401 / 403: the key is dropped from the pool for the rest of the run; `CallFailed` once no
+  key is left;
 - every key out for the day: `QuotaExhausted` with the earliest reset time.
-
-Nothing here imports `google.genai`: errors are read by duck typing (`.code`, `.details`), so
-the pool is tested with a fake client.
 """
 
 import asyncio
@@ -27,7 +23,7 @@ import time
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 WINDOW_S = 60.0
@@ -60,7 +56,7 @@ def mask(key: str) -> str:
 def next_daily_reset(now: float | None = None) -> float:
     """Epoch seconds of the next midnight in Pacific time, when Gemini's daily quota resets."""
 
-    moment = datetime.fromtimestamp(now if now is not None else time.time(), tz=timezone.utc)
+    moment = datetime.fromtimestamp(now if now is not None else time.time(), tz=UTC)
     try:
         from zoneinfo import ZoneInfo
 
@@ -98,7 +94,7 @@ class KeyPool:
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
     ) -> None:
         if not keys:
-            raise ValueError("no API keys: set GEMINI_API_KEYS")
+            raise ValueError("no API keys")
         self.keys = [KeyState(key) for key in dict.fromkeys(keys)]
         self.rpm = rpm
         self._clock, self._wall, self._sleep = clock, wall, sleep
@@ -154,10 +150,11 @@ def classify(error: BaseException) -> tuple[str, float | None]:
             return "rpd", None
         match = _RETRY_DELAY.search(text)
         return "rpm", float(match.group(1)) if match else None
-    if code in (500, 502, 503):
-        return "unavailable", None
     if code == 504:
         return "timeout", None
+    # 500/502/503 and proxy errors such as Cloudflare's 520-527 (525: SSL handshake failed)
+    if isinstance(code, int) and 500 <= code < 600:
+        return "unavailable", None
     if code in (401, 403):
         return "denied", None
     return "fatal", None
@@ -173,7 +170,7 @@ def _error_text(error: BaseException) -> str:
 
 
 @dataclass
-class GeminiCaller:
+class PooledCaller:
     """Runs one request against a model through its key pool, retrying as the module says."""
 
     pools: dict[str, KeyPool]

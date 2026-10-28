@@ -135,10 +135,21 @@ class ClarificationPanel(_Strict):
 # --- pending round (server-side state) ---------------------------------------
 
 
+class CalculationTarget(_Strict):
+    """The target of an inverse calculation: an output key of the formula, how the output
+    must compare to `value`, and the value (a number, or a letter grade such as "A+")."""
+
+    output: str = Field(min_length=1, max_length=32)
+    op: Literal[">=", "<=", "=="] = ">="
+    value: str = Field(min_length=1, max_length=32)
+
+
 class CalculationPlan(_Strict):
-    """How a pending calculation task is finished on resume: a built-in formula computed
-    by Python (forward only), or `llm` - the LLM computes it (target questions, formulas
-    from documents, follow-ups), retrieving with `retrieval_query` when set."""
+    """How a pending calculation task is finished on resume: a registered formula
+    computed by Python - forward, or solved for `solve_for` so that `target` holds.
+    `arithmetic` is plain arithmetic over the student's own numbers (computed at once,
+    never resumed). `llm` is the retired LLM path (26/10/2026): a round stored with it is
+    still readable and resumes to a fixed sentence."""
 
     formula_id: Literal[
         "gpa",
@@ -147,17 +158,28 @@ class CalculationPlan(_Strict):
         "tuition_semester",
         "tuition_year",
         "tuition_program",
+        "admission_score_2026",
+        "transcript_score_3hk",
+        "weighted_score",
+        "date_span",
+        "time_span",
+        "arithmetic",
         "llm",
     ]
+    # Inverse calculation: the param to find ("ck", or a list position "diem[4]") and
+    # the target its output must meet. Both or neither.
+    solve_for: str | None = Field(default=None, max_length=32)
+    target: CalculationTarget | None = None
+    # Retired `llm` plans only, kept so stored rounds still parse.
     retrieval_query: str | None = Field(default=None, max_length=500)
-    # `llm` only: the documents the LLM saw when it asked, reused on resume by id - no
-    # second search + rerank for the same question.
     chunk_ids: list[str] | None = Field(default=None, max_length=20)
 
     @model_validator(mode="after")
-    def _query_only_for_llm(self) -> "CalculationPlan":
+    def _consistent(self) -> "CalculationPlan":
         if self.formula_id != "llm" and self.retrieval_query is not None:
             raise ValueError("retrieval_query is only for an llm plan")
+        if (self.solve_for is None) != (self.target is None):
+            raise ValueError("solve_for and target go together")
         return self
 
 

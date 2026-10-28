@@ -23,7 +23,7 @@ import re
 from typing import Any
 
 FENCE = "```"
-CAPTURED_TYPES = frozenset({"ask_user_form", "confirmed_metadata"})
+CAPTURED_TYPES = frozenset({"ask_user_form", "confirmed_metadata", "calc_request"})
 # Longest language tag we wait for before deciding a fence is not ```json.
 _LANG_LOOKAHEAD = 16
 _JSON_LANG = re.compile(r"json(?![a-z0-9_-])", re.IGNORECASE)

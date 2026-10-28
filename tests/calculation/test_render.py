@@ -19,6 +19,25 @@ CASES: dict[FormulaId, Mapping[str, object]] = {
     },
     "grade_conversion": {"score10": "8.45"},
     "tuition_program": {"tc_lt": 100, "tc_th": 42, "don_gia_lt": 980000, "don_gia_th": 1600000},
+    "admission_score_2026": {"dtn": 22, "dgnl": 900, "dtk": 1100, "dhb": 25, "uu_tien": 0.25},
+    "transcript_score_3hk": {
+        "mon1": "Toán",
+        "m1_10": 7.5,
+        "m1_11": 8,
+        "m1_12": 8.5,
+        "m2_10": 6,
+        "m2_11": 6.5,
+        "m2_12": 7,
+        "mon3": "Lý",
+        "m3_10": 4.5,
+        "m3_11": 5,
+        "m3_12": 5.5,
+    },
+    "weighted_score": {
+        "trong_so": [20, 30, 50],
+        "diem": [9, 7, 9.2],
+        "lam_tron_thanh_phan": 0.5,
+    },
 }
 
 
@@ -39,3 +58,11 @@ def test_notice_comes_first() -> None:
         calculate("grade_conversion", {"score10": 7}), notice="Kết quả tham khảo theo quy chế"
     )
     assert rendered.startswith("**Kết quả tham khảo theo quy chế**\n\n**Quy đổi")
+
+
+def test_formula_latex_is_rendered_as_display_math_blocks() -> None:
+    rendered = render_markdown(calculate("admission_score_2026", CASES["admission_score_2026"]))
+    assert "\n$$\n\\text{ĐXT} = \\max(\\text{XT1},\\ \\text{XT2},\\ \\text{XT3})\n$$\n" in rendered
+    assert rendered.index("$$") < rendered.index("- ĐTN: tổng điểm 3 môn")
+    # A formula without LaTeX keeps its text lines only.
+    assert "$$" not in render_markdown(calculate("grade_conversion", {"score10": 8}))

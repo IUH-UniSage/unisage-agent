@@ -196,14 +196,25 @@ def result_row(
         "expected_web_outcome": question.get("expected_web_outcome"),
         "expected_source_hosts": question.get("expected_source_hosts") or [],
         "forbidden_source_patterns": question.get("forbidden_source_patterns") or [],
+        "unanswerable_kind": question.get("unanswerable_kind"),
         "access": access,
         "web": web,
         "response": result.response_text,
         "citations": output.citations if output else [],
         "used_ticket_fallback": bool(output and output.used_ticket_fallback),
         "used_web_search": bool(output and output.used_web_search),
+        "evidence": output.evidence if output else [],
         "asked_back": bool(output and output.pending_round is not None),
         "calculation_items": output.calculation_items if output else [],
+        "calculation_formulas": (
+            [
+                str((trace.get("trace") or {}).get("formula_id") or "")
+                for trace in output.calculation_traces
+            ]
+            if output
+            else []
+        ),
+        "expected_calculation": question.get("expected_calculation"),
         "nodes": recording.nodes,
         "prompts": {
             name: texts
@@ -382,8 +393,8 @@ def write_summary(out: Path) -> dict[str, Any]:
         json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8"
     )
     print(
-        f"\n{'variant/category':<28}{'rows':>6}{'pass':>6}{'fail':>6}{'pend':>6}{'err':>5}"
-        f"{'recall@5':>11}{'leak':>8}"
+        f"\n{'variant/category':<32}{'rows':>6}{'pass':>6}{'fail':>6}{'pend':>6}{'err':>5}"
+        f"{'recall@5':>11}{'leak':>8}{'fabr':>6}{'ungr':>6}"
     )
     for name, counts in summary["table"].items():
         recall = (
@@ -391,8 +402,9 @@ def write_summary(out: Path) -> dict[str, Any]:
         )
         leak = f"{counts.get('leak', 0)}/{counts['leak_n']}" if counts.get("leak_n") else "-"
         print(
-            f"{name:<28}{counts['rows']:>6}{counts.get('pass', 0):>6}{counts.get('fail', 0):>6}"
+            f"{name:<32}{counts['rows']:>6}{counts.get('pass', 0):>6}{counts.get('fail', 0):>6}"
             f"{counts.get('pending', 0):>6}{counts.get('error', 0):>5}{recall:>11}{leak:>8}"
+            f"{counts.get('fabricated', 0):>6}{counts.get('ungrounded', 0):>6}"
         )
     print(f"latency {summary['latency_ms']}  ttft {summary['ttft_ms']}")
     if summary["web"].get("searches"):

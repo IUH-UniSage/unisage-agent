@@ -56,3 +56,7 @@ htmlcov/
 celerybeat-schedule*
 # evals.run output (answers, retrieved chunks)
 runs/
+
+# UNISAGE-106: benchmark reports are local artefacts
+benchmark_results/
+reranker/.venv/

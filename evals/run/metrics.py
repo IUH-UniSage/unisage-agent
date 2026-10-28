@@ -25,6 +25,19 @@ REFUSAL_HINTS = (
     "không có quyền",
     "tạo ticket",
     "gửi yêu cầu hỗ trợ",
+    # Stated limits (UNISAGE-106 Phase 6): a partial answer, a wrong premise, a missing year.
+    "không đủ dữ liệu",
+    "chưa có đủ thông tin",
+    "chưa đủ thông tin",
+    "chưa đủ dữ liệu",
+    "không có quy định",
+    "không tồn tại",
+    "không đề cập",
+    "chưa có quyết định",
+    "chưa có quy chế",
+    "chưa có thông báo",
+    "không có kết quả",
+    "chưa có dữ liệu",
     "liên hệ",
 )
 
@@ -87,6 +100,18 @@ def web_pages(row: dict[str, Any]) -> list[dict[str, Any]]:
     """Every web page the turn used: quoted in the answer or linked by the fallback."""
 
     return [*(row.get("web_results") or []), *(row.get("web_sources") or [])]
+
+
+def wrong_source_used(row: dict[str, Any]) -> bool | None:
+    """An `unanswerable/near_miss` question: did the answer cite a document matching one of
+    `forbidden_source_patterns` (title, case-insensitive) - the "nearly right" document used as
+    if it answered? None when the question sets no pattern."""
+
+    patterns = [pattern.lower() for pattern in row.get("forbidden_source_patterns") or []]
+    if not patterns:
+        return None
+    titles = [str(c.get("title") or "") for c in row.get("citations") or []]
+    return any(pattern in title.lower() for title in titles for pattern in patterns)
 
 
 def web_scope_ok(row: dict[str, Any]) -> bool | None:
@@ -229,12 +254,48 @@ def _readings(token: str) -> list[float]:
     return [float(token)]
 
 
+_HOURS_MINUTES = re.compile(r"(\d+)\s*(?:giờ|h)\s*(\d{1,2})\s*(?:phút)?\b", re.IGNORECASE)
+
+
 def numbers_match(expected: Sequence[float], text: str) -> bool:
-    found = numbers_in(text)
-    return all(round(float(n), 6) in found for n in expected)
+    found = set(numbers_in(text))
+    # "37 giờ 30 phút" states 37,5 giờ; "13 giờ 10 phút" states 13,1667 giờ.
+    for hours, minutes in _HOURS_MINUTES.findall(text or ""):
+        found.add(round(int(hours) + int(minutes) / 60, 6))
+        found.add(round(int(hours) + int(minutes) / 60, 2))
+    return all(round(float(n), 6) in found or round(float(n), 2) in found for n in expected)
 
 
 _RESULT_AFTER_EQUALS = re.compile(r"=\s*([0-9][0-9.,\s]*[0-9]|[0-9])")
+
+
+def calculation_path(row: dict[str, Any]) -> str:
+    """What computed the turn's numbers: `formula:<id>` / `arithmetic` (the calculation
+    node, from the staff trace's formula ids), `calc_request` (an advisory answer with a
+    code-computed block) or `advisory` (figures quoted, nothing computed)."""
+
+    formulas = [f for f in row.get("calculation_formulas") or [] if f]
+    if formulas:
+        first = formulas[0]
+        return "arithmetic" if first == "arithmetic" else f"formula:{first}"
+    if row.get("calculation_items"):
+        return "formula:?"
+    if "Phép tính số học" in (row.get("response") or ""):
+        return "calc_request"
+    return "advisory"
+
+
+def calculation_path_ok(expected: str, actual: str) -> bool:
+    """`advisory` accepts a quoted answer or a code-computed `calc_request` block;
+    `arithmetic` accepts the calculation node or a `calc_request` block (both computed by
+    code; operands read from a cited document go through the advisory answer, 28/10/2026);
+    a formula tag requires exactly that formula."""
+
+    if expected == "advisory":
+        return actual in ("advisory", "calc_request")
+    if expected == "arithmetic":
+        return actual in ("arithmetic", "calc_request")
+    return actual == expected
 
 
 def numbers_from_answer(answer: str) -> list[float]:
@@ -296,6 +357,12 @@ def score_row(row: dict[str, Any]) -> dict[str, Any]:
         "leaked": leaked_documents(row),
         "refusal_hint": looks_like_refusal(answer),
         "asked_back": bool(row.get("asked_back")),
+        # Grounding check of the graph (app/graph/grounding.py), read from its warnings.
+        "ungrounded": bool(
+            {"ANSWER_UNGROUNDED_NUMBERS", "CALC_UNGROUNDED_INPUT"}
+            & set(row.get("warning_codes") or [])
+        ),
+        "no_citation": "ANSWER_NO_CITATION" in (row.get("warning_codes") or []),
     }
     passed: bool | None = None
     if "error" in outcome:
@@ -320,8 +387,27 @@ def score_row(row: dict[str, Any]) -> dict[str, Any]:
         checks["hidden_document_used"] = hidden_document_used(row)
         passed = not checks["leaked"] and not checks["hidden_document_used"]
     elif category == "unanswerable":
+        kind = row.get("unanswerable_kind") or "legacy"
         refused = "ticket" in outcome or checks["refusal_hint"]
-        passed = not checks["leaked"] and refused
+        checks["wrong_source"] = wrong_source_used(row)
+        if kind == "calc_missing_input":
+            # Asking for the missing input is the right move; a stated limit also counts.
+            passed = not checks["leaked"] and (checks["asked_back"] or refused)
+        else:
+            # Citing the nearly-right document is fine when the limit is stated ("chỉ có
+            # quyết định 2025-2026"); it is fabrication only without that statement.
+            passed = not checks["leaked"] and refused
+        # A confident answer where none was possible: figures with no source, the wrong
+        # document, or simply numbers stated without any limit - what "bịa" looks like.
+        checks["fabricated"] = (
+            passed is False
+            and not checks["asked_back"]
+            and (
+                bool(checks["wrong_source"])
+                or checks["ungrounded"]
+                or (not refused and bool(re.search(r"\d", answer)))
+            )
+        )
     elif category == "calculation" or row.get("expected_intent") == "academic_calculation":
         numbers = row.get("expected_numbers")
         checks["numbers_source"] = "expected_numbers" if numbers else None
@@ -329,13 +415,32 @@ def score_row(row: dict[str, Any]) -> dict[str, Any]:
             numbers = numbers_from_answer(row.get("expected_answer") or "")
             checks["numbers_source"] = "answer" if numbers else None
         checks["numbers_match"] = numbers_match(numbers, answer) if numbers else None
-        # A category=calculation question must take the calculation branch; one only labelled
-        # academic_calculation (e.g. "which courses, how many credits") may be answered by RAG.
-        allowed = {"calculation"} if category == "calculation" else {"calculation", "rag"}
-        if not allowed & set(outcome) or checks["asked_back"] or checks["leaked"]:
-            passed = False
-        elif checks["numbers_match"] is not None:
-            passed = checks["numbers_match"]
+        expected_path = row.get("expected_calculation")
+        checks["calc_path"] = calculation_path(row)
+        if expected_path:
+            # Tagged (26/10/2026): the question must take the expected path - a registry
+            # formula or plain arithmetic computed by code, or the advisory path (figures
+            # quoted, a calc_request block computed by code) - and the numbers must appear.
+            # On the advisory path a number the model worked out itself (strict grounding)
+            # fails the row even when it is right.
+            checks["calc_path_ok"] = calculation_path_ok(expected_path, checks["calc_path"])
+            if not checks["calc_path_ok"] or checks["asked_back"] or checks["leaked"]:
+                passed = False
+            elif expected_path == "advisory" and checks["ungrounded"]:
+                passed = False
+            elif checks["numbers_match"] is not None:
+                passed = checks["numbers_match"]
+            elif expected_path == "advisory":
+                passed = None  # correctness of a quoted answer needs the judge
+        else:
+            # A category=calculation question must take the calculation branch; one only
+            # labelled academic_calculation (e.g. "which courses, how many credits") may be
+            # answered by RAG.
+            allowed = {"calculation"} if category == "calculation" else {"calculation", "rag"}
+            if not allowed & set(outcome) or checks["asked_back"] or checks["leaked"]:
+                passed = False
+            elif checks["numbers_match"] is not None:
+                passed = checks["numbers_match"]
     else:  # normal, access visible
         if "rag" not in outcome or checks["recall_at_5"] is False or checks["leaked"]:
             passed = False
@@ -373,7 +478,10 @@ def summarize(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         web["answered_from_web"] += "web" in checks["outcome"]
         web["linked_sources"] += "web_source" in checks["outcome"]
         web["wrong_scope"] += checks.get("web_scope_ok") is False
-        bucket = table[(row["variant"], row["category"])]
+        label = row["category"]
+        if label == "unanswerable" and row.get("unanswerable_kind"):
+            label = f"unanswerable/{row['unanswerable_kind']}"
+        bucket = table[(row["variant"], label)]
         bucket["rows"] += 1
         if "error" in checks["outcome"]:
             bucket["error"] += 1
@@ -390,6 +498,9 @@ def summarize(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         if row.get("expect_visible") is False:
             bucket["leak_n"] += 1
             bucket["leak"] += bool(checks["leaked"])
+        bucket["ungrounded"] += bool(checks.get("ungrounded"))
+        bucket["no_citation"] += bool(checks.get("no_citation"))
+        bucket["fabricated"] += bool(checks.get("fabricated"))
         if checks["leaked"]:
             leaks.append({"id": row["id"], "persona": row.get("persona"), "docs": checks["leaked"]})
         latencies.append(row["total_ms"])

@@ -19,10 +19,20 @@ evals/
     runner.py     python -m evals.run
     recording.py  captures nodes, retrieval, context and TTFT of a turn
     metrics.py    deterministic checks: outcome, recall@5, leakage, citations, latency
-  judge/       4. RAGAS scores on Gemini, in its own environment
-    cli.py        python -m evals.judge
-    ragas_metrics.py  the RAGAS metrics and the Gemini LLM/embeddings they call
-    gemini_pool.py    key pool: per-key RPM, daily-quota reset (or --rpd-recheck), 503/504 move on to another key
+  judge/       4. RAGAS scores, in its own environment
+    cli.py        python -m evals.judge (flags, picks the providers, prints the summary)
+    tasks.py      which metrics a row gets and their inputs
+    cost.py       list-price estimate and the --max-cost guard
+    runner.py     the run: concurrency, quota waits, fallback re-scoring
+    checkpoint.py judge.jsonl, merge into results.jsonl, judge_summary.json
+    ledger.py     calls, tokens, USD, models and masked keys of each score
+    ragas_metrics.py  the RAGAS metrics and the JudgeLLM/JudgeEmbeddings bridge to an adapter
+    providers/    one adapter per judge provider, behind one interface
+      base.py         JudgeAdapter: generate_json(model, prompt, schema), embed(model, texts)
+      pool.py         key pool: per-key RPM, daily-quota reset, 429/5xx/timeout retries, 401/403 drop
+      gemini.py       google-genai (GEMINI_API_KEYS)
+      openai_compat.py  any Chat Completions endpoint, e.g. Qwen (JUDGE_OPENAI_*)
+      __init__.py     registry + choice from JUDGE_PROVIDER / JUDGE_EMBEDDING_PROVIDER
     prompts/      RAGAS prompt examples translated to Vietnamese (cached, reused)
     requirements.in / requirements.txt  pinned judge environment
 ```
@@ -41,10 +51,31 @@ evals/
 
 The judge cannot share the service's dependencies (RAGAS 0.4.3 pins `instructor`, which would
 downgrade the service's `openai` and `pydantic-ai`), so `task eval:judge` runs it with
-`uv run --isolated --no-project --with-requirements evals/judge/requirements.txt`. Its keys are
-`GEMINI_API_KEYS` in `.env.eval` (comma-separated, never committed). Its tests:
-`pytest tests/evals/test_judge.py` in the service environment, and
-`tests/evals/test_judge_ragas.py` with `--noconftest` in the judge environment.
+`uv run --isolated --no-project --with-requirements evals/judge/requirements.txt`. Its tests:
+`pytest tests/evals/test_judge.py tests/evals/test_judge_openai_compat.py` in the service
+environment, and `tests/evals/test_judge_ragas.py` with `--noconftest` in the judge environment.
+
+## Judge provider
+
+Picked from `.env.eval` (never committed) or the environment; `--judge-provider` and
+`--embedding-provider` override, `--judge-model` / `--judge-fallback` / `--embedding-model`
+override the models.
+
+| Variable | Meaning |
+|---|---|
+| `JUDGE_PROVIDER` | `gemini` (default) or `openai_compat` |
+| `JUDGE_EMBEDDING_PROVIDER` | who embeds for answer_relevancy; default the judge provider if it can embed, else `gemini` |
+| `GEMINI_API_KEYS` | Gemini keys, comma separated |
+| `JUDGE_OPENAI_BASE_URL`, `JUDGE_OPENAI_API_KEYS` | endpoint and keys of `openai_compat` |
+| `JUDGE_OPENAI_MODEL`, `JUDGE_OPENAI_FALLBACK_MODEL` | judge model (required) and optional fallback |
+| `JUDGE_OPENAI_EMBEDDING_MODEL` | set only if the endpoint has `/embeddings` |
+| `JUDGE_OPENAI_RESPONSE_FORMAT` | `json_object` (default), `json_schema` or `none` |
+| `JUDGE_OPENAI_RPM` | requests per minute per key (default `--rpm`) |
+
+A new provider is one module in `providers/` implementing `JudgeAdapter` plus one line in
+`providers.ADAPTERS`. Scores made by different judges are not comparable: judge a run with a
+new provider in its own folder (copy `results.jsonl` and `config.json`, not `judge.jsonl`);
+`judge_summary.json` records the providers and models used.
 
 ## What the judge scores
 

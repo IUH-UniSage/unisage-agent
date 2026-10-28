@@ -31,6 +31,16 @@ class CalculationResult:
     # The one result line shown to the student (markdown); None = built from `outputs`.
     # Grade conversions fold the band lookup in here instead of repeating it as a step.
     summary: str | None = None
+    # Numeric value of each output, keyed by `OutputSpec.key` - what the solver reads
+    # when a target is set on it, and what the trace records.
+    values: dict[str, Decimal] = field(default_factory=dict)
+    # Filled by `calculate()` from the registry: the formula's version and its source
+    # document, shown under the formula lines.
+    version: str = ""
+    source: str = ""
+    # The same formula as display math (one LaTeX expression per line), rendered by the
+    # client with KaTeX inside `$$ … $$`; empty = text lines only.
+    formula_latex: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

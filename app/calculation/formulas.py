@@ -8,10 +8,11 @@ half-up via `round_half_up` - never Python's banker's `round()`.
 Spec: docs/specs/SPEC-calc-engine.md.
 """
 
+import datetime as _dt
 import re
 import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
 
@@ -262,6 +263,7 @@ def grade_conversion(params: Mapping[str, object]) -> CalculationResult:
             ("Thang 4", fixed(band.gp4, 1)),
         ),
         summary=_conversion_summary("Điểm", rounded, band),
+        values={"diem10": rounded, "thang4": band.gp4},
     )
 
 
@@ -269,6 +271,13 @@ def grade_conversion(params: Mapping[str, object]) -> CalculationResult:
 # Course score (học phần tích hợp lý thuyết + thực hành)
 # ---------------------------------------------------------------------------
 
+COURSE_SCORE_FORMULA_LATEX = (
+    r"\text{TBtx} = \frac{TX_1 + TX_2 + \dots + TX_n}{n}",
+    r"\text{ĐLT} = 0{,}2 \times \text{TBtx} + 0{,}3 \times \text{GK} + 0{,}5 \times \text{CK}",
+    r"\text{ĐTH} = \frac{TH_1 + TH_2 + \dots + TH_n}{n}",
+    r"\text{ĐTKHP} = \frac{\text{ĐLT} \times \text{TCLT} + \text{ĐTH} \times \text{TCTH}}"
+    r"{\text{TCLT} + \text{TCTH}}",
+)
 COURSE_SCORE_FORMULA_TEXT = (
     "Điểm từng cột TX, GK, CK, TH làm tròn đến 0.5 (lẻ dưới 0.25 → 0; từ 0.25 đến dưới 0.75 → 0.5;"
     " từ 0.75 → 1)",
@@ -485,6 +494,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
         formula_id="course_score",
         title="Điểm tổng kết học phần (lý thuyết + thực hành)",
         formula_text=COURSE_SCORE_FORMULA_TEXT,
+        formula_latex=COURSE_SCORE_FORMULA_LATEX,
         inputs=tuple(inputs),
         steps=tuple(steps),
         outputs=(
@@ -493,6 +503,7 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
             ("Thang 4", fixed(band.gp4, 1)),
         ),
         summary=_conversion_summary("ĐTKHP", final, band),
+        values={"dtkhp": final, "thang4": band.gp4},
     )
 
 
@@ -503,6 +514,9 @@ def course_score(params: Mapping[str, object]) -> CalculationResult:
 GPA_COURSES_MAX = 30
 COURSE_CREDIT_MIN = 1
 COURSE_CREDIT_MAX = 10
+GPA_FORMULA_LATEX = (
+    r"\text{GPA} = \frac{\sum_i \text{điểm thang 4}_i \times \text{TC}_i}{\sum_i \text{TC}_i}",
+)
 GPA_FORMULA_TEXT = (
     f"Điểm chất lượng của môn = điểm hệ 4 {TIMES} số tín chỉ",
     f"GPA = Σ (điểm hệ 4 {TIMES} số tín chỉ) / Σ số tín chỉ, làm tròn đến 0.01",
@@ -610,12 +624,14 @@ def gpa(params: Mapping[str, object]) -> CalculationResult:
         formula_id="gpa",
         title="Điểm trung bình (GPA) thang 4",
         formula_text=GPA_FORMULA_TEXT,
+        formula_latex=GPA_FORMULA_LATEX,
         inputs=tuple(
             (name, f"{credits} TC, điểm {score_text.split(' → ')[0]}")
             for name, credits, score_text, _ in rows
         ),
         steps=tuple(steps),
         outputs=(("GPA", fixed(final, 2)), ("Tổng tín chỉ", str(total_credits))),
+        values={"gpa": final, "tong_tin_chi": Decimal(total_credits)},
     )
 
 
@@ -631,6 +647,10 @@ TUITION_SCOPES: dict[TuitionScope, str] = {
     "tuition_year": "một năm học",
     "tuition_program": "cả khoá học",
 }
+TUITION_FORMULA_LATEX = (
+    r"\text{Học phí} = \text{TC}_{LT} \times \text{đơn giá}_{LT}"
+    r" + \text{TC}_{TH} \times \text{đơn giá}_{TH}",
+)
 TUITION_FORMULA_TEXT = (
     f"Học phí = TC lý thuyết {TIMES} đơn giá 1 TC lý thuyết"
     f" + TC thực hành {TIMES} đơn giá 1 TC thực hành",
@@ -717,6 +737,7 @@ def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], Calculatio
             formula_id=scope,
             title=title,
             formula_text=TUITION_FORMULA_TEXT,
+            formula_latex=TUITION_FORMULA_LATEX,
             inputs=(
                 ("TC lý thuyết", str(lt)),
                 ("TC thực hành", str(th)),
@@ -748,6 +769,7 @@ def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], Calculatio
             ),
             outputs=((title, money(total)),),
             warnings=TUITION_WARNINGS,
+            values={"hoc_phi": total},
         )
 
     return compute
@@ -765,6 +787,11 @@ FormulaId = Literal[
     "tuition_semester",
     "tuition_year",
     "tuition_program",
+    "admission_score_2026",
+    "transcript_score_3hk",
+    "weighted_score",
+    "date_span",
+    "time_span",
 ]
 
 
@@ -909,17 +936,966 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
 
 
 @dataclass(frozen=True)
+class OutputSpec:
+    """One output of a formula - what a target question names ("để ĐXT đạt 24")."""
+
+    key: str
+    label: str
+    money: bool = False  # shown as whole đồng (học phí), not as a score
+
+
+@dataclass(frozen=True)
 class Formula:
+    """A registered, versioned calculation. `version` is "<năm văn bản>.<lần sửa>" for a
+    formula bound to one document and "1", "2"... for a standing rule; `source` names
+    the document the rule was taken from. Both are shown under the formula lines and
+    recorded in the trace, so an answer can always be tied to the rule it used."""
+
     formula_id: FormulaId
+    version: str
+    source: str
     title: str
     description: str
     params: tuple[ParamSpec, ...]
+    outputs: tuple[OutputSpec, ...]
     compute: Callable[[Mapping[str, object]], CalculationResult]
+    # The rounding the formula applies to a param before using it (0.5 for a recorded
+    # score), given the other params; None = none. The solver searches on that grid.
+    rounding_of: Callable[[Mapping[str, object], str], Decimal | None] | None = None
+
+
+def _when_positive(field: str) -> Callable[[Mapping[str, object]], bool]:
+    """Needed only once another param is a positive number (ĐTK once a ĐGNL result is;
+    "0" there means the student did not sit the test)."""
+
+    def required(params: Mapping[str, object]) -> bool:
+        value = to_decimal(params.get(field))
+        return value is not None and value > 0
+
+    return required
+
+
+def _optional_number(
+    params: Mapping[str, object],
+    name: str,
+    errors: list[FieldError],
+    *,
+    minimum: Decimal,
+    maximum: Decimal,
+    default: Decimal | None,
+) -> Decimal | None:
+    """A number in [minimum, maximum]; `default` when not given (None = required)."""
+
+    raw = params.get(name)
+    if raw is None:
+        if default is None:
+            _missing(name, errors)
+        return default
+    number = to_decimal(raw)
+    if number is None:
+        errors.append(FieldError(name, "phải là một số"))
+        return None
+    if not minimum <= number <= maximum:
+        errors.append(
+            FieldError(
+                name,
+                f"bạn nhập {plain(number)}, giá trị phải từ {plain(minimum)} đến {plain(maximum)}",
+            )
+        )
+        return None
+    if _decimal_places(number) > SCORE_MAX_PLACES:
+        errors.append(FieldError(name, "tối đa 2 chữ số thập phân"))
+        return None
+    return number
+
+
+# Sources shown under every result and kept in the trace (`Formula.source`).
+COURSE_SCORE_SOURCE = (
+    "Quy chế đào tạo đại học chính quy theo tín chỉ của Trường (điểm học phần, GPA, quy đổi"
+    " điểm; quy tắc chốt 09/10/2026)"
+)
+TUITION_SOURCE = (
+    "Quyết định mức thu học phí theo năm học của Trường (biểu phí theo khoá, khối ngành)"
+)
+
+
+# ---------------------------------------------------------------------------
+# Admission score 2026 (điểm xét tuyển đại học chính quy, thang 30)
+# ---------------------------------------------------------------------------
+
+ADMISSION_2026_VERSION = "2026.1"
+ADMISSION_2026_SOURCE = "Công thức tính điểm xét tuyển đại học chính quy năm 2026 của Trường"
+ADMISSION_2026_TITLE = "Điểm xét tuyển đại học chính quy 2026 (thang 30)"
+ADMISSION_SCALE = Decimal(30)
+ADMISSION_WEIGHT_DK = Decimal("0.7")
+ADMISSION_WEIGHT_DHB = Decimal("0.3")
+APTITUDE_SCORE_MAX = Decimal(1200)
+# The top score of the 1200-point test is never below this: a smaller "ĐTK" read from a
+# document (the "30" of "thang điểm 30") is a misread, not a top score.
+APTITUDE_TOP_MIN = Decimal(600)
+BONUS_MAX = Decimal(10)
+ADMISSION_2026_FORMULA_LATEX = (
+    r"\text{ĐĐGNL} = \frac{\text{Kết quả thi ĐGNL} \times 30}{\text{ĐTK}}",
+    r"\text{ĐK} = \max(\text{ĐTN},\ \text{ĐĐGNL})",
+    r"\text{XT1} = 0{,}7 \times \text{ĐK} + 0{,}3 \times \text{ĐHB} + \text{Đ(Kv;Đt)} + \text{ĐC}",
+    r"\text{XT2} = \text{ĐTN} + \text{Đ(Kv;Đt)} + \text{ĐC}",
+    r"\text{XT3} = \text{ĐĐGNL} + \text{Đ(Kv;Đt)} + \text{ĐC}",
+    r"\text{ĐXT} = \max(\text{XT1},\ \text{XT2},\ \text{XT3})",
+)
+ADMISSION_2026_FORMULA_TEXT = (
+    f"ĐĐGNL = kết quả thi ĐGNL {TIMES} 30 / ĐTK (ĐTK: điểm thủ khoa kỳ thi ĐGNL năm 2026)",
+    "ĐK = Max(ĐTN, ĐĐGNL); ĐTN: tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp xét tuyển",
+    f"XT1 = 0.7 {TIMES} ĐK + 0.3 {TIMES} ĐHB + Đ(Kv;Đt) + ĐC;"
+    " ĐHB: tổng điểm học bạ 3 môn trong tổ hợp",
+    "XT2 = ĐTN + Đ(Kv;Đt) + ĐC; XT3 = ĐĐGNL + Đ(Kv;Đt) + ĐC",
+    "ĐXT = Max(XT1, XT2, XT3), thang điểm 30",
+)
+ADMISSION_2026_FORMULA_NOTES = (
+    "ĐTN: tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp; ĐHB: tổng điểm học bạ 3 môn trong"
+    " tổ hợp; ĐTK: điểm thủ khoa kỳ thi ĐGNL năm 2026; Đ(Kv;Đt): điểm ưu tiên khu vực, đối tượng;"
+    " ĐC: điểm cộng",
+    "Thang điểm 30",
+)
+ADMISSION_2026_WARNINGS = (
+    "Đ(Kv;Đt) là điểm ưu tiên khu vực/đối tượng theo quy định của Bộ GD&ĐT (từ 22,5 điểm trở"
+    " lên mức ưu tiên giảm dần) - kết quả dùng đúng mức bạn đã nhập.",
+    "ĐC là điểm cộng (điểm thưởng, điểm xét thưởng, điểm khuyến khích) theo quy định của Trường.",
+)
+ADMISSION_2026_OUTPUTS = (
+    OutputSpec("ddgnl", "điểm ĐGNL quy đổi về thang 30"),
+    OutputSpec("dk", "ĐK = Max(ĐTN, ĐĐGNL)"),
+    OutputSpec("xt1", "XT1 (kết hợp điểm thi và học bạ)"),
+    OutputSpec("xt2", "XT2 (điểm thi tốt nghiệp)"),
+    OutputSpec("xt3", "XT3 (điểm ĐGNL quy đổi)"),
+    OutputSpec("dxt", "điểm xét tuyển ĐXT = Max(XT1, XT2, XT3)"),
+)
+
+
+def _score30_spec(name: str, label: str, tab_label: str) -> ParamSpec:
+    return ParamSpec(
+        name=name,
+        label=label,
+        tab_label=tab_label,
+        kind="number",
+        min=SCORE_MIN,
+        max=ADMISSION_SCALE,
+        step=Decimal("0.01"),
+    )
+
+
+ADMISSION_2026_PARAMS: tuple[ParamSpec, ...] = (
+    _score30_spec("dtn", "Tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp (ĐTN)", "ĐTN"),
+    _score30_spec("dhb", "Tổng điểm học bạ 3 môn trong tổ hợp (ĐHB)", "ĐHB"),
+    ParamSpec(
+        name="dgnl",
+        label="Kết quả thi đánh giá năng lực (nhập 0 nếu không dự thi)",
+        tab_label="ĐGNL",
+        kind="number",
+        min=SCORE_MIN,
+        max=APTITUDE_SCORE_MAX,
+        step=Decimal("0.01"),
+    ),
+    ParamSpec(
+        name="dtk",
+        label="Điểm thủ khoa kỳ thi đánh giá năng lực năm 2026 (ĐTK, thang 1200)",
+        tab_label="ĐTK",
+        kind="number",
+        required=_when_positive("dgnl"),
+        lookup="điểm thủ khoa kỳ thi đánh giá năng lực năm 2026 điểm cao nhất",
+        min=APTITUDE_TOP_MIN,
+        max=APTITUDE_SCORE_MAX,
+        step=Decimal("0.01"),
+    ),
+    ParamSpec(
+        name="uu_tien",
+        label=(
+            "Điểm ưu tiên khu vực/đối tượng Đ(Kv;Đt), đã quy đổi theo quy định của Bộ"
+            " (nhập 0 nếu không có)"
+        ),
+        tab_label="Ưu tiên",
+        kind="number",
+        min=SCORE_MIN,
+        max=BONUS_MAX,
+        step=Decimal("0.01"),
+    ),
+    ParamSpec(
+        name="diem_cong",
+        label="Điểm cộng ĐC (thưởng, xét thưởng, khuyến khích; nhập 0 nếu không có)",
+        tab_label="Điểm cộng",
+        kind="number",
+        min=SCORE_MIN,
+        max=BONUS_MAX,
+        step=Decimal("0.01"),
+    ),
+)
+
+
+def admission_score_2026(params: Mapping[str, object]) -> CalculationResult:
+    """ĐXT 2026: the aptitude result is first converted to the 30-point scale, the
+    better of exam total and converted aptitude score feeds XT1, and ĐXT is the best
+    of XT1/XT2/XT3. No rounding rule is published, so the values are exact and shown
+    with ≤ 2 decimals (`fmt`)."""
+
+    errors: list[FieldError] = []
+    dtn = _optional_number(
+        params, "dtn", errors, minimum=SCORE_MIN, maximum=ADMISSION_SCALE, default=None
+    )
+    dhb = _optional_number(
+        params, "dhb", errors, minimum=SCORE_MIN, maximum=ADMISSION_SCALE, default=None
+    )
+    dgnl = _optional_number(
+        params, "dgnl", errors, minimum=SCORE_MIN, maximum=APTITUDE_SCORE_MAX, default=Decimal(0)
+    )
+    dgnl = None if dgnl is not None and dgnl <= 0 else dgnl  # 0 = did not sit the test
+    dtk: Decimal | None = None
+    if dgnl is not None:
+        dtk = _optional_number(
+            params,
+            "dtk",
+            errors,
+            minimum=APTITUDE_TOP_MIN,
+            maximum=APTITUDE_SCORE_MAX,
+            default=None,
+        )
+        if dtk is not None and dgnl > dtk:
+            errors.append(
+                FieldError(
+                    "dtk",
+                    f"điểm thủ khoa phải lớn hơn hoặc bằng kết quả thi {plain(dgnl)} bạn đã nêu",
+                )
+            )
+    uu_tien = _optional_number(
+        params, "uu_tien", errors, minimum=SCORE_MIN, maximum=BONUS_MAX, default=Decimal(0)
+    )
+    diem_cong = _optional_number(
+        params, "diem_cong", errors, minimum=SCORE_MIN, maximum=BONUS_MAX, default=Decimal(0)
+    )
+    if errors or dtn is None or dhb is None or uu_tien is None or diem_cong is None:
+        raise CalculationInputError(errors)
+
+    text = ADMISSION_2026_FORMULA_TEXT
+    extra = uu_tien + diem_cong
+    extra_text = f" + {plain(uu_tien)} + {plain(diem_cong)}"
+    inputs: list[tuple[str, str]] = [("ĐTN", plain(dtn)), ("ĐHB", plain(dhb))]
+    steps: list[Step] = []
+    values: dict[str, Decimal] = {}
+
+    ddgnl: Decimal | None = None
+    if dgnl is not None and dtk is not None:
+        ddgnl = dgnl * ADMISSION_SCALE / dtk
+        inputs += [("Kết quả ĐGNL", plain(dgnl)), ("ĐTK", plain(dtk))]
+        steps.append(
+            Step(
+                label="Quy đổi ĐGNL về thang 30",
+                symbolic=text[0],
+                substituted=f"ĐĐGNL = {plain(dgnl)} {TIMES} 30 / {plain(dtk)} {equals(ddgnl)}",
+                value=ddgnl,
+                display=fmt(ddgnl),
+            )
+        )
+        values["ddgnl"] = ddgnl
+        dk = max(dtn, ddgnl)
+        dk_line = f"ĐK = Max({plain(dtn)}; {short(ddgnl)}) = {short(dk)}"
+    else:
+        dk = dtn
+        dk_line = f"ĐK = ĐTN = {plain(dtn)} (không dự thi ĐGNL)"
+    inputs += [("Đ(Kv;Đt)", plain(uu_tien)), ("ĐC", plain(diem_cong))]
+    steps.append(
+        Step(
+            label="Điểm thi dùng để xét",
+            symbolic=text[1],
+            substituted=dk_line,
+            value=dk,
+            display=short(dk),
+        )
+    )
+    values["dk"] = dk
+
+    part_dk = ADMISSION_WEIGHT_DK * dk
+    part_dhb = ADMISSION_WEIGHT_DHB * dhb
+    xt1 = part_dk + part_dhb + extra
+    steps.append(
+        Step(
+            label="XT1",
+            symbolic=text[2],
+            substituted=(
+                f"XT1 = 0.7 {TIMES} {short(dk)} + 0.3 {TIMES} {plain(dhb)}{extra_text}"
+                f" = {short(part_dk)} + {short(part_dhb)}{extra_text} {equals(xt1)}"
+            ),
+            value=xt1,
+            display=fmt(xt1),
+        )
+    )
+    xt2 = dtn + extra
+    steps.append(
+        Step(
+            label="XT2",
+            symbolic=text[3],
+            substituted=f"XT2 = {plain(dtn)}{extra_text} {equals(xt2)}",
+            value=xt2,
+            display=fmt(xt2),
+        )
+    )
+    values.update({"xt1": xt1, "xt2": xt2})
+    candidates = [("XT1", xt1), ("XT2", xt2)]
+    if ddgnl is not None:
+        xt3 = ddgnl + extra
+        steps.append(
+            Step(
+                label="XT3",
+                symbolic=text[3],
+                substituted=f"XT3 = {short(ddgnl)}{extra_text} {equals(xt3)}",
+                value=xt3,
+                display=fmt(xt3),
+            )
+        )
+        values["xt3"] = xt3
+        candidates.append(("XT3", xt3))
+    best_label, dxt = max(candidates, key=lambda item: item[1])
+    steps.append(
+        Step(
+            label="Điểm xét tuyển",
+            symbolic=text[4],
+            substituted=(
+                "ĐXT = Max("
+                + "; ".join(short(value) for _, value in candidates)
+                + f") = {short(dxt)} ({best_label})"
+            ),
+            value=dxt,
+            display=fmt(dxt),
+        )
+    )
+    values["dxt"] = dxt
+    outputs = (*((label, fmt(value)) for label, value in candidates), ("ĐXT", fmt(dxt)))
+    return CalculationResult(
+        formula_id="admission_score_2026",
+        title=ADMISSION_2026_TITLE,
+        formula_text=ADMISSION_2026_FORMULA_NOTES,
+        formula_latex=ADMISSION_2026_FORMULA_LATEX,
+        inputs=tuple(inputs),
+        steps=tuple(steps),
+        outputs=outputs,
+        warnings=ADMISSION_2026_WARNINGS,
+        summary=f"ĐXT **{fmt(dxt)}** / 30 (lấy theo {best_label})",
+        values=values,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Transcript-based admission score (học bạ lớp 10, 11, HK1 lớp 12)
+# ---------------------------------------------------------------------------
+
+TRANSCRIPT_VERSION = "2020.1"
+TRANSCRIPT_SOURCE = (
+    "Bản mô tả chương trình đào tạo đại học chính quy ngành Kiểm toán năm 2020, mục 4.1"
+    " (xét tuyển sử dụng kết quả học tập THPT lớp 10, 11 và học kỳ 1 lớp 12)"
+)
+TRANSCRIPT_TITLE = "Điểm xét tuyển học bạ THPT (lớp 10, lớp 11, học kỳ 1 lớp 12)"
+TRANSCRIPT_THRESHOLD = Decimal("19.5")
+TRANSCRIPT_SUBJECTS = (1, 2, 3)
+TRANSCRIPT_FORMULA_LATEX = (
+    r"\text{Điểm môn} = \frac{\text{TB cả năm lớp 10} + \text{TB cả năm lớp 11}"
+    r" + \text{TB HK1 lớp 12}}{3}",
+    r"\text{Tổng} = \text{Môn}_1 + \text{Môn}_2 + \text{Môn}_3 \ \ge\ \text{ngưỡng nhận hồ sơ}",
+)
+TRANSCRIPT_FORMULA_TEXT = (
+    "Điểm môn = (TB cả năm lớp 10 + TB cả năm lớp 11 + TB học kỳ 1 lớp 12) / 3",
+    "Tổng điểm xét tuyển = điểm môn 1 + điểm môn 2 + điểm môn 3 (tổ hợp 3 môn)",
+    "Ngưỡng nhận hồ sơ: tổng 3 môn tối thiểu 19.50 (theo bản mô tả CTĐT 2020)",
+)
+TRANSCRIPT_OUTPUTS = (
+    OutputSpec("mon1", "điểm môn 1 (trung bình 3 học kỳ)"),
+    OutputSpec("mon2", "điểm môn 2"),
+    OutputSpec("mon3", "điểm môn 3"),
+    OutputSpec("tong", "tổng điểm 3 môn"),
+)
+_TRANSCRIPT_TERMS = (
+    ("10", "TB cả năm lớp 10"),
+    ("11", "TB cả năm lớp 11"),
+    ("12", "TB học kỳ 1 lớp 12"),
+)
+
+
+def _subject_name(params: Mapping[str, object], index: int) -> str:
+    raw = params.get(f"mon{index}")
+    name = " ".join(str(raw).replace("*", "").split())[:40] if isinstance(raw, str) else ""
+    return f"Môn {index}" + (f" ({name})" if name else "")
+
+
+def _transcript_params() -> tuple[ParamSpec, ...]:
+    specs: list[ParamSpec] = []
+    for index in TRANSCRIPT_SUBJECTS:
+        specs.append(
+            ParamSpec(
+                name=f"mon{index}",
+                label=f"Tên môn {index} trong tổ hợp (VD Toán)",
+                tab_label=f"Môn {index}",
+                kind="text",
+                required=_never,
+            )
+        )
+        for suffix, term in _TRANSCRIPT_TERMS:
+
+            def label(known: Mapping[str, object], index: int = index, term: str = term) -> str:
+                return f"{_subject_name(known, index)}: {term}"
+
+            specs.append(
+                ParamSpec(
+                    name=f"m{index}_{suffix}",
+                    label=f"Môn {index}: {term}",
+                    label_from=label,
+                    tab_label=f"M{index} {'HK1 12' if suffix == '12' else 'lớp ' + suffix}",
+                    kind="number",
+                    min=SCORE_MIN,
+                    max=SCORE_MAX,
+                    step=Decimal("0.01"),
+                )
+            )
+    specs.append(
+        ParamSpec(
+            name="nguong",
+            label="Ngưỡng nhận hồ sơ (tổng 3 môn), mặc định 19.5",
+            tab_label="Ngưỡng",
+            kind="number",
+            required=_never,
+            min=SCORE_MIN,
+            max=ADMISSION_SCALE,
+            step=Decimal("0.01"),
+        )
+    )
+    return tuple(specs)
+
+
+TRANSCRIPT_PARAMS = _transcript_params()
+
+
+def transcript_score_3hk(params: Mapping[str, object]) -> CalculationResult:
+    errors: list[FieldError] = []
+    terms: dict[int, list[Decimal]] = {}
+    for index in TRANSCRIPT_SUBJECTS:
+        scores: list[Decimal] = []
+        for suffix, _ in _TRANSCRIPT_TERMS:
+            name = f"m{index}_{suffix}"
+            if params.get(name) is None:
+                _missing(name, errors)
+                continue
+            score = parse_score(params[name], name, errors)
+            if score is not None:
+                scores.append(score)
+        terms[index] = scores
+    threshold = _optional_number(
+        params,
+        "nguong",
+        errors,
+        minimum=SCORE_MIN,
+        maximum=ADMISSION_SCALE,
+        default=TRANSCRIPT_THRESHOLD,
+    )
+    if errors or threshold is None or any(len(scores) != 3 for scores in terms.values()):
+        raise CalculationInputError(errors)
+
+    steps: list[Step] = []
+    inputs: list[tuple[str, str]] = []
+    values: dict[str, Decimal] = {}
+    total = Decimal(0)
+    for index in TRANSCRIPT_SUBJECTS:
+        scores = terms[index]
+        mean = sum(scores, Decimal(0)) / 3
+        name = _subject_name(params, index)
+        inputs.append((name, " - ".join(plain(score) for score in scores)))
+        steps.append(
+            Step(
+                label=f"Điểm {name.lower() if name.startswith('Môn') else name}",
+                symbolic=TRANSCRIPT_FORMULA_TEXT[0],
+                substituted=(
+                    f"{name} = ({' + '.join(plain(s) for s in scores)}) / 3"
+                    f" = {plain(sum(scores, Decimal(0)))} / 3 {equals(mean)}"
+                ),
+                value=mean,
+                display=fmt(mean),
+            )
+        )
+        values[f"mon{index}"] = mean
+        total += mean
+    inputs.append(("Ngưỡng nhận hồ sơ", plain(threshold)))
+    steps.append(
+        Step(
+            label="Tổng 3 môn",
+            symbolic=TRANSCRIPT_FORMULA_TEXT[1],
+            substituted=(
+                "Tổng = "
+                + " + ".join(short(values[f"mon{i}"]) for i in TRANSCRIPT_SUBJECTS)
+                + f" {equals(total)}"
+            ),
+            value=total,
+            display=fmt(total),
+        )
+    )
+    values["tong"] = total
+    reached = total >= threshold
+    verdict = "đủ điều kiện nộp hồ sơ" if reached else "chưa đạt ngưỡng nhận hồ sơ"
+    sign = "≥" if reached else "<"
+    return CalculationResult(
+        formula_id="transcript_score_3hk",
+        title=TRANSCRIPT_TITLE,
+        formula_text=TRANSCRIPT_FORMULA_TEXT,
+        formula_latex=TRANSCRIPT_FORMULA_LATEX,
+        inputs=tuple(inputs),
+        steps=tuple(steps),
+        outputs=(
+            *((f"Môn {i}", fmt(values[f"mon{i}"])) for i in TRANSCRIPT_SUBJECTS),
+            ("Tổng 3 môn", fmt(total)),
+        ),
+        summary=f"Tổng 3 môn **{fmt(total)}** {sign} ngưỡng {plain(threshold)} → {verdict}",
+        values=values,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Weighted course score (trọng số riêng của đề cương học phần)
+# ---------------------------------------------------------------------------
+
+WEIGHTED_SOURCE = (
+    "Trọng số đánh giá ghi trong đề cương học phần (do người hỏi hoặc tài liệu nêu);"
+    " làm tròn 0.1 và điểm chữ theo quy chế của Trường"
+)
+WEIGHTED_TITLE = "Điểm học phần theo trọng số đề cương"
+WEIGHTED_COMPONENTS_MAX = 10
+WEIGHT_TOTAL = Decimal(100)
+WEIGHT_TOLERANCE = Decimal("0.5")
+WEIGHTED_FORMULA_LATEX = (r"\text{Điểm học phần} = \sum_{i} \frac{w_i}{100} \times \text{điểm}_i",)
+WEIGHTED_FORMULA_TEXT = (
+    f"Điểm học phần = Σ (trọng số i / 100 {TIMES} điểm thành phần i), làm tròn đến 0.1",
+    "Điểm thành phần làm tròn theo bước đã nêu (VD 0.5) trước khi nhân trọng số, nếu có",
+    "Điểm chữ và thang 4 theo bảng quy đổi của Trường",
+)
+WEIGHTED_OUTPUTS = (
+    OutputSpec("diem_hp", "điểm học phần (thang 10)"),
+    OutputSpec("thang4", "điểm thang 4"),
+)
+WEIGHTED_PARAMS: tuple[ParamSpec, ...] = (
+    ParamSpec(
+        name="trong_so",
+        label="Trọng số từng thành phần theo đề cương, đơn vị % (VD 10, 10, 30, 50)",
+        tab_label="Trọng số",
+        kind="number_list",
+        min=SCORE_MIN,
+        max=WEIGHT_TOTAL,
+        step=Decimal("0.01"),
+        unit="%",
+        max_items=WEIGHTED_COMPONENTS_MAX,
+    ),
+    ParamSpec(
+        name="diem",
+        label="Điểm từng thành phần, cùng thứ tự với trọng số, thang 10",
+        tab_label="Điểm",
+        kind="number_list",
+        min=SCORE_MIN,
+        max=SCORE_MAX,
+        step=Decimal("0.01"),
+        max_items=WEIGHTED_COMPONENTS_MAX,
+    ),
+    ParamSpec(
+        name="lam_tron_thanh_phan",
+        label="Bước làm tròn điểm thành phần trước khi tính (VD 0.5); bỏ trống nếu không",
+        tab_label="Làm tròn TP",
+        kind="number",
+        required=_never,
+        min=SCORE_MIN,
+        max=Decimal(1),
+        step=Decimal("0.1"),
+    ),
+)
+
+
+def _round_to_step(value: Decimal, step: Decimal) -> Decimal:
+    if step == Decimal("0.5"):
+        return round_to_half_point(value)
+    return (value / step).quantize(Decimal(1), rounding=ROUND_HALF_UP) * step
+
+
+def weighted_score(params: Mapping[str, object]) -> CalculationResult:
+    errors: list[FieldError] = []
+    raw_weights = params.get("trong_so")
+    raw_scores = params.get("diem")
+    weights: list[Decimal] = []
+    if raw_weights is None:
+        _missing("trong_so", errors)
+    elif not isinstance(raw_weights, list | tuple) or not raw_weights:
+        errors.append(FieldError("trong_so", "cần ít nhất một trọng số"))
+    elif len(raw_weights) > WEIGHTED_COMPONENTS_MAX:
+        errors.append(FieldError("trong_so", f"tối đa {WEIGHTED_COMPONENTS_MAX} thành phần"))
+    else:
+        for item in raw_weights:
+            number = to_decimal(item)
+            if number is None or number < 0:
+                errors.append(FieldError("trong_so", "mỗi trọng số phải là một số không âm"))
+                break
+            weights.append(number)
+        else:
+            total_weight = sum(weights, Decimal(0))
+            if abs(total_weight - 1) <= Decimal("0.001"):  # given as fractions (0.1, 0.3, 0.5)
+                weights = [weight * 100 for weight in weights]
+                total_weight = sum(weights, Decimal(0))
+            if abs(total_weight - WEIGHT_TOTAL) > WEIGHT_TOLERANCE:
+                errors.append(
+                    FieldError(
+                        "trong_so", f"tổng trọng số là {plain(total_weight)} %, phải bằng 100 %"
+                    )
+                )
+    scores: list[Decimal | None] = []
+    if raw_scores is None:
+        _missing("diem", errors)
+    elif not isinstance(raw_scores, list | tuple):
+        errors.append(FieldError("diem", "phải là danh sách điểm"))
+    else:
+        for position, item in enumerate(raw_scores, start=1):
+            if item is None:
+                errors.append(FieldError("diem", f"còn thiếu điểm thành phần thứ {position}"))
+                scores.append(None)
+            else:
+                scores.append(parse_score(item, "diem", errors))
+        if weights and len(scores) != len(weights):
+            errors.append(
+                FieldError(
+                    "diem",
+                    f"có {len(weights)} trọng số nhưng {len(scores)} điểm"
+                    " - mỗi thành phần đúng một điểm",
+                )
+            )
+    step = _optional_number(
+        params,
+        "lam_tron_thanh_phan",
+        errors,
+        minimum=SCORE_MIN,
+        maximum=Decimal(1),
+        default=Decimal(0),
+    )
+    if errors or step is None or any(score is None for score in scores):
+        raise CalculationInputError(errors)
+    given = [score for score in scores if score is not None]
+
+    steps: list[Step] = []
+    rounded = given
+    if step > 0:
+        rounded = [_round_to_step(score, step) for score in given]
+        changes = [
+            f"TP{i} {plain(before)} → {plain(after)}"
+            for i, (before, after) in enumerate(zip(given, rounded, strict=True), start=1)
+            if before != after
+        ]
+        if changes:
+            steps.append(
+                Step(
+                    label="Làm tròn điểm thành phần",
+                    symbolic=WEIGHTED_FORMULA_TEXT[1],
+                    substituted="; ".join(changes),
+                    value=Decimal(0),
+                    display="",
+                    note=f"làm tròn đến {plain(step)}",
+                )
+            )
+    parts = [weight / 100 * score for weight, score in zip(weights, rounded, strict=True)]
+    raw_total = sum(parts, Decimal(0))
+    final = round_half_up(raw_total, COURSE_SCORE_PLACES)
+    tail = (
+        f"= {fixed(final, 1)}"
+        if raw_total == final
+        else f"= {before_rounding(raw_total, final, COURSE_SCORE_PLACES)} → {fixed(final, 1)}"
+    )
+    steps.append(
+        Step(
+            label="Điểm học phần",
+            symbolic=WEIGHTED_FORMULA_TEXT[0],
+            substituted=(
+                "Điểm = "
+                + " + ".join(
+                    f"{plain(weight)}% {TIMES} {plain(score)}"
+                    for weight, score in zip(weights, rounded, strict=True)
+                )
+                + " = "
+                + " + ".join(short(part) for part in parts)
+                + f" {tail}"
+            ),
+            value=final,
+            display=fixed(final, 1),
+            note="làm tròn đến 0.1",
+        )
+    )
+    band = grade_band(final)
+    return CalculationResult(
+        formula_id="weighted_score",
+        title=WEIGHTED_TITLE,
+        formula_text=WEIGHTED_FORMULA_TEXT,
+        formula_latex=WEIGHTED_FORMULA_LATEX,
+        inputs=tuple(
+            (f"TP{i} ({plain(weight)} %)", plain(score))
+            for i, (weight, score) in enumerate(zip(weights, given, strict=True), start=1)
+        ),
+        steps=tuple(steps),
+        outputs=(
+            ("Điểm học phần", fixed(final, 1)),
+            ("Điểm chữ", band.letter),
+            ("Thang 4", fixed(band.gp4, 1)),
+        ),
+        summary=_conversion_summary("Điểm học phần", final, band),
+        values={"diem_hp": final, "thang4": band.gp4},
+    )
+
+
+HALF_POINT = Decimal("0.5")
+
+
+def _course_score_rounding(params: Mapping[str, object], name: str) -> Decimal | None:
+    """Recorded component scores (TX columns, GK, CK, TH) are rounded to 0.5; a TBtx
+    given as the average is not."""
+
+    if name in ("gk", "ck", "th"):
+        return HALF_POINT
+    if name == "tbtx" and isinstance(params.get("tbtx"), list | tuple):
+        return HALF_POINT
+    return None
+
+
+def _weighted_rounding(params: Mapping[str, object], name: str) -> Decimal | None:
+    step = to_decimal(params.get("lam_tron_thanh_phan"))
+    return step if name == "diem" and step is not None and step > 0 else None
+
+
+# ---------------------------------------------------------------------------
+# Date span (khoảng ngày giữa hai mốc) and time span (tổng giờ của các khoảng giờ)
+# ---------------------------------------------------------------------------
+
+DATE_SPAN_VERSION = "1"
+DATE_SPAN_SOURCE = (
+    "cách đếm ngày theo lịch (hiệu hai ngày; tính cả ngày đầu và ngày cuối = hiệu + 1)"
+)
+DATE_SPAN_TITLE = "Khoảng ngày giữa hai mốc"
+DATE_SPAN_FORMULA_TEXT = (
+    "Số ngày cách nhau = ngày kết thúc \u2212 ngày bắt đầu (theo lịch)",
+    "Số ngày tính cả ngày đầu và ngày cuối = số ngày cách nhau + 1",
+    "Có thời hạn N năm: mốc bắt đầu được cộng thêm N năm trước khi so với ngày kết thúc",
+)
+DATE_SPAN_OUTPUTS = (
+    OutputSpec("so_ngay", "số ngày cách nhau (không tính ngày đầu)"),
+    OutputSpec("ca_hai_dau", "số ngày tính cả ngày đầu và ngày cuối"),
+)
+DATE_SPAN_PARAMS: tuple[ParamSpec, ...] = (
+    ParamSpec(name="tu_ngay", label="Ngày bắt đầu (dd/mm/yyyy)", tab_label="Từ ngày", kind="text"),
+    ParamSpec(
+        name="den_ngay", label="Ngày kết thúc (dd/mm/yyyy)", tab_label="Đến ngày", kind="text"
+    ),
+    ParamSpec(
+        name="cong_them_nam",
+        label="Thời hạn cộng thêm vào ngày bắt đầu, tính bằng năm (bỏ trống nếu không)",
+        tab_label="Hạn (năm)",
+        kind="number",
+        required=_never,
+        min=Decimal(0),
+        max=Decimal(20),
+        step=Decimal(1),
+    ),
+)
+_DATE_TEXT = re.compile(r"^\s*(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{4})\s*$")
+
+
+def parse_date_text(value: object, field: str, errors: list[FieldError]) -> _dt.date | None:
+    match = _DATE_TEXT.match(str(value)) if isinstance(value, str) else None
+    if match is None:
+        errors.append(FieldError(field, "ngày phải viết dạng dd/mm/yyyy"))
+        return None
+    day, month, year = (int(part) for part in match.groups())
+    try:
+        return _dt.date(year, month, day)
+    except ValueError:
+        errors.append(FieldError(field, f"không có ngày {day:02d}/{month:02d}/{year}"))
+        return None
+
+
+def _shift_years(date: _dt.date, years: int) -> _dt.date:
+    try:
+        return date.replace(year=date.year + years)
+    except ValueError:  # 29/02 → 28/02
+        return date.replace(year=date.year + years, day=28)
+
+
+def _date_text(date: _dt.date) -> str:
+    return date.strftime("%d/%m/%Y")
+
+
+def date_span(params: Mapping[str, object]) -> CalculationResult:
+    errors: list[FieldError] = []
+    start = end = None
+    if params.get("tu_ngay") is None:
+        _missing("tu_ngay", errors)
+    else:
+        start = parse_date_text(params["tu_ngay"], "tu_ngay", errors)
+    if params.get("den_ngay") is None:
+        _missing("den_ngay", errors)
+    else:
+        end = parse_date_text(params["den_ngay"], "den_ngay", errors)
+    years = _optional_number(
+        params, "cong_them_nam", errors, minimum=Decimal(0), maximum=Decimal(20), default=Decimal(0)
+    )
+    if errors or start is None or end is None or years is None:
+        raise CalculationInputError(errors)
+    steps: list[Step] = []
+    inputs: list[tuple[str, str]] = [
+        ("Ngày bắt đầu", _date_text(start)),
+        ("Ngày kết thúc", _date_text(end)),
+    ]
+    anchor = start
+    if years > 0:
+        anchor = _shift_years(start, int(years))
+        inputs.append(("Thời hạn", f"{plain(years)} năm"))
+        steps.append(
+            Step(
+                label="Mốc sau thời hạn",
+                symbolic=DATE_SPAN_FORMULA_TEXT[2],
+                substituted=f"{_date_text(start)} + {plain(years)} năm = {_date_text(anchor)}",
+                value=Decimal(0),
+                display=_date_text(anchor),
+            )
+        )
+    days = (end - anchor).days
+    if days < 0:
+        raise CalculationInputError(
+            [
+                FieldError(
+                    "den_ngay", f"ngày kết thúc {_date_text(end)} trước mốc {_date_text(anchor)}"
+                )
+            ]
+        )
+    span = Decimal(days)
+    inclusive = span + 1
+    steps.append(
+        Step(
+            label="Số ngày cách nhau",
+            symbolic=DATE_SPAN_FORMULA_TEXT[0],
+            substituted=f"{_date_text(end)} \u2212 {_date_text(anchor)} = {days} ngày",
+            value=span,
+            display=str(days),
+        )
+    )
+    steps.append(
+        Step(
+            label="Tính cả ngày đầu và ngày cuối",
+            symbolic=DATE_SPAN_FORMULA_TEXT[1],
+            substituted=f"{days} + 1 = {days + 1} ngày",
+            value=inclusive,
+            display=str(days + 1),
+        )
+    )
+    return CalculationResult(
+        formula_id="date_span",
+        title=DATE_SPAN_TITLE,
+        formula_text=DATE_SPAN_FORMULA_TEXT,
+        inputs=tuple(inputs),
+        steps=tuple(steps),
+        outputs=(("Cách nhau", f"{days} ngày"), ("Tính cả hai đầu", f"{days + 1} ngày")),
+        summary=(
+            f"Từ {_date_text(anchor)} đến {_date_text(end)}: cách nhau **{days} ngày**;"
+            f" tính cả ngày đầu và ngày cuối **{days + 1} ngày**"
+        ),
+        values={"so_ngay": span, "ca_hai_dau": inclusive},
+    )
+
+
+TIME_SPAN_VERSION = "1"
+TIME_SPAN_SOURCE = (
+    "cách cộng khoảng giờ theo đồng hồ (giờ kết thúc \u2212 giờ bắt đầu, cộng các khoảng)"
+)
+TIME_SPAN_TITLE = "Tổng thời gian của các khoảng giờ"
+TIME_SPAN_FORMULA_TEXT = (
+    "Mỗi khoảng = giờ kết thúc \u2212 giờ bắt đầu (qua nửa đêm thì cộng 24 giờ)",
+    "Tổng = cộng các khoảng, đổi ra giờ và phút",
+)
+TIME_SPAN_OUTPUTS = (
+    OutputSpec("tong_gio", "tổng số giờ (thập phân)"),
+    OutputSpec("tong_phut", "tổng số phút"),
+)
+TIME_SPAN_PARAMS: tuple[ParamSpec, ...] = (
+    ParamSpec(
+        name="khoang_gio",
+        label="Các khoảng giờ, mỗi khoảng dạng hh:mm-hh:mm, cách nhau bằng dấu chấm phẩy"
+        " (VD 06:30-19:40; 06:30-19:40; 06:30-17:40)",
+        tab_label="Khoảng giờ",
+        kind="text",
+    ),
+)
+_TIME_RANGE = re.compile(
+    r"(\d{1,2})\s*[:h]\s*(\d{2})\s*(?:-|\u2013|\u2014|đến|to)\s*(\d{1,2})\s*[:h]\s*(\d{2})",
+    re.IGNORECASE,
+)
+TIME_RANGES_MAX = 20
+
+
+def time_span(params: Mapping[str, object]) -> CalculationResult:
+    errors: list[FieldError] = []
+    raw = params.get("khoang_gio")
+    if raw is None:
+        _missing("khoang_gio", errors)
+        raise CalculationInputError(errors)
+    ranges = _TIME_RANGE.findall(str(raw))
+    if not ranges:
+        errors.append(FieldError("khoang_gio", "chưa đọc được khoảng giờ nào dạng hh:mm-hh:mm"))
+    if len(ranges) > TIME_RANGES_MAX:
+        errors.append(FieldError("khoang_gio", f"tối đa {TIME_RANGES_MAX} khoảng giờ"))
+    spans: list[tuple[str, int]] = []
+    for h1, m1, h2, m2 in ranges:
+        start, end = int(h1) * 60 + int(m1), int(h2) * 60 + int(m2)
+        if int(h1) > 23 or int(h2) > 23 or int(m1) > 59 or int(m2) > 59:
+            errors.append(FieldError("khoang_gio", f"giờ {h1}:{m1}-{h2}:{m2} không hợp lệ"))
+            continue
+        if end < start:
+            end += 24 * 60
+        spans.append((f"{int(h1):02d}:{m1}-{int(h2):02d}:{m2}", end - start))
+    if errors:
+        raise CalculationInputError(errors)
+
+    def hm(minutes: int) -> str:
+        return f"{minutes // 60} giờ {minutes % 60:02d} phút"
+
+    steps = [
+        Step(
+            label=f"Khoảng {index}",
+            symbolic=TIME_SPAN_FORMULA_TEXT[0],
+            substituted=f"{text} = {hm(minutes)}",
+            value=Decimal(minutes),
+            display=hm(minutes),
+        )
+        for index, (text, minutes) in enumerate(spans, start=1)
+    ]
+    total = sum(minutes for _, minutes in spans)
+    hours = Decimal(total) / 60
+    steps.append(
+        Step(
+            label="Tổng",
+            symbolic=TIME_SPAN_FORMULA_TEXT[1],
+            substituted=" + ".join(hm(m) for _, m in spans) + f" = {hm(total)} ({fmt(hours)} giờ)",
+            value=hours,
+            display=hm(total),
+        )
+    )
+    return CalculationResult(
+        formula_id="time_span",
+        title=TIME_SPAN_TITLE,
+        formula_text=TIME_SPAN_FORMULA_TEXT,
+        inputs=tuple((f"Khoảng {i}", text) for i, (text, _) in enumerate(spans, start=1)),
+        steps=tuple(steps),
+        outputs=(("Tổng", f"{hm(total)} ({fmt(hours)} giờ)"),),
+        summary=f"Tổng thời gian **{hm(total)}** (= **{fmt(hours)} giờ**)",
+        values={"tong_gio": hours, "tong_phut": Decimal(total)},
+    )
 
 
 FORMULAS: dict[FormulaId, Formula] = {
     "course_score": Formula(
         formula_id="course_score",
+        rounding_of=_course_score_rounding,
+        version="1",
+        source=COURSE_SCORE_SOURCE,
+        outputs=(OutputSpec("dtkhp", "ĐTKHP (thang 10)"), OutputSpec("thang4", "điểm thang 4")),
         title="Điểm tổng kết học phần (lý thuyết + thực hành)",
         description="Điểm tổng kết một học phần từ điểm TX/GK/CK và các cột thực hành",
         params=(
@@ -954,6 +1930,9 @@ FORMULAS: dict[FormulaId, Formula] = {
     ),
     "gpa": Formula(
         formula_id="gpa",
+        version="1",
+        source=COURSE_SCORE_SOURCE,
+        outputs=(OutputSpec("gpa", "GPA (thang 4)"),),
         title="Điểm trung bình (GPA) thang 4",
         description="GPA học kỳ hoặc tích lũy từ danh sách môn, số tín chỉ và điểm",
         params=(
@@ -969,6 +1948,9 @@ FORMULAS: dict[FormulaId, Formula] = {
     ),
     "grade_conversion": Formula(
         formula_id="grade_conversion",
+        version="1",
+        source=COURSE_SCORE_SOURCE,
+        outputs=(OutputSpec("diem10", "điểm thang 10"), OutputSpec("thang4", "điểm thang 4")),
         title="Quy đổi điểm thang 10 sang điểm chữ và thang 4",
         description="Quy đổi một điểm thang 10 sang điểm chữ và điểm thang 4",
         params=(
@@ -987,6 +1969,9 @@ FORMULAS: dict[FormulaId, Formula] = {
     **{
         scope: Formula(
             formula_id=scope,
+            version="1",
+            source=TUITION_SOURCE,
+            outputs=(OutputSpec("hoc_phi", f"học phí {period}", money=True),),
             title=f"Học phí {period}",
             description=(
                 f"Học phí {period} từ số tín chỉ lý thuyết, thực hành và đơn giá 1 tín chỉ"
@@ -996,7 +1981,77 @@ FORMULAS: dict[FormulaId, Formula] = {
         )
         for scope, period in TUITION_SCOPES.items()
     },
+    "admission_score_2026": Formula(
+        formula_id="admission_score_2026",
+        version=ADMISSION_2026_VERSION,
+        source=ADMISSION_2026_SOURCE,
+        outputs=ADMISSION_2026_OUTPUTS,
+        title=ADMISSION_2026_TITLE,
+        description=(
+            "Điểm xét tuyển đại học chính quy 2026 (thang 30) từ tổng điểm 3 môn thi tốt nghiệp,"
+            " điểm ĐGNL (quy đổi thang 30), tổng điểm học bạ 3 môn, điểm ưu tiên và điểm cộng"
+        ),
+        params=ADMISSION_2026_PARAMS,
+        compute=admission_score_2026,
+    ),
+    "transcript_score_3hk": Formula(
+        formula_id="transcript_score_3hk",
+        version=TRANSCRIPT_VERSION,
+        source=TRANSCRIPT_SOURCE,
+        outputs=TRANSCRIPT_OUTPUTS,
+        title=TRANSCRIPT_TITLE,
+        description=(
+            "Điểm xét tuyển học bạ: điểm mỗi môn = (TB cả năm lớp 10 + TB cả năm lớp 11"
+            " + TB học kỳ 1 lớp 12) / 3, tổng 3 môn so với ngưỡng nhận hồ sơ"
+        ),
+        params=TRANSCRIPT_PARAMS,
+        compute=transcript_score_3hk,
+    ),
+    "date_span": Formula(
+        formula_id="date_span",
+        version=DATE_SPAN_VERSION,
+        source=DATE_SPAN_SOURCE,
+        outputs=DATE_SPAN_OUTPUTS,
+        title=DATE_SPAN_TITLE,
+        description=(
+            "Số ngày giữa hai mốc ngày (kéo dài bao nhiêu ngày, còn bao nhiêu ngày, quá hạn bao"
+            " nhiêu ngày), có hoặc không tính cả ngày đầu và ngày cuối; thời hạn N năm cộng vào"
+            " mốc đầu"
+        ),
+        params=DATE_SPAN_PARAMS,
+        compute=date_span,
+    ),
+    "time_span": Formula(
+        formula_id="time_span",
+        version=TIME_SPAN_VERSION,
+        source=TIME_SPAN_SOURCE,
+        outputs=TIME_SPAN_OUTPUTS,
+        title=TIME_SPAN_TITLE,
+        description=(
+            "Tổng giờ và phút của một hay nhiều khoảng giờ hh:mm-hh:mm (lịch làm việc, ca thi)"
+        ),
+        params=TIME_SPAN_PARAMS,
+        compute=time_span,
+    ),
+    "weighted_score": Formula(
+        formula_id="weighted_score",
+        rounding_of=_weighted_rounding,
+        version="1",
+        source=WEIGHTED_SOURCE,
+        outputs=WEIGHTED_OUTPUTS,
+        title=WEIGHTED_TITLE,
+        description=(
+            "Điểm học phần theo trọng số riêng của đề cương (VD trắc nghiệm 10 %, giữa kỳ 30 %,"
+            " cuối kỳ 50 %) khi khác công thức 20/30/50 của Trường"
+        ),
+        params=WEIGHTED_PARAMS,
+        compute=weighted_score,
+    ),
 }
+
+
+def formula_of(formula_id: FormulaId) -> Formula:
+    return FORMULAS[formula_id]
 
 
 def param_spec(formula_id: FormulaId, name: str) -> ParamSpec | None:
@@ -1020,9 +2075,15 @@ def missing_params(formula_id: FormulaId, params: Mapping[str, object]) -> list[
 
 
 def calculate(formula_id: FormulaId, params: Mapping[str, object]) -> CalculationResult:
-    """Raises `CalculationInputError` (every bad or missing field at once)."""
+    """Raises `CalculationInputError` (every bad or missing field at once). The result
+    carries the registry's version and source of the formula."""
 
-    return FORMULAS[formula_id].compute(params)
+    formula = FORMULAS[formula_id]
+    return replace(formula.compute(params), version=formula.version, source=formula.source)
+
+
+def output_spec(formula_id: FormulaId, key: str) -> OutputSpec | None:
+    return next((spec for spec in FORMULAS[formula_id].outputs if spec.key == key), None)
 
 
 # ---------------------------------------------------------------------------
@@ -1042,6 +2103,7 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
         re.compile(r"lý thuyết.{0,40}thực hành|thực hành.{0,40}lý thuyết"),
         re.compile(r"\b(tx|tbtx|gk|ck)\b.{0,30}\b(tx|tbtx|gk|ck)\b"),
         re.compile(r"giữa kỳ.{0,40}cuối kỳ|giữa kì.{0,40}cuối kì"),
+        re.compile(r"(điểm )?(cuối|giữa) k[ỳì] (cần|phải|tối thiểu|bao nhiêu)"),
     ),
     "grade_conversion": (
         re.compile(r"quy đổi|qui đổi|đổi (sang|ra) (điểm chữ|thang 4|hệ 4)"),
@@ -1056,6 +2118,30 @@ BUILTIN_TRIGGERS: dict[FormulaId, tuple[re.Pattern[str], ...]] = {
             r"(cả|toàn|trọn) (khoá|khóa|ngành|chương trình)"
             r"|(đến khi|tới khi|cho tới lúc) (ra trường|tốt nghiệp)"
         ),
+    ),
+    "admission_score_2026": (
+        re.compile(r"điểm xét tuyển|\bđxt\b|\bxt[123]\b"),
+        re.compile(r"đgnl|đánh giá năng lực|điểm thủ khoa"),
+        re.compile(r"(điểm|kết quả) (thi )?(tốt nghiệp|tn) .{0,40}(học bạ|ưu tiên|điểm cộng)"),
+    ),
+    "transcript_score_3hk": (
+        re.compile(r"học bạ|kết quả học tập thpt"),
+        re.compile(r"lớp 10.{0,60}lớp 11|học kỳ 1 lớp 12|hk1 lớp 12|hk 1 lớp 12"),
+        re.compile(r"ngưỡng nhận hồ sơ"),
+    ),
+    "date_span": (
+        re.compile(r"(bao nhiêu|mấy) ngày|kéo dài|cách nhau|quá hạn|còn .{0,20}ngày"),
+        re.compile(r"\d{1,2}/\d{1,2}/\d{4}.{0,40}\d{1,2}/\d{1,2}/\d{4}"),
+    ),
+    "time_span": (
+        re.compile(
+            r"(bao nhiêu|mấy) (giờ|tiếng)|tổng thời gian|\d{1,2}h\d{2}\s*[-\u2013]\s*\d{1,2}h\d{2}"
+        ),
+    ),
+    "weighted_score": (
+        re.compile(r"trọng số"),
+        re.compile(r"\d+\s*%.{0,80}\d+\s*%"),
+        re.compile(r"đề cương|flipped|multiple.choice|mid.term|final test"),
     ),
 }
 _TUITION = re.compile(r"học phí")
@@ -1077,13 +2163,24 @@ def route_builtin(question: str) -> list[FormulaId]:
 
 
 def describe_builtin_formulas() -> str:
-    """The formula list rendered into the extractor prompt (one source of truth)."""
+    """The formula list rendered into the extractor prompt (one source of truth): id,
+    version, what it computes, its params and the outputs a target may name."""
 
     lines: list[str] = []
     for formula in FORMULAS.values():
         params = "; ".join(f"`{spec.name}`: {spec.label}" for spec in formula.params)
-        lines.append(f"- `{formula.formula_id}` - {formula.description}. Tham số: {params}")
+        outputs = ", ".join(f"`{spec.key}` ({spec.label})" for spec in formula.outputs)
+        lines.append(
+            f"- `{formula.formula_id}` (v{formula.version}) - {formula.description}."
+            f" Tham số: {params}. Đầu ra: {outputs}"
+        )
     return "\n".join(lines)
+
+
+def describe_registry() -> str:
+    """One line per formula for the classifier: what the system can compute itself."""
+
+    return "\n".join(f"- {formula.title}: {formula.description}" for formula in FORMULAS.values())
 
 
 def describe_builtin_rules() -> str:

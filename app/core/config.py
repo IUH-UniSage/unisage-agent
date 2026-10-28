@@ -167,12 +167,6 @@ class Settings(BaseSettings):
     INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS: int = Field(default=6, ge=0)
 
     # --- CHAT_: read on every chat turn ---
-    # Let the LLM answer calculations Python does not compute (target questions,
-    # formulas from documents, follow-ups). Off = only the 3 built-in formulas are
-    # calculated (kill switch - there is no pre-release eval; Đúng/Sai feedback instead).
-    CHAT_CALC_LLM_ENABLED: bool = True
-    # Timeout of that LLM call (not streamed: the whole answer is parsed before it is shown).
-    CHAT_CALC_LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0)
     # Hard deadline for everything a turn does after claiming a clarification panel
     # (start_turn → graph → finalize). Past it the task is cancelled before any more writes.
     CHAT_CLAIMED_TURN_DEADLINE_SECONDS: float = Field(default=150.0, gt=0)
@@ -235,11 +229,41 @@ class Settings(BaseSettings):
     # answer, and the turn would end in TicketFallback with the right document retrieved.
     CHAT_LLM_RERANK_RESCUE_MIN_SCORE: float = Field(default=0.75, ge=0, le=1)
     CHAT_LLM_RERANK_RESCUE_KEEP: int = Field(default=2, ge=0)
+    # Cross-encoder rerank (docs/specs/SPEC-cross-encoder-rerank.md): a local
+    # bge-reranker-v2-m3 service (`task reranker:serve`) scores (question, chunk) pairs.
+    # `llm`: the LLM rerank above, as before (the service is never called).
+    # `cross_encoder`: CrossEncoderRerankNode keeps each sub-query's top CROSS_ENCODER_KEEP
+    # by cross-encoder score and the LLM rerank is skipped.
+    # `cross_encoder_then_llm`: the cross-encoder cuts to KEEP, the LLM rerank judges those.
+    # `none`: no rerank model at all - the retrieval order (RRF for hybrid) above the dense
+    # floor, cut to CONTEXT_MAX_CHUNKS; the benchmark's "no rerank" baseline, measurable e2e.
+    # A service error or timeout falls over to the LLM rerank with an AI-admin warning.
+    # `auto`: the `none` path, plus the LLM rerank only for a turn whose evidence signals
+    # (app/graph/evidence.py) call a sub-query weak - the gate "no document answers this"
+    # kept for the risky tail at a fraction of the LLM calls.
+    CHAT_RERANK_MODE: Literal["llm", "cross_encoder", "cross_encoder_then_llm", "none", "auto"] = (
+        "llm"
+    )
+    CROSS_ENCODER_URL: str = "http://127.0.0.1:8403"
+    CROSS_ENCODER_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
+    CHAT_CROSS_ENCODER_KEEP: int = Field(default=8, ge=1)
+    # Evidence sufficiency (app/graph/evidence.py), logged every turn and the trigger of
+    # `auto`: a sub-query is `weak` when its best dense cosine is below MIN_COSINE and, when
+    # a cross-encoder score exists, that score is below MIN_CE too. 0,60 from the threshold
+    # study (139 câu demo, 26/10/2026): flags ~10 % of turns, catches 3 of the 5 questions
+    # whose document is not in the top-8 (report Phase 6); re-run `task benchmark:evidence`
+    # on a new corpus before changing it.
+    CHAT_EVIDENCE_MIN_COSINE: float = Field(default=0.60, ge=0.0, le=1.0)
+    CHAT_EVIDENCE_MIN_CE: float = 1.0
     # WebSearchNode: searches the web (TAVILY_*) for each sub-query rerank left with no
     # chunk, before giving up to TicketFallbackNode. Per-turn cap and per-result char cap
     # bound how much web text reaches the system prompt (~3000 chars at the defaults),
     # however long the question or however many sub-queries it split into.
     CHAT_WEB_SEARCH_ENABLED: bool = False
+    # Fallback web search policy (app/graph/web_policy.py): besides sub-queries the LLM
+    # rerank emptied or retrieval found nothing for, also search those whose evidence is
+    # only `weak` (app/graph/evidence.py). Off by default: measure the fallback on its own.
+    CHAT_WEB_SEARCH_ON_WEAK_EVIDENCE: bool = False
     # `speculative`: for a task whose topic is in SPECULATIVE_TOPICS (fees, admission,
     # notices, contacts - what changes every year and is posted on the website first),
     # the search starts with the advisory branch, alongside query transformation, retrieval
@@ -315,6 +339,11 @@ class Settings(BaseSettings):
     # existing behavior; flip off in .env if the false positives outweigh
     # the (rare) real misses it exists to catch.
     CHAT_ALLOW_REPAIR_JSON: bool = True
+    # Grounding check after generation (app/graph/grounding.py): numbers in the answer that
+    # no cited source / shown source / the question contains get a caution line appended
+    # (the answer is already streamed) and an AI-admin warning; `[n]` outside the sources
+    # and answers with figures but no citation are reported to AI admins.
+    CHAT_GROUNDING_CHECK: bool = True
 
     # --- Cost tracking & budget ---
     # Must match backend-java's app.timezone: DAILY/MONTHLY budget periodKeys are cut

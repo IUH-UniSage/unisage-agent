@@ -16,7 +16,6 @@ class PromptTemplates:
     chat_ticket_fallback: str
     chat_social: str
     chat_calculation_review: str
-    chat_calculation_llm: str
     json_repair: str
 
     # Agents (system prompts of single-purpose LLM nodes)

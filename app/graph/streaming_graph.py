@@ -30,15 +30,14 @@ from app.core.registry.model_registry import CredentialConfig
 from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.address import address_for
+from app.graph.calc_requests import arithmetic_blocks
 from app.graph.calculation_turn import (
-    REVIEW_ISSUE_KEY,
     CalculationTask,
     Review,
     calculation_titles,
     known_fields,
     needs_input_parts,
     number_citations,
-    redo_with_llm,
     render_outcomes,
     review,
     trace_items,
@@ -49,6 +48,8 @@ from app.graph.clarification_round import (
     advisory_task,
     build_round,
 )
+from app.graph.evidence import levels_for
+from app.graph.grounding import caution_line, check_answer, looks_like_refusal, numbers_in
 from app.graph.metadata_fields import (
     Scope,
     apply_updates,
@@ -56,16 +57,22 @@ from app.graph.metadata_fields import (
     concept,
     field_scope,
     normalize_value,
-    registered_name,
     update_notice,
 )
 from app.graph.nodes.calculation import (
     CalculationDeps,
     Computed,
-    LlmAnswered,
+    Deferred,
+    Planned,
     TaskOutcome,
+    plan_calculation,
+    registry_id,
     resume_calculation_task,
-    run_calculation_task,
+    run_planned_task,
+)
+from app.graph.nodes.cross_encoder_rerank import (
+    CROSS_ENCODER_SKIPPED,
+    cross_encoder_rerank,
 )
 from app.graph.nodes.generation_synthesis import build_generation_agent, run_generation_synthesis
 from app.graph.nodes.greeting import detect_greeting, greeting_for
@@ -118,6 +125,8 @@ from app.graph.streaming_state import (
     GraphOutput,
     ResumeInput,
 )
+from app.graph.web_policy import decide_fallback
+from app.integrations.cross_encoder_client import CrossEncoderClient
 from app.rag.prompting.citations import (
     build_citations,
     build_context_trace,
@@ -133,6 +142,9 @@ from app.schemas.web_search import WebSearchResult, WebSlots
 logger = logging.getLogger(__name__)
 
 # Prefixes of the AI-admin warnings (`event: warning`) this module raises.
+_UNGROUNDED = "Câu trả lời có con số không tìm thấy trong tài liệu được trích dẫn: "
+_INVALID_CITATION = "Câu trả lời trích dẫn chỉ số nguồn không tồn tại: "
+_NO_CITATION = "Câu trả lời nêu số liệu nhưng không trích dẫn tài liệu nào."
 _WEB_SEARCH_FAILED = (
     "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
 )
@@ -355,13 +367,6 @@ async def _classified_turn(
             confirmed_metadata=confirmed_metadata,
         )
 
-    # A mixed turn answers only the advisory question(s), so generation doesn't
-    # try to answer the calculation part from regulations.
-    advisory_question = (
-        " ".join(task.query for task, _mode in route_plan.advisory_tasks)
-        if route_plan.calculation_tasks
-        else None
-    )
     calculation_tasks = [
         CalculationTask(task_id=f"T{index}", query=task.query)
         for index, task in enumerate(route_plan.calculation_tasks, start=1)
@@ -369,11 +374,30 @@ async def _classified_turn(
     deps = _calculation_deps(
         graph_input, models, usage_recorder, budget, trace, confirmed_metadata=confirmed_metadata
     )
+    # The extractor runs before anything else: a task no registered formula fits joins
+    # the advisory part (answered from the documents, no arithmetic by the model), so
+    # its retrieval starts with the others'.
+    planned = await _plan_calculations(calculation_tasks, deps, trace)
+    runnable = [task for task in planned if not isinstance(task, Deferred)]
+    advisory_tasks: list[tuple[ClassifiedTask, RoutingMode]] = [
+        *route_plan.advisory_tasks,
+        *(
+            (
+                ClassifiedTask(intent="academic_advisory", query=task.query, routing_mode="SINGLE"),
+                "SINGLE",
+            )
+            for task in planned
+            if isinstance(task, Deferred)
+        ),
+    ]
+    # A mixed turn answers only the advisory question(s), so generation doesn't
+    # try to answer the calculation part from regulations.
+    advisory_question = " ".join(task.query for task, _mode in advisory_tasks) if runnable else None
     advisory: AdvisoryPart | None = None
-    if route_plan.advisory_tasks:
+    if advisory_tasks:
         advisory = AdvisoryPart(
             task_id=f"T{len(calculation_tasks) + 1}",
-            tasks=list(route_plan.advisory_tasks),
+            tasks=advisory_tasks,
             question=advisory_question,
         )
     return await _turn_with_calculations(
@@ -384,15 +408,16 @@ async def _classified_turn(
         usage_recorder,
         budget,
         confirmed_metadata=confirmed_metadata,
-        calculations=_start_calculations(calculation_tasks, deps, trace),
-        queries={task.task_id: task.query for task in calculation_tasks},
+        calculations=_start_calculations(runnable, deps),
+        queries={task.task_id: task.query for task in runnable},
         cache_ctx=cache_ctx,
         cached_turn=cached_turn,
-        l1_pending=l1_pending if not calculation_tasks else None,
+        l1_pending=l1_pending if not runnable else None,
         deps=deps,
         advisory=advisory,
         original_query=advisory_question or graph_input.user_message,
         previous_round=None,
+        strict_numbers=len(runnable) < len(planned),
     )
 
 
@@ -533,54 +558,49 @@ def calculation_title(last: LastCalculation | None) -> str | None:
 
     if last is None:
         return None
-    if last.title:
+    known = registry_id(last.plan.formula_id)
+    if last.title or known is None:
         return last.title
-    return FORMULAS[last.plan.formula_id].title if last.plan.formula_id != "llm" else None
+    return FORMULAS[known].title
 
 
 def _computed_calculations(outcomes: Sequence[TaskOutcome]) -> list[LastCalculation]:
-    """The turn's computed calculations, each with its own numbers (a follow-up reuses
-    them instead of asking again): a built-in one's parameters, an LLM one's inputs."""
+    """The turn's computed calculations, each with its parameters (a follow-up reuses
+    them instead of asking again)."""
 
-    calculations: list[LastCalculation] = []
-    for outcome in outcomes:
-        if isinstance(outcome, Computed):
-            calculations.append(
-                LastCalculation(
-                    plan=outcome.plan, params=outcome.params, title=outcome.result.title
-                )
-            )
-        elif isinstance(outcome, LlmAnswered):
-            calculations.append(
-                LastCalculation(
-                    plan=outcome.plan,
-                    params={
-                        registered_name(name): value
-                        for name, value in outcome.known_params.items()
-                        if name != REVIEW_ISSUE_KEY
-                    },
-                    title=outcome.query[:200],
-                )
-            )
-    return calculations
+    return [
+        LastCalculation(plan=outcome.plan, params=outcome.params, title=outcome.result.title)
+        for outcome in outcomes
+        if isinstance(outcome, Computed)
+    ]
+
+
+async def _plan_calculations(
+    tasks: Sequence[CalculationTask], deps: CalculationDeps, trace: GraphTrace
+) -> list[Planned | Deferred]:
+    """One extractor call per task, concurrently: which registered formula (and which
+    numbers, unknown and target), plain arithmetic over the student's numbers, or
+    `Deferred` when none fits."""
+
+    if not tasks:
+        return []
+    trace.node("07_CalculationNode")
+    return list(
+        await asyncio.gather(*(plan_calculation(task.task_id, task.query, deps) for task in tasks))
+    )
 
 
 def _start_calculations(
-    tasks: Sequence[CalculationTask], deps: CalculationDeps, trace: GraphTrace
+    tasks: Sequence[Planned], deps: CalculationDeps
 ) -> "asyncio.Task[list[TaskOutcome]] | None":
-    """Calculation tasks run alongside the advisory retrieval (they are awaited only at
-    the barrier right before node 10)."""
+    """Planned calculations run alongside the advisory retrieval (they are awaited only
+    at the barrier right before node 10)."""
 
     if not tasks:
         return None
-    trace.node("07_CalculationNode")
 
     async def run_all() -> list[TaskOutcome]:
-        return list(
-            await asyncio.gather(
-                *(run_calculation_task(task.task_id, task.query, deps) for task in tasks)
-            )
-        )
+        return list(await asyncio.gather(*(run_planned_task(task, deps) for task in tasks)))
 
     return asyncio.create_task(run_all())
 
@@ -610,18 +630,20 @@ async def _turn_with_calculations(
     cache_ctx: TurnCacheContext | None = None,
     cached_turn: CachedTurn | None = None,
     l1_pending: L1Pending | None = None,
+    # A calculation question joined the advisory part: numbers the model works out
+    # itself are flagged, since code was supposed to compute them.
+    strict_numbers: bool = False,
 ) -> GraphOutput:
     """Stream order: calculation blocks (Python) → advisory answer (node 10, which only
     starts after the blocks were sent) → one panel for everything still missing. A
     calculation-only turn instead opens with the checked review, so its blocks wait for
-    that call; a built-in result that does not answer what was asked is redone by the
-    LLM, or - LLM path off or failing - shown under "Lưu ý"."""
+    that call; a result the review says does not answer what was asked is shown under
+    "Lưu ý"."""
 
     outcomes: list[TaskOutcome] = []
     shown: list[str] = []
     calculation_citations: list[dict[str, Any]] = []
     checked: Review | None = None
-    redone: dict[str, str] = {}
 
     def collect(done: Sequence[TaskOutcome], first_citation: int) -> None:
         numbered, cited = number_citations(done, first_citation)
@@ -655,6 +677,7 @@ async def _turn_with_calculations(
                 cache_ctx=cache_ctx,
                 cached_turn=cached_turn,
                 l1_pending=l1_pending,
+                strict_numbers=strict_numbers,
             )
             output = replace(
                 output,
@@ -663,12 +686,10 @@ async def _turn_with_calculations(
             )
         else:
             done = await calculations if calculations is not None else []
-            computed = [o for o in done if isinstance(o, Computed) and not o.chosen_by_llm]
+            computed = [o for o in done if isinstance(o, Computed)]
             checked = await review(computed, original_query, deps)
-            if checked is not None:
-                done, redone = await redo_with_llm(done, queries, checked, deps)
             collect(done, 1)
-            lead = checked.lead() if checked is not None and not redone else ""
+            lead = checked.lead() if checked is not None else ""
             await emit("\n\n".join(text for text in (lead, render_outcomes(outcomes)) if text))
             output = GraphOutput(
                 response_text="".join(shown),
@@ -714,7 +735,6 @@ async def _turn_with_calculations(
             run_id=budget.request_id if budget is not None else usage_recorder.request_id,
             deps=deps,
             review=checked,
-            redone=redone,
         )
         output = replace(
             output,
@@ -1049,6 +1069,7 @@ async def _run_advisory_flow(
     cache_ctx: TurnCacheContext | None = None,
     cached_turn: CachedTurn | None = None,
     l1_pending: L1Pending | None = None,
+    strict_numbers: bool = False,
 ) -> GraphOutput:
     """Advisory branch: query transformation → retrieval → rerank → web search
     for the sub-queries rerank left empty → generation (or ticket fallback
@@ -1152,18 +1173,61 @@ async def _run_advisory_flow(
         # only the low dense floor applies here; the LLM is the gate.
         trace.node("09_PostRetrievalRerankNode")
         llm_rerank_follows = settings.CHAT_LLM_RERANK_ENABLED and models.rerank is not None
+        judge_follows = llm_rerank_follows or settings.CHAT_RERANK_MODE != "llm"
         rerank_result = rerank_chunks(
             per_query_chunks,
-            score_threshold=settings.CHAT_RETRIEVAL_DENSE_FLOOR if llm_rerank_follows else None,
+            score_threshold=settings.CHAT_RETRIEVAL_DENSE_FLOOR if judge_follows else None,
         )
         rerank_ok = True
 
-    # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
+    # EvidenceSignals: how confident retrieval is per sub-query, logged every turn; `auto`
+    # runs the LLM rerank only when a sub-query is weak (app/graph/evidence.py).
+    evidence = levels_for([result.chunks for result in rerank_result.per_query])
+    evidence_rows = [
+        {"sub_query": index + 1, "level": level, **signals.as_dict()}
+        for index, (signals, level) in enumerate(evidence)
+    ]
+    logger.info(
+        "evidence mode=%s %s",
+        settings.CHAT_RERANK_MODE,
+        "; ".join(f"SQ{i + 1} {lvl} {sig.describe()}" for i, (sig, lvl) in enumerate(evidence)),
+    )
+    weak_evidence = any(level == "weak" for _, level in evidence)
+
+    # CrossEncoderRerankNode (CHAT_RERANK_MODE cross_encoder / cross_encoder_then_llm,
+    # docs/specs/SPEC-cross-encoder-rerank.md): each sub-query's top CHAT_CROSS_ENCODER_KEEP
+    # by cross-encoder score. `cross_encoder` stops there; `cross_encoder_then_llm` hands
+    # those to the LLM rerank. A service failure falls over to the LLM rerank with a
+    # warning and skips the cache store: that result is not what this mode's key stands for.
+    # `none` runs neither: the dense floor + retrieval order is the whole rerank stage.
+    llm_rerank_wanted = settings.CHAT_LLM_RERANK_ENABLED and (
+        settings.CHAT_RERANK_MODE not in ("none", "auto")
+        or (settings.CHAT_RERANK_MODE == "auto" and weak_evidence)
+    )
     if (
         cached_result is None
-        and settings.CHAT_LLM_RERANK_ENABLED
+        and settings.CHAT_RERANK_MODE in ("cross_encoder", "cross_encoder_then_llm")
         and rerank_result.has_valid_context
     ):
+        trace.node("09a_CrossEncoderRerankNode")
+        ce_outcome = await cross_encoder_rerank(CrossEncoderClient(), questions, rerank_result)
+        if ce_outcome.failure is None:
+            rerank_result = ce_outcome.result
+            llm_rerank_wanted = (
+                settings.CHAT_RERANK_MODE == "cross_encoder_then_llm"
+                and settings.CHAT_LLM_RERANK_ENABLED
+            )
+        else:
+            rerank_ok = False
+            admin_warnings.append(
+                AdminWarning(
+                    code="CROSS_ENCODER_FAILED",
+                    message=f"{CROSS_ENCODER_SKIPPED}{ce_outcome.failure}",
+                )
+            )
+
+    # LLMRerankNode: keep only the chunks that answer each sub-query (RERANK model).
+    if cached_result is None and llm_rerank_wanted and rerank_result.has_valid_context:
         if models.rerank is not None:
             rerank_agent = build_llm_rerank_agent(models.rerank)
             trace.node("09a_LLMRerankNode", agent=rerank_agent, credential=models.rerank_credential)
@@ -1217,7 +1281,12 @@ async def _run_advisory_flow(
 
     # WebSearchNode + WebJudgeNode: judged alongside rerank for every sub-query (fast-
     # changing topic), else only for the sub-queries left with no chunk.
-    failed = set(rerank_result.failed_query_indexes)
+    # Fallback scope: the policy decides from the evidence levels and what the rerank
+    # emptied, apart from which rerank mode ran (app/graph/web_policy.py).
+    web_decision = decide_fallback(
+        [level for _, level in evidence], emptied_by_rerank=rerank_result.failed_query_indexes
+    )
+    failed = set(web_decision.sub_queries)
     web_results: list[WebSearchResult] = []
     web_sources: list[WebSearchResult] = []
     outcomes: list[WebSearchOutcome] = []
@@ -1365,6 +1434,7 @@ async def _run_advisory_flow(
         trace=trace,
         sub_queries=sub_query_questions,
         calculation_titles=calculation_titles_shown,
+        strict_arithmetic=strict_numbers,
         purpose="CHAT",
         credential=models.generation_credential,
         snapshot_version=models.snapshot_version,
@@ -1375,6 +1445,58 @@ async def _run_advisory_flow(
     response_text = keep_known_links(
         strip_source_list(generation_result.response_text), [*web_results, *web_sources]
     )
+    # GroundingCheck: numbers and [n] of the answer against the sources it was shown
+    # (chunks, then web pages, numbered in that order). The text is already streamed, so a
+    # finding adds a caution line and an AI-admin warning rather than a rewrite.
+    if settings.CHAT_GROUNDING_CHECK:
+        shown = [chunk.content for chunk in rerank_result.chunks] + [
+            page.content for page in web_results
+        ]
+        # Strict when the arithmetic of this turn belongs to code (a deferred calculation
+        # question, or the answer requested calc blocks): a sum the model states itself is
+        # ungrounded, not "derivable".
+        strict = strict_numbers or bool(generation_result.calc_requests)
+        report = check_answer(response_text, shown, question=question, strict=strict)
+        if report.ungrounded:
+            caution = caution_line(report.ungrounded)
+            await token_sink(caution)
+            response_text += caution
+            admin_warnings.append(
+                AdminWarning(
+                    code="ANSWER_UNGROUNDED_NUMBERS",
+                    message=f"{_UNGROUNDED}{', '.join(report.ungrounded)}",
+                )
+            )
+        if report.invalid_markers:
+            admin_warnings.append(
+                AdminWarning(
+                    code="ANSWER_INVALID_CITATION",
+                    message=f"{_INVALID_CITATION}{report.invalid_markers}",
+                )
+            )
+        elif (
+            report.no_citation
+            and numbers_in(response_text)
+            and not looks_like_refusal(response_text)
+        ):
+            admin_warnings.append(AdminWarning(code="ANSWER_NO_CITATION", message=_NO_CITATION))
+        logger.info(
+            "grounding ungrounded=%s cited=%s invalid=%s no_citation=%s",
+            report.ungrounded,
+            report.cited,
+            report.invalid_markers,
+            report.no_citation,
+        )
+    # Plain arithmetic the answer asked for over figures it cited: computed by code and
+    # appended as a Python block (or refused with a fixed line and an AI-admin warning).
+    if generation_result.calc_requests:
+        computed, rejected = arithmetic_blocks(
+            generation_result.calc_requests, question=question, chunks=rerank_result.chunks
+        )
+        if computed:
+            await token_sink(computed)
+            response_text += computed
+        admin_warnings.extend(rejected)
     # Official pages the judge kept only as links: listed after the answer, as the
     # fallback lists them, instead of being lost because another page answered.
     links = source_links_block(web_sources, response_text)
@@ -1393,4 +1515,5 @@ async def _run_advisory_flow(
         context_web=context_web,
         used_web_search=bool(web_results),
         admin_warnings=admin_warnings,
+        evidence=evidence_rows,
     )

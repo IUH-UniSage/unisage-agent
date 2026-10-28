@@ -17,6 +17,11 @@ from app.rag.retrieval.lexical import BM25_VECTOR, rrf_merge
 LEXICAL_ONLY_FLAG = "lexical_only"
 from app.schemas.security import AcademicSecurityContext
 
+# Per-query rank metadata written on the fused points (not stored in Qdrant).
+RRF_SCORE_KEY = "rrf_score"
+DENSE_RANK_KEY = "dense_rank"
+BM25_RANK_KEY = "bm25_rank"
+
 # Dimension of OpenAI's `text-embedding-3-small` - only used to create the live collection
 # before any identity is registered; a re-index target is created with its model's dimension.
 _DEFAULT_EMBEDDING_DIMENSIONS = 1536
@@ -429,7 +434,14 @@ def search_chunks_batch(
                     best_by_id[point.id] = point
         if sparse_response is None:
             ranked = sorted(best_by_id.values(), key=lambda point: point.score, reverse=True)
-            results.append(ranked[:limit])
+            results.append(
+                [
+                    point.model_copy(
+                        update={"payload": {**(point.payload or {}), DENSE_RANK_KEY: rank}}
+                    )
+                    for rank, point in enumerate(ranked[:limit], start=1)
+                ]
+            )
             continue
         # Two lists of equal weight: the dense side merged first (best cosine per chunk, as
         # the dense-only search ranks it), then BM25. Fusing the 3 dense lists separately
@@ -446,21 +458,39 @@ def search_chunks_batch(
             else settings.CHAT_RETRIEVAL_LEXICAL_HIT_SCORE
         )
         sparse_by_id = {point.id: point for point in sparse_response.points}
+        dense_rank = {point.id: rank for rank, point in enumerate(dense_ranked, start=1)}
+        bm25_rank = {point.id: rank for rank, point in enumerate(sparse_response.points, start=1)}
         fused = rrf_merge(ranked_lists, k=rrf_k or settings.CHAT_RETRIEVAL_RRF_K)
         ranked = []
-        for point_id, _rrf in fused[:limit]:
-            dense_point = best_by_id.get(cast("str | int | UUID", point_id))
+        for point_id, rrf in fused[:limit]:
+            key = cast("str | int | UUID", point_id)
+            # Where the chunk stood in each list and its fused score: the evidence signals
+            # (app/graph/evidence.py) read these to tell a confident retrieval from a weak one.
+            ranks = {
+                RRF_SCORE_KEY: round(rrf, 4),
+                DENSE_RANK_KEY: dense_rank.get(key),
+                BM25_RANK_KEY: bm25_rank.get(key),
+            }
+            dense_point = best_by_id.get(key)
             if dense_point is not None:
-                ranked.append(dense_point)
+                ranked.append(
+                    dense_point.model_copy(
+                        update={"payload": {**(dense_point.payload or {}), **ranks}}
+                    )
+                )
             else:
-                lexical_point = sparse_by_id[cast("str | int | UUID", point_id)]
+                lexical_point = sparse_by_id[key]
                 # `score` is a stand-in (no cosine was measured); the flag is what the floor
                 # and anything else that must not read it as a cosine should look at.
                 ranked.append(
                     lexical_point.model_copy(
                         update={
                             "score": lexical_score,
-                            "payload": {**(lexical_point.payload or {}), LEXICAL_ONLY_FLAG: True},
+                            "payload": {
+                                **(lexical_point.payload or {}),
+                                LEXICAL_ONLY_FLAG: True,
+                                **ranks,
+                            },
                         }
                     )
                 )

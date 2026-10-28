@@ -569,6 +569,288 @@
       "example_options": [],
       "priority": "low",
       "description": "Số nguyên đồng."
+    },
+    {
+      "field": "dtn",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_thi_tot_nghiep",
+        "tong_diem_thi"
+      ],
+      "concept": "Tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp (ĐTN)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét tuyển 2026, thang 30."
+    },
+    {
+      "field": "dhb",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_hoc_ba",
+        "tong_diem_hoc_ba"
+      ],
+      "concept": "Tổng điểm học bạ 3 môn trong tổ hợp (ĐHB)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét tuyển 2026, thang 30."
+    },
+    {
+      "field": "dgnl",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_dgnl",
+        "danh_gia_nang_luc"
+      ],
+      "concept": "Kết quả thi đánh giá năng lực",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm thô kỳ thi ĐGNL (quy đổi thang 30 theo điểm thủ khoa)."
+    },
+    {
+      "field": "dtk",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_thu_khoa"
+      ],
+      "concept": "Điểm thủ khoa kỳ thi đánh giá năng lực (ĐTK)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Dùng quy đổi ĐGNL về thang 30."
+    },
+    {
+      "field": "uu_tien",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_uu_tien"
+      ],
+      "concept": "Điểm ưu tiên khu vực/đối tượng Đ(Kv;Đt)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Mức đã quy đổi theo quy định Bộ GD&ĐT; 0 nếu không có."
+    },
+    {
+      "field": "diem_cong",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_thuong",
+        "diem_khuyen_khich"
+      ],
+      "concept": "Điểm cộng ĐC (thưởng, khuyến khích)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "0 nếu không có."
+    },
+    {
+      "field": "nguong",
+      "scope": "calculation",
+      "key_aliases": [
+        "nguong_nhan_ho_so"
+      ],
+      "concept": "Ngưỡng nhận hồ sơ (tổng 3 môn)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ; mặc định 19,5."
+    },
+    {
+      "field": "trong_so",
+      "scope": "calculation",
+      "key_aliases": [
+        "trong_so_thanh_phan"
+      ],
+      "concept": "Trọng số từng thành phần theo đề cương (%)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Danh sách %, cùng thứ tự với `diem`."
+    },
+    {
+      "field": "diem",
+      "scope": "calculation",
+      "key_aliases": [
+        "diem_thanh_phan"
+      ],
+      "concept": "Điểm từng thành phần theo trọng số đề cương",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Danh sách điểm thang 10, cùng thứ tự với `trong_so`."
+    },
+    {
+      "field": "lam_tron_thanh_phan",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Bước làm tròn điểm thành phần trước khi tính",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "VD 0,5 theo quy chế; bỏ trống nếu không."
+    },
+    {
+      "field": "mon1",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Tên môn 1 trong tổ hợp xét học bạ",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Chỉ để ghi nhãn, không tính."
+    },
+    {
+      "field": "m1_10",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 1: TB cả năm lớp 10",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "m1_11",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 1: TB cả năm lớp 11",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "m1_12",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 1: TB học kỳ 1 lớp 12",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "mon2",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Tên môn 2 trong tổ hợp xét học bạ",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Chỉ để ghi nhãn, không tính."
+    },
+    {
+      "field": "m2_10",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 2: TB cả năm lớp 10",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "m2_11",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 2: TB cả năm lớp 11",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "m2_12",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 2: TB học kỳ 1 lớp 12",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "mon3",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Tên môn 3 trong tổ hợp xét học bạ",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Chỉ để ghi nhãn, không tính."
+    },
+    {
+      "field": "m3_10",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 3: TB cả năm lớp 10",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "m3_11",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 3: TB cả năm lớp 11",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "m3_12",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Môn 3: TB học kỳ 1 lớp 12",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Điểm xét học bạ THPT (lớp 10, 11, HK1 lớp 12), thang 10."
+    },
+    {
+      "field": "tu_ngay",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Ngày bắt đầu (dd/mm/yyyy)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Khoảng ngày giữa hai mốc."
+    },
+    {
+      "field": "den_ngay",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Ngày kết thúc (dd/mm/yyyy)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Khoảng ngày giữa hai mốc."
+    },
+    {
+      "field": "cong_them_nam",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Thời hạn cộng thêm vào ngày bắt đầu (năm)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Khoảng ngày: hạn hiệu lực N năm."
+    },
+    {
+      "field": "khoang_gio",
+      "scope": "calculation",
+      "key_aliases": [],
+      "concept": "Các khoảng giờ hh:mm-hh:mm",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Tổng thời gian của các khoảng giờ."
     }
   ]
 }

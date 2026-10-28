@@ -93,6 +93,9 @@ class GraphOutput:
     # This turn's computed calculations, oldest first, appended to the conversation's
     # `recent_calculations` (empty = keep the list as it is).
     calculations: list[LastCalculation] = field(default_factory=list)
+    # Evidence sufficiency per sub-query (app/graph/evidence.py): signals and level, for
+    # the eval and the threshold study; empty when the turn had no retrieval.
+    evidence: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def last_calculation(self) -> LastCalculation | None:

@@ -1,0 +1,30 @@
+version: '3'
+
+# Cross-encoder rerank service (docs/specs/SPEC-cross-encoder-rerank.md): a separate uv project
+# in ./reranker so the agent never depends on torch. First `task reranker:sync` downloads torch
+# (CUDA wheel, ~2.5 GB) and the first `serve` downloads the model (~2.3 GB) into ~/.cache/huggingface.
+
+vars:
+  RERANKER_PORT: '{{.RERANKER_PORT | default "8403"}}'
+  RERANKER_HOST: '{{.RERANKER_HOST | default "127.0.0.1"}}'
+
+tasks:
+  sync:
+    desc: "Cài môi trường cho service reranker (uv project riêng ./reranker)"
+    cmds:
+      - uv sync --project reranker --group dev
+
+  serve:
+    desc: "Chạy service cross-encoder bge-reranker-v2-m3 (cổng 8403). Ctrl+C giải phóng VRAM. Vd task reranker:serve RERANKER_PORT=8403"
+    cmds:
+      - uv run --project reranker uvicorn reranker.app:app --host {{.RERANKER_HOST}} --port {{.RERANKER_PORT}} --workers 1 {{.CLI_ARGS}}
+
+  test:
+    desc: "Test service reranker (scorer giả, không tải model)"
+    cmds:
+      - uv run --project reranker pytest reranker/tests {{.CLI_ARGS}}
+
+  health:
+    desc: "Gọi /health của service"
+    cmds:
+      - curl -s http://{{.RERANKER_HOST}}:{{.RERANKER_PORT}}/health
