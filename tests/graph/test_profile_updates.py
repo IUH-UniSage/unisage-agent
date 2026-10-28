@@ -5,6 +5,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from pydantic import JsonValue
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -293,6 +294,52 @@ async def test_a_corrected_training_type_reprices_the_tuition_instead_of_reusing
     params = result.last_calculation.params
     assert params["he_dao_tao"] == "Cao học"
     # Read again for the new row (the lookup answered 980.000 / 1.600.000), not reused.
+    assert (params["don_gia_lt"], params["don_gia_th"]) == (980000, 1600000)
+
+
+@pytest.mark.asyncio
+async def test_an_echoed_old_price_does_not_survive_a_corrected_intake() -> None:
+    """28/10/2026: "tôi nhầm, tôi khoá 20" after a K18 tuition result. The extractor
+    echoed the whole previous calculation (2022 prices included) and the 2022 prices were
+    reused; an echoed value is not one the student gave, so the prices are read again."""
+
+    earlier: dict[str, JsonValue] = {
+        "tc_lt": 12,
+        "tc_th": 4,
+        "don_gia_lt": 750000,
+        "don_gia_th": 1130000,
+        "khoa_nhap_hoc": "Nhập học 2022 (đang học kỳ 9)",
+        "khoi_nganh": "cntt",
+        "he_dao_tao": "Đại học chính quy (chương trình chuẩn)",
+    }
+    previous = LastCalculation(
+        plan=CalculationPlan(formula_id="tuition_semester"),
+        params=earlier,
+        title="Học phí một học kỳ",
+    )
+    result = await run_graph(
+        _input(
+            "tôi nhầm , tôi khoá 20",
+            confirmed_metadata={"khoa_nhap_hoc": "2022", "khoi_nganh": "cntt"},
+            recent_calculations=[previous],
+        ),
+        _tuition_models(
+            {
+                "tasks": [{"intent": "academic_calculation", "query": "tôi nhầm , tôi khoá 20"}],
+                "metadata_updates": {"khoa_nhap_hoc": "2024"},
+            },
+            {"formula_id": "previous", "params": {**earlier, "khoa_nhap_hoc": "2024"}},
+            _PRICES_FOUND,
+            chunks=[_FEE_TABLE],
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert result.last_calculation is not None
+    params = result.last_calculation.params
+    assert params["khoa_nhap_hoc"] == "2024"
     assert (params["don_gia_lt"], params["don_gia_th"]) == (980000, 1600000)
 
 

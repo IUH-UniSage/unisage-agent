@@ -955,7 +955,11 @@ async def plan_calculation(task_id: str, query: str, deps: CalculationDeps) -> P
         **profile_params(formula_id, deps.confirmed_metadata),
         **extraction.params,
     }
-    params = drop_stale_lookups(formula_id, earlier, params, keep=set(extraction.params))
+    # Only what the extractor changed counts as given this turn: it often echoes the whole
+    # previous calculation, prices included (28/10/2026, "tôi nhầm, tôi khoá 20" kept the
+    # 2022 prices), and an echoed price must not survive a change of row.
+    given = {name for name, value in extraction.params.items() if earlier.get(name) != value}
+    params = drop_stale_lookups(formula_id, earlier, params, keep=given)
     return PlannedTask(task_id, query, formula_id, params, extraction.unknown, extraction.target)
 
 

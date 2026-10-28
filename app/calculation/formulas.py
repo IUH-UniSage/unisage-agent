@@ -1059,6 +1059,8 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             tab_label="Khối ngành",
             kind="text",
             required=_never,
+            # The groups the fee schedule prices; free text ("cntt") was matched by guess.
+            options=("Khối Kinh tế", "Khối Công nghệ", "Ngành Dược"),
         ),
         ParamSpec(
             name="he_dao_tao",

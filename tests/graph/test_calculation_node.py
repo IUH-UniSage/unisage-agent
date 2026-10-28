@@ -827,7 +827,12 @@ async def test_tuition_asks_the_fee_row_first_then_reads_the_prices() -> None:
         panel_id=first.pending_round.panel.panel_id,
         answers=[
             *(Answer(question_id=q.id, option_id=q.options[0].id) for q in choices),
-            Answer(question_id=questions["khoi_nganh"].id, text="Khối Công nghệ"),
+            Answer(
+                question_id=questions["khoi_nganh"].id,
+                option_id=next(
+                    o.id for o in questions["khoi_nganh"].options if o.label == "Khối Công nghệ"
+                ),
+            ),
             Answer(question_id=questions["tc_lt"].id, number=Decimal(15)),
             Answer(question_id=questions["tc_th"].id, number=Decimal(4)),
         ],
