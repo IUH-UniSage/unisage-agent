@@ -23,6 +23,7 @@ class Ledger:
     usd: float = 0.0
     models: Counter[str] = field(default_factory=Counter)
     keys: set[str] = field(default_factory=set)
+    steps: list[dict[str, Any]] = field(default_factory=list)
 
     def book(self, model: str, key: str, tokens_in: int, tokens_out: int) -> None:
         # a model without a known price is booked at 0 (`cost.PRICES`)
@@ -47,6 +48,15 @@ class Ledger:
             "output_tokens": self.output_tokens,
             "usd": round(self.usd, 6),
         }
+
+
+def step(name: str, output: Any) -> None:
+    """Keep what the judge answered at one RAGAS step (a pydantic model or a dict)."""
+
+    ledger = current.get()
+    if ledger is not None:
+        data = output.model_dump() if hasattr(output, "model_dump") else output
+        ledger.steps.append({"step": name, "output": data})
 
 
 def book(model: str, key: str, tokens_in: int, tokens_out: int = 0) -> None:

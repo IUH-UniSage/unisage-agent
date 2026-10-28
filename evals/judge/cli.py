@@ -43,7 +43,17 @@ from evals.judge.checkpoint import (
 )
 from evals.judge.cost import BudgetExceeded, check_budget, estimate
 from evals.judge.runner import JudgeRun
-from evals.judge.tasks import METRICS, NO_LLM, tasks_of
+from evals.judge.tasks import METRICS, NO_LLM, PASS_SCORE, Task, tasks_of
+
+EXPLAIN_FILE = "judge_explain.jsonl"
+# metrics whose RAGAS steps say why a score is low (refusal already keeps its reason)
+EXPLAINED = (
+    "faithfulness",
+    "web_faithfulness",
+    "answer_coverage",
+    "context_recall",
+    "answer_relevancy",
+)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -92,6 +102,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="translate the RAGAS prompt examples to Vietnamese once and cache them",
     )
     parser.add_argument("--dry-run", action="store_true", help="estimate the cost and stop")
+    parser.add_argument(
+        "--explain",
+        action="store_true",
+        help=(
+            f"score again, into {EXPLAIN_FILE}, only the scores below {PASS_SCORE} in judge.jsonl, "
+            "keeping each RAGAS step (claims, verdicts, reasons); judge.jsonl and results.jsonl "
+            "are not touched"
+        ),
+    )
     args = parser.parse_args(argv)
     args.metrics = [name.strip() for name in args.metrics.split(",") if name.strip()]
     unknown = sorted(set(args.metrics) - set(METRICS))
@@ -136,13 +155,30 @@ def resolve(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
     return plan
 
 
+def low_scores(tasks: Sequence[Task], records: dict[tuple[str, str], dict[str, Any]]) -> list[Task]:
+    """The tasks of `EXPLAINED` metrics whose recorded score is below the pass mark."""
+
+    low = []
+    for task in tasks:
+        value = records.get((task.key, task.metric), {}).get("value")
+        if task.metric in EXPLAINED and isinstance(value, (int, float)) and value < PASS_SCORE:
+            low.append(task)
+    return low
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     env = providers.read_env(args.env_file)
     rows = load_rows(args.out)
     if args.limit:
         rows = rows[: args.limit]
-    tasks = pending_tasks(tasks_of(rows, args.metrics), load_records(args.out / "judge.jsonl"))
+    records = load_records(args.out / "judge.jsonl")
+    if args.explain:
+        tasks = pending_tasks(
+            low_scores(tasks_of(rows, args.metrics), records), load_records(args.out / EXPLAIN_FILE)
+        )
+    else:
+        tasks = pending_tasks(tasks_of(rows, args.metrics), records)
     needs_llm = any(task.metric not in NO_LLM for task in tasks)
     try:
         plan = resolve(args, env)
@@ -210,6 +246,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         concurrency=args.concurrency,
         quota_wait_s=args.quota_wait * 60,
         max_quota_waits=args.max_quota_waits,
+        checkpoint_name=EXPLAIN_FILE if args.explain else "judge.jsonl",
     )
 
     async def go() -> bool:
@@ -219,6 +256,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             await factory.aclose()
 
     finished = asyncio.run(go())
+    if args.explain:
+        print(f"\n{len(tasks)} low score(s) explained in {args.out / EXPLAIN_FILE}")
+        return 0 if finished else 3
     records = load_records(run.checkpoint)
     merged = merge_into_results(args.out, records)
     summary = summarize_scores(load_rows(args.out), records, plan["fallback"])

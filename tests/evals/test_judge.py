@@ -499,3 +499,31 @@ def test_answer_coverage_keeps_precision_and_f1_as_extra_values(tmp_path: Path) 
     assert summary["answer_coverage"]["mean"] == 1.0
     assert summary["answer_precision"]["mean"] == 0.0
     assert summary["factual_correctness_f1"] == {"n": 0, "nan": 1, "by_category": {}}
+
+
+def test_explain_picks_only_low_scores_of_explained_metrics() -> None:
+    rows = [_row(id="q1"), _row(id="q2")]
+    tasks = judge_tasks.tasks_of(rows, list(judge_tasks.METRICS))
+    records: dict[tuple[str, str], dict[str, Any]] = {
+        ("q1:original", "faithfulness"): {"value": 0.4},
+        ("q1:original", "answer_coverage"): {"value": 0.9},
+        ("q2:original", "answer_coverage"): {"value": 0.0},
+        ("q2:original", "refusal"): {"value": 0.0},  # refusal keeps its own reason
+        ("q2:original", "id_context_recall"): {"value": 0.0},  # no LLM: nothing to explain
+        ("q2:original", "faithfulness"): {"value": None},  # NaN: not a low score
+    }
+
+    low = cli.low_scores(tasks, records)
+
+    assert {(t.key, t.metric) for t in low} == {
+        ("q1:original", "faithfulness"),
+        ("q2:original", "answer_coverage"),
+    }
+
+
+def test_a_record_keeps_the_judge_steps_when_there_are_some() -> None:
+    task = Task("q1:original", "faithfulness", {})
+    steps = [{"step": "NLIStatementOutput", "output": {"statements": []}}]
+
+    assert checkpoint.record_of(task, Score(0.5, steps=steps))["steps"] == steps
+    assert "steps" not in checkpoint.record_of(task, Score(0.5))

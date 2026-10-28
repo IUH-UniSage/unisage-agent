@@ -24,10 +24,11 @@ class JudgeRun:
     max_quota_waits: int = 48
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep
     clock: Callable[[], float] = time.time
+    checkpoint_name: str = "judge.jsonl"
 
     @property
     def checkpoint(self) -> Path:
-        return self.out / "judge.jsonl"
+        return self.out / self.checkpoint_name
 
     async def run(self, tasks: Sequence[Task]) -> bool:
         """Score every task; False when stopped by quota with tasks left (checkpoint kept)."""

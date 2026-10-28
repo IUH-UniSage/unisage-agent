@@ -51,6 +51,9 @@ class Score:
     reason: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, float] = field(default_factory=dict)
+    # what the judge answered at each RAGAS step (statements, verdicts and their reasons),
+    # so a low score can be explained claim by claim
+    steps: list[dict[str, Any]] = field(default_factory=list)
 
 
 class Scorer(Protocol):

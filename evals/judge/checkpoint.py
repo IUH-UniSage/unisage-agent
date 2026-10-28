@@ -63,6 +63,7 @@ def record_of(task: Task, score: Score) -> dict[str, Any]:
             for name, extra in score.extra.items()
         },
         **score.usage,
+        **({"steps": score.steps} if score.steps else {}),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
 

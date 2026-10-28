@@ -73,7 +73,9 @@ class JudgeLLM(InstructorBaseRagasLLM):
                 last = error
                 continue
             ledger.book(model, answer.key, answer.input_tokens, answer.output_tokens)
-            return response_model.model_validate_json(extract_json(answer.text))
+            parsed = response_model.model_validate_json(extract_json(answer.text))
+            ledger.step(response_model.__name__, parsed)
+            return parsed
         raise last or ModelUnavailable(self.model)
 
     def generate(self, prompt: str, response_model: type[Any]) -> Any:
@@ -196,7 +198,9 @@ class RagasScorer:
             value, reason, extra = math.nan, f"{type(error).__name__}: {str(error)[:300]}", {}
         finally:
             ledger.current.reset(token)
-        return Score(value=value, reason=reason, usage=booked.as_usage(), extra=extra)
+        return Score(
+            value=value, reason=reason, usage=booked.as_usage(), extra=extra, steps=booked.steps
+        )
 
     async def _run(self, task: Task) -> tuple[float, str | None, dict[str, float]]:
         inputs = task.inputs
