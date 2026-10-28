@@ -4,21 +4,26 @@ handling and the Gemini key pool - all without RAGAS, Gemini or a network."""
 import asyncio
 import json
 import math
+import random
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from evals.judge import cli as judge
-from evals.judge.gemini_pool import (
+from evals.judge import checkpoint, cli, cost, providers
+from evals.judge import tasks as judge_tasks
+from evals.judge.providers import gemini
+from evals.judge.providers.base import split_keys
+from evals.judge.providers.pool import (
     CallFailed,
-    GeminiCaller,
     KeyPool,
     ModelUnavailable,
+    PooledCaller,
     QuotaExhausted,
     classify,
 )
-from evals.judge.cli import JudgeRun, Score, Task
+from evals.judge.runner import JudgeRun
+from evals.judge.tasks import Score, Task
 
 
 def _row(**overrides: Any) -> dict[str, Any]:
@@ -45,10 +50,10 @@ def _row(**overrides: Any) -> dict[str, Any]:
 
 
 def test_a_row_with_an_expected_answer_gets_every_answer_metric_and_refusal() -> None:
-    tasks = {task.metric: task for task in judge.tasks_for(_row())}
+    tasks = {task.metric: task for task in judge_tasks.tasks_for(_row())}
 
-    assert set(tasks) == {*judge.ANSWER_METRICS, "refusal"}
-    assert len(tasks["faithfulness"].inputs["retrieved_contexts"]) == judge.MAX_CONTEXTS
+    assert set(tasks) == {*judge_tasks.ANSWER_METRICS, "refusal"}
+    assert len(tasks["faithfulness"].inputs["retrieved_contexts"]) == judge_tasks.MAX_CONTEXTS
     assert tasks["id_context_recall"].inputs == {
         "retrieved_context_ids": ["doc-a"],
         "reference_context_ids": ["doc-a", "doc-b"],
@@ -68,7 +73,7 @@ def test_a_row_with_an_expected_answer_gets_every_answer_metric_and_refusal() ->
     ],
 )
 def test_rows_without_an_answer_to_check_only_get_the_refusal_metric(overrides: dict) -> None:
-    assert [task.metric for task in judge.tasks_for(_row(**overrides))] == ["refusal"]
+    assert [task.metric for task in judge_tasks.tasks_for(_row(**overrides))] == ["refusal"]
 
 
 def test_an_answer_from_the_web_is_judged_against_the_fetched_pages() -> None:
@@ -78,16 +83,16 @@ def test_an_answer_from_the_web_is_judged_against_the_fetched_pages() -> None:
         web_results=[{"url": "https://iuh.edu.vn/a", "content": "trang web"}],
     )
 
-    tasks = {task.metric: task for task in judge.tasks_for(row)}
+    tasks = {task.metric: task for task in judge_tasks.tasks_for(row)}
 
     assert set(tasks) == {"web_faithfulness", "answer_coverage", "refusal"}
     assert tasks["web_faithfulness"].inputs["retrieved_contexts"] == ["trang web"]
 
 
 def test_failed_turns_get_no_metric_and_metrics_can_be_chosen() -> None:
-    assert judge.tasks_for(_row(error="boom")) == []
-    assert judge.tasks_for(_row(response="")) == []
-    chosen = judge.tasks_for(_row(), ["id_context_precision", "id_context_recall"])
+    assert judge_tasks.tasks_for(_row(error="boom")) == []
+    assert judge_tasks.tasks_for(_row(response="")) == []
+    chosen = judge_tasks.tasks_for(_row(), ["id_context_precision", "id_context_recall"])
     assert [task.metric for task in chosen] == ["id_context_precision", "id_context_recall"]
 
 
@@ -95,19 +100,21 @@ def test_failed_turns_get_no_metric_and_metrics_can_be_chosen() -> None:
 
 
 def test_the_estimate_counts_only_llm_metrics_and_the_guard_stops_over_the_cap() -> None:
-    tasks = judge.tasks_for(_row())
-    estimated = judge.estimate(tasks, judge.DEFAULT_MODEL)
+    tasks = judge_tasks.tasks_for(_row())
+    estimated = cost.estimate(tasks, gemini.DEFAULT_MODEL)
 
     assert (
         estimated["calls"] == 2 + 4 + 1 + 1 + 1
     )  # faithfulness, factual, recall, relevancy, refusal
     assert estimated["usd"] > 0
     assert (
-        judge.estimate(judge.tasks_for(_row(), ["id_context_recall"]), judge.DEFAULT_MODEL)["usd"]
+        cost.estimate(judge_tasks.tasks_for(_row(), ["id_context_recall"]), gemini.DEFAULT_MODEL)[
+            "usd"
+        ]
         == 0
     )
-    with pytest.raises(judge.BudgetExceeded):
-        judge.check_budget(estimated, max_cost=estimated["usd"] / 2)
+    with pytest.raises(cost.BudgetExceeded):
+        cost.check_budget(estimated, max_cost=estimated["usd"] / 2)
 
 
 def _results(tmp_path: Path, rows: list[dict[str, Any]]) -> Path:
@@ -120,7 +127,7 @@ def _results(tmp_path: Path, rows: list[dict[str, Any]]) -> Path:
 def test_main_stops_before_any_call_when_the_estimate_exceeds_max_cost(tmp_path: Path) -> None:
     out = _results(tmp_path, [_row(id=f"q{i}") for i in range(5)])
 
-    code = judge.main(["--out", str(out), "--max-cost", "0.000001", "--env-file", "none"])
+    code = cli.main(["--out", str(out), "--max-cost", "0.000001", "--env-file", "none"])
 
     assert code == 2
     assert not (out / "judge.jsonl").exists()
@@ -175,34 +182,34 @@ def _run(out: Path, scorers: list[FakeScorer], **kwargs: Any) -> tuple[JudgeRun,
 def test_every_score_is_checkpointed_and_a_rerun_only_scores_what_is_missing(
     tmp_path: Path,
 ) -> None:
-    tasks = judge.tasks_of([_row(id="q1"), _row(id="q2")], ["refusal", "faithfulness"])
+    tasks = judge_tasks.tasks_of([_row(id="q1"), _row(id="q2")], ["refusal", "faithfulness"])
     scorer = FakeScorer(values={"faithfulness": math.nan})
     run, _ = _run(tmp_path, [scorer])
 
     assert asyncio.run(run.run(tasks))
-    records = judge.load_records(tmp_path / "judge.jsonl")
+    records = checkpoint.load_records(tmp_path / "judge.jsonl")
     assert len(records) == 4
     assert records[("q1:original", "faithfulness")]["value"] is None  # NaN, tried once only
     assert len(scorer.calls) == 4
 
     # the next run picks up only the NaN scores
-    assert [(t.key, t.metric) for t in judge.pending_tasks(tasks, records)] == [
+    assert [(t.key, t.metric) for t in checkpoint.pending_tasks(tasks, records)] == [
         ("q1:original", "faithfulness"),
         ("q2:original", "faithfulness"),
     ]
 
 
 def test_out_of_quota_stops_with_the_checkpoint_when_not_allowed_to_wait(tmp_path: Path) -> None:
-    tasks = judge.tasks_of([_row(id=f"q{i}") for i in range(3)], ["refusal"])
+    tasks = judge_tasks.tasks_of([_row(id=f"q{i}") for i in range(3)], ["refusal"])
     run, _ = _run(tmp_path, [FakeScorer(quota_after=1)])
     run.concurrency = 1
 
     assert asyncio.run(run.run(tasks)) is False
-    assert len(judge.load_records(tmp_path / "judge.jsonl")) == 1
+    assert len(checkpoint.load_records(tmp_path / "judge.jsonl")) == 1
 
 
 def test_out_of_quota_waits_for_the_reset_then_scores_the_rest(tmp_path: Path) -> None:
-    tasks = judge.tasks_of([_row(id=f"q{i}") for i in range(3)], ["refusal"])
+    tasks = judge_tasks.tasks_of([_row(id=f"q{i}") for i in range(3)], ["refusal"])
     scorer = FakeScorer(quota_after=1)
     slept: list[float] = []
 
@@ -215,18 +222,20 @@ def test_out_of_quota_waits_for_the_reset_then_scores_the_rest(tmp_path: Path) -
 
     assert asyncio.run(run.run(tasks))
     assert slept == [160.0]  # until the reset (1000) + 60 s margin
-    assert len(judge.load_records(tmp_path / "judge.jsonl")) == 3
+    assert len(checkpoint.load_records(tmp_path / "judge.jsonl")) == 3
 
 
 def test_rows_scored_by_the_fallback_are_scored_again_with_the_main_model(tmp_path: Path) -> None:
-    tasks = judge.tasks_of([_row(id=f"q{i}") for i in range(4)], ["refusal", "id_context_recall"])
+    tasks = judge_tasks.tasks_of(
+        [_row(id=f"q{i}") for i in range(4)], ["refusal", "id_context_recall"]
+    )
     run, asked = _run(
         tmp_path, [FakeScorer(fallback=True), FakeScorer(fallback=False)], fallback_model="fallback"
     )
 
     assert asyncio.run(run.run(tasks))
     assert asked == [False, True]
-    records = judge.load_records(tmp_path / "judge.jsonl")
+    records = checkpoint.load_records(tmp_path / "judge.jsonl")
     assert all(not r["fallback"] for (k, m), r in records.items() if m == "refusal")
 
 
@@ -234,15 +243,15 @@ def test_scores_are_merged_into_results_and_summarised(tmp_path: Path) -> None:
     rows = [_row(id="q1"), _row(id="q2", category="unanswerable", expected_answer=None)]
     out = _results(tmp_path, rows)
     run, _ = _run(out, [FakeScorer(values={"refusal": 0.0, "faithfulness": 0.5})])
-    asyncio.run(run.run(judge.tasks_of(rows, ["refusal", "faithfulness"])))
+    asyncio.run(run.run(judge_tasks.tasks_of(rows, ["refusal", "faithfulness"])))
 
-    records = judge.load_records(out / "judge.jsonl")
-    assert judge.merge_into_results(out, records) == 2
-    merged = judge.load_rows(out)
+    records = checkpoint.load_records(out / "judge.jsonl")
+    assert checkpoint.merge_into_results(out, records) == 2
+    merged = checkpoint.load_rows(out)
     assert merged[0]["ragas"]["faithfulness"]["value"] == 0.5
     assert (out / "results.jsonl.bak").exists()
 
-    summary = judge.summarize_scores(merged, records)
+    summary = checkpoint.summarize_scores(merged, records)
     assert summary["metrics"]["faithfulness"] == {
         "n": 1,
         "mean": 0.5,
@@ -256,10 +265,12 @@ def test_scores_are_merged_into_results_and_summarised(tmp_path: Path) -> None:
 def test_keys_come_from_the_environment_or_the_env_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
     env = tmp_path / ".env.eval"
-    env.write_text('OTHER=1\nGEMINI_API_KEYS="k1, k2\tk3"\n', encoding="utf-8")
-    assert judge.read_keys(env) == ["k1", "k2", "k3"]
+    env.write_text(
+        'OTHER=1\n# GEMINI_API_KEYS=old\nGEMINI_API_KEYS="k1, k2\tk3"\n', encoding="utf-8"
+    )
+    assert split_keys(providers.read_env(env)["GEMINI_API_KEYS"]) == ["k1", "k2", "k3"]
     monkeypatch.setenv("GEMINI_API_KEYS", "a;b")
-    assert judge.read_keys(env) == ["a", "b"]
+    assert split_keys(providers.read_env(env)["GEMINI_API_KEYS"]) == ["a", "b"]
 
 
 # --- key pool -------------------------------------------------------------------------------
@@ -326,19 +337,25 @@ def test_errors_are_classified_from_the_code_and_the_quota_details() -> None:
     assert classify(FakeError(429, per_day)) == ("rpd", None)
     assert classify(FakeError(429, per_minute)) == ("rpm", 34.0)
     assert classify(FakeError(503)) == ("unavailable", None)
+    assert classify(FakeError(525)) == ("unavailable", None)  # Cloudflare in front of a proxy
     assert classify(FakeError(504)) == ("timeout", None)
-    assert classify(asyncio.TimeoutError()) == ("timeout", None)
+    assert classify(TimeoutError()) == ("timeout", None)
     assert classify(FakeError(403)) == ("denied", None)
     assert classify(FakeError(401)) == ("denied", None)
     assert classify(FakeError(400)) == ("fatal", None)
 
 
+class NoJitter(random.Random):
+    def uniform(self, a: float, b: float) -> float:
+        return a
+
+
 def _caller(
     keys: list[str], clock: Clock, outcomes: dict[str, list[Any]], **options: Any
-) -> GeminiCaller:
+) -> PooledCaller:
     """A caller whose client for a key is the key itself (see `_call`)."""
 
-    return GeminiCaller(
+    return PooledCaller(
         pools={"m": _pool(keys, clock, rpm=10)},
         client_for=lambda key: key,
         next_reset=lambda: 99_999.0,
@@ -347,7 +364,7 @@ def _caller(
     )
 
 
-def _call(caller: GeminiCaller, outcomes: dict[str, list[Any]]) -> Any:
+def _call(caller: PooledCaller, outcomes: dict[str, list[Any]]) -> Any:
     """`outcomes[key]` is consumed per call: an exception to raise or a value to return."""
 
     async def request(client: str) -> Any:
@@ -395,7 +412,8 @@ def test_503_and_504_cool_the_key_down_and_move_on_to_another_key() -> None:
         "key-one-123456": [FakeError(503), FakeError(504), "ok"],
         "key-two-123456": [FakeError(503), FakeError(504)],
     }
-    caller = _caller(list(outcomes), clock, outcomes)
+    # no jitter: with it the two keys' cool-downs race and the call order varies run to run
+    caller = _caller(list(outcomes), clock, outcomes, rng=NoJitter())
 
     response, state = _call(caller, outcomes)
 
@@ -452,10 +470,10 @@ def test_an_embedding_call_is_not_counted_as_the_fallback_model() -> None:
         for i in range(10)
     }
 
-    assert judge.fallback_rows(records, "fallback") == set()
+    assert checkpoint.fallback_rows(records, "fallback") == set()
     records[("q0:original", "refusal")] = {"value": 1.0, "models": {"fallback": 1}}
     records[("q1:original", "refusal")] = {"value": 1.0, "models": {"fallback": 1}}
-    assert judge.fallback_rows(records, "fallback") == {"q0:original", "q1:original"}
+    assert checkpoint.fallback_rows(records, "fallback") == {"q0:original", "q1:original"}
 
 
 def test_answer_coverage_keeps_precision_and_f1_as_extra_values(tmp_path: Path) -> None:
@@ -469,15 +487,15 @@ def test_answer_coverage_keeps_precision_and_f1_as_extra_values(tmp_path: Path) 
             return score
 
     run, _ = _run(out, [Coverage(values={"answer_coverage": 1.0})])
-    asyncio.run(run.run(judge.tasks_of(rows, ["answer_coverage"])))
-    records = judge.load_records(out / "judge.jsonl")
+    asyncio.run(run.run(judge_tasks.tasks_of(rows, ["answer_coverage"])))
+    records = checkpoint.load_records(out / "judge.jsonl")
 
-    judge.merge_into_results(out, records)
-    ragas = judge.load_rows(out)[0]["ragas"]
+    checkpoint.merge_into_results(out, records)
+    ragas = checkpoint.load_rows(out)[0]["ragas"]
     assert ragas["answer_coverage"]["value"] == 1.0
     assert ragas["answer_precision"]["value"] == 0.0
     assert ragas["factual_correctness_f1"]["value"] is None
-    summary = judge.summarize_scores(rows, records)["metrics"]
+    summary = checkpoint.summarize_scores(rows, records)["metrics"]
     assert summary["answer_coverage"]["mean"] == 1.0
     assert summary["answer_precision"]["mean"] == 0.0
     assert summary["factual_correctness_f1"] == {"n": 0, "nan": 1, "by_category": {}}

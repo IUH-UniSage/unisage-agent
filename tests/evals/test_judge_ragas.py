@@ -1,5 +1,6 @@
-"""Task 11: the real RAGAS metrics driven through `GeminiJudgeLLM` with a fake Gemini client
-that answers every structured-output request with JSON built from the requested schema.
+"""Task 11: the real RAGAS metrics driven through `JudgeLLM` and the Gemini adapter, with a
+fake Gemini client that answers every structured-output request with JSON built from the
+requested schema.
 
 Runs in the judge environment only (RAGAS cannot share the service's dependencies):
     uv run --isolated --no-project --with-requirements evals/judge/requirements.txt \\
@@ -19,8 +20,11 @@ import pytest
 pytest.importorskip("ragas.metrics.collections")
 pytest.importorskip("google.genai")
 
-from evals.judge import cli as judge, ragas_metrics as judge_ragas  # noqa: E402
-from evals.judge.cli import Task  # noqa: E402
+from evals.judge import ragas_metrics as judge_ragas
+from evals.judge import tasks as judge_tasks
+from evals.judge.providers import gemini
+from evals.judge.providers.base import Options
+from evals.judge.tasks import Task
 
 
 def fake_instance(schema: dict[str, Any], node: dict[str, Any] | None = None) -> Any:
@@ -79,21 +83,22 @@ class FakeModels:
 def fake_gemini(monkeypatch) -> FakeModels:
     models = FakeModels(unavailable=set())
     client = SimpleNamespace(aio=SimpleNamespace(models=models))
-    monkeypatch.setattr(judge_ragas, "_client_cache", lambda: lambda key: client)
+    monkeypatch.setattr(gemini, "_client_cache", lambda: lambda key: client)
     return models
 
 
 def _factory(tmp_path: Path, adapt: bool = False) -> judge_ragas.RagasScorerFactory:
+    adapter = gemini.GeminiAdapter(
+        ["key-one-123456", "key-two-123456"], Options(rpm=100, thinking="minimal")
+    )
     return judge_ragas.RagasScorerFactory(
-        keys=["key-one-123456", "key-two-123456"],
+        adapter=adapter,
         model="gemini-3.1-flash-lite-preview",
         fallback="gemini-3.5-flash-lite",
-        embedding_model="gemini-embedding-001",
-        thinking="minimal",
-        rpm=100,
         prompts_dir=tmp_path / "prompts",
         adapt_prompts=adapt,
-        metrics=list(judge.METRICS),
+        embedder=adapter,
+        embedding_model="gemini-embedding-001",
     )
 
 
@@ -116,12 +121,12 @@ def _row() -> dict[str, Any]:
 def test_every_metric_scores_a_row_through_the_fake_gemini(tmp_path: Path, fake_gemini) -> None:
     scorer = _factory(tmp_path)(False)
 
-    async def go() -> dict[str, judge.Score]:
-        return {task.metric: await scorer.score(task) for task in judge.tasks_for(_row())}
+    async def go() -> dict[str, judge_tasks.Score]:
+        return {task.metric: await scorer.score(task) for task in judge_tasks.tasks_for(_row())}
 
     scores = asyncio.run(go())
 
-    assert set(scores) == {*judge.ANSWER_METRICS, "refusal"}
+    assert set(scores) == {*judge_tasks.ANSWER_METRICS, "refusal"}
     for metric, score in scores.items():
         assert not math.isnan(score.value), (metric, score.reason)
         assert 0.0 <= score.value <= 1.0
@@ -142,7 +147,7 @@ def test_an_overloaded_main_model_falls_back_and_the_score_says_so(
     fake_gemini.unavailable.add("gemini-3.1-flash-lite-preview")
     factory = _factory(tmp_path)
     scorer = factory(False)
-    scorer.caller.sleep = no_wait
+    scorer.adapters[0].caller.sleep = no_wait
 
     score = asyncio.run(
         scorer.score(
@@ -158,7 +163,7 @@ def test_an_overloaded_main_model_falls_back_and_the_score_says_so(
     assert score.usage["model"] == "gemini-3.5-flash-lite"
 
     primary_only = factory(True)
-    primary_only.caller.sleep = no_wait
+    primary_only.adapters[0].caller.sleep = no_wait
     failed = asyncio.run(
         primary_only.score(
             Task(
@@ -175,14 +180,14 @@ def test_missing_context_is_a_nan_with_a_reason_not_a_crash(tmp_path: Path, fake
     scorer = _factory(tmp_path)(False)
     row = {**_row(), "context": []}
 
-    scores = asyncio.run(_score_all(scorer, judge.tasks_for(row)))
+    scores = asyncio.run(_score_all(scorer, judge_tasks.tasks_for(row)))
 
     assert math.isnan(scores["faithfulness"].value)
     assert scores["faithfulness"].reason == "no retrieved context"
     assert scores["id_context_recall"].value == 0.0
 
 
-async def _score_all(scorer: Any, tasks: list[Task]) -> dict[str, judge.Score]:
+async def _score_all(scorer: Any, tasks: list[Task]) -> dict[str, judge_tasks.Score]:
     return {task.metric: await scorer.score(task) for task in tasks}
 
 
@@ -220,7 +225,7 @@ def test_a_correct_answer_with_extra_detail_covers_the_expected_answer(monkeypat
     # (not backed by it), while the expected answer's one claim is in the answer
     import numpy as np
 
-    metric = judge_ragas.AnswerCorrectness(llm=judge_ragas.GeminiJudgeLLM(None, "m", None, ""))
+    metric = judge_ragas.AnswerCorrectness(llm=judge_ragas.JudgeLLM(None, "m", None))
     checks = {"answer": np.array([False]), "expected": np.array([True])}
 
     async def verify(text: str, against: str) -> np.ndarray:
