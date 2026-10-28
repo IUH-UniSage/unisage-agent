@@ -18,7 +18,9 @@
         "hệ",
         "chương trình chuẩn",
         "chương trình đại trà",
-        "tăng cường tiếng Anh"
+        "tăng cường tiếng Anh",
+        "cao học",
+        "nghiên cứu sinh"
       ],
       "example_options": [
         "Đại học chính quy (chương trình chuẩn)",
@@ -26,7 +28,7 @@
         "Đại học liên thông, văn bằng 2"
       ],
       "priority": "high",
-      "description": "Hệ đào tạo kèm chương trình như biểu học phí chia mức thu (chính quy chuẩn, chính quy tăng cường tiếng Anh, liên thông/văn bằng 2)."
+      "description": "Hệ đào tạo kèm chương trình như biểu học phí chia mức thu (chính quy chuẩn, chính quy tăng cường tiếng Anh, liên thông/văn bằng 2, cao học, nghiên cứu sinh)."
     },
     {
       "field": "bac_dao_tao",

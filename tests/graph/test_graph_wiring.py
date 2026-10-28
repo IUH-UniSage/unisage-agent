@@ -1533,7 +1533,8 @@ async def test_resume_skips_classification_and_retrieves_on_the_original_questio
     result = await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
 
     assert result.response_text == "Câu trả lời cuối cùng [1]."
-    assert result.confirmed_metadata == {"he_dao_tao": "chinh_quy"}
+    # The label the student picked, not the form's own option id (28/10/2026).
+    assert result.confirmed_metadata == {"he_dao_tao": "Chính quy"}
     assert len(retrieval.queries) == 1
     assert retrieval.queries[0].startswith("học phí của ngành tôi học")
     assert "Hệ đào tạo: Chính quy" not in retrieval.queries[0]
@@ -1613,7 +1614,7 @@ async def test_resume_keeps_asking_new_fields_but_never_an_answered_one(
         run(_FORM_JSON, 1), models(_FORM_JSON), _sink([]), _TRACE, _usage_recorder()
     )
     assert again.pending_round is None
-    assert again.confirmed_metadata == {"he_dao_tao": "chinh_quy"}
+    assert again.confirmed_metadata == {"he_dao_tao": "Chính quy"}
 
 
 def _capturing_generation(prompts: list[str]) -> FunctionModel:

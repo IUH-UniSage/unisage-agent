@@ -115,13 +115,19 @@ async def test_a_price_is_never_read_for_an_assumed_row() -> None:
     assert found.values == {} and found.row == ()
     assert [question["field"] for question in found.questions] == ["khoi_nganh", "he_dao_tao"]
     faculty, training = found.questions
-    assert [option["label"] for option in faculty["options"]] == ["Khối Kinh tế", "Khối Công nghệ"]
+    assert [option["label"] for option in faculty["options"]] == [
+        "Khối Kinh tế",
+        "Khối Công nghệ",
+        "Ngành Dược",
+    ]
     # One question for the training type and its programme: the fee schedule's sections.
     assert training["kind"] == "choice"
     assert [option["label"] for option in training["options"]] == [
         "Đại học chính quy (chương trình chuẩn)",
         "Đại học chính quy tăng cường tiếng Anh",
         "Đại học liên thông, văn bằng 2",
+        "Cao học",
+        "Nghiên cứu sinh",
     ]
 
 
@@ -157,7 +163,8 @@ async def test_several_intakes_ask_which_one_first() -> None:
     choice, text, training = found.questions
     assert choice["field"] == "khoa_nhap_hoc" and choice["kind"] == "choice"
     assert [option["label"] for option in choice["options"]] == ["2025-2026", "2024-2025"]
-    assert text["field"] == "khoi_nganh" and text["kind"] == "text"
+    # The faculty group is a choice of the fee schedule's groups, never free text ("cntt").
+    assert text["field"] == "khoi_nganh" and text["kind"] == "choice"
     assert training["field"] == "he_dao_tao"
 
 
@@ -270,5 +277,6 @@ async def test_training_type_choices_keep_the_fee_schedule_sections() -> None:
         "Đại học chính quy (chương trình chuẩn)",
         "Đại học chính quy tăng cường tiếng Anh",
         "Đại học liên thông, văn bằng 2",
-        "Cao học",
+        "Cao học",  # the document's "Cao học" repeats this one: listed once
+        "Nghiên cứu sinh",
     ]

@@ -136,6 +136,12 @@ template: |
   Output: {"tasks": [{"intent": "academic_calculation", "query": "Tính lại học phí học kỳ này giúp tôi, khoá 2023", "routing_mode": null}], "confidence": 0.9, "metadata_updates": {"khoa_nhap_hoc": "2023"}}
   (Sinh viên sửa khoá của chính mình → cập nhật hồ sơ, và vẫn phân loại phần còn lại như bình thường.)
 
+  Lịch sử: "- Trợ lý: ... Kết quả: Học phí một học kỳ **15.080.000 đồng** ... Đơn giá lấy theo dòng biểu phí: Năm nhập học: 2024-2025; Khối ngành: Khối Kinh tế; Hệ đào tạo: Đại học chính quy."
+  <previous_calculation_turn>Học phí một học kỳ</previous_calculation_turn>
+  User: "tôi nhầm, tôi học cao học"
+  Output: {"tasks": [{"intent": "academic_calculation", "query": "Tính lại học phí học kỳ này, hệ Cao học", "routing_mode": null}], "confidence": 0.9, "metadata_updates": {"he_dao_tao": "Cao học"}}
+  (Sửa hệ đào tạo của chính mình ngay sau phép tính học phí → cập nhật hồ sơ VÀ tính lại theo dòng biểu phí mới, không chỉ ghi nhận.)
+
   Lịch sử:
   "- Người dùng: Làm sao đăng ký học lại?
   - Trợ lý: Bạn vui lòng cho biết bạn nhập học năm nào (khóa mấy) để mình hướng dẫn thủ tục đăng ký học lại."

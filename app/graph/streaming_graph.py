@@ -460,8 +460,12 @@ async def _run_resume(
             continue
         default_scope: Scope = "profile" if question.origin == "advisory" else "calculation"
         if field_scope(name, default_scope) == "profile":
-            # The intake is kept as a year: "kỳ 9" would be wrong next term.
-            normalized = normalize_value(name, value, today)
+            # The profile keeps what the student picked as they read it: an advisory
+            # choice's id is the model's own slug ("dai_hoc_chinh_quy"), which the next
+            # prompt showed as is and the model then asked about again (28/10/2026). The
+            # intake is kept as a year: "kỳ 9" would be wrong next term.
+            shown = answer.display if question.kind == "choice" else value
+            normalized = normalize_value(name, shown, today)
             if normalized is not None:
                 confirmed_metadata[name] = normalized
 
