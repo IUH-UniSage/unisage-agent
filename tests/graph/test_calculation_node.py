@@ -807,6 +807,11 @@ async def test_tuition_asks_the_fee_row_first_then_reads_the_prices() -> None:
         _usage_recorder(),
     )
 
+    # The formula comes first, so the student sees why each input is asked.
+    text = first.response_text
+    assert text.startswith("**Học phí một học kỳ**\n\nCông thức:")
+    assert "\\text{TC}_{LT}" in text and "Phiên bản công thức 2" in text
+    assert text.index("Công thức:") < text.index(NEEDS_INPUT_LEAD)
     assert first.pending_round is not None
     questions = {q.field: q for q in first.pending_round.panel.questions}
     assert list(questions) == [
@@ -1389,3 +1394,23 @@ async def test_a_deferred_turn_tells_node_10_to_hand_the_arithmetic_to_a_calc_re
         _usage_recorder(),
     )
     assert plain_seen and ARITHMETIC_NOTICE not in plain_seen[0]
+
+
+def test_a_formula_preview_follows_what_is_known() -> None:
+    """The tuition preview shows the GDQP-AN part once the student asked for it; a
+    formula without a preview keeps the panel alone (only the generic lead)."""
+
+    from pydantic import JsonValue
+
+    from app.calculation.formulas import FormulaId
+    from app.graph.calculation_turn import formula_preview, render_outcomes
+    from app.graph.nodes.calculation import NeedsInput
+
+    def needs(formula_id: FormulaId, known: dict[str, JsonValue]) -> NeedsInput:
+        return NeedsInput("T1", CalculationPlan(formula_id=formula_id), known, [])
+
+    plain = formula_preview(needs("tuition_year", {}))
+    assert plain.startswith("**Học phí một năm học**") and "TC}_{QP}" not in plain
+    assert "TC}_{QP}" in formula_preview(needs("tuition_year", {"gom_qpan": "có"}))
+    assert formula_preview(needs("gpa", {})) == ""
+    assert render_outcomes([needs("gpa", {})]) == NEEDS_INPUT_LEAD

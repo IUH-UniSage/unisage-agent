@@ -677,6 +677,14 @@ TUITION_DEFENCE_TEXT = (
 _YES = frozenset({"có", "co", "yes", "true", "1", "gồm", "gom", "x"})
 
 
+def tuition_preview(params: Mapping[str, object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The tuition formula as it will be computed: with the GDQP-AN part when asked."""
+
+    if includes_defence(params):
+        return TUITION_DEFENCE_LATEX, TUITION_DEFENCE_TEXT
+    return TUITION_FORMULA_LATEX, TUITION_FORMULA_TEXT
+
+
 def includes_defence(params: Mapping[str, object]) -> bool:
     """Whether the student asked for the national defence (GDQP-AN) part too."""
 
@@ -1111,6 +1119,10 @@ class Formula:
     rounding_of: Callable[[Mapping[str, object], str], Decimal | None] | None = None
     # Public link to the source document; empty = the source is shown as plain text.
     source_url: str = ""
+    # The formula as (LaTeX lines, text lines), shown above the panel before the student
+    # is asked for its inputs; None = only the panel. Given what is already known (the
+    # tuition formula gains its GDQP-AN part once the student asked for it).
+    preview: Callable[[Mapping[str, object]], tuple[tuple[str, ...], tuple[str, ...]]] | None = None
 
 
 def _when_positive(field: str) -> Callable[[Mapping[str, object]], bool]:
@@ -2131,6 +2143,7 @@ FORMULAS: dict[FormulaId, Formula] = {
             ),
             params=_tuition_params(scope),
             compute=_tuition(scope),
+            preview=tuition_preview,
         )
         for scope, period in TUITION_SCOPES.items()
     },
