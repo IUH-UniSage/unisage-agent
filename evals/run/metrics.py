@@ -286,11 +286,15 @@ def calculation_path(row: dict[str, Any]) -> str:
 
 
 def calculation_path_ok(expected: str, actual: str) -> bool:
-    """`advisory` accepts a quoted answer or a code-computed `calc_request` block; a
-    formula or `arithmetic` tag requires exactly that path."""
+    """`advisory` accepts a quoted answer or a code-computed `calc_request` block;
+    `arithmetic` accepts the calculation node or a `calc_request` block (both computed by
+    code; operands read from a cited document go through the advisory answer, 28/10/2026);
+    a formula tag requires exactly that formula."""
 
     if expected == "advisory":
         return actual in ("advisory", "calc_request")
+    if expected == "arithmetic":
+        return actual in ("arithmetic", "calc_request")
     return actual == expected
 
 

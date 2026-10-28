@@ -376,3 +376,8 @@ def test_a_tagged_calculation_row_must_take_its_expected_path() -> None:
         score_row(dict(quoted, calculation_formulas=["date_span"], calculation_items=[{}]))["pass"]
         is False
     )
+    # An arithmetic tag: the calculation node or a calc_request block (both code-computed);
+    # an answer with no computed block does not pass.
+    arithmetic = dict(block, expected_calculation="arithmetic")
+    assert score_row(arithmetic)["calc_path_ok"] is True and score_row(arithmetic)["pass"] is True
+    assert score_row(dict(quoted, expected_calculation="arithmetic"))["pass"] is False
