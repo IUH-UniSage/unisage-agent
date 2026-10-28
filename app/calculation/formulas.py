@@ -962,6 +962,8 @@ class Formula:
     # The rounding the formula applies to a param before using it (0.5 for a recorded
     # score), given the other params; None = none. The solver searches on that grid.
     rounding_of: Callable[[Mapping[str, object], str], Decimal | None] | None = None
+    # Public link to the source document; empty = the source is shown as plain text.
+    source_url: str = ""
 
 
 def _when_positive(field: str) -> Callable[[Mapping[str, object]], bool]:
@@ -1025,6 +1027,9 @@ TUITION_SOURCE = (
 
 ADMISSION_2026_VERSION = "2026.1"
 ADMISSION_2026_SOURCE = "Công thức tính điểm xét tuyển đại học chính quy năm 2026 của Trường"
+ADMISSION_2026_SOURCE_URL = (
+    "https://tuyensinh.iuh.edu.vn/HoSoTuyenSinh/cong-thuc-xet-tuyen-iuh-2026.pdf"
+)
 ADMISSION_2026_TITLE = "Điểm xét tuyển đại học chính quy 2026 (thang 30)"
 ADMISSION_SCALE = Decimal(30)
 ADMISSION_WEIGHT_DK = Decimal("0.7")
@@ -1985,6 +1990,7 @@ FORMULAS: dict[FormulaId, Formula] = {
         formula_id="admission_score_2026",
         version=ADMISSION_2026_VERSION,
         source=ADMISSION_2026_SOURCE,
+        source_url=ADMISSION_2026_SOURCE_URL,
         outputs=ADMISSION_2026_OUTPUTS,
         title=ADMISSION_2026_TITLE,
         description=(
@@ -2079,7 +2085,12 @@ def calculate(formula_id: FormulaId, params: Mapping[str, object]) -> Calculatio
     carries the registry's version and source of the formula."""
 
     formula = FORMULAS[formula_id]
-    return replace(formula.compute(params), version=formula.version, source=formula.source)
+    return replace(
+        formula.compute(params),
+        version=formula.version,
+        source=formula.source,
+        source_url=formula.source_url,
+    )
 
 
 def output_spec(formula_id: FormulaId, key: str) -> OutputSpec | None:

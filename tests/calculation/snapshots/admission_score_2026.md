@@ -23,7 +23,7 @@ $$
 
 - ĐTN: tổng điểm 3 môn thi tốt nghiệp THPT trong tổ hợp; ĐHB: tổng điểm học bạ 3 môn trong tổ hợp; ĐTK: điểm thủ khoa kỳ thi ĐGNL năm 2026; Đ(Kv;Đt): điểm ưu tiên khu vực, đối tượng; ĐC: điểm cộng
 - Thang điểm 30
-- _Phiên bản công thức 2026.1 · nguồn: Công thức tính điểm xét tuyển đại học chính quy năm 2026 của Trường_
+- _Phiên bản công thức 2026.1 · nguồn: [Công thức tính điểm xét tuyển đại học chính quy năm 2026 của Trường](https://tuyensinh.iuh.edu.vn/HoSoTuyenSinh/cong-thuc-xet-tuyen-iuh-2026.pdf)_
 
 Thay số:
 1. Quy đổi ĐGNL về thang 30: ĐĐGNL = 900 × 30 / 1100 ≈ 24.55

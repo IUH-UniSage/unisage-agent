@@ -24,7 +24,10 @@ def render_markdown(result: CalculationResult, *, notice: str | None = None) -> 
         lines.append("")
     lines += [f"- {line}" for line in result.formula_text]
     if result.version:
-        lines.append(f"- _Phiên bản công thức {result.version} · nguồn: {result.source}_")
+        source = (
+            f"[{result.source}]({result.source_url})" if result.source_url else result.source
+        )
+        lines.append(f"- _Phiên bản công thức {result.version} · nguồn: {source}_")
     if result.steps:
         lines += ["", "Thay số:"]
         lines += [
