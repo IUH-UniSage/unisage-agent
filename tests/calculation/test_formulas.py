@@ -388,9 +388,76 @@ def test_only_prices_and_a_programme_s_credits_are_looked_up() -> None:
     def looked_up(formula_id: formulas.FormulaId) -> set[str]:
         return {spec.name for spec in formulas.FORMULAS[formula_id].params if spec.lookup}
 
-    assert looked_up("tuition_semester") == {"don_gia_lt", "don_gia_th"}
-    assert looked_up("tuition_year") == {"don_gia_lt", "don_gia_th"}
-    assert looked_up("tuition_program") == {"tc_lt", "tc_th", "don_gia_lt", "don_gia_th"}
+    defence = {"tc_qp", "don_gia_qp"}  # only when the student asks for GDQP-AN
+    assert looked_up("tuition_semester") == {"don_gia_lt", "don_gia_th", *defence}
+    assert looked_up("tuition_year") == {"don_gia_lt", "don_gia_th", *defence}
+    assert looked_up("tuition_program") == {"tc_lt", "tc_th", "don_gia_lt", "don_gia_th", *defence}
+
+
+def test_a_unit_price_typed_in_thousands_is_refused_with_its_likely_meaning() -> None:
+    """28/10/2026: "1130" and "1200" were taken as đồng and priced a semester at 19.560
+    đồng. A unit price below 100.000 đồng is refused; when x 1000 is in range the hint
+    offers it."""
+
+    with pytest.raises(CalculationInputError) as error:
+        formulas.calculate(
+            "tuition_semester", {"tc_lt": 12, "tc_th": 5, "don_gia_lt": 1130, "don_gia_th": 50}
+        )
+    reasons = {item.field: item.reason for item in error.value.errors}
+    assert reasons["don_gia_lt"] == (
+        "bạn nhập 1.130 đồng, đơn giá phải từ 100.000 đồng - có phải 1.130.000 đồng?"
+    )
+    assert "có phải 50.000 đồng" not in reasons["don_gia_th"]  # 50.000 is still too low
+    # 0 stays valid: no practice credits, no practice price.
+    zero = {"tc_lt": 10, "tc_th": 0, "don_gia_lt": 980000, "don_gia_th": 0}
+    assert formulas.calculate("tuition_semester", zero).outputs[0][1] == "9.800.000 đồng"
+
+
+def test_one_price_per_credit_prices_theory_and_practice_alike() -> None:
+    """The English-enhanced programme, intake 2025, Khối Công nghệ: 1.400.000 per credit."""
+
+    params = {"tc_lt": 12, "tc_th": 5, "don_gia_lt": 1400000, "don_gia_th": 1400000}
+    result = formulas.calculate("tuition_semester", params)
+    assert result.outputs == (("Học phí một học kỳ", "23.800.000 đồng"),)
+
+
+_SEMESTER = {"tc_lt": 12, "tc_th": 4, "don_gia_lt": 930000, "don_gia_th": 980000}
+
+
+def test_national_defence_is_added_only_when_asked() -> None:
+    """28/10/2026: "cả quốc phòng thì bao nhiêu" recomputed the same 15.080.000 đồng -
+    the formula had no GDQP-AN part. v2 adds it on request, priced per credit."""
+
+    plain = formulas.calculate("tuition_semester", _SEMESTER)
+    assert plain.outputs == (("Học phí một học kỳ", "15.080.000 đồng"),)
+    assert plain.warnings == formulas.TUITION_WARNINGS
+    assert formulas.missing_params("tuition_semester", _SEMESTER) == []
+
+    asked = {**_SEMESTER, "gom_qpan": "có"}
+    assert [s.name for s in formulas.missing_params("tuition_semester", asked)] == [
+        "tc_qp",
+        "don_gia_qp",
+    ]
+    result = formulas.calculate("tuition_semester", {**asked, "tc_qp": 8, "don_gia_qp": 400000})
+    assert result.outputs == (("Học phí một học kỳ", "18.280.000 đồng"),)
+    assert result.steps[2].substituted == f"8 {X} 400.000 đồng = 3.200.000 đồng"
+    assert result.steps[-1].substituted == (
+        "11.160.000 đồng + 3.920.000 đồng + 3.200.000 đồng = 18.280.000 đồng"
+    )
+    assert result.warnings == ()  # "chưa gồm GDQP-AN" no longer true
+    assert "TC}_{QP}" in result.formula_latex[0]
+    assert formulas.FORMULAS["tuition_semester"].version == "2"
+
+
+def test_the_national_defence_price_is_read_from_the_same_fee_row() -> None:
+    spec = formulas.param_spec("tuition_year", "don_gia_qp")
+    assert spec is not None and spec.selected_by == formulas.TUITION_ROW and spec.lookup
+
+
+def test_the_programme_is_part_of_the_training_type() -> None:
+    names = {spec.name for spec in formulas.FORMULAS["tuition_semester"].params}
+    assert "loai_chuong_trinh" not in names
+    assert formulas.TUITION_ROW == ("khoa_nhap_hoc", "khoi_nganh", "he_dao_tao")
 
 
 def test_tuition_rejects_bad_inputs_all_at_once() -> None:
@@ -398,13 +465,14 @@ def test_tuition_rejects_bad_inputs_all_at_once() -> None:
         formulas.calculate(
             "tuition_semester", {"tc_lt": 2.5, "tc_th": 301, "don_gia_lt": -1, "don_gia_th": 1}
         )
-    assert _fields(error.value) == {"tc_lt", "tc_th", "don_gia_lt"}
+    # 1 đồng is below the lowest unit price a fee schedule lists.
+    assert _fields(error.value) == {"tc_lt", "tc_th", "don_gia_lt", "don_gia_th"}
 
 
 def test_tuition_without_any_credit_is_rejected() -> None:
     with pytest.raises(CalculationInputError) as error:
         formulas.calculate(
-            "tuition_semester", {"tc_lt": 0, "tc_th": 0, "don_gia_lt": 1, "don_gia_th": 1}
+            "tuition_semester", {"tc_lt": 0, "tc_th": 0, "don_gia_lt": 980000, "don_gia_th": 980000}
         )
     assert _fields(error.value) == {"tc_lt"}
 

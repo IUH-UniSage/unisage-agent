@@ -209,7 +209,13 @@ async def test_a_failed_immediate_save_does_not_fail_the_turn() -> None:
 async def test_a_follow_up_after_a_correction_recomputes_with_the_new_intake() -> None:
     previous = LastCalculation(
         plan=CalculationPlan(formula_id="tuition_semester"),
-        params={"tc_lt": 15, "tc_th": 4, "khoa_nhap_hoc": "2022"},
+        params={
+            "tc_lt": 15,
+            "tc_th": 4,
+            "khoa_nhap_hoc": "2022",
+            "khoi_nganh": "Khối Công nghệ",
+            "he_dao_tao": "Đại học chính quy",
+        },
         title="Học phí một học kỳ",
     )
     query = "tính lại học phí học kỳ này giúp tôi"

@@ -641,6 +641,9 @@ def gpa(params: Mapping[str, object]) -> CalculationResult:
 
 TUITION_CREDITS_MAX = 300
 TUITION_PRICE_MAX = Decimal(100_000_000)
+# The lowest unit price of a credit any fee schedule lists is several hundred thousand
+# đồng: "1130" typed for 1.130.000 is refused with a hint instead of pricing 1.130 đồng.
+TUITION_PRICE_MIN = Decimal(100_000)
 TuitionScope = Literal["tuition_semester", "tuition_year", "tuition_program"]
 TUITION_SCOPES: dict[TuitionScope, str] = {
     "tuition_semester": "một học kỳ",
@@ -657,7 +660,39 @@ TUITION_FORMULA_TEXT = (
     "Đơn giá theo khoá tuyển sinh và giữ nguyên suốt khoá học; chỉ khoá mới có đơn giá khác",
 )
 TUITION_WARNINGS = ("Chưa gồm học phần Giáo dục quốc phòng - an ninh (đơn giá riêng), nếu có.",)
+# v2: an optional national defence (GDQP-AN) part, priced per credit like the others,
+# added only when the student asks for it ("cả quốc phòng thì bao nhiêu").
+TUITION_VERSION = "2"
+TUITION_DEFENCE_LATEX = (
+    r"\text{Học phí} = \text{TC}_{LT} \times \text{đơn giá}_{LT}"
+    r" + \text{TC}_{TH} \times \text{đơn giá}_{TH}"
+    r" + \text{TC}_{QP} \times \text{đơn giá}_{QP}",
+)
+TUITION_DEFENCE_TEXT = (
+    f"Học phí = TC lý thuyết {TIMES} đơn giá 1 TC lý thuyết"
+    f" + TC thực hành {TIMES} đơn giá 1 TC thực hành"
+    f" + TC GDQP-AN {TIMES} đơn giá 1 TC GDQP-AN",
+    TUITION_FORMULA_TEXT[1],
+)
+_YES = frozenset({"có", "co", "yes", "true", "1", "gồm", "gom", "x"})
+
+
+def includes_defence(params: Mapping[str, object]) -> bool:
+    """Whether the student asked for the national defence (GDQP-AN) part too."""
+
+    value = params.get("gom_qpan")
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().casefold() in _YES
+
+
 TUITION_PERIOD_MAX = 60
+# What picks a unit price in the fee schedule; each one is confirmed by the student,
+# never assumed (a default "Khối Công nghệ" priced a student of another group). The
+# programme is part of `he_dao_tao`: the schedule's sections are "Đại học chính quy",
+# "Đại học chính quy tăng cường tiếng Anh", "Đại học liên thông, văn bằng 2", so a separate
+# programme question only repeated it and allowed contradictory pairs.
+TUITION_ROW = ("khoa_nhap_hoc", "khoi_nganh", "he_dao_tao")
 
 
 def money(value: Decimal) -> str:
@@ -670,9 +705,14 @@ def money(value: Decimal) -> str:
 _MONEY_TEXT = re.compile(r"(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(đồng|đ|vnđ|vnd)?", re.IGNORECASE)
 
 
-def parse_money(value: object, field: str, errors: list[FieldError]) -> Decimal | None:
+def parse_money(
+    value: object, field: str, errors: list[FieldError], *, minimum: Decimal = Decimal(0)
+) -> Decimal | None:
     """An amount in whole đồng. Text must be written out ("980000", "980.000 đ"): a dot
-    or comma is a thousands separator, and "1,6 triệu" is refused rather than misread."""
+    or comma is a thousands separator, and "1,6 triệu" is refused rather than misread.
+    0 means "none" (no practice credits). Between 0 and `minimum`, an amount that is in
+    range once multiplied by 1 000 is offered as the likely meaning ("1130" → "1.130.000
+    đồng?")."""
 
     if isinstance(value, str):
         match = _MONEY_TEXT.fullmatch(value.strip())
@@ -682,8 +722,18 @@ def parse_money(value: object, field: str, errors: list[FieldError]) -> Decimal 
     if number is None or number != number.to_integral_value():
         errors.append(FieldError(field, "số tiền phải là số nguyên (đồng)"))
         return None
-    if not Decimal(0) <= number <= TUITION_PRICE_MAX:
-        errors.append(FieldError(field, f"số tiền phải từ 0 đến {money(TUITION_PRICE_MAX)}"))
+    if 0 < number < minimum and minimum <= number * 1000 <= TUITION_PRICE_MAX:
+        errors.append(
+            FieldError(
+                field,
+                f"bạn nhập {money(number)}, đơn giá phải từ {money(minimum)}"
+                f" - có phải {money(number * 1000)}?",
+            )
+        )
+        return None
+    if number < 0 or 0 < number < minimum or number > TUITION_PRICE_MAX:
+        lowest = f"0 hoặc từ {money(minimum)}" if minimum else "0"
+        errors.append(FieldError(field, f"số tiền phải là {lowest} đến {money(TUITION_PRICE_MAX)}"))
         return None
     return number
 
@@ -715,34 +765,63 @@ def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], Calculatio
                 credits[name] = parse_credits(
                     raw, name, errors, minimum=0, maximum=TUITION_CREDITS_MAX
                 )
-        for name in ("don_gia_lt", "don_gia_th"):
+        defence = includes_defence(params)
+        for name in ("don_gia_lt", "don_gia_th", *(("don_gia_qp",) if defence else ())):
             raw = params.get(name)
             if raw is None:
                 _missing(name, errors)
                 prices[name] = None
             else:
-                prices[name] = parse_money(raw, name, errors)
+                prices[name] = parse_money(raw, name, errors, minimum=TUITION_PRICE_MIN)
+        if defence:
+            raw = params.get("tc_qp")
+            if raw is None:
+                _missing("tc_qp", errors)
+                credits["tc_qp"] = None
+            else:
+                credits["tc_qp"] = parse_credits(
+                    raw, "tc_qp", errors, minimum=0, maximum=TUITION_CREDITS_MAX
+                )
         lt, th = credits["tc_lt"], credits["tc_th"]
         price_lt, price_th = prices["don_gia_lt"], prices["don_gia_th"]
         if not errors and lt == 0 and th == 0:
             errors.append(FieldError("tc_lt", "tổng tín chỉ lý thuyết và thực hành phải lớn hơn 0"))
         if errors or lt is None or th is None or price_lt is None or price_th is None:
             raise CalculationInputError(errors)
+        qp, price_qp = credits.get("tc_qp"), prices.get("don_gia_qp")
 
         theory = lt * price_lt
         practice = th * price_th
-        total = theory + practice
+        defence_fee = qp * price_qp if defence and qp is not None and price_qp is not None else None
+        total = theory + practice + (defence_fee or 0)
         title = f"Học phí {tuition_period(scope, params)}"
+        defence_inputs: tuple[tuple[str, str], ...] = ()
+        defence_steps: tuple[Step, ...] = ()
+        if defence_fee is not None and qp is not None and price_qp is not None:
+            defence_inputs = (("TC GDQP-AN", str(qp)), ("Đơn giá 1 TC GDQP-AN", money(price_qp)))
+            defence_steps = (
+                Step(
+                    label="Học phí GDQP-AN",
+                    symbolic=f"TC GDQP-AN {TIMES} đơn giá GDQP-AN",
+                    substituted=f"{qp} {TIMES} {money(price_qp)} = {money(defence_fee)}",
+                    value=defence_fee,
+                    display=money(defence_fee),
+                ),
+            )
+        parts = [money(theory), money(practice)]
+        if defence_fee is not None and defence_steps:
+            parts.append(money(defence_fee))
         return CalculationResult(
             formula_id=scope,
             title=title,
-            formula_text=TUITION_FORMULA_TEXT,
-            formula_latex=TUITION_FORMULA_LATEX,
+            formula_text=TUITION_DEFENCE_TEXT if defence_steps else TUITION_FORMULA_TEXT,
+            formula_latex=TUITION_DEFENCE_LATEX if defence_steps else TUITION_FORMULA_LATEX,
             inputs=(
                 ("TC lý thuyết", str(lt)),
                 ("TC thực hành", str(th)),
                 ("Đơn giá 1 TC lý thuyết", money(price_lt)),
                 ("Đơn giá 1 TC thực hành", money(price_th)),
+                *defence_inputs,
             ),
             steps=(
                 Step(
@@ -759,16 +838,18 @@ def _tuition(scope: TuitionScope) -> Callable[[Mapping[str, object]], Calculatio
                     value=practice,
                     display=money(practice),
                 ),
+                *defence_steps,
                 Step(
                     label="Tổng",
-                    symbolic="Học phí lý thuyết + học phí thực hành",
-                    substituted=f"{money(theory)} + {money(practice)} = {money(total)}",
+                    symbolic="Học phí lý thuyết + học phí thực hành"
+                    + (" + học phí GDQP-AN" if defence_steps else ""),
+                    substituted=f"{' + '.join(parts)} = {money(total)}",
                     value=total,
                     display=money(total),
                 ),
             ),
             outputs=((title, money(total)),),
-            warnings=TUITION_WARNINGS,
+            warnings=() if defence_steps else TUITION_WARNINGS,
             values={"hoc_phi": total},
         )
 
@@ -831,6 +912,12 @@ class ParamSpec:
     lookup: str | None = None
     # The label once other params are known (see `label_for`); None = always `label`.
     label_from: Callable[[Mapping[str, object]], str] | None = None
+    # The context params (intake, faculty group, programme...) that pick the document
+    # row this value is read from. Until every one of them is known, the value is never
+    # taken from the documents - they are asked first, never assumed.
+    selected_by: tuple[str, ...] = ()
+    # Choices offered for a text param when the documents list none.
+    options: tuple[str, ...] = ()
 
 
 def _score_spec(name: str, label: str, tab_label: str, credit_field: str) -> ParamSpec:
@@ -862,10 +949,12 @@ def _credit_spec(name: str, label: str, tab_label: str) -> ParamSpec:
 def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
     """Theory and practice credits are always two separate questions. Credits of a whole
     programme come from its curriculum document; those of a semester or a year are the
-    student's own. The unit prices come from the fee schedule. `khoa_nhap_hoc` and
-    `khoi_nganh` are not computed with: they pick the fee schedule row, and are asked
-    only when the documents hold several rows. `pham_vi` is never asked nor computed
-    with: it only names the period in the labels and the title."""
+    student's own. The unit prices come from the fee schedule. The context params are
+    not computed with: they pick the fee schedule row. `TUITION_ROW` (intake, faculty
+    group, training type with its programme) is always confirmed by the student before a
+    price is read; `co_so_hoc` is asked only when the documents list several campuses.
+    `pham_vi` is never asked nor computed with: it only names the period in the labels
+    and the title."""
 
     credit_lookup = (
         "tổng số tín chỉ lý thuyết, thực hành của chương trình đào tạo"
@@ -903,13 +992,52 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             step=Decimal(1),
             unit="đồng",
             lookup="mức thu học phí 01 tín chỉ môn lý thuyết, môn thực hành",
+            selected_by=TUITION_ROW,
         )
         for name, kind, short_kind in (
             ("don_gia_lt", "lý thuyết", "LT"),
             ("don_gia_th", "thực hành", "TH"),
         )
     ]
+    # Asked (and looked up) only when the student wants national defence included.
+    defence = [
+        ParamSpec(
+            name="tc_qp",
+            label="Số tín chỉ Giáo dục quốc phòng - an ninh (GDQP-AN)",
+            tab_label="TC GDQP-AN",
+            kind="number",
+            required=includes_defence,
+            min=Decimal(0),
+            max=Decimal(TUITION_CREDITS_MAX),
+            step=Decimal(1),
+            unit="TC",
+            lookup="số tín chỉ học phần Giáo dục quốc phòng - an ninh trong chương trình đào tạo",
+        ),
+        ParamSpec(
+            name="don_gia_qp",
+            label="Đơn giá 1 tín chỉ Giáo dục quốc phòng - an ninh (đồng)",
+            tab_label="Đơn giá GDQP-AN",
+            kind="number",
+            required=includes_defence,
+            min=Decimal(0),
+            max=TUITION_PRICE_MAX,
+            step=Decimal(1),
+            unit="đồng",
+            lookup="mức thu học phí 01 tín chỉ môn QPAN giáo dục quốc phòng - an ninh",
+            selected_by=TUITION_ROW,
+        ),
+    ]
     context = [
+        ParamSpec(
+            name="gom_qpan",
+            label=(
+                'Có tính cả học phí Giáo dục quốc phòng - an ninh không: ghi "có" khi người'
+                " dùng hỏi gồm/cả quốc phòng, GDQP, QPAN"
+            ),
+            tab_label="Gồm GDQP-AN",
+            kind="text",
+            required=_never,
+        ),
         ParamSpec(
             name="khoa_nhap_hoc",
             label="Bạn nhập học năm nào (VD 2025)",
@@ -925,6 +1053,25 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             required=_never,
         ),
         ParamSpec(
+            name="he_dao_tao",
+            label="Bạn học hệ / chương trình đào tạo nào",
+            tab_label="Hệ đào tạo",
+            kind="text",
+            required=_never,
+            options=(
+                "Đại học chính quy (chương trình chuẩn)",
+                "Đại học chính quy tăng cường tiếng Anh",
+                "Đại học liên thông, văn bằng 2",
+            ),
+        ),
+        ParamSpec(
+            name="co_so_hoc",
+            label="Bạn học tại cơ sở nào",
+            tab_label="Cơ sở",
+            kind="text",
+            required=_never,
+        ),
+        ParamSpec(
             name="pham_vi",
             label="Phạm vi học phí đúng như người dùng nói (VD 2 năm đầu)",
             tab_label="Phạm vi",
@@ -932,7 +1079,7 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             required=_never,
         ),
     ]
-    return (*credits, *prices, *context)
+    return (*credits, *prices, *defence, *context)
 
 
 @dataclass(frozen=True)
@@ -1974,12 +2121,13 @@ FORMULAS: dict[FormulaId, Formula] = {
     **{
         scope: Formula(
             formula_id=scope,
-            version="1",
+            version=TUITION_VERSION,
             source=TUITION_SOURCE,
             outputs=(OutputSpec("hoc_phi", f"học phí {period}", money=True),),
             title=f"Học phí {period}",
             description=(
-                f"Học phí {period} từ số tín chỉ lý thuyết, thực hành và đơn giá 1 tín chỉ"
+                f"Học phí {period} từ số tín chỉ lý thuyết, thực hành và đơn giá 1 tín chỉ;"
+                " gồm cả Giáo dục quốc phòng - an ninh khi người dùng hỏi"
             ),
             params=_tuition_params(scope),
             compute=_tuition(scope),

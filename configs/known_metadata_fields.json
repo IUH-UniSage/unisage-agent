@@ -7,21 +7,26 @@
       "key_aliases": [
         "training_type",
         "loai_hinh_dao_tao",
-        "he"
+        "he",
+        "loai_chuong_trinh",
+        "chuong_trinh_hoc_phi"
       ],
       "concept": "Hệ đào tạo",
       "aliases": [
         "hệ đào tạo",
         "loại hình đào tạo",
-        "hệ"
+        "hệ",
+        "chương trình chuẩn",
+        "chương trình đại trà",
+        "tăng cường tiếng Anh"
       ],
       "example_options": [
-        "Chính quy",
-        "Liên thông",
-        "Vừa làm vừa học"
+        "Đại học chính quy (chương trình chuẩn)",
+        "Đại học chính quy tăng cường tiếng Anh",
+        "Đại học liên thông, văn bằng 2"
       ],
       "priority": "high",
-      "description": "Hình thức đào tạo (chính quy/liên thông...)."
+      "description": "Hệ đào tạo kèm chương trình như biểu học phí chia mức thu (chính quy chuẩn, chính quy tăng cường tiếng Anh, liên thông/văn bằng 2)."
     },
     {
       "field": "bac_dao_tao",
@@ -408,6 +413,49 @@
         "muc_thu_lt"
       ],
       "concept": "Đơn giá 1 tín chỉ lý thuyết (đồng)",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Số nguyên đồng."
+    },
+    {
+      "field": "gom_qpan",
+      "scope": "calculation",
+      "key_aliases": [
+        "gom_gdqp",
+        "tinh_ca_quoc_phong",
+        "co_quoc_phong"
+      ],
+      "concept": "Có tính cả học phí Giáo dục quốc phòng - an ninh",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "\"có\" khi người dùng hỏi gồm/cả quốc phòng (GDQP-AN, QPAN)."
+    },
+    {
+      "field": "tc_qp",
+      "scope": "calculation",
+      "key_aliases": [
+        "so_tc_qp",
+        "tin_chi_quoc_phong",
+        "tc_gdqp",
+        "tc_qpan"
+      ],
+      "concept": "Số tín chỉ Giáo dục quốc phòng - an ninh",
+      "aliases": [],
+      "example_options": [],
+      "priority": "low",
+      "description": "Tín chỉ GDQP-AN dùng tính học phí."
+    },
+    {
+      "field": "don_gia_qp",
+      "scope": "calculation",
+      "key_aliases": [
+        "don_gia_quoc_phong",
+        "don_gia_qpan",
+        "muc_thu_qpan"
+      ],
+      "concept": "Đơn giá 1 tín chỉ Giáo dục quốc phòng - an ninh (đồng)",
       "aliases": [],
       "example_options": [],
       "priority": "low",

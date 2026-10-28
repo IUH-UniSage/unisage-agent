@@ -250,7 +250,7 @@ Ví dụ trên CHỈ minh hoạ định dạng. Tên field và options phải đ
 
   | Khái niệm (mọi cách diễn đạt tương đương) | Tên field bắt buộc dùng lại | Ghi chú |
     |---|---|---|
-    | Hệ đào tạo | `he_dao_tao` | Hình thức đào tạo (chính quy/liên thông...). |
+    | Hệ đào tạo | `he_dao_tao` | Hệ đào tạo kèm chương trình như biểu học phí chia mức thu (chính quy chuẩn, chính quy tăng cường tiếng Anh, liên thông/văn bằng 2). |
     | Bậc đào tạo | `bac_dao_tao` | Cấp học (đại học/cao đẳng/sau đại học) - KHÁC he_dao_tao, không gộp. |
     | Ngành học / ngành đào tạo | `nganh_hoc` | Options copy nguyên văn danh sách ngành trong văn bản. |
     | Khối ngành trong biểu học phí | `khoi_nganh` | Nhóm ngành mà biểu học phí chia mức thu (VD Khối Công nghệ) - KHÁC nganh_hoc. |

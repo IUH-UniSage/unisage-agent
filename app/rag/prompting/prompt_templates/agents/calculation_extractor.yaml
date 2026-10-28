@@ -52,6 +52,10 @@ template: |
   User: "Khoá 2025-2026, kỳ này em học 15 tín lý thuyết 4 tín thực hành, học phí bao nhiêu?"
   {"formula_id": "tuition_semester", "params": {"tc_lt": 15, "tc_th": 4, "khoa_nhap_hoc": "2025"}, "solve_for": null, "target": null, "retrieval_query": null}
 
+  User: "cả quốc phòng thì bao nhiêu"
+  <previous_calculation>{"formula_id": "previous", "formula": "Học phí một học kỳ", "params": {"tc_lt": 12, "tc_th": 4, "don_gia_lt": 930000, "don_gia_th": 980000, "khoa_nhap_hoc": "2025-2026"}}</previous_calculation>
+  {"formula_id": "previous", "params": {"gom_qpan": "có"}, "solve_for": null, "target": null, "retrieval_query": null}
+
   User: "Đăng ký tối đa mấy tín lý thuyết để học phí kỳ này không quá 8 triệu? Kỳ này em không có môn thực hành"
   {"formula_id": "tuition_semester", "params": {"tc_th": 0}, "solve_for": "tc_lt", "target": {"output": "hoc_phi", "op": "<=", "value": 8000000}, "retrieval_query": null}
 

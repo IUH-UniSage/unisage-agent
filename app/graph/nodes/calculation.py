@@ -594,6 +594,8 @@ class DocumentValues:
     values: dict[str, JsonValue] = field(default_factory=dict)
     sources: dict[str, RetrievedChunk] = field(default_factory=dict)
     questions: list[dict[str, Any]] = field(default_factory=list)
+    # The fee schedule row the values were read for, as (label, value) pairs.
+    row: tuple[tuple[str, str], ...] = ()
 
 
 def build_value_extractor_agent(model: Model | str) -> Agent[None, str]:
@@ -641,16 +643,36 @@ def _amounts(text: str) -> set[int]:
     return {int(re.sub(r"\D", "", match)) for match in _AMOUNT.findall(text)}
 
 
+def _option_key(label: str) -> str:
+    """ "Đại học chính quy (chương trình chuẩn)" and "Đại học chính quy" compare alike."""
+
+    return " ".join(re.sub(r"\(.*?\)", " ", label).casefold().split())
+
+
 def _context_question(
     spec: ParamSpec, options: object, known: Mapping[str, JsonValue]
 ) -> dict[str, Any]:
-    labels = list(
-        dict.fromkeys(
-            str(option).strip()[:120]
-            for option in (options if isinstance(options, list) else [])
-            if str(option).strip()
+    """The spec's own choices first (the training type always offers the fee schedule's
+    undergraduate sections), then the other options the documents list; a document
+    option that only repeats a spec choice ("Đại học chính quy") is dropped."""
+
+    read = [
+        str(option).strip()[:120]
+        for option in (options if isinstance(options, list) else [])
+        if str(option).strip()
+    ]
+    own = list(spec.options)
+
+    def repeats(label: str) -> bool:
+        key = _option_key(label)
+        return any(
+            _option_key(choice) == key or _option_key(choice).startswith(key + " ")
+            for choice in own
         )
-    )[:_OPTIONS_MAX]
+
+    labels = list(dict.fromkeys([*own, *(label for label in read if not repeats(label))]))[
+        :_OPTIONS_MAX
+    ]
     if len(labels) < 2:
         return question_for(spec, known)
     return {
@@ -732,6 +754,14 @@ async def fill_from_documents(
         return DocumentValues()
 
     data = load_json_object(raw) or {}
+    # The row of the documents is never guessed: a value whose row is not confirmed yet
+    # (which intake, faculty group, training type, programme) is dropped and its
+    # missing context is asked, whatever the model read.
+    unconfirmed = [
+        name
+        for name in dict.fromkeys(name for spec in wanted for name in spec.selected_by)
+        if not _context_value(name, known, deps)
+    ]
     wanted_names = {spec.name for spec in wanted}
     values: dict[str, JsonValue] = {}
     sources: dict[str, RetrievedChunk] = {}
@@ -750,23 +780,25 @@ async def fill_from_documents(
             or not 1 <= index <= len(chunks)
             or number not in _amounts(chunks[index - 1].content)
             or not _in_range(spec, number)
+            or any(selector in unconfirmed for selector in spec.selected_by)
         ):
             rejected.append(name)
             continue
         values[name] = number
         sources[name] = chunks[index - 1]
 
-    questions: list[dict[str, Any]] = []
+    asked: dict[str, object] = {}
     if wanted_names - set(values):
         raw_ask = data.get("ask")
         for item in raw_ask if isinstance(raw_ask, list) else []:
-            if not isinstance(item, dict):
-                continue
-            spec = param_spec(formula_id, str(item.get("field") or ""))
-            if spec is None or spec.kind != "text" or known.get(spec.name) is not None:
-                continue
-            if all(question["field"] != spec.name for question in questions):
-                questions.append(_context_question(spec, item.get("options"), known))
+            if isinstance(item, dict):
+                asked.setdefault(str(item.get("field") or ""), item.get("options"))
+    questions: list[dict[str, Any]] = []
+    for name in dict.fromkeys([*unconfirmed, *asked]):
+        spec = param_spec(formula_id, name)
+        if spec is None or spec.kind != "text" or _context_value(name, known, deps):
+            continue
+        questions.append(_context_question(spec, asked.get(name), known))
     logger.info(
         "calculation.document_values formula=%s found=%s rejected=%s ask=%s",
         formula_id,
@@ -774,11 +806,29 @@ async def fill_from_documents(
         rejected,
         [question["field"] for question in questions],
     )
-    return DocumentValues(values, sources, questions)
+    row = tuple(
+        (spec.tab_label, value)
+        for name in dict.fromkeys(name for spec in wanted for name in spec.selected_by)
+        if (spec := param_spec(formula_id, name)) and (value := _context_value(name, known, deps))
+    )
+    return DocumentValues(values, sources, questions, row if values else ())
 
 
+def _context_value(name: str, known: Mapping[str, JsonValue], deps: CalculationDeps) -> str:
+    """What the student declared for a context param (this round, else their profile)."""
+
+    value = known.get(name)
+    if value is None:
+        value = deps.confirmed_metadata.get(name)
+    return "" if value is None else str(value).strip()
+
+
+# The row lists one price per credit, theory and practice alike (an English-enhanced
+# programme): said so, since the formula still shows two lines with the same price.
+_SINGLE_PRICE_NOTE = "Biểu phí ghi một mức thu chung cho mọi tín chỉ (lý thuyết và thực hành)."
 _DOCUMENT_PRICE_NOTE = (
-    "Đơn giá theo biểu phí đại học chính quy tại trụ sở chính; hệ hoặc cơ sở khác có đơn giá riêng."
+    "Đơn giá lấy theo dòng biểu phí: {row}. Nếu thông tin này chưa đúng với bạn, hãy cho mình"
+    " biết để tính lại."
 )
 
 
@@ -809,8 +859,17 @@ def _with_document_notes(
             f"{label}: {_value_text(spec, found.values[name])} [{markers[chunk.chunk_id]}]"
         )
         prices = prices or spec.unit == "đồng"
-    if prices:
-        notes.append(_DOCUMENT_PRICE_NOTE)
+    lt, th = found.sources.get("don_gia_lt"), found.sources.get("don_gia_th")
+    if (
+        lt is not None
+        and th is not None
+        and lt.chunk_id == th.chunk_id
+        and found.values.get("don_gia_lt") == found.values.get("don_gia_th")
+    ):
+        notes.append(_SINGLE_PRICE_NOTE)
+    if prices and found.row:
+        row = "; ".join(f"{label}: {value}" for label, value in found.row)
+        notes.append(_DOCUMENT_PRICE_NOTE.format(row=row))
     return replace(outcome, notes=tuple(notes), sources=sources)
 
 

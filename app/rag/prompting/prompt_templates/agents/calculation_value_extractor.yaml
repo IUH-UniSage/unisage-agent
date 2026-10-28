@@ -11,14 +11,17 @@ template: |
   - `<documents>`: các đoạn tài liệu, mỗi đoạn mở đầu bằng `[n]`.
 
   ## Đầu ra (chỉ JSON, không giải thích)
-  {"values": {"<tên>": {"value": <số nguyên>, "chunk": <n>}}, "ask": [{"field": "<khoa_nhap_hoc hoặc khoi_nganh>", "options": ["<lựa chọn>", "..."]}]}
+  {"values": {"<tên>": {"value": <số nguyên>, "chunk": <n>}}, "ask": [{"field": "<khoa_nhap_hoc | khoi_nganh | he_dao_tao | co_so_hoc>", "options": ["<lựa chọn>", "..."]}]}
 
   ## Quy tắc
-  - CHỈ ghi một số liệu khi đoạn `[n]` ghi rõ con số đó cho ĐÚNG trường hợp của sinh viên: đúng bậc/hệ (mặc định đại học chính quy), đúng cơ sở (mặc định trụ sở chính), đúng khoá tuyển sinh, đúng khối/ngành. `value` là số nguyên, chép đúng con số trong đoạn (VD "980.000" → 980000). `chunk` là số `n` của đoạn chứa con số đó.
+  - KHÔNG BAO GIỜ tự giả định sinh viên thuộc khoá nhập học, khối ngành (Kinh tế, Công nghệ, Dược...), hệ đào tạo (gồm cả chương trình: "Đại học chính quy" chuẩn, "Đại học chính quy tăng cường tiếng Anh", "liên thông, văn bằng 2"...) hay cơ sở nào. Chỉ dùng những gì `<known>` ghi; không có giá trị mặc định.
+  - CHỈ ghi một số liệu khi đoạn `[n]` ghi rõ con số đó cho ĐÚNG trường hợp `<known>` mô tả: đúng bậc/hệ, đúng chương trình, đúng cơ sở, đúng khoá tuyển sinh, đúng khối/ngành. `value` là số nguyên, chép đúng con số trong đoạn (VD "980.000" → 980000). `chunk` là số `n` của đoạn chứa con số đó.
   - Không chắc, hoặc tài liệu không có → BỎ số liệu đó khỏi `values`. Tuyệt đối không suy ra, không cộng dồn, không lấy số của bậc/khoá/khối khác.
-  - Đơn giá: "đơn giá 1 tín chỉ lý thuyết" là mức thu 01 tín chỉ của môn lý thuyết; "thực hành" là của môn thực hành. KHÔNG dùng mức thu theo năm học, KHÔNG dùng đơn giá QPAN.
+  - Đơn giá: "đơn giá 1 tín chỉ lý thuyết" là mức thu 01 tín chỉ của môn lý thuyết; "thực hành" là của môn thực hành. KHÔNG dùng mức thu theo năm học; đơn giá lý thuyết/thực hành KHÔNG lấy đơn giá QPAN. `don_gia_qp` (khi có trong `<wanted>`) là mức thu 01 tín chỉ môn QPAN / Giáo dục quốc phòng - an ninh của ĐÚNG dòng đó (VD "Môn QPAN: 400.000"); dòng không ghi QPAN → bỏ, không lấy QPAN của khoá/hệ khác.
+  - `tc_qp`: chỉ lấy khi tài liệu ghi rõ số tín chỉ của học phần Giáo dục quốc phòng - an ninh; không có thì bỏ.
+  - Dòng biểu phí của trường hợp sinh viên chỉ có MỘT mức thu 01 tín chỉ, không tách lý thuyết/thực hành (VD hệ tăng cường tiếng Anh "Khối CN (1.400k/TC)", "1.400.000") → ghi CÙNG con số đó cho cả `don_gia_lt` và `don_gia_th`, cùng `chunk`.
   - Tổng tín chỉ của chương trình: chỉ lấy khi tài liệu ghi sẵn tổng số tín chỉ lý thuyết / thực hành của toàn chương trình. KHÔNG tự cộng từng học phần.
-  - `ask`: khi tài liệu có NHIỀU dòng khác nhau theo khoá tuyển sinh hoặc theo khối ngành mà `<known>` chưa cho biết sinh viên thuộc dòng nào → thêm một mục cho đúng tiêu chí đó, `options` là các giá trị tài liệu ghi (VD ["2025-2026", "2024-2025", "2023-2024"], hoặc ["Khối Kinh tế", "Khối Công nghệ"]). Khi đó KHÔNG ghi số liệu phụ thuộc tiêu chí đó vào `values`.
+  - `ask`: mỗi tiêu chí chia dòng biểu phí (khoá tuyển sinh, khối ngành, hệ đào tạo, cơ sở) mà `<known>` chưa cho biết → thêm một mục cho đúng tiêu chí đó, `options` là các giá trị tài liệu ghi (VD ["2025-2026", "2024-2025", "2023-2024"], ["Khối Kinh tế", "Khối Công nghệ"], ["Đại học chính quy", "Đại học chính quy tăng cường tiếng Anh", "Đại học liên thông, văn bằng 2"], ["Trụ sở chính TP.HCM", "Phân hiệu Quảng Ngãi"]). Khi đó KHÔNG ghi số liệu phụ thuộc tiêu chí đó vào `values`.
   - Khối ngành: chỉ xếp ngành vào khối khi tài liệu ghi rõ ngành đó thuộc khối nào; không có thì hỏi `khoi_nganh`.
   - Không có gì để ghi và không cần hỏi → {"values": {}, "ask": []}.
 
@@ -28,6 +31,10 @@ template: |
   Đoạn [1] có biểu phí đại học chính quy khoá 2025-2026, 2024-2025, 2023-2024, mỗi khoá tách Khối Kinh tế / Khối Công nghệ.
   {"values": {}, "ask": [{"field": "khoa_nhap_hoc", "options": ["2025-2026", "2024-2025", "2023-2024"]}, {"field": "khoi_nganh", "options": ["Khối Kinh tế", "Khối Công nghệ"]}]}
 
-  <known>khoa_nhap_hoc: 2025; khoi_nganh: Khối Công nghệ</known>
+  <known>khoa_nhap_hoc: 2025; khoi_nganh: Khối Công nghệ; he_dao_tao: Đại học chính quy (chương trình chuẩn)</known>
   Đoạn [1] ghi "Khóa tuyển sinh năm học 2025-2026 ... Khối Công nghệ: Môn lý thuyết 980.000 | Môn thực hành 1.600.000".
   {"values": {"don_gia_lt": {"value": 980000, "chunk": 1}, "don_gia_th": {"value": 1600000, "chunk": 1}}, "ask": []}
+
+  <known>khoa_nhap_hoc: 2025; khoi_nganh: Khối Công nghệ; he_dao_tao: Đại học chính quy tăng cường tiếng Anh</known>
+  Đoạn [2] ghi "4 Đại học chính quy tăng cường tiếng Anh ... 4.1 Khóa 2025-2026: Khối KT (1.300k/TC) | Khối CN (1.400k/TC) | QPAN (400k) | 1.300.000 / 1.400.000".
+  {"values": {"don_gia_lt": {"value": 1400000, "chunk": 2}, "don_gia_th": {"value": 1400000, "chunk": 2}}, "ask": []}

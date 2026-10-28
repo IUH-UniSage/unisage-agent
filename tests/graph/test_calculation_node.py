@@ -341,6 +341,12 @@ async def test_a_fitting_review_answers_first_then_shows_the_python_block(
     assert "06_QueryTransformationNode" not in _traced_nodes(caplog)
 
 
+# The fee schedule row the student confirmed; without it no unit price is read.
+_TUITION_ROW = {
+    "khoa_nhap_hoc": "2025-2026",
+    "khoi_nganh": "Khối Công nghệ",
+    "he_dao_tao": "Đại học chính quy",
+}
 _TWO_YEARS = "tính giúp tôi học phí ngành công nghệ thông tin 2 năm đầu"
 _TWO_YEARS_ISSUE = "Bạn hỏi học phí 2 năm đầu, nhưng phép tính dưới đây là học phí một năm học."
 _TWO_YEARS_ANSWER = "Kết quả bên dưới là học phí một năm học: **165.200.000 đồng**."
@@ -368,7 +374,10 @@ async def _two_years_turn(generation: FunctionModel) -> GraphOutput:
         GraphModels(
             classification=_scripted(
                 {"tasks": [{"intent": "academic_calculation", "query": _TWO_YEARS}]},
-                {"formula_id": "tuition_year", "params": {"tc_lt": 100, "tc_th": 42}},
+                {
+                    "formula_id": "tuition_year",
+                    "params": {"tc_lt": 100, "tc_th": 42, **_TUITION_ROW},
+                },
                 _PRICES_FOUND,
             ),
             query_transformation=_echo_model(),
@@ -757,7 +766,7 @@ async def test_tuition_prices_come_from_the_fee_schedule_with_a_citation() -> No
             {"tasks": [{"intent": "academic_calculation", "query": query}]},
             {
                 "formula_id": "tuition_semester",
-                "params": {"tc_lt": 15, "tc_th": 4, "khoa_nhap_hoc": "2025-2026"},
+                "params": {"tc_lt": 15, "tc_th": 4, **_TUITION_ROW},
                 "retrieval_query": None,
             },
             _PRICES_FOUND,
@@ -771,6 +780,7 @@ async def test_tuition_prices_come_from_the_fee_schedule_with_a_citation() -> No
     assert result.pending_round is None
     assert "Học phí một học kỳ **21.100.000 đồng**" in result.response_text
     assert "- Đơn giá 1 tín chỉ lý thuyết (đồng): 980.000 đồng [1]" in result.response_text
+    assert "Khối ngành: Khối Công nghệ" in result.response_text
     assert "AI tự tính" not in result.response_text
     assert [(c["index"], c["title"]) for c in result.citations] == [
         (1, "Quyet Dinh 1035 - Hoc phi 2025-2026")
@@ -778,7 +788,10 @@ async def test_tuition_prices_come_from_the_fee_schedule_with_a_citation() -> No
 
 
 @pytest.mark.asyncio
-async def test_tuition_asks_the_intake_first_then_reads_the_prices() -> None:
+async def test_tuition_asks_the_fee_row_first_then_reads_the_prices() -> None:
+    """Nothing about the student is assumed: the intake, faculty group, training type
+    and programme are all asked before a unit price is read."""
+
     query = "tính học phí học kỳ này giúp em"
     task = {"tasks": [{"intent": "academic_calculation", "query": query}]}
     extraction = {"formula_id": "tuition_semester", "params": {}, "retrieval_query": None}
@@ -796,13 +809,20 @@ async def test_tuition_asks_the_intake_first_then_reads_the_prices() -> None:
 
     assert first.pending_round is not None
     questions = {q.field: q for q in first.pending_round.panel.questions}
-    assert list(questions) == ["khoa_nhap_hoc", "tc_lt", "tc_th"]
-    intake = questions["khoa_nhap_hoc"]
+    assert list(questions) == [
+        "khoa_nhap_hoc",
+        "khoi_nganh",
+        "he_dao_tao",
+        "tc_lt",
+        "tc_th",
+    ]
+    choices = [questions[name] for name in ("khoa_nhap_hoc", "he_dao_tao")]
     submit = ClarificationSubmit(
         action="submit",
         panel_id=first.pending_round.panel.panel_id,
         answers=[
-            Answer(question_id=intake.id, option_id=intake.options[0].id),
+            *(Answer(question_id=q.id, option_id=q.options[0].id) for q in choices),
+            Answer(question_id=questions["khoi_nganh"].id, text="Khối Công nghệ"),
             Answer(question_id=questions["tc_lt"].id, number=Decimal(15)),
             Answer(question_id=questions["tc_th"].id, number=Decimal(4)),
         ],
@@ -854,7 +874,7 @@ async def test_tuition_for_two_years_asks_and_titles_the_period_the_student_name
         _input(query),
         _tuition_models(
             {"tasks": [{"intent": "academic_calculation", "query": query}]},
-            {"formula_id": "tuition_year", "params": {"pham_vi": "2 năm đầu"}},
+            {"formula_id": "tuition_year", "params": {"pham_vi": "2 năm đầu", **_TUITION_ROW}},
             _PRICES_FOUND,
             chunks=[_FEE_TABLE],
         ),
@@ -902,7 +922,12 @@ async def test_every_llm_call_of_a_calculation_turn_gets_the_current_time() -> N
             classification=_recording(
                 classification,
                 json.dumps({"tasks": [{"intent": "academic_calculation", "query": _TWO_YEARS}]}),
-                json.dumps({"formula_id": "tuition_year", "params": {"tc_lt": 100, "tc_th": 42}}),
+                json.dumps(
+                    {
+                        "formula_id": "tuition_year",
+                        "params": {"tc_lt": 100, "tc_th": 42, **_TUITION_ROW},
+                    }
+                ),
                 json.dumps(_PRICES_FOUND),
             ),
             query_transformation=_echo_model(),
@@ -1119,7 +1144,12 @@ async def test_document_lookups_are_filtered_like_the_advisory_flow(
             classification=_recording(
                 classification,
                 json.dumps({"tasks": [{"intent": "academic_calculation", "query": query}]}),
-                json.dumps({"formula_id": "tuition_semester", "params": {"tc_lt": 15, "tc_th": 4}}),
+                json.dumps(
+                    {
+                        "formula_id": "tuition_semester",
+                        "params": {"tc_lt": 15, "tc_th": 4, **_TUITION_ROW},
+                    }
+                ),
                 json.dumps(
                     {
                         "values": {
@@ -1140,7 +1170,9 @@ async def test_document_lookups_are_filtered_like_the_advisory_flow(
         _usage_recorder(),
     )
 
-    assert retrieval.queries == [f"{_FEE_LOOKUP}  {query}"]  # no profile context between
+    # The confirmed fee row (intake, faculty group, training type) narrows the search.
+    row = " ".join(_TUITION_ROW.values())
+    assert retrieval.queries == [f"{_FEE_LOOKUP} {row} {query}"]
     assert query in rerank_prompts[0] and "Lịch thi" not in rerank_prompts[0]
     _classifier, _extractor, value_prompt = classification
     assert "850.000 đồng/tín chỉ" in value_prompt and "mục: Đại học chính quy" in value_prompt
@@ -1157,7 +1189,10 @@ async def _fee_turn(models: dict[str, object]) -> GraphOutput:
         GraphModels(
             classification=_scripted(
                 {"tasks": [{"intent": "academic_calculation", "query": query}]},
-                {"formula_id": "tuition_semester", "params": {"tc_lt": 15, "tc_th": 4}},
+                {
+                    "formula_id": "tuition_semester",
+                    "params": {"tc_lt": 15, "tc_th": 4, **_TUITION_ROW},
+                },
                 {
                     "values": {
                         "don_gia_lt": {"value": 850000, "chunk": 1},
