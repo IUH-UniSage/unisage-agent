@@ -188,3 +188,15 @@ def test_context_trace_keeps_every_source_and_marks_the_cited_ones() -> None:
         (None, "LINK", True),
     ]
     assert web_items[1]["url"] == "https://iuh.edu.vn/quy-che"
+
+
+def test_an_address_written_in_a_document_chunk_is_kept() -> None:
+    # 29/10/2026: with web off, "https://exam.iuh.edu.vn/" from the chunk was dropped,
+    # leaving "tại địa chỉ ** [1]".
+    chunk = "Sinh viên đăng nhập tại: **https://exam.iuh.edu.vn/ Tên đăng nhập: Mã số sinh viên**"
+    text = "Đăng nhập tại **https://exam.iuh.edu.vn/** [1], hoặc https://khong-co.example.vn [1]."
+    assert keep_known_links(text, [], [chunk]) == (
+        "Đăng nhập tại **https://exam.iuh.edu.vn/** [1], hoặc  [1]."
+    )
+    # A dropped address leaves no empty bold or underline behind.
+    assert keep_known_links("Truy cập **https://khong-co.vn** ngay", []) == "Truy cập  ngay"

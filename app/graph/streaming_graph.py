@@ -1467,7 +1467,9 @@ async def _run_advisory_flow(
         budget=budget,
     )
     response_text = keep_known_links(
-        strip_source_list(generation_result.response_text), [*web_results, *web_sources]
+        strip_source_list(generation_result.response_text),
+        [*web_results, *web_sources],
+        [chunk.content for chunk in rerank_result.chunks],
     )
     # Plain arithmetic the answer asked for over figures it cited: computed by code (or
     # refused with a fixed line and an AI-admin warning). Computed before the grounding
