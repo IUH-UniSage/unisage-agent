@@ -23,14 +23,14 @@ from typing import Any
 from pydantic import JsonValue
 from pydantic_ai.models import Model
 
-from app.calculation.formulas import FORMULAS
+from app.calculation.formulas import FORMULAS, plain
 from app.core.config import settings
 from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_trace
 from app.core.registry.model_registry import CredentialConfig
 from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
 from app.graph.address import address_for
-from app.graph.calc_requests import arithmetic_blocks
+from app.graph.calc_requests import calc_blocks
 from app.graph.calculation_turn import (
     CalculationTask,
     Review,
@@ -64,7 +64,9 @@ from app.graph.nodes.calculation import (
     Computed,
     Deferred,
     Planned,
+    PlannedTask,
     TaskOutcome,
+    declared_profile,
     plan_calculation,
     registry_id,
     resume_calculation_task,
@@ -372,13 +374,29 @@ async def _classified_turn(
         for index, task in enumerate(route_plan.calculation_tasks, start=1)
     ]
     deps = _calculation_deps(
-        graph_input, models, usage_recorder, budget, trace, confirmed_metadata=confirmed_metadata
+        graph_input,
+        models,
+        usage_recorder,
+        budget,
+        trace,
+        confirmed_metadata=confirmed_metadata,
+        profile_updates={
+            canonical_field(name): confirmed_metadata.get(canonical_field(name))
+            for name in classification.metadata_updates
+        },
     )
     # The extractor runs before anything else: a task no registered formula fits joins
     # the advisory part (answered from the documents, no arithmetic by the model), so
     # its retrieval starts with the others'.
     planned = await _plan_calculations(calculation_tasks, deps, trace)
     runnable = [task for task in planned if not isinstance(task, Deferred)]
+    for task in runnable:
+        if isinstance(task, PlannedTask):
+            confirmed_metadata, _ = apply_updates(
+                confirmed_metadata,
+                declared_profile(task, graph_input.user_message),
+                now_ict().date(),
+            )
     advisory_tasks: list[tuple[ClassifiedTask, RoutingMode]] = [
         *route_plan.advisory_tasks,
         *(
@@ -539,8 +557,10 @@ def _calculation_deps(
     trace: GraphTrace,
     *,
     confirmed_metadata: dict[str, str] | None = None,
+    profile_updates: dict[str, str | None] | None = None,
 ) -> CalculationDeps:
     return CalculationDeps(
+        profile_updates=profile_updates or {},
         models=models,
         security=graph_input.security,
         on_attempt=usage_recorder.bind("CalculationNode"),
@@ -1449,6 +1469,14 @@ async def _run_advisory_flow(
     response_text = keep_known_links(
         strip_source_list(generation_result.response_text), [*web_results, *web_sources]
     )
+    # Plain arithmetic the answer asked for over figures it cited: computed by code (or
+    # refused with a fixed line and an AI-admin warning). Computed before the grounding
+    # check so a result the answer also states in words is not "ungrounded"; streamed after.
+    blocks = (
+        calc_blocks(generation_result.calc_requests, question=question, chunks=rerank_result.chunks)
+        if generation_result.calc_requests
+        else None
+    )
     # GroundingCheck: numbers and [n] of the answer against the sources it was shown
     # (chunks, then web pages, numbered in that order). The text is already streamed, so a
     # finding adds a caution line and an AI-admin warning rather than a rewrite.
@@ -1460,7 +1488,13 @@ async def _run_advisory_flow(
         # question, or the answer requested calc blocks): a sum the model states itself is
         # ungrounded, not "derivable".
         strict = strict_numbers or bool(generation_result.calc_requests)
-        report = check_answer(response_text, shown, question=question, strict=strict)
+        computed_values = {
+            f"calc_{index}": plain(value)
+            for index, value in enumerate(blocks.values if blocks else [], start=1)
+        }
+        report = check_answer(
+            response_text, shown, question=question, known=computed_values, strict=strict
+        )
         if report.ungrounded:
             caution = caution_line(report.ungrounded)
             await token_sink(caution)
@@ -1491,16 +1525,11 @@ async def _run_advisory_flow(
             report.invalid_markers,
             report.no_citation,
         )
-    # Plain arithmetic the answer asked for over figures it cited: computed by code and
-    # appended as a Python block (or refused with a fixed line and an AI-admin warning).
-    if generation_result.calc_requests:
-        computed, rejected = arithmetic_blocks(
-            generation_result.calc_requests, question=question, chunks=rerank_result.chunks
-        )
-        if computed:
-            await token_sink(computed)
-            response_text += computed
-        admin_warnings.extend(rejected)
+    if blocks is not None:
+        if blocks.markdown:
+            await token_sink(blocks.markdown)
+            response_text += blocks.markdown
+        admin_warnings.extend(blocks.warnings)
     # Official pages the judge kept only as links: listed after the answer, as the
     # fallback lists them, instead of being lost because another page answered.
     links = source_links_block(web_sources, response_text)

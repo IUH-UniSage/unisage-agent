@@ -98,3 +98,38 @@ def test_missing_operands_compares_with_every_way_a_number_is_written() -> None:
     assert missing_operands([Decimal(250000), Decimal(60000), Decimal(1200000)], texts) == []
     assert missing_operands([Decimal(190000)], texts) == [Decimal(190000)]
     assert missing_operands([Decimal("7.5")], ["điểm 7,5 môn Toán"]) == []
+
+
+_APPEALS = RetrievedChunk(
+    chunk_id="s3",
+    content=(
+        "Học kỳ I 2020-2021: phúc khảo trắc nghiệm 16 đơn, tự luận 358 đơn; thay đổi điểm 45 đơn."
+    ),
+    source="PhucKhao.pdf",
+    score=0.9,
+)
+
+
+def test_a_request_may_use_the_result_of_an_earlier_one() -> None:
+    # Live 28/10/2026 (d0317): "374 - 45" was refused because 374 is the first block's
+    # result, not a figure of the document.
+    from app.graph.calc_requests import calc_blocks
+
+    blocks = calc_blocks(
+        [
+            {"label": "Tổng số đơn", "expression": "16 + 358", "unit": "đơn", "sources": [1]},
+            {"label": "Đơn không đổi điểm", "expression": "374 - 45", "unit": "đơn"},
+        ],
+        question="tổng bao nhiêu đơn và bao nhiêu đơn không đổi điểm?",
+        chunks=[_APPEALS],
+    )
+    assert blocks.warnings == []
+    assert blocks.values == [Decimal(374), Decimal(329)]
+    assert "Đơn không đổi điểm: **329 đơn**" in blocks.markdown
+    # Only a result code computed counts: an invented subtotal is still refused.
+    refused = calc_blocks(
+        [{"label": "Đơn không đổi điểm", "expression": "374 - 45", "unit": "đơn"}],
+        question="bao nhiêu đơn không đổi điểm?",
+        chunks=[_APPEALS],
+    )
+    assert refused.values == [] and refused.warnings[0].code == "CALC_REQUEST_REJECTED"

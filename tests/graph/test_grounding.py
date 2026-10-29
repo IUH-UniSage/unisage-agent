@@ -121,3 +121,25 @@ def test_strict_mode_treats_a_sum_the_model_worked_out_as_ungrounded() -> None:
     answer = "Tổng số tín chỉ của 4 học phần là 16 tín chỉ (3 + 4 + 2 + 7) [1]."
     assert check_answer(answer, sources).ungrounded == []
     assert check_answer(answer, sources, strict=True).ungrounded == ["16"]
+
+
+def test_a_result_computed_by_code_is_grounded_even_in_strict_mode() -> None:
+    # Live 28/10/2026 (d0245): the answer stated "30 tín chỉ" and the calc block computed
+    # 120 - 90 = 30, yet the caution said 30 was not in the documents.
+    sources = ["Có bằng đại học: tối thiểu 120 tín chỉ; có bằng thạc sĩ: 90 tín chỉ."]
+    answer = "Nhiều hơn tối thiểu 30 tín chỉ [1]."
+    assert check_answer(answer, sources, strict=True).ungrounded == ["30"]
+    assert check_answer(answer, sources, known={"calc_1": "30"}, strict=True).ungrounded == []
+
+
+def test_a_question_number_rounded_to_a_written_step_is_grounded() -> None:
+    # Live 28/10/2026 (d0314): 7,6 rounded to 0,5 is 7,5.
+    question = (
+        "Làm tròn: phần lẻ dưới 0,25 -> 0,0; từ 0,25 đến dưới 0,75 -> 0,5. Điểm 6,2; 7,6; 8,8?"
+    )
+    sources = ["Phần lẻ từ 0,25 đến dưới 0,75 làm tròn thành 0,5."]
+    right = "Lần lượt là 6,0; 7,5 và 9,0 [1]."
+    assert check_answer(right, sources, question=question, strict=True).ungrounded == []
+    # 8,8 rounds to 9,0, not 8,5 (small whole numbers like 8,0 are never checked).
+    wrong = "Lần lượt là 6,0; 7,5 và 8,5 [1]."
+    assert check_answer(wrong, sources, question=question, strict=True).ungrounded == ["8,5"]

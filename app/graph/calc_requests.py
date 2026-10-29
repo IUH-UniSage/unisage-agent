@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -40,6 +41,13 @@ REJECTED_LINE = (
 _REJECTED = "Yêu cầu tính của câu trả lời bị từ chối: "
 
 
+@dataclass(frozen=True)
+class CalcBlocks:
+    markdown: str  # to append after the answer; empty when nothing was requested
+    warnings: list[AdminWarning]
+    values: list[Decimal]  # results computed by code (the grounding check accepts them)
+
+
 def arithmetic_blocks(
     requests: Sequence[dict[str, Any]],
     *,
@@ -49,8 +57,22 @@ def arithmetic_blocks(
     """Markdown to append after the answer (empty when nothing was requested) and the
     AI-admin warnings for rejected requests."""
 
+    blocks = calc_blocks(requests, question=question, chunks=chunks)
+    return blocks.markdown, blocks.warnings
+
+
+def calc_blocks(
+    requests: Sequence[dict[str, Any]],
+    *,
+    question: str,
+    chunks: Sequence[RetrievedChunk],
+) -> CalcBlocks:
+    """`arithmetic_blocks` with the computed values. A request may use the result of an
+    earlier one as an operand ("374 - 45" after "16 + 358", 29/10/2026)."""
+
     parts: list[str] = []
     warnings: list[AdminWarning] = []
+    values: list[Decimal] = []
     for raw in list(requests)[:REQUESTS_MAX]:
         request = parse_request(raw)
         if request is None:
@@ -65,7 +87,9 @@ def arithmetic_blocks(
         cited = [
             chunks[index - 1] for index in request.sources if 1 <= index <= len(chunks)
         ] or list(chunks)
-        missing = missing_operands(evaluation.operands, [question, *(c.content for c in cited)])
+        missing = missing_operands(
+            evaluation.operands, [question, *(c.content for c in cited)], known=values
+        )
         if missing:
             parts.append(REJECTED_LINE.format(label=request.label))
             warnings.append(
@@ -92,21 +116,25 @@ def arithmetic_blocks(
             markers,
         )
         parts.append(render_markdown(arithmetic_result(request, evaluation, source=source)))
+        values.append(evaluation.value)
     if not parts:
-        return "", warnings
-    return "\n\n" + "\n\n".join(parts), warnings
+        return CalcBlocks("", warnings, values)
+    return CalcBlocks("\n\n" + "\n\n".join(parts), warnings, values)
 
 
 def _warning(message: str) -> AdminWarning:
     return AdminWarning(code="CALC_REQUEST_REJECTED", message=f"{_REJECTED}{message}")
 
 
-def missing_operands(operands: Sequence[Decimal], texts: Sequence[str]) -> list[Decimal]:
-    """Operands none of `texts` states (as written: 1.200.000 and 1200000 both count).
-    The evidence half of the policy - shared by the node (the student's own numbers) and
-    the advisory requests (cited documents)."""
+def missing_operands(
+    operands: Sequence[Decimal], texts: Sequence[str], *, known: Sequence[Decimal] = ()
+) -> list[Decimal]:
+    """Operands none of `texts` states (as written: 1.200.000 and 1200000 both count) and
+    that are not one of `known` (results code already computed this turn). The evidence
+    half of the policy - shared by the node (the student's own numbers) and the advisory
+    requests (cited documents)."""
 
-    stated: set[Decimal] = set()
+    stated: set[Decimal] = set(known)
     for text in texts:
         for value in numbers_in(text or "").values():
             stated.add(Decimal(str(value)))
