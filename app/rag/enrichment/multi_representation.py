@@ -84,6 +84,20 @@ def _parse_enrichment_output(
     return EnrichedChunk(chunk=chunk, summary=summary, questions=questions)
 
 
+def enrich_input(chunk: Chunk, title: str = "") -> str:
+    """What the enricher reads: the document's title and the chunk's heading path, then its
+    content. Without them the summary and questions only describe the chunk ("số tổng đài
+    hỗ trợ là gì") and miss the organisation, school year or system a student names
+    (29/10/2026)."""
+
+    head = []
+    if title:
+        head.append(f"<document>{title}</document>")
+    if chunk.heading_path:
+        head.append(f"<section>{' > '.join(chunk.heading_path)}</section>")
+    return "\n".join([*head, chunk.content])
+
+
 @dataclass(frozen=True)
 class MultiRepresentationEnricher:
     """Add a summary + hypothetical questions to a chunk via one LLM call.
@@ -121,7 +135,7 @@ class MultiRepresentationEnricher:
             ),
         )
 
-    def enrich(self, chunk: Chunk) -> EnrichedChunk:
+    def enrich(self, chunk: Chunk, title: str = "") -> EnrichedChunk:
         """Enrich one chunk.
 
         Test-injected `model` (a `pydantic_ai` `Model`/model-name string): skips the
@@ -140,10 +154,12 @@ class MultiRepresentationEnricher:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                result = asyncio.run(agent.run(chunk.content))
+                result = asyncio.run(agent.run(enrich_input(chunk, title)))
             else:
                 with ThreadPoolExecutor(max_workers=1) as pool:
-                    result = pool.submit(asyncio.run, agent.run(chunk.content)).result()
+                    result = pool.submit(
+                        asyncio.run, agent.run(enrich_input(chunk, title))
+                    ).result()
             parsed = _parse_enrichment_output(result.output or "", chunk, self.question_count)
             if parsed is not None:
                 return parsed
@@ -152,11 +168,11 @@ class MultiRepresentationEnricher:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self._enrich_recorded(chunk))
+            return asyncio.run(self._enrich_recorded(chunk, title))
         with ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, self._enrich_recorded(chunk)).result()
+            return pool.submit(asyncio.run, self._enrich_recorded(chunk, title)).result()
 
-    async def _enrich_recorded(self, chunk: Chunk) -> EnrichedChunk:
+    async def _enrich_recorded(self, chunk: Chunk, title: str = "") -> EnrichedChunk:
         # One event loop and one Redis client for the whole call - an asyncio Redis
         # connection is bound to the loop that opened it (see OpenAIEmbedder.embed()).
         redis_client = redis_asyncio.Redis.from_url(settings.REDIS_URL)
@@ -173,7 +189,7 @@ class MultiRepresentationEnricher:
             )
             if reserve_result != "OK":
                 raise RequestBudgetRejectedError("EXTRACTION", reserve_result)
-            result = await self.enrich_tracked(chunk, recorder, budget_tracker)
+            result = await self.enrich_tracked(chunk, recorder, budget_tracker, title=title)
             status = "SUCCESS"
             return result
         finally:
@@ -193,6 +209,8 @@ class MultiRepresentationEnricher:
         chunk: Chunk,
         usage_recorder: UsageRecorder,
         budget_tracker: BudgetTracker,
+        *,
+        title: str = "",
     ) -> EnrichedChunk:
         """Enrich within a CALLER-managed `UsageRecorder`/`BudgetTracker` - the ingestion
         pipeline's shared per-document recorder (`app.worker.tasks.ingestion.embed_chunks`), which
@@ -238,7 +256,7 @@ class MultiRepresentationEnricher:
 
             output = await run_agent_text_with_failover(
                 agent,
-                chunk.content,
+                enrich_input(chunk, title),
                 purpose="EXTRACTION",
                 credential=credential,
                 snapshot_version=snapshot_version,

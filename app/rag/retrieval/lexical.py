@@ -39,12 +39,29 @@ def tokenize(text: str) -> list[str]:
     return [token for token in _TOKEN.findall(folded) if len(token) > 1 or token.isdigit()]
 
 
-def lexical_text(content: str, heading_path: Sequence[str] = ()) -> str:
-    """What a chunk contributes to BM25: its heading path (course codes and section names
-    often live only there) followed by its content."""
+def document_title(object_key: str | None) -> str:
+    """The document's title from its object key (uuid prefix and extension dropped)."""
+
+    from app.rag.prompting.citations import source_title
+
+    return source_title(object_key) if object_key else ""
+
+
+def with_title(text: str, title: str) -> str:
+    """A chunk text with its document's title first: the chunk rarely repeats what the title
+    says (the organisation, the school year, the system), and a question names it
+    ("Tổng đài 18008000" answers a question about the Ministry's registration system only
+    in a document titled so). Used for the dense texts and BM25 alike (29/10/2026)."""
+
+    return f"Tài liệu: {title}\n{text}" if title else text
+
+
+def lexical_text(content: str, heading_path: Sequence[str] = (), title: str = "") -> str:
+    """What a chunk contributes to BM25: its document's title and heading path (course codes
+    and section names often live only there) followed by its content."""
 
     headings = " ".join(h for h in heading_path if h)
-    return f"{headings}\n{content}" if headings else content
+    return with_title(f"{headings}\n{content}" if headings else content, title)
 
 
 # BM25 term-frequency saturation (Robertson k1, b) and the average chunk length in tokens

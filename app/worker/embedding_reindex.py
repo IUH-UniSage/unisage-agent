@@ -33,7 +33,7 @@ from app.core.security.redaction import safe_error_message
 from app.core.usage.usage_recorder import UsageRecorder
 from app.integrations.backend_java_client import BackendJavaClient, BackendJavaHTTPError
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder_for
-from app.rag.retrieval.lexical import lexical_text, sparse_vector
+from app.rag.retrieval.lexical import document_title, lexical_text, sparse_vector, with_title
 from app.rag.vectorstore import qdrant_store
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,11 @@ def sparse_of_payload(payload: dict[str, Any]) -> tuple[list[int], list[float]]:
     ingestion used (`app.worker.tasks.ingestion`): heading path + content."""
 
     return sparse_vector(
-        lexical_text(str(payload.get("content") or ""), list(payload.get("heading_path") or []))
+        lexical_text(
+            str(payload.get("content") or ""),
+            list(payload.get("heading_path") or []),
+            document_title(payload.get("object_key")),
+        )
     )
 
 
@@ -111,7 +115,8 @@ def embedding_texts(payload: dict[str, Any]) -> list[str]:
     content = str(payload.get("content") or "")
     summary = str(payload.get("summary") or "") or content
     questions = " ".join(str(q) for q in payload.get("questions") or []) or content
-    return [content, summary, questions]
+    title = document_title(payload.get("object_key"))
+    return [with_title(text, title) for text in (content, summary, questions)]
 
 
 async def run_embedding_reindex_once(
@@ -144,7 +149,9 @@ async def _run(claim: _Claim, backend: BackendJavaClient, qdrant: QdrantClient) 
         key = await _prepare_target(claim, backend, qdrant)
         progress.total = qdrant_store.count_points(qdrant, claim.source)
         await _report(claim, backend, progress)
-        if claim.rebuild:
+        # A rebuild keeps the live model; with EMBEDDING_REBUILD_REEMBED it also re-embeds
+        # (same model, new embedding texts - the document title added 29/10/2026).
+        if claim.rebuild and not settings.EMBEDDING_REBUILD_REEMBED:
             await _copy_collection(claim, backend, qdrant, key, progress)
         else:
             embedder = build_embedder_for(claim.credential, key)

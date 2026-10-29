@@ -46,12 +46,16 @@ class CrossEncoderOutcome:
 
 
 def passage_text(chunk: RetrievedChunk) -> str:
-    """What the cross-encoder reads for a chunk: its heading path, then its content -
-    the heading carries the table's subject (which programme level a fee row is for)."""
+    """What the cross-encoder reads for a chunk: the document's title, its heading path,
+    then its content. The heading carries the table's subject (which programme level a
+    fee row is for); the title carries what the chunk itself rarely repeats - the
+    organisation, the school year, the system ("Tổng đài 18008000" is only the answer
+    for the Ministry's registration system). Measured 29/10/2026 on the demo set: the
+    answer chunk reached the top 8 for 154/179 questions with the title, 144 without."""
 
-    if chunk.heading_path:
-        return " > ".join(chunk.heading_path) + "\n" + chunk.content
-    return chunk.content
+    title = source_title(chunk.source) if chunk.source else ""
+    parts = [f"Tài liệu: {title}" if title else "", " > ".join(chunk.heading_path or [])]
+    return "\n".join([*(part for part in parts if part), chunk.content])
 
 
 async def cross_encoder_rerank(

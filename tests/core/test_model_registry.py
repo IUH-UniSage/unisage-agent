@@ -205,3 +205,38 @@ async def test_init_model_registry_raises_when_chat_purpose_missing_entirely(
 
     with pytest.raises(ModelRegistryError):
         await init_model_registry(client=_client_with(handler))
+
+
+def test_a_denied_model_is_dropped_from_every_purpose(monkeypatch) -> None:
+    # 29/10/2026: no GPT during the eval - a saturated Gemini waits instead.
+    from app.core.config import settings
+    from app.core.registry.model_registry import denied_model
+
+    monkeypatch.setattr(settings, "LLM_MODEL_DENYLIST", "gpt")
+    assert denied_model("gpt-5-mini") and denied_model("GPT-4o")
+    assert not denied_model("gemini-3.1-flash-lite-preview")
+    assert not denied_model("text-embedding-3-small")
+    monkeypatch.setattr(settings, "LLM_MODEL_DENYLIST", "")
+    assert not denied_model("gpt-5-mini")
+
+
+def test_parse_snapshot_drops_denied_models(monkeypatch) -> None:
+    from app.core.config import settings
+    from app.core.registry.model_registry import parse_snapshot
+
+    def credential(cid: str, model: str) -> dict:
+        return {"id": cid, "revision": 1, "sourceType": "API", "provider": "x", "modelName": model}
+
+    monkeypatch.setattr(settings, "LLM_MODEL_DENYLIST", "gpt")
+    snapshot = parse_snapshot(
+        {
+            "version": 1,
+            "generatedAt": "2026-10-29T00:00:00Z",
+            "purposes": {
+                "CHAT": [credential("a", "gemini-3.1-flash-lite"), credential("b", "gpt-5-mini")],
+                "EMBEDDING": [credential("c", "text-embedding-3-small")],
+            },
+        }
+    )
+    assert [c.id for c in snapshot.credentials_for("CHAT")] == ["a"]
+    assert [c.id for c in snapshot.credentials_for("EMBEDDING")] == ["c"]

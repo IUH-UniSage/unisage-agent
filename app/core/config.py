@@ -125,6 +125,12 @@ class Settings(BaseSettings):
     # each batch of points is one embedding call (3 texts per point). ---
     EMBEDDING_REINDEX_POLL_INTERVAL_SECONDS: float = 15.0
     EMBEDDING_REINDEX_BATCH_SIZE: int = 32
+    # A `rebuild` run (same model) also re-embeds the dense vectors instead of copying them:
+    # for a change of the embedding texts (the document title added 29/10/2026).
+    EMBEDDING_REBUILD_REEMBED: bool = False
+    # Model-name substrings never used, whatever the registry lists (comma-separated, e.g.
+    # "gpt"); see `model_registry.denied_model`.
+    LLM_MODEL_DENYLIST: str = ""
     EMBEDDING_REINDEX_MAX_ATTEMPTS: int = 3
 
     # --- TAVILY_: web search API used by WebSearchNode when retrieval finds nothing for a

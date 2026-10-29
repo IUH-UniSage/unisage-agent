@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import threading
 from collections.abc import Callable, Collection, Sequence
@@ -16,6 +18,8 @@ from app.rag.retrieval.lexical import BM25_VECTOR, rrf_merge
 # `RetrievedChunk.metadata` so a floor can exempt it instead of trusting its stand-in score.
 LEXICAL_ONLY_FLAG = "lexical_only"
 from app.schemas.security import AcademicSecurityContext
+
+logger = logging.getLogger(__name__)
 
 # Per-query rank metadata written on the fused points (not stored in Qdrant).
 RRF_SCORE_KEY = "rrf_score"
@@ -169,13 +173,17 @@ def point_with_bm25(
     sparse vector: dense vectors as they are, `bm25` computed from the payload (heading path +
     content, like ingestion), payload copied with `payload_update` applied."""
 
-    from app.rag.retrieval.lexical import lexical_text, sparse_vector
+    from app.rag.retrieval.lexical import document_title, lexical_text, sparse_vector
 
     payload = {**(record.payload or {}), **(payload_update or {})}
     vectors = dict(record.vector) if isinstance(record.vector, dict) else {}
     dense = {name: cast(list[float], vectors[name]) for name in _VECTOR_NAMES if name in vectors}
     bm25 = sparse_vector(
-        lexical_text(str(payload.get("content") or ""), list(payload.get("heading_path") or []))
+        lexical_text(
+            str(payload.get("content") or ""),
+            list(payload.get("heading_path") or []),
+            document_title(payload.get("object_key")),
+        )
     )
     return models.PointStruct(
         id=record.id,
@@ -345,6 +353,30 @@ def search_chunks(
 SparseQuery = tuple[list[int], list[float]]
 
 
+def _log_requests(requests: Sequence[models.QueryRequest]) -> None:
+    """One line per Qdrant request: the vector searched, its size, the limit and the
+    permission filter - never the vector itself (thousands of floats per request)."""
+
+    for index, request in enumerate(requests, start=1):
+        query = request.query
+        if isinstance(query, models.SparseVector):
+            size = f"sparse terms={len(query.indices)}"
+        elif isinstance(query, list):
+            size = f"dense dim={len(query)}"
+        else:
+            size = type(query).__name__
+        flt = request.filter.model_dump(exclude_none=True) if request.filter else None
+        logger.info(
+            "qdrant.request %d/%d using=%s %s limit=%s filter=%s",
+            index,
+            len(requests),
+            request.using,
+            size,
+            request.limit,
+            json.dumps(flt, ensure_ascii=False, default=str),
+        )
+
+
 def search_chunks_batch(
     client: QdrantClient,
     *,
@@ -409,6 +441,7 @@ def search_chunks_batch(
             )
             count += 1
         request_counts.append(count)
+    _log_requests(requests)
     try:
         responses = client.query_batch_points(collection_name=_name(collection), requests=requests)
     except UnexpectedResponse as exc:

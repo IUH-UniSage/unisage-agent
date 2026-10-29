@@ -93,7 +93,8 @@ async def test_each_sub_query_is_scored_with_its_own_question_concurrently() -> 
     )
 
     assert sorted(q for q, _ in client.calls) == ["q1", "q2"]
-    assert client.calls[0][1] == ["Học phí\na", "b"]  # heading path precedes the content
+    # The title, then the heading path, precede the content.
+    assert client.calls[0][1] == ["Tài liệu: a\nHọc phí\na", "Tài liệu: b\nb"]
     assert [c.chunk_id for c in outcome.result.per_query[0].chunks] == ["b"]
     assert [c.chunk_id for c in outcome.result.per_query[1].chunks] == ["b"]
     assert [c.chunk_id for c in outcome.result.chunks] == ["b"]
@@ -120,14 +121,19 @@ async def test_two_stage_mode_hands_the_llm_rerank_exactly_k_candidates_per_sub_
     assert [c.chunk_id for c in _candidate_chunks(outcome.result)] == ["d", "a"]
 
 
-def test_passage_text_puts_the_heading_path_before_the_content() -> None:
+def test_passage_text_puts_the_title_and_heading_path_before_the_content() -> None:
     chunk = RetrievedChunk(
         chunk_id="x",
         content="Khối Công nghệ 38.350.000",
-        source="s",
+        source="docs/3fa85f64-5717-4562-b3fc-2c963f66afa6_Quyet Dinh 1035 - Hoc phi.pdf",
         score=0.5,
         heading_path=["Học phí 2025", "3 Đại học chính quy"],
     )
 
-    assert passage_text(chunk) == "Học phí 2025 > 3 Đại học chính quy\nKhối Công nghệ 38.350.000"
-    assert passage_text(_B) == "b"
+    assert passage_text(chunk) == (
+        "Tài liệu: Quyet Dinh 1035 - Hoc phi\n"
+        "Học phí 2025 > 3 Đại học chính quy\n"
+        "Khối Công nghệ 38.350.000"
+    )
+    no_title = RetrievedChunk(chunk_id="y", content="b", source="", score=0.5)
+    assert passage_text(no_title) == "b"

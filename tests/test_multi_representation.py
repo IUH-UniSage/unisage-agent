@@ -512,3 +512,32 @@ async def test_enrich_called_from_a_running_event_loop_still_records_usage(
     assert result.summary == "ok"
     assert len(captured_outbox) == 1
     assert captured_outbox[0]["status"] == "SUCCESS"
+
+
+def test_the_enricher_reads_the_document_title_and_section_first() -> None:
+    # 29/10/2026: without them the questions only describe the chunk ("số tổng đài là gì").
+    from app.rag.enrichment.multi_representation import enrich_input
+    from app.schemas.ingestion import Chunk, RegionType
+
+    chunk = Chunk(
+        chunk_index=0,
+        content="Tổng đài 18008000 nhánh số 2",
+        region_type=RegionType.TEXT,
+        heading_path=["2. Tổng quan", "2.2. Đầu mối hỗ trợ"],
+    )
+    assert enrich_input(chunk, "Hướng dẫn đăng ký xét tuyển 2025") == (
+        "<document>Hướng dẫn đăng ký xét tuyển 2025</document>\n"
+        "<section>2. Tổng quan > 2.2. Đầu mối hỗ trợ</section>\n"
+        "Tổng đài 18008000 nhánh số 2"
+    )
+    assert enrich_input(Chunk(chunk_index=1, content="x", region_type=RegionType.TEXT)) == "x"
+
+
+def test_only_gemini_or_qwen_may_re_enrich() -> None:
+    from app.tools.reenrich import allowed_extraction_model
+
+    assert allowed_extraction_model("google", "gemini-3.1-flash-lite-preview")
+    assert allowed_extraction_model("openai", "Qwen3.8-Max-fast-agent")
+    assert not allowed_extraction_model("openai", "gpt-5-mini")
+    assert not allowed_extraction_model("google", "gpt-oss-120b")
+    assert not allowed_extraction_model("anthropic", "claude-haiku")
