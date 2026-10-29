@@ -66,6 +66,8 @@ QUOTA_HINTS = (
     "quota",
     "rate limit",
     "resource_exhausted",
+    # Every allowed credential busy (no fallback to a denied model): wait, do not record it.
+    "no available credential",
 )
 QUOTA = "quota"
 

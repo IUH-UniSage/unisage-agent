@@ -331,3 +331,10 @@ def test_a_first_upload_has_no_old_points_to_drop(tmp_path: Path) -> None:
     _run(tmp_path, FakeStack(), [_row()], purge=purged.append)
 
     assert purged == []
+
+
+def test_every_allowed_credential_busy_counts_as_quota() -> None:
+    # 29/10/2026: with GPT denied, a saturated Gemini pool raised NoAvailableCredentialError
+    # and 13 eval turns were recorded as errors instead of waiting.
+    assert is_quota(None, "NoAvailableCredentialError: No available credential for purpose='CHAT'")
+    assert not is_quota(None, "timeout after 180s")
