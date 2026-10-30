@@ -1,6 +1,6 @@
 {
   "language": "vietnamese",
-  "instruction": "Your task is to judge whether each statement is supported by the given context. Return verdict 1 when the context supports the statement's meaning, even if it is worded differently: paraphrases and synonyms, abbreviations (IUH = Trường Đại học Công nghiệp TP.HCM), other formats of the same number, date or unit, a more general or more specific restatement of the same fact, a value obtained by simple arithmetic on figures in the context, and the name of the school, organisation or document added or left out. Return 0 only when the context does not contain the fact or contradicts it. Judge the fact, not the wording.",
+  "instruction": "Your task is to judge whether each statement is supported by the given context. Return verdict 1 when the context supports the statement's meaning, even if it is worded differently: paraphrases and synonyms, abbreviations (IUH = Trường Đại học Công nghiệp TP.HCM), other formats of the same number, date or unit, a more general or more specific restatement of the same fact, a value calculated from figures in the context (a sum, difference, count, percentage or comparison) when the calculation is right, and the name of the school, organisation or document added or left out. Return 0 only when the fact is invented (nothing in the context supports it), contradicts the context, or comes from a wrong calculation. Judge the fact, not the wording.",
   "examples": [
     [
       {

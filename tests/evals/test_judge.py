@@ -53,7 +53,11 @@ def test_a_row_with_an_expected_answer_gets_every_answer_metric_and_refusal() ->
     tasks = {task.metric: task for task in judge_tasks.tasks_for(_row())}
 
     assert set(tasks) == {*judge_tasks.ANSWER_METRICS, "refusal"}
-    assert len(tasks["faithfulness"].inputs["retrieved_contexts"]) == judge_tasks.MAX_CONTEXTS
+    # The question comes first (a detail the answer repeats from it is not invented), then at
+    # most MAX_CONTEXTS chunks.
+    contexts = tasks["faithfulness"].inputs["retrieved_contexts"]
+    assert contexts[0].startswith("Câu hỏi của người dùng: ")
+    assert len(contexts) == judge_tasks.MAX_CONTEXTS + 1
     assert tasks["id_context_recall"].inputs == {
         "retrieved_context_ids": ["doc-a"],
         "reference_context_ids": ["doc-a", "doc-b"],
@@ -86,7 +90,7 @@ def test_an_answer_from_the_web_is_judged_against_the_fetched_pages() -> None:
     tasks = {task.metric: task for task in judge_tasks.tasks_for(row)}
 
     assert set(tasks) == {"web_faithfulness", "answer_coverage", "refusal"}
-    assert tasks["web_faithfulness"].inputs["retrieved_contexts"] == ["trang web"]
+    assert tasks["web_faithfulness"].inputs["retrieved_contexts"][1:] == ["trang web"]
 
 
 def test_failed_turns_get_no_metric_and_metrics_can_be_chosen() -> None:
@@ -527,3 +531,14 @@ def test_a_record_keeps_the_judge_steps_when_there_are_some() -> None:
 
     assert checkpoint.record_of(task, Score(0.5, steps=steps))["steps"] == steps
     assert "steps" not in checkpoint.record_of(task, Score(0.5))
+
+
+def test_the_grounding_caution_is_not_judged() -> None:
+    # 29/10/2026 (d0220): the line the grounding check appends was scored as an invented claim.
+    from evals.judge.tasks import judged_response
+
+    answer = (
+        "Học phần tiên quyết là 2111452 [1].\n\n> Lưu ý: con số 2111443 không tìm thấy trong tài"
+        " liệu được trích dẫn, bạn kiểm tra lại với đơn vị phụ trách trước khi dùng."
+    )
+    assert judged_response(answer) == "Học phần tiên quyết là 2111452 [1]."
