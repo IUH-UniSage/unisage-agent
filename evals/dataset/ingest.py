@@ -72,6 +72,17 @@ QUOTA_HINTS = (
 QUOTA = "quota"
 
 
+def is_eval_collection(collection: str) -> bool:
+    """A collection this tool may delete points from: an eval name, or one listed in
+    EVAL_EXTRA_COLLECTIONS (comma-separated) of the eval env - an explicit opt-in, e.g.
+    "unisage-official-chunks" (01/11/2026)."""
+
+    extra = {
+        c.strip() for c in os.environ.get("EVAL_EXTRA_COLLECTIONS", "").split(",") if c.strip()
+    }
+    return "eval" in collection or collection in extra
+
+
 def is_quota(code: object, message: object) -> bool:
     text = str(message or "").lower()
     return code in QUOTA_CODES or any(hint in text for hint in QUOTA_HINTS)
@@ -105,6 +116,24 @@ def _data(response: httpx.Response) -> Any:
     return body.get("data")
 
 
+class _ReloginAuth(httpx.Auth):
+    """Bearer auth that logs in again once when a request gets 401 - a full ingest runs for
+    hours, longer than the admin token lives."""
+
+    requires_request_body = True  # the retried request re-sends the same (multipart) body
+
+    def __init__(self, client: "UniSageClient", code: str, password: str) -> None:
+        self.client, self.code, self.password = client, code, password
+
+    def auth_flow(self, request: httpx.Request):
+        request.headers["Authorization"] = f"Bearer {self.client.token}"
+        response = yield request
+        if response.status_code == 401:
+            self.client.login(self.code, self.password)
+            request.headers["Authorization"] = f"Bearer {self.client.token}"
+            yield request
+
+
 @dataclass
 class UniSageClient:
     """Thin wrapper over the gateway: `/api/v1/master/**` (backend-java) and
@@ -115,10 +144,14 @@ class UniSageClient:
 
     def login(self, code: str, password: str) -> None:
         data = _data(
-            self.http.post("/api/v1/master/auth/login", json={"code": code, "password": password})
+            self.http.post(
+                "/api/v1/master/auth/login",
+                json={"code": code, "password": password},
+                auth=None,
+            )
         )
         self.token = data["accessToken"]
-        self.http.headers["Authorization"] = f"Bearer {self.token}"
+        self.http.auth = _ReloginAuth(self, code, password)
 
     def department_ids(self) -> dict[str, str]:
         """Department code (`departments.name`) -> UUID, over the whole tree."""
@@ -435,8 +468,11 @@ def qdrant_purge() -> Callable[[str], None]:
     from app.core.config import settings
 
     collection = settings.QDRANT_COLLECTION
-    if "eval" not in collection:
-        sys.exit(f"QDRANT_COLLECTION '{collection}' is not an eval collection: refusing to delete")
+    if not is_eval_collection(collection):
+        sys.exit(
+            f"QDRANT_COLLECTION '{collection}' is not an eval collection: refusing to delete"
+            " (name it with 'eval' or list it in EVAL_EXTRA_COLLECTIONS)"
+        )
     client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
 
     def purge(document_id: str) -> None:
