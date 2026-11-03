@@ -331,3 +331,45 @@ def test_a_first_upload_has_no_old_points_to_drop(tmp_path: Path) -> None:
     _run(tmp_path, FakeStack(), [_row()], purge=purged.append)
 
     assert purged == []
+
+
+def test_every_allowed_credential_busy_counts_as_quota() -> None:
+    # 29/10/2026: with GPT denied, a saturated Gemini pool raised NoAvailableCredentialError
+    # and 13 eval turns were recorded as errors instead of waiting.
+    assert is_quota(None, "NoAvailableCredentialError: No available credential for purpose='CHAT'")
+    assert not is_quota(None, "timeout after 180s")
+
+
+def test_a_collection_without_eval_in_its_name_needs_an_explicit_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evals.dataset.ingest import is_eval_collection
+
+    monkeypatch.delenv("EVAL_EXTRA_COLLECTIONS", raising=False)
+    assert is_eval_collection("unisage_eval_chunks")
+    assert not is_eval_collection("unisage-official-chunks")
+    assert not is_eval_collection("unisage_chunks")
+    monkeypatch.setenv("EVAL_EXTRA_COLLECTIONS", "unisage-official-chunks")
+    assert is_eval_collection("unisage-official-chunks")
+    assert not is_eval_collection("unisage_chunks")
+
+
+def test_client_logs_in_again_when_the_token_expires() -> None:
+    tokens = iter(["t1", "t2"])
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/master/auth/login":
+            assert "Authorization" not in request.headers
+            return httpx.Response(200, json={"code": 1000, "data": {"accessToken": next(tokens)}})
+        seen.append(request.headers["Authorization"])
+        if request.headers["Authorization"] == "Bearer t1":
+            return httpx.Response(401, json={"code": 1001, "message": "Unauthenticated"})
+        return httpx.Response(200, json={"code": 1000, "data": {"id": "doc-1"}})
+
+    http = httpx.Client(base_url="http://gw", transport=httpx.MockTransport(handler))
+    client = UniSageClient(http)
+    client.login("admin", "pw")
+
+    assert client.create_document({"title": "x"}, "x.pdf", b"%PDF")["id"] == "doc-1"
+    assert seen == ["Bearer t1", "Bearer t2"]

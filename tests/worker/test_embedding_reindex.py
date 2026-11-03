@@ -10,7 +10,11 @@ from app.core.config import settings
 from app.integrations.backend_java_client import BackendJavaHTTPError
 from app.rag.vectorstore import qdrant_store
 from app.worker import embedding_reindex
-from app.worker.embedding_reindex import embedding_texts, run_embedding_reindex_once
+from app.worker.embedding_reindex import (
+    embedding_texts,
+    run_embedding_reindex_once,
+    sparse_of_payload,
+)
 
 SOURCE = "unisage_chunks"
 TARGET = "unisage_chunks__20261017030000"
@@ -358,6 +362,35 @@ async def test_a_rebuild_copies_the_dense_vectors_and_adds_bm25_without_embeddin
     ]
 
 
+async def _same_dimension(fake: FakeEmbedder, texts: list[str]) -> list[list[float]]:
+    fake.calls.append(texts)
+    return [[float(len(text)), 1.0, 0.0, 0.0] for text in texts]
+
+
+@pytest.mark.asyncio
+async def test_a_rebuild_re_embeds_when_the_embedding_texts_changed(
+    qdrant: QdrantClient, embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EMBEDDING_REBUILD_REEMBED (29/10/2026, the document title added to the texts): the
+    live model re-embeds every point instead of copying its vectors; the run stays a rebuild
+    (same identity, Java only moves the pointer)."""
+
+    monkeypatch.setattr(settings, "EMBEDDING_REBUILD_REEMBED", True)
+    # Same model, same dimension as the live collection.
+    monkeypatch.setattr(
+        FakeEmbedder,
+        "embed_tracked",
+        lambda self, texts, *_: _same_dimension(self, texts),
+    )
+    backend = FakeBackend(claims=[_rebuild_claim()])
+
+    assert await run_embedding_reindex_once(backend=backend, qdrant=qdrant) is True  # type: ignore[arg-type]
+
+    assert embedder.calls
+    assert qdrant_store.count_points(qdrant, TARGET) == 5
+    assert backend.results[0]["succeeded"] is True
+
+
 @pytest.mark.asyncio
 async def test_a_rebuild_reconciles_points_added_meanwhile(
     qdrant: QdrantClient, embedder: FakeEmbedder
@@ -404,3 +437,26 @@ async def test_the_target_collection_carries_the_bm25_sparse_vector(
     )
     assert record.vector is not None and BM25_VECTOR in record.vector
     assert len(record.vector[BM25_VECTOR].indices) > 0
+
+
+def test_embedding_texts_start_with_the_document_title() -> None:
+    # 29/10/2026: the chunk rarely repeats the organisation or school year its title names.
+    payload = {
+        "content": "Tổng đài 18008000 nhánh số 2",
+        "summary": "Liên hệ hỗ trợ",
+        "questions": ["Gọi số nào?"],
+        "object_key": (
+            "demo/3fa85f64-5717-4562-b3fc-2c963f66afa6_Huong dan dang ky xet tuyen 2025.pdf"
+        ),
+    }
+    texts = embedding_texts(payload)
+    assert all(text.startswith("Tài liệu: Huong dan dang ky xet tuyen 2025\n") for text in texts)
+    assert texts[0].endswith("Tổng đài 18008000 nhánh số 2")
+
+
+def test_bm25_of_the_payload_counts_the_title_words() -> None:
+    from app.rag.retrieval.lexical import sparse_vector
+
+    with_title = sparse_of_payload({"content": "Tổng đài", "object_key": "Xet tuyen.pdf"})
+    plain = sparse_vector("Tổng đài")
+    assert len(with_title[0]) > len(plain[0])

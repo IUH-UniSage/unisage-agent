@@ -45,7 +45,8 @@ _TITLE_MIN_CHARS = 6
 _LETTERHEAD = re.compile(r"(?:BỘ |CỘNG HÒA|CỘNG HOÀ|TRƯỜNG ĐẠI HỌC|ĐẠI HỌC CÔNG NGHIỆP)")
 _TITLE_MAX_CHARS = 90
 _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\((\S+?)\)")
-_BARE_URL = re.compile(r"(?<!\()https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'\"]")
+# "*" and "`" end a URL: the model wraps addresses in bold or code ("**https://x.vn/**").
+_BARE_URL = re.compile(r"(?<!\()https?://[^\s<>()\[\]*`]*[^\s<>()\[\].,;:!?'\"*`]")
 
 
 def cited_indexes(response_text: str, source_count: int) -> list[int]:
@@ -83,12 +84,23 @@ def strip_source_list(response_text: str) -> str:
     return "\n".join(lines[:end]).rstrip()
 
 
-def keep_known_links(text: str, pages: Sequence[WebSearchResult]) -> str:
-    """Links the model wrote, pointed back at the pages it was given: a URL it retyped
-    with diacritics ("quoc-khánh") goes to that page again, any other one is dropped (the
-    link text stays). The model only copies URLs, so none it writes can be new."""
+# Markup left empty once a link inside it is dropped: "** **", "<u></u>", "``".
+_EMPTY_MARKUP = re.compile(r"\*\*\s*\*\*|__\s*__|<u>\s*</u>|`\s*`")
+
+
+def keep_known_links(
+    text: str, pages: Sequence[WebSearchResult], documents: Sequence[str] = ()
+) -> str:
+    """Links the model wrote, pointed back at the pages and document chunks it was given: a
+    URL it retyped with diacritics ("quoc-khánh") goes to that page again, any other one is
+    dropped (the link text stays). The model only copies URLs, so none it writes can be new.
+    `documents`: the chunk texts shown - their URLs are known too (29/10/2026: with web off
+    every address of a document, "https://exam.iuh.edu.vn/", was dropped, leaving "**")."""
 
     known = {_fold_url(page.url): page.url for page in pages}
+    for document in documents:
+        for found in _BARE_URL.findall(document or ""):
+            known.setdefault(_fold_url(found), found)
 
     def markdown(match: re.Match[str]) -> str:
         url = known.get(_fold_url(match.group(2)))
@@ -97,7 +109,7 @@ def keep_known_links(text: str, pages: Sequence[WebSearchResult]) -> str:
     def bare(match: re.Match[str]) -> str:
         return known.get(_fold_url(match.group(0)), "")
 
-    return _BARE_URL.sub(bare, _MARKDOWN_LINK.sub(markdown, text))
+    return _EMPTY_MARKUP.sub("", _BARE_URL.sub(bare, _MARKDOWN_LINK.sub(markdown, text)))
 
 
 def source_links_block(pages: Sequence[WebSearchResult], reply: str = "") -> str:

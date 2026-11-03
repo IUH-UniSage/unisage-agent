@@ -32,7 +32,7 @@ from app.core.usage.usage_recorder import UsageRecorder
 from app.integrations.backend_java_client import BackendJavaClient
 from app.rag.embeddings.provider import EmbeddingProvider, build_embedder
 from app.rag.enrichment.multi_representation import EnrichedChunk, MultiRepresentationEnricher
-from app.rag.retrieval.lexical import lexical_text, sparse_vector
+from app.rag.retrieval.lexical import document_title, lexical_text, sparse_vector, with_title
 from app.rag.vectorstore import qdrant_store
 from app.schemas.ingestion import Chunk
 from app.services.retrieval_cache_invalidation import invalidate_after_embed
@@ -182,6 +182,7 @@ async def _enrich_waiting_for_credentials(
     chunk: Chunk,
     recorder: UsageRecorder,
     budget_tracker: BudgetTracker,
+    title: str = "",
 ) -> EnrichedChunk:
     """`enrich_tracked`, but while every EXTRACTION credential is cooling down it waits
     `INGEST_EXTRACTION_CREDENTIAL_WAIT_SECONDS` and retries the same chunk, at most
@@ -190,7 +191,7 @@ async def _enrich_waiting_for_credentials(
     waits = 0
     while True:
         try:
-            return await enricher.enrich_tracked(chunk, recorder, budget_tracker)
+            return await enricher.enrich_tracked(chunk, recorder, budget_tracker, title=title)
         except NoAvailableCredentialError as exc:
             if waits >= settings.INGEST_EXTRACTION_MAX_CREDENTIAL_WAITS or not (
                 _is_temporary_exhaustion(exc)
@@ -359,15 +360,18 @@ async def _run_embed_chunks(
             try:
                 last_extraction_started = await _pause_between_extractions(last_extraction_started)
                 enriched = await _enrich_waiting_for_credentials(
-                    enricher, chunk, recorder, budget_tracker
+                    enricher, chunk, recorder, budget_tracker, document_title(object_key)
                 )
                 # Empty summary/questions (the enrichment fallback) would send an
                 # empty string to the embeddings API; fall back to the chunk's own
                 # content so every point still gets three valid vectors.
                 summary_text = enriched.summary or chunk.content
                 questions_text = " ".join(enriched.questions) or chunk.content
+                title = document_title(object_key)
                 content_vector, summary_vector, questions_vector = await embedder.embed_tracked(
-                    [chunk.content, summary_text, questions_text], recorder, budget_tracker
+                    [with_title(t, title) for t in (chunk.content, summary_text, questions_text)],
+                    recorder,
+                    budget_tracker,
                 )
                 chunk_id = f"{document_id}:{chunk.chunk_index}"
                 point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
@@ -381,7 +385,7 @@ async def _run_embed_chunks(
                         content=chunk.content,
                         summary=enriched.summary,
                         questions=enriched.questions,
-                        bm25=sparse_vector(lexical_text(chunk.content, chunk.heading_path)),
+                        bm25=sparse_vector(lexical_text(chunk.content, chunk.heading_path, title)),
                         department=department_id,
                         access_level=access_level,
                         is_public=is_public,

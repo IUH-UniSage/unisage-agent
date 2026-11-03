@@ -1,5 +1,6 @@
 """Which RAGAS metrics a `results.jsonl` row gets, and their inputs (`spec.md` §4)."""
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -82,6 +83,23 @@ def _contexts(items: Iterable[dict[str, Any]]) -> list[str]:
     return [text[:MAX_CONTEXT_CHARS] for text in texts if text][:MAX_CONTEXTS]
 
 
+# The caution the grounding check appends ("> Lưu ý: con số 7,5 không tìm thấy ... trước khi
+# dùng."): written by code, not by the model, so it is not a claim to judge.
+_CAUTION = re.compile(r"\n*> Lưu ý: con số .*? trước khi dùng\.", re.DOTALL)
+
+
+def judged_response(response: str) -> str:
+    return _CAUTION.sub("", response).strip()
+
+
+def with_question(question: str, contexts: list[str]) -> list[str]:
+    """Faithfulness reads the question too: a detail the answer repeats from it ("Tạp chí số
+    29 (2017)") is not invented, though the table of contents chunk does not repeat it
+    (29/10/2026: correct answers were scored 0)."""
+
+    return [f"Câu hỏi của người dùng: {question}", *contexts] if question else contexts
+
+
 def _unique(values: Iterable[Any]) -> list[str]:
     return [str(value) for value in dict.fromkeys(values) if value]
 
@@ -89,7 +107,7 @@ def _unique(values: Iterable[Any]) -> list[str]:
 def tasks_for(row: dict[str, Any], selected: Sequence[str] = METRICS) -> list[Task]:
     """The RAGAS inputs of one `results.jsonl` row (`spec.md` §4)."""
 
-    response = (row.get("response") or "").strip()
+    response = judged_response(row.get("response") or "")
     if row.get("error") or row.get("quota") or not response:
         return []
     key = row_key(row)
@@ -108,13 +126,18 @@ def tasks_for(row: dict[str, Any], selected: Sequence[str] = METRICS) -> list[Ta
             "web_faithfulness",
             user_input=question,
             response=response,
-            retrieved_contexts=_contexts(row.get("web_results") or []),
+            retrieved_contexts=with_question(question, _contexts(row.get("web_results") or [])),
         )
         if reference:
             add("answer_coverage", response=response, reference=reference)
     elif has_reference(row):
         contexts = _contexts(row.get("context") or [])
-        add("faithfulness", user_input=question, response=response, retrieved_contexts=contexts)
+        add(
+            "faithfulness",
+            user_input=question,
+            response=response,
+            retrieved_contexts=with_question(question, contexts),
+        )
         add("answer_coverage", response=response, reference=reference)
         add(
             "context_recall",

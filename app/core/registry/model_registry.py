@@ -153,13 +153,26 @@ def _parse_reindex(raw: dict[str, Any] | None) -> EmbeddingReindexRun | None:
     )
 
 
+def denied_model(model_name: str | None) -> bool:
+    """`LLM_MODEL_DENYLIST` (comma-separated, case-insensitive substrings, e.g. "gpt"): such a
+    credential is dropped from the snapshot, so no purpose ever selects it or fails over to it -
+    a saturated allowed model waits instead (29/10/2026: no GPT during the eval)."""
+
+    name = (model_name or "").casefold()
+    return any(term and term in name for term in settings.LLM_MODEL_DENYLIST.casefold().split(","))
+
+
 def parse_snapshot(payload: dict[str, Any]) -> ModelRegistrySnapshot:
     """Pure parse of the raw `GET /snapshot` JSON — no I/O, no startup-gate check, so it's cheap
     to unit test against a hand-built payload."""
 
     purposes_raw = payload.get("purposes") or {}
     purposes: dict[str, tuple[CredentialConfig, ...]] = {
-        purpose: tuple(_parse_credential(c) for c in credentials)
+        purpose: tuple(
+            credential
+            for credential in (_parse_credential(c) for c in credentials)
+            if not denied_model(credential.model_name)
+        )
         for purpose, credentials in purposes_raw.items()
     }
     return ModelRegistrySnapshot(

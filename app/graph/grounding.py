@@ -21,6 +21,7 @@ invented figures, not to prove correctness; `tests/graph/test_grounding.py` pins
 from __future__ import annotations
 
 import itertools
+import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -208,6 +209,24 @@ def _derivable(value: float, grounded: Sequence[float], in_answer: Sequence[floa
     return False
 
 
+_STEPS = (0.1, 0.25, 0.5)
+
+
+def _step_roundings(question: str, texts: Iterable[str]) -> list[float]:
+    """The question's numbers rounded to the nearest step a source or the question writes
+    ("làm tròn đến 0,5": 7,6 -> 7,5; 8,8 -> 9,0; 29/10/2026). Only those values: a figure
+    rounded the wrong way stays ungrounded. No code tool rounds, so strict mode keeps it."""
+
+    written = {v for text in texts for v in numbers_in(text).values()}
+    steps = [step for step in _STEPS if any(_close(step, v) for v in written)]
+    out: list[float] = []
+    for value in numbers_in(question).values():
+        for step in steps:
+            # Half up, the way the rules round ("từ 0,25 đến dưới 0,75 -> 0,5").
+            out.append(math.floor(value / step + 0.5 + 1e-9) * step)
+    return out
+
+
 def ungrounded_numbers(
     answer: str,
     sources: Iterable[str],
@@ -227,6 +246,7 @@ def ungrounded_numbers(
     for text in texts:
         source_values.update(numbers_in(text).values())
     source_values.update(_date_time_spans(texts, multiples=allow_derived))
+    source_values.update(_step_roundings(question, texts))
     grounded = sorted(source_values)
     out: list[str] = []
     # Two passes: a number derived from sources (a subtotal) can ground the next one

@@ -361,3 +361,27 @@ def test_a_bare_request_for_a_routed_formula_is_not_deferred() -> None:
         parse_extraction(raw, allowed=["gpa", "course_score"], question=question).formula_id
         == "none"
     )
+
+
+def test_an_arithmetic_question_asking_two_quantities_computes_both() -> None:
+    # Live 28/10/2026 (d0330): "tổng tiền phải trả và tổng tiền được giảm" got one block.
+    from app.calculation.arithmetic import arithmetic_results, evaluate
+
+    raw = (
+        '{"formula_id": "arithmetic", "params": {}, "arithmetic": ['
+        '{"expression": "(250000 - 60000) + (320000 - 80000)", "label": "Tổng tiền phải trả",'
+        ' "unit": "đồng"},'
+        ' {"expression": "60000 + 80000", "label": "Tổng tiền được giảm", "unit": "đồng"}]}'
+    )
+    extraction = parse_extraction(raw, allowed=[])
+    assert extraction.arithmetic is not None and len(extraction.more_arithmetic) == 1
+    pairs = [
+        (request, evaluate(request.expression))
+        for request in (extraction.arithmetic, *extraction.more_arithmetic)
+    ]
+    result = arithmetic_results(pairs, source="câu hỏi")
+    assert result.outputs == (
+        ("Tổng tiền phải trả", "430.000 đồng"),
+        ("Tổng tiền được giảm", "140.000 đồng"),
+    )
+    assert len(result.steps) == 2

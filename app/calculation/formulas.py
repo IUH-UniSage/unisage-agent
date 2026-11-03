@@ -924,6 +924,10 @@ class ParamSpec:
     # row this value is read from. Until every one of them is known, the value is never
     # taken from the documents - they are asked first, never assumed.
     selected_by: tuple[str, ...] = ()
+    # Other context that changes the value without being required before it is read
+    # (the campus: asked only when the documents list several): a follow-up that changes
+    # it looks the value up again.
+    repriced_by: tuple[str, ...] = ()
     # Choices offered for a text param when the documents list none.
     options: tuple[str, ...] = ()
 
@@ -1001,6 +1005,7 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             unit="đồng",
             lookup="mức thu học phí 01 tín chỉ môn lý thuyết, môn thực hành",
             selected_by=TUITION_ROW,
+            repriced_by=("co_so_hoc",),
         )
         for name, kind, short_kind in (
             ("don_gia_lt", "lý thuyết", "LT"),
@@ -1033,6 +1038,7 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             unit="đồng",
             lookup="mức thu học phí 01 tín chỉ môn QPAN giáo dục quốc phòng - an ninh",
             selected_by=TUITION_ROW,
+            repriced_by=("co_so_hoc",),
         ),
     ]
     context = [
@@ -1059,6 +1065,8 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
             tab_label="Khối ngành",
             kind="text",
             required=_never,
+            # The groups the fee schedule prices; free text ("cntt") was matched by guess.
+            options=("Khối Kinh tế", "Khối Công nghệ", "Ngành Dược"),
         ),
         ParamSpec(
             name="he_dao_tao",
@@ -1070,6 +1078,8 @@ def _tuition_params(scope: TuitionScope) -> tuple[ParamSpec, ...]:
                 "Đại học chính quy (chương trình chuẩn)",
                 "Đại học chính quy tăng cường tiếng Anh",
                 "Đại học liên thông, văn bằng 2",
+                "Cao học",
+                "Nghiên cứu sinh",
             ),
         ),
         ParamSpec(

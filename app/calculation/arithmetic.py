@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, DivisionByZero, InvalidOperation
 
@@ -291,6 +291,40 @@ def arithmetic_result(
         outputs=((request.label, shown),),
         summary=f"{request.label}: **{shown}**",
         values={"ket_qua": evaluation.value},
+        version=ARITHMETIC_VERSION,
+        source=source,
+    )
+
+
+def arithmetic_results(
+    pairs: Sequence[tuple[ArithmeticRequest, Evaluation]], *, source: str
+) -> CalculationResult:
+    """One block for every quantity the question asks ("tổng tiền phải trả và tổng tiền
+    được giảm", 29/10/2026): a line and an output per quantity."""
+
+    if len(pairs) == 1:
+        return arithmetic_result(*pairs[0], source=source)
+    single = [
+        arithmetic_result(request, evaluation, source=source) for request, evaluation in pairs
+    ]
+    labels = ", ".join(request.label for request, _ in pairs)
+    return CalculationResult(
+        formula_id=ARITHMETIC_ID,
+        title=f"{ARITHMETIC_TITLE}: {labels}",
+        formula_text=single[0].formula_text,
+        inputs=tuple(
+            (f"Số hạng {index}", plain(operand))
+            for index, operand in enumerate(
+                (o for _, evaluation in pairs for o in evaluation.operands), start=1
+            )
+        ),
+        steps=tuple(step for result in single for step in result.steps),
+        outputs=tuple(output for result in single for output in result.outputs),
+        summary="; ".join(result.summary for result in single),
+        values={
+            f"ket_qua_{index}": evaluation.value
+            for index, (_, evaluation) in enumerate(pairs, start=1)
+        },
         version=ARITHMETIC_VERSION,
         source=source,
     )

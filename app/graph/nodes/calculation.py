@@ -17,7 +17,7 @@ the arithmetic to the user (decision 26/10/2026: no LLM arithmetic in this node)
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any, Literal
@@ -31,7 +31,7 @@ from app.calculation.arithmetic import (
     ArithmeticError,
     ArithmeticRequest,
     Evaluation,
-    arithmetic_result,
+    arithmetic_results,
     evaluate,
     parse_request,
 )
@@ -156,6 +156,8 @@ class ArithmeticTask:
     query: str
     request: ArithmeticRequest
     evaluation: Evaluation
+    # The other quantities the same question asks (at most `ARITHMETIC_MAX - 1`).
+    more: tuple[tuple[ArithmeticRequest, Evaluation], ...] = ()
 
 
 Planned = PlannedTask | ArithmeticTask
@@ -180,6 +182,10 @@ class CalculationDeps:
     # What the student typed this turn (None on a panel answer): the task query is the
     # classifier's normalised rewrite, and a rewrite can lose a word like "không".
     user_message: str | None = None
+    # Profile fields the student corrected THIS turn (classifier `metadata_updates`, as
+    # saved): they win over the extractor's reading of the same message ("khoá 20" read as
+    # 2020 while the profile rightly says 2024).
+    profile_updates: Mapping[str, str | None] = field(default_factory=dict)
     trace: GraphTrace | None = None
     # AI-admin warnings raised while calculating, one per code.
     warnings: list[AdminWarning] = field(default_factory=list)
@@ -213,6 +219,11 @@ class Extraction:
     unknown: Unknown | None = None
     target: Target | None = None
     arithmetic: ArithmeticRequest | None = None
+    more_arithmetic: tuple[ArithmeticRequest, ...] = ()
+
+
+# Quantities one arithmetic question may ask at once (the advisory calc blocks allow 3 too).
+ARITHMETIC_MAX = 3
 
 
 def load_json_object(raw: str) -> dict[str, Any] | None:
@@ -299,11 +310,14 @@ def parse_extraction(
         else:
             return _none_extraction(params, data)
     if formula_id == "arithmetic":
-        request = parse_request(data.get("arithmetic"))
-        if request is None:
-            logger.warning("calculation.arithmetic_unreadable %r", data.get("arithmetic"))
+        raw = data.get("arithmetic")
+        items = raw if isinstance(raw, list) else [raw]
+        requests = [parse_request(item) for item in items[:ARITHMETIC_MAX]]
+        if not requests or any(request is None for request in requests):
+            logger.warning("calculation.arithmetic_unreadable %r", raw)
             return _none_extraction(params, data)
-        return Extraction("arithmetic", {}, None, arithmetic=request)
+        first, *rest = [request for request in requests if request is not None]
+        return Extraction("arithmetic", {}, None, arithmetic=first, more_arithmetic=tuple(rest))
     if formula_id not in BUILTIN_IDS:
         if len(routed) != 1:
             return _none_extraction(params, data)
@@ -643,6 +657,136 @@ def _amounts(text: str) -> set[int]:
     return {int(re.sub(r"\D", "", match)) for match in _AMOUNT.findall(text)}
 
 
+_BRANCHES = ("quảng ngãi", "thanh hóa", "thanh hoá")
+
+
+def _in_campus_section(campus: object, content: str, number: int) -> bool:
+    """A branch campus's price must be written after the branch's heading in the chunk:
+    the fee schedule lists the main campus first, and the model read the main campus's
+    2022 row for a Quảng Ngãi student (seen live 28/10/2026)."""
+
+    wanted = str(campus or "").casefold()
+    branch = next((name for name in _BRANCHES if name in wanted), None)
+    if branch is None:
+        return True
+    text = content.casefold()
+    start = min((at for name in _BRANCHES if (at := text.find(name)) >= 0), default=-1)
+    return start >= 0 and number in _amounts(content[start:])
+
+
+_WRONG_ROW = frozenset({"not under the campus heading", "not under the intake heading"})
+
+
+def _read_values(
+    formula_id: FormulaId,
+    data: Mapping[str, Any],
+    wanted_names: set[str],
+    chunks: Sequence[RetrievedChunk],
+    known: Mapping[str, JsonValue],
+    unconfirmed: Collection[str],
+) -> tuple[dict[str, JsonValue], dict[str, RetrievedChunk], list[str], list[str]]:
+    """The values kept from the model's reading, their chunks, the names rejected and,
+    among those, the ones read from another intake's or campus's row."""
+
+    values: dict[str, JsonValue] = {}
+    sources: dict[str, RetrievedChunk] = {}
+    rejected: list[str] = []
+    wrong_row: list[str] = []
+    raw_values = data.get("values")
+    for name, item in raw_values.items() if isinstance(raw_values, dict) else []:
+        if name not in wanted_names or not isinstance(item, dict):
+            continue
+        number = _whole_number(item.get("value"))
+        index = item.get("chunk")
+        spec = param_spec(formula_id, name)
+        reason = _value_rejection(number, index, spec, chunks, known, unconfirmed)
+        if reason is not None:
+            logger.info(
+                "calculation.document_value_rejected name=%s value=%r chunk=%r reason=%s",
+                name,
+                item.get("value"),
+                index,
+                reason,
+            )
+            rejected.append(name)
+            if reason in _WRONG_ROW:
+                wrong_row.append(name)
+            continue
+        assert isinstance(index, int)
+        values[name] = number
+        sources[name] = chunks[index - 1]
+    return values, sources, rejected, wrong_row
+
+
+def _reread_hint(known: Mapping[str, JsonValue]) -> str:
+    row = "; ".join(
+        f"{label}: {_intake_row(value) if name == 'khoa_nhap_hoc' else value}"
+        for name, label in (("khoa_nhap_hoc", "khoá"), ("co_so_hoc", "cơ sở"))
+        if (value := known.get(name))
+    )
+    return (
+        "\n<recheck>Số vừa đọc nằm ở dòng của khoá hoặc cơ sở khác. Đọc lại đúng dòng"
+        f" ({row or 'theo <known>'}), đúng mục tiêu đề của dòng đó.</recheck>"
+    )
+
+
+def _value_rejection(
+    number: int | None,
+    index: object,
+    spec: ParamSpec | None,
+    chunks: Sequence[RetrievedChunk],
+    known: Mapping[str, JsonValue],
+    unconfirmed: Collection[str],
+) -> str | None:
+    """Why a value the model read from the documents is not used (None: it is)."""
+
+    if number is None or spec is None:
+        return "not a whole number" if spec is not None else "unknown param"
+    if not isinstance(index, int) or not 1 <= index <= len(chunks):
+        return "no such chunk"
+    content = chunks[index - 1].content
+    if number not in _amounts(content):
+        return "not written in the chunk"
+    if not _in_range(spec, number):
+        return "out of range"
+    if any(selector in unconfirmed for selector in spec.selected_by):
+        return "row selector unconfirmed"
+    if not _in_campus_section(known.get("co_so_hoc"), content, number):
+        return "not under the campus heading"
+    if not _in_intake_section(known.get("khoa_nhap_hoc"), content, number):
+        return "not under the intake heading"
+    return None
+
+
+_SCHOOL_YEAR = re.compile(r"(20\d{2})\s*-\s*20\d{2}(\s*trở về trước)?")
+
+
+def _in_intake_section(intake: object, content: str, number: int) -> bool:
+    """A price must be written under the student's intake ("Khóa tuyển sinh năm học
+    2024-2025", or "2021-2022 trở về trước" for older intakes) when the chunk names intakes:
+    the model read the 2023 row for intake 2024 (seen live 29/10/2026). A row line counts
+    under the last "[...]" heading above it, which repeats its section path."""
+
+    year = re.search(r"20\d{2}", str(intake or ""))
+    if year is None or not _SCHOOL_YEAR.search(content):
+        return True
+    wanted = int(year.group(0))
+    heading = ""
+    for line in content.splitlines():
+        if line.startswith("[") and line.rstrip().endswith("]"):
+            heading = line
+            continue
+        if number not in _amounts(line):
+            continue
+        found = _SCHOOL_YEAR.findall(heading + " " + line)
+        if not found:
+            return True
+        start, older = found[-1]
+        if int(start) == wanted or (older and wanted <= int(start)):
+            return True
+    return False
+
+
 def _option_key(label: str) -> str:
     """ "Đại học chính quy (chương trình chuẩn)" and "Đại học chính quy" compare alike."""
 
@@ -697,13 +841,26 @@ def _value_prompt(
         **dict(deps.confirmed_metadata),
         **{name: str(value) for name, value in known.items() if isinstance(value, str)},
     }
-    known_lines = "; ".join(f"{name}: {value}" for name, value in context.items())
+    known_lines = "; ".join(
+        f"{name}: {_intake_row(value) if name == 'khoa_nhap_hoc' else value}"
+        for name, value in context.items()
+    )
     wanted_lines = "; ".join(f"{spec.name}: {spec.label}" for spec in wanted)
     return append_current_time(
         f"<question>{query}</question>\n<known>{known_lines or '(trống)'}</known>\n"
         f"<wanted>{wanted_lines}</wanted>\n<documents>\n{_documents(chunks)}\n</documents>",
         deps.confirmed_metadata,
     )
+
+
+def _intake_row(value: object) -> str:
+    """ "2024" -> "2024 (khóa tuyển sinh năm học 2024-2025)": with the bare year the model
+    read the 2023-2024 row for intake 2024 (seen live 28/10/2026)."""
+
+    text = str(value).strip()
+    if re.fullmatch(r"20\d{2}", text):
+        return f"{text} (khóa tuyển sinh năm học {text}-{int(text) + 1})"
+    return text
 
 
 async def fill_from_documents(
@@ -736,24 +893,6 @@ async def fill_from_documents(
     chunks = await _search(query, queries, deps)
     if not chunks:
         return DocumentValues()
-    try:
-        raw = await run_agent_text_with_failover(
-            build_value_extractor_agent(deps.models.classification),
-            _value_prompt(query, wanted, known, chunks, deps),
-            purpose="CHAT",
-            credential=deps.models.generation_credential,
-            snapshot_version=deps.models.snapshot_version,
-            agent_factory=build_value_extractor_agent,
-            on_failover=deps.on_failover,
-            on_attempt=deps.on_attempt,
-            budget=deps.budget,
-            timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
-        )
-    except Exception:
-        logger.warning("calculation.value_extractor_failed", exc_info=True)
-        return DocumentValues()
-
-    data = load_json_object(raw) or {}
     # The row of the documents is never guessed: a value whose row is not confirmed yet
     # (which intake, faculty group, training type, programme) is dropped and its
     # missing context is asked, whatever the model read.
@@ -763,29 +902,35 @@ async def fill_from_documents(
         if not _context_value(name, known, deps)
     ]
     wanted_names = {spec.name for spec in wanted}
-    values: dict[str, JsonValue] = {}
-    sources: dict[str, RetrievedChunk] = {}
-    rejected: list[str] = []
-    raw_values = data.get("values")
-    for name, item in raw_values.items() if isinstance(raw_values, dict) else []:
-        if name not in wanted_names or not isinstance(item, dict):
-            continue
-        number = _whole_number(item.get("value"))
-        index = item.get("chunk")
-        spec = param_spec(formula_id, name)
-        if (
-            number is None
-            or spec is None
-            or not isinstance(index, int)
-            or not 1 <= index <= len(chunks)
-            or number not in _amounts(chunks[index - 1].content)
-            or not _in_range(spec, number)
-            or any(selector in unconfirmed for selector in spec.selected_by)
-        ):
-            rejected.append(name)
-            continue
-        values[name] = number
-        sources[name] = chunks[index - 1]
+    prompt = _value_prompt(query, wanted, known, chunks, deps)
+    # One more read when a price came from another intake's or campus's row (live
+    # 29/10/2026: intake 2024 read the 2023 row): the student is not asked to type a
+    # price the documents hold. The extra call happens only on that mistake.
+    for attempt in range(2):
+        try:
+            raw = await run_agent_text_with_failover(
+                build_value_extractor_agent(deps.models.classification),
+                prompt,
+                purpose="CHAT",
+                credential=deps.models.generation_credential,
+                snapshot_version=deps.models.snapshot_version,
+                agent_factory=build_value_extractor_agent,
+                on_failover=deps.on_failover,
+                on_attempt=deps.on_attempt,
+                budget=deps.budget,
+                timeout_seconds=settings.CHAT_AUX_CALL_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            logger.warning("calculation.value_extractor_failed", exc_info=True)
+            return DocumentValues()
+        data = load_json_object(raw) or {}
+        values, sources, rejected, wrong_row = _read_values(
+            formula_id, data, wanted_names, chunks, known, unconfirmed
+        )
+        if attempt or not wrong_row:
+            break
+        logger.info("calculation.document_values_reread wrong_row=%s", wrong_row)
+        prompt += _reread_hint(known)
 
     asked: dict[str, object] = {}
     if wanted_names - set(values):
@@ -884,6 +1029,48 @@ def profile_params(formula_id: FormulaId, profile: Mapping[str, str]) -> dict[st
     }
 
 
+_SELF = re.compile(r"\b(tôi|em|mình)\b", re.IGNORECASE)
+_HYPOTHETICAL = re.compile(r"\b(nếu|giả sử|giả như|ví dụ|thì sao)\b", re.IGNORECASE)
+
+
+def declared_profile(task: PlannedTask, message: str) -> dict[str, str]:
+    """Profile fields the student stated about themselves in the calculation request
+    ("Tôi học ở phân hiệu Quảng Ngãi, khối Kinh tế... tính học phí"): the classifier often
+    leaves them out of `metadata_updates` (seen live 28/10/2026). Kept only when the value
+    is written in the message, never for a hypothetical ("nếu là khoá 2023...")."""
+
+    if not _SELF.search(message) or _HYPOTHETICAL.search(message):
+        return {}
+    return {
+        name: str(value)
+        for name, value in profile_params(
+            task.formula_id, {k: str(v) for k, v in task.params.items() if isinstance(v, str)}
+        ).items()
+        if _written(name, value, message)
+    }
+
+
+def _written(name: str, value: object, message: str) -> bool:
+    """Whether a profile-field value is written in the message ("2023" for the intake,
+    "khối công nghệ" for "Khối Công nghệ")."""
+
+    text = " ".join(message.casefold().split())
+    if name == "khoa_nhap_hoc":
+        year = _row_text(name, value)
+        return bool(year) and (year in text or year in _intake_numbers(text))
+    key = _option_key(str(value))
+    return bool(key) and key in text
+
+
+_INTAKE_NUMBER = re.compile(r"\b(?:k|khoá|khóa)\s*(\d{1,2})\b")
+
+
+def _intake_numbers(text: str) -> set[str]:
+    """IUH numbers its intakes from 2004: "K20", "khoá 20" -> "2024"."""
+
+    return {str(2004 + int(number)) for number in _INTAKE_NUMBER.findall(text)}
+
+
 async def builtin_task(
     task_id: str,
     formula_id: FormulaId,
@@ -949,12 +1136,116 @@ async def plan_calculation(task_id: str, query: str, deps: CalculationDeps) -> P
     # gave, even when the router picked another formula.
     assert formula_id is not None
     reusable = previous is not None and previous_formula(previous) is not None
+    earlier = _builtin_params(formula_id, previous.params) if reusable and previous else {}
+    extracted = _extracted_params(formula_id, extraction.params, deps, query, earlier)
     params = {
-        **(_builtin_params(formula_id, previous.params) if reusable and previous else {}),
+        **earlier,
         **profile_params(formula_id, deps.confirmed_metadata),
-        **extraction.params,
+        **extracted,
+        **{
+            name: value
+            for name, value in deps.profile_updates.items()
+            if value is not None and param_spec(formula_id, name) is not None
+        },
     }
+    # Only what the extractor changed counts as given this turn: it often echoes the whole
+    # previous calculation, prices included (28/10/2026, "tôi nhầm, tôi khoá 20" kept the
+    # 2022 prices), and an echoed price must not survive a change of row.
+    given = {name for name, value in extracted.items() if earlier.get(name) != value}
+    params = drop_stale_lookups(formula_id, earlier, params, keep=given)
     return PlannedTask(task_id, query, formula_id, params, extraction.unknown, extraction.target)
+
+
+def _extracted_params(
+    formula_id: FormulaId,
+    raw: Mapping[str, JsonValue],
+    deps: CalculationDeps,
+    query: str,
+    earlier: Mapping[str, JsonValue],
+) -> dict[str, JsonValue]:
+    """The extractor's params, without a looked-up value (a unit price) the student did
+    not write in this message: the extractor copies prices from the previous result or the
+    history (28/10/2026: the 2025 regular prices came back after a switch to the English
+    programme), and such a value must be read from the documents for the current row."""
+
+    message = deps.user_message or query
+    written = _amounts(message)
+    kept: dict[str, JsonValue] = {}
+    for name, value in raw.items():
+        spec = param_spec(formula_id, name)
+        # A profile value repeated from the previous calculation that the message does not
+        # state is an echo (of a hypothetical turn: "tính lại cho khoá và khối của tôi" kept
+        # "nếu là khoá 2023", seen 28/10/2026). A value new to this turn is a correction
+        # even when written differently ("khoá 20", "trụ sở chính TP.HCM").
+        own = deps.confirmed_metadata.get(name)
+        if (
+            own
+            and is_profile_field(name)
+            and _row_text(name, own) != _row_text(name, value)
+            and _row_text(name, earlier.get(name)) == _row_text(name, value)
+            and not _written(name, value, message)
+        ):
+            continue
+        if spec is not None and spec.lookup and spec.unit == "đồng":
+            number = _whole_number(value)
+            if number is None or number not in written:
+                continue
+        kept[name] = value
+    return kept
+
+
+def _whole_number(value: object) -> int | None:
+    """980000, 980000.0, "980.000", "980.000 đồng" -> 980000; anything else None."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        found = _amounts(value)
+        return next(iter(found)) if len(found) == 1 else None
+    return None
+
+
+def drop_stale_lookups(
+    formula_id: FormulaId,
+    earlier: Mapping[str, JsonValue],
+    params: Mapping[str, JsonValue],
+    *,
+    keep: set[str],
+) -> dict[str, JsonValue]:
+    """A follow-up that changes the row a value was read for ("tôi nhầm, tôi học cao
+    học", another intake or faculty group) must not reuse that value: the unit prices of
+    the old row are dropped and looked up again for the new one. A value the student
+    gave this turn (`keep`) stays."""
+
+    result = dict(params)
+    for spec in FORMULAS[formula_id].params:
+        selectors = (*spec.selected_by, *spec.repriced_by)
+        if not selectors or spec.name in keep or spec.name not in result:
+            continue
+        # A selector given only now counts as a change too: the value was read without it
+        # (the main campus assumed, then "tôi học ở phân hiệu Quảng Ngãi").
+        changed = any(
+            _row_text(name, earlier.get(name)) != _row_text(name, result.get(name))
+            for name in selectors
+            if earlier.get(name) is not None or result.get(name) is not None
+        )
+        if changed:
+            del result[spec.name]
+    return result
+
+
+def _row_text(name: str, value: object) -> str:
+    """A row selector as compared across turns: the intake by its year ("2025-2026" from a
+    panel and "2025" from the profile are the same row), anything else as folded text."""
+
+    text = " ".join(str(value or "").split()).casefold()
+    if name == "khoa_nhap_hoc" and (year := re.search(r"20\d{2}", text)):
+        return year.group(0)
+    return text
 
 
 def _plan_arithmetic(
@@ -964,36 +1255,45 @@ def _plan_arithmetic(
     whose every operand is a number of the question (or the raw message). Anything else
     goes to the advisory path, which may still request the sum over cited figures."""
 
-    request = extraction.arithmetic
-    assert request is not None
-    try:
-        evaluation = evaluate(request.expression)
-    except ArithmeticError as exc:
-        logger.warning("calculation.arithmetic_refused task=%s %s", task_id, exc)
-        return Deferred(task_id, query, None)
-    missing = missing_operands(evaluation.operands, [query, deps.user_message or ""])
-    if missing:
-        logger.info(
-            "calculation.arithmetic_deferred task=%s missing=%s",
-            task_id,
-            [plain(m) for m in missing],
+    assert extraction.arithmetic is not None
+    pairs: list[tuple[ArithmeticRequest, Evaluation]] = []
+    for request in (extraction.arithmetic, *extraction.more_arithmetic):
+        try:
+            evaluation = evaluate(request.expression)
+        except ArithmeticError as exc:
+            logger.warning("calculation.arithmetic_refused task=%s %s", task_id, exc)
+            return Deferred(task_id, query, None)
+        # A later quantity may use an earlier one's result ("tổng sau giảm" from "tổng giảm").
+        missing = missing_operands(
+            evaluation.operands,
+            [query, deps.user_message or ""],
+            known=[earlier.value for _, earlier in pairs],
         )
-        return Deferred(task_id, query, None)
-    logger.info(
-        "calculation.arithmetic task=%s expression=%r value=%s",
-        task_id,
-        evaluation.expression,
-        plain(evaluation.value),
-    )
-    return ArithmeticTask(task_id, query, request, evaluation)
+        if missing:
+            logger.info(
+                "calculation.arithmetic_deferred task=%s missing=%s",
+                task_id,
+                [plain(m) for m in missing],
+            )
+            return Deferred(task_id, query, None)
+        logger.info(
+            "calculation.arithmetic task=%s expression=%r value=%s",
+            task_id,
+            evaluation.expression,
+            plain(evaluation.value),
+        )
+        pairs.append((request, evaluation))
+    (request, evaluation), *more = pairs
+    return ArithmeticTask(task_id, query, request, evaluation, tuple(more))
 
 
 async def run_planned_task(task: Planned, deps: CalculationDeps) -> TaskOutcome:
     if isinstance(task, ArithmeticTask):
-        result = arithmetic_result(task.request, task.evaluation, source=ARITHMETIC_SOURCE_OWN)
+        pairs = [(task.request, task.evaluation), *task.more]
+        result = arithmetic_results(pairs, source=ARITHMETIC_SOURCE_OWN)
         params: dict[str, JsonValue] = {
-            "expression": task.evaluation.expression,
-            "label": task.request.label,
+            "expression": "; ".join(evaluation.expression for _, evaluation in pairs),
+            "label": "; ".join(request.label for request, _ in pairs),
             "unit": task.request.unit,
         }
         return Computed(task.task_id, result, CalculationPlan(formula_id="arithmetic"), params)

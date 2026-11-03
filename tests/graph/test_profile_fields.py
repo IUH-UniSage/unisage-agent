@@ -135,7 +135,7 @@ async def test_a_builtin_formula_reads_the_intake_from_the_profile_instead_of_as
 
     assert isinstance(outcome, Computed)
     assert outcome.params["khoa_nhap_hoc"] == "2022"
-    assert "khoa_nhap_hoc: 2022" in prompts[1]
+    assert "khoa_nhap_hoc: 2022 (khóa tuyển sinh năm học 2022-2023)" in prompts[1]
 
 
 @pytest.mark.asyncio

@@ -115,13 +115,19 @@ async def test_a_price_is_never_read_for_an_assumed_row() -> None:
     assert found.values == {} and found.row == ()
     assert [question["field"] for question in found.questions] == ["khoi_nganh", "he_dao_tao"]
     faculty, training = found.questions
-    assert [option["label"] for option in faculty["options"]] == ["Khối Kinh tế", "Khối Công nghệ"]
+    assert [option["label"] for option in faculty["options"]] == [
+        "Khối Kinh tế",
+        "Khối Công nghệ",
+        "Ngành Dược",
+    ]
     # One question for the training type and its programme: the fee schedule's sections.
     assert training["kind"] == "choice"
     assert [option["label"] for option in training["options"]] == [
         "Đại học chính quy (chương trình chuẩn)",
         "Đại học chính quy tăng cường tiếng Anh",
         "Đại học liên thông, văn bằng 2",
+        "Cao học",
+        "Nghiên cứu sinh",
     ]
 
 
@@ -157,7 +163,8 @@ async def test_several_intakes_ask_which_one_first() -> None:
     choice, text, training = found.questions
     assert choice["field"] == "khoa_nhap_hoc" and choice["kind"] == "choice"
     assert [option["label"] for option in choice["options"]] == ["2025-2026", "2024-2025"]
-    assert text["field"] == "khoi_nganh" and text["kind"] == "text"
+    # The faculty group is a choice of the fee schedule's groups, never free text ("cntt").
+    assert text["field"] == "khoi_nganh" and text["kind"] == "choice"
     assert training["field"] == "he_dao_tao"
 
 
@@ -270,5 +277,127 @@ async def test_training_type_choices_keep_the_fee_schedule_sections() -> None:
         "Đại học chính quy (chương trình chuẩn)",
         "Đại học chính quy tăng cường tiếng Anh",
         "Đại học liên thông, văn bằng 2",
-        "Cao học",
+        "Cao học",  # the document's "Cao học" repeats this one: listed once
+        "Nghiên cứu sinh",
     ]
+
+
+_CAMPUSES = RetrievedChunk(
+    chunk_id="hp:10",
+    content=(
+        "| 3.4 | - Khối Kinh tế [LT: 750.000, TH: 790.000] | 750.000 / 790.000 | 23.294.000 |\n"
+        "| B | PHÂN HIỆU QUẢNG NGÃI, CƠ SỞ THANH HÓA |  |  |\n"
+        "| 1.1 | Khóa tuyển sinh năm học 2025-2026 - Khối Kinh tế | 416.000 | 15.900.000 |"
+    ),
+    source="Quyet Dinh 1035 - Hoc phi 2025-2026",
+    score=0.9,
+)
+_BRANCH_ROW: dict[str, JsonValue] = {
+    "tc_lt": 12,
+    "tc_th": 4,
+    "khoa_nhap_hoc": "2025",
+    "khoi_nganh": "Khối Kinh tế",
+    "he_dao_tao": "Đại học chính quy",
+    "co_so_hoc": "Phân hiệu Quảng Ngãi",
+}
+
+
+@pytest.mark.asyncio
+async def test_a_branch_campus_price_comes_from_the_branch_section_only() -> None:
+    """28/10/2026: a Quảng Ngãi student was priced with the main campus's 2022 row."""
+
+    main_row = {
+        "values": {
+            "don_gia_lt": {"value": 750000, "chunk": 1},
+            "don_gia_th": {"value": 790000, "chunk": 1},
+        }
+    }
+    deps, _ = _deps(main_row, [_CAMPUSES])
+    found = await fill_from_documents("tuition_semester", "học phí", _BRANCH_ROW, deps)
+    assert found.values == {}
+
+    branch_row = {
+        "values": {
+            "don_gia_lt": {"value": 416000, "chunk": 1},
+            "don_gia_th": {"value": 416000, "chunk": 1},
+        }
+    }
+    deps, _ = _deps(branch_row, [_CAMPUSES])
+    found = await fill_from_documents("tuition_semester", "học phí", _BRANCH_ROW, deps)
+    assert found.values == {"don_gia_lt": 416000, "don_gia_th": 416000}
+
+
+_FEE_ROWS = """QUYẾT ĐỊNH: > MỨC THU HỌC PHÍ CÁC HỆ ĐÀO TẠO NĂM HỌC 2025 - 2026
+
+| TT | HỆ ĐÀO TẠO / KHÓA TUYỂN SINH | Mức thu 01 tín chỉ | Mức thu theo năm học |
+| --- | --- | --- | --- |
+[A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.2 Khóa tuyển sinh năm học 2024-2025]
+| 3.2 | - Khối Công nghệ [LT: 930.000, TH: 1.530.000] | 930.000 / 1.530.000 | 35.340.000 |
+[A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.3 Khóa tuyển sinh năm học 2023-2024]
+| 3.3 | - Khối Công nghệ [LT: 840.000, TH: 1.560.000] | 840.000 / 1.560.000 | 33.428.000 |
+[A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy]
+| 3.5 | Khóa tuyển sinh năm học 2021-2022 trở về trước |  |  |
+[A ĐỐI VỚI TRỤ SỞ CHÍNH > 3 Đại học chính quy > 3.5 Khóa tuyển sinh năm học 2021-2022 trở về trước]
+| 3.5 | - Khối Công nghệ [LT: 700.000, TH: 1.000.000] | 700.000 / 1.000.000 | 25.000.000 |
+"""
+
+
+def test_a_price_must_be_written_under_the_students_intake() -> None:
+    from app.graph.nodes.calculation import _in_intake_section
+
+    # Live 29/10/2026: intake 2024 read the 2023-2024 row (840.000 / 1.560.000).
+    assert _in_intake_section("2024", _FEE_ROWS, 930000)
+    assert _in_intake_section("2024", _FEE_ROWS, 1530000)
+    assert not _in_intake_section("2024", _FEE_ROWS, 840000)
+    assert not _in_intake_section("2024", _FEE_ROWS, 1560000)
+    assert _in_intake_section("2023", _FEE_ROWS, 1560000)
+    # "trở về trước" covers older intakes; a chunk naming no intake cannot be checked.
+    assert _in_intake_section("2019", _FEE_ROWS, 700000)
+    assert not _in_intake_section("2022", _FEE_ROWS, 700000)
+    assert _in_intake_section("2024", "| Khối Công nghệ | 840.000 |", 840000)
+    assert _in_intake_section(None, _FEE_ROWS, 840000)
+
+
+@pytest.mark.asyncio
+async def test_a_price_read_from_another_intakes_row_is_read_again() -> None:
+    # Live 29/10/2026: intake 2024 read the 2023 row; the student was then asked to type
+    # the prices. One more read naming the row finds them.
+    answers = [
+        {"values": {"don_gia_lt": {"value": 840000, "chunk": 1}}, "ask": []},
+        {"values": {"don_gia_lt": {"value": 930000, "chunk": 1}}, "ask": []},
+    ]
+    prompts: list[str] = []
+
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        prompts.append(str(getattr(messages[-1].parts[-1], "content", "")))
+        answer = answers[len(prompts) - 1]
+        return ModelResponse(parts=[TextPart(content=json.dumps(answer))])
+
+    model = FunctionModel(function=respond)
+    deps = CalculationDeps(
+        models=GraphModels(
+            classification=model,
+            query_transformation=model,
+            generation=model,
+            retrieval=_Retrieval(
+                [RetrievedChunk(chunk_id="hp:rows", content=_FEE_ROWS, source="QĐ 1035", score=0.9)]
+            ),
+        )
+    )
+    known: dict[str, JsonValue] = {
+        "tc_lt": 12,
+        "tc_th": 0,
+        "khoa_nhap_hoc": "2024",
+        "khoi_nganh": "Khối Công nghệ",
+        "he_dao_tao": "Đại học chính quy (chương trình chuẩn)",
+    }
+
+    found = await fill_from_documents("tuition_semester", "học phí", known, deps)
+
+    assert found.values.get("don_gia_lt") == 930000
+    assert len(prompts) == 2 and "<recheck>" in prompts[1] and "2024-2025" in prompts[1]
+    # A right first read costs no second call.
+    del answers[0]
+    prompts.clear()
+    found = await fill_from_documents("tuition_semester", "học phí", known, deps)
+    assert found.values.get("don_gia_lt") == 930000 and len(prompts) == 1

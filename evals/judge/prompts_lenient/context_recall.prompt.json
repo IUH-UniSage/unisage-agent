@@ -1,0 +1,69 @@
+{
+ "language": "vietnamese",
+ "instruction": "Given a context and an answer, analyze each statement in the answer and classify if the statement can be attributed to the given context or not.\nUse only binary classification: 1 if the statement can be attributed to the context, 0 if it cannot.\nProvide detailed reasoning for each classification.",
+ "examples": [
+  [
+   {
+    "question": "Bạn có thể cho tôi biết gì về Albert Einstein?",
+    "context": "Albert Einstein (14 tháng 3 năm 1879 - 18 tháng 4 năm 1955) là một nhà vật lý lý thuyết sinh ra tại Đức, được coi rộng rãi là một trong những nhà khoa học vĩ đại và có ảnh hưởng nhất mọi thời đại. Nổi tiếng nhất với việc phát triển thuyết tương đối, ông cũng có những đóng góp quan trọng cho cơ học lượng tử, và do đó là một nhân vật trung tâm trong cuộc tái định hình mang tính cách mạng về sự hiểu biết khoa học về tự nhiên mà vật lý hiện đại đã đạt được trong những thập kỷ đầu của thế kỷ hai mươi. Công thức tương đương khối lượng-năng lượng E = mc2 của ông, xuất phát từ thuyết tương đối, đã được gọi là 'phương trình nổi tiếng nhất thế giới'. Ông đã nhận giải Nobel Vật lý năm 1921 'vì những đóng góp của ông cho vật lý lý thuyết, và đặc biệt là vì khám phá ra định luật về hiệu ứng quang điện', một bước ngoặt trong sự phát triển của lý thuyết lượng tử. Công trình của ông cũng được biết đến với ảnh hưởng đối với triết học khoa học. Trong một cuộc thăm dò năm 1999 với 130 nhà vật lý hàng đầu trên toàn thế giới bởi tạp chí Physics World của Anh, Einstein được xếp hạng là nhà vật lý vĩ đại nhất mọi thời đại. Những thành tựu trí tuệ và sự độc đáo của ông đã khiến Einstein trở thành từ đồng nghĩa với thiên tài.",
+    "answer": "Albert Einstein, sinh ngày 14 tháng 3 năm 1879, là một nhà vật lý lý thuyết sinh ra tại Đức, được coi rộng rãi là một trong những nhà khoa học vĩ đại và có ảnh hưởng nhất mọi thời đại. Ông đã nhận giải Nobel Vật lý năm 1921 vì những đóng góp của ông cho vật lý lý thuyết. Ông đã xuất bản 4 bài báo vào năm 1905. Einstein chuyển đến Thụy Sĩ vào năm 1895."
+   },
+   {
+    "classifications": [
+     {
+      "statement": "Albert Einstein, sinh ngày 14 tháng 3 năm 1879, là một nhà vật lý lý thuyết sinh ra tại Đức, được coi rộng rãi là một trong những nhà khoa học vĩ đại và có ảnh hưởng nhất mọi thời đại.",
+      "reason": "Ngày sinh của Einstein được đề cập rõ ràng trong ngữ cảnh.",
+      "attributed": 1
+     },
+     {
+      "statement": "Ông đã nhận giải Nobel Vật lý năm 1921 vì những đóng góp của ông cho vật lý lý thuyết.",
+      "reason": "Câu chính xác có trong ngữ cảnh được đưa ra.",
+      "attributed": 1
+     },
+     {
+      "statement": "Ông đã xuất bản 4 bài báo vào năm 1905.",
+      "reason": "Không có đề cập nào về các bài báo ông đã viết trong ngữ cảnh được đưa ra.",
+      "attributed": 0
+     },
+     {
+      "statement": "Einstein chuyển đến Thụy Sĩ vào năm 1895.",
+      "reason": "Không có bằng chứng hỗ trợ cho điều này trong ngữ cảnh được đưa ra.",
+      "attributed": 0
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "question": "ai đã thắng icc world cup 2020?",
+    "context": "ICC Men's T20 World Cup 2022, được tổ chức từ ngày 16 tháng 10 đến ngày 13 tháng 11 năm 2022, tại Úc, là phiên bản thứ tám của giải đấu. Ban đầu được lên kế hoạch cho năm 2020, giải đấu đã bị hoãn lại do đại dịch COVID-19. Anh đã giành chiến thắng, đánh bại Pakistan với năm wicket trong trận chung kết để giành danh hiệu ICC Men's T20 World Cup thứ hai của họ.",
+    "answer": "Anh"
+   },
+   {
+    "classifications": [
+     {
+      "statement": "Anh",
+      "reason": "Ngữ cảnh làm rõ rằng Anh đã thắng phiên bản năm 2022 (vốn ban đầu được lên kế hoạch cho năm 2020).",
+      "attributed": 1
+     }
+    ]
+   }
+  ],
+  [
+   {
+    "question": "Ngọn núi cao nhất thế giới là gì?",
+    "context": "Andes là dãy núi lục địa dài nhất thế giới, nằm ở Nam Mỹ. Nó trải dài qua bảy quốc gia và có nhiều đỉnh núi cao nhất ở Tây Bán cầu. Dãy núi này nổi tiếng với các hệ sinh thái đa dạng, bao gồm Cao nguyên Andean ở độ cao lớn và rừng nhiệt đới Amazon.",
+    "answer": "Mount Everest."
+   },
+   {
+    "classifications": [
+     {
+      "statement": "Mount Everest.",
+      "reason": "Ngữ cảnh được cung cấp thảo luận về dãy núi Andes, không bao gồm Mount Everest hoặc liên quan trực tiếp đến ngọn núi cao nhất thế giới.",
+      "attributed": 0
+     }
+    ]
+   }
+  ]
+ ]
+}
