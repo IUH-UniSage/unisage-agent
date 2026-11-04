@@ -236,3 +236,31 @@ def test_a_correct_answer_with_extra_detail_covers_the_expected_answer(monkeypat
     coverage, precision, f1 = asyncio.run(metric.parts(response="A", reference="R"))
 
     assert (coverage, precision, f1) == (1.0, 0.0, 0.0)
+
+
+def test_coverage_counts_the_facts_the_question_asks_for() -> None:
+    # 03/11/2026 (q0113): a correct answer scored 0 by FactualCorrectness; the rubric reads the
+    # question and checks each fact of the expected answer.
+    class FakeLLM:
+        prompt = ""
+
+        async def agenerate(self, prompt: str, model: Any) -> Any:
+            FakeLLM.prompt = prompt
+            return model.model_validate(
+                {
+                    "facts": [
+                        {"fact": "14:00-17:00", "reason": "có", "verdict": 1},
+                        {"fact": "18/4/2026", "reason": "có", "verdict": 1},
+                        {"fact": "Research Room 3", "reason": "thiếu", "verdict": 0},
+                        {"fact": "tòa B", "reason": "có", "verdict": 1},
+                    ]
+                }
+            )
+
+    metric = judge_ragas.QuestionCoverage(FakeLLM())  # type: ignore[arg-type]
+    coverage, precision, f1 = asyncio.run(
+        metric.parts(response="A", reference="R", user_input="Đăng ký ở đâu, khi nào?")
+    )
+
+    assert coverage == 0.75 and math.isnan(precision) and math.isnan(f1)
+    assert "Đăng ký ở đâu, khi nào?" in FakeLLM.prompt and "Đáp án kỳ vọng:\nR" in FakeLLM.prompt

@@ -200,7 +200,10 @@ def recall_at_k(row: dict[str, Any], k: int = RECALL_K) -> bool | None:
     expected = set(row.get("expected_document_ids") or [])
     if not expected or row.get("expect_visible") is False:
         return None
-    return bool(expected & top_documents(row, k))
+    # Another document that answers the question just as well (an exact copy, a later
+    # extension notice) counts too (03/11/2026).
+    accepted = expected | set(row.get("alternative_document_ids") or [])
+    return bool(accepted & top_documents(row, k))
 
 
 def recall_all_at_k(row: dict[str, Any], k: int = RECALL_K) -> bool | None:

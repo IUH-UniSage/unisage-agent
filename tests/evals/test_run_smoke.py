@@ -140,6 +140,39 @@ def test_rescore_rereads_expected_document_ids_from_the_manifest(tmp_path: Path)
     assert rescored["checks"]["recall_at_5"] is True
 
 
+def test_rescore_rereads_what_the_question_expects(tmp_path: Path) -> None:
+    # 03/11/2026: expected answers and calculation labels fixed in questions.jsonl apply to a
+    # finished run; the question asked is kept.
+    row = {
+        "id": "q1",
+        "asked": "Câu cũ?",
+        "category": "calculation",
+        "expected_answer": "Cũ, kèm chi tiết không được hỏi.",
+        "expected_calculation": None,
+        "expected_doc_ids": [],
+        "response": "Tổng là 39 tín chỉ.",
+        "checks": {"outcome": ["rag"]},
+        "context": [],
+        "expect_visible": True,
+    }
+    (tmp_path / "results.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+    question = {
+        "id": "q1",
+        "question": "Câu mới?",
+        "expected_answer": "39 tín chỉ.",
+        "expected_calculation": "advisory",
+        "expected_numbers": [39],
+        "expected_doc_ids": [],
+    }
+
+    rescore(tmp_path, {}, {"q1": question})
+
+    rescored = json.loads((tmp_path / "results.jsonl").read_text(encoding="utf-8"))
+    assert rescored["expected_answer"] == "39 tín chỉ."
+    assert rescored["expected_calculation"] == "advisory"
+    assert rescored["asked"] == "Câu cũ?"
+
+
 class _FetchingService(FakeRetrievalService):
     def fetch(self, chunk_ids, *, security):  # type: ignore[no-untyped-def]
         return [CHUNK] if CHUNK.chunk_id in chunk_ids else []

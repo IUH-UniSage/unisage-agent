@@ -63,6 +63,7 @@ def test_a_row_with_an_expected_answer_gets_every_answer_metric_and_refusal() ->
         "reference_context_ids": ["doc-a", "doc-b"],
     }
     assert tasks["answer_coverage"].inputs == {
+        "user_input": _row()["asked"],
         "response": "Học phí là 15 triệu đồng mỗi học kỳ.",
         "reference": "15 triệu đồng mỗi học kỳ.",
     }
@@ -542,3 +543,43 @@ def test_the_grounding_caution_is_not_judged() -> None:
         " liệu được trích dẫn, bạn kiểm tra lại với đơn vị phụ trách trước khi dùng."
     )
     assert judged_response(answer) == "Học phần tiên quyết là 2111452 [1]."
+
+
+def test_lines_written_by_code_are_not_judged() -> None:
+    # 03/11/2026 (d0016, d0111, d0014): the profile update notice, the formula description
+    # of a calculation block and the current-semester sentence were scored as invented claims.
+    from evals.judge.tasks import judged_response
+
+    answer = (
+        "Mình đã cập nhật thông tin của bạn - khóa nhập học: 2025.\n\n"
+        "Tổng số đơn là kết quả tính ở bên dưới [1].\n\n"
+        "**Phép tính số học: Tổng số đơn**\n\n"
+        "Công thức:\n"
+        "- Cộng, trừ, nhân, chia các số liệu đã nêu; không áp dụng quy định hay hệ số nào\n"
+        "- _Phiên bản công thức 1 · nguồn: số liệu trích từ tài liệu [1]_\n\n"
+        "Thay số:\n1. Tổng số đơn: 27 + 42 = 69\n\n"
+        "Kết quả: Tổng số đơn: **69 đơn**\n\n"
+        '_Mình chưa tính được "tỷ lệ" từ các số liệu đã trích dẫn, bạn kiểm tra lại các con số'
+        " giúp mình nhé._\n\n"
+        "Theo lịch dự kiến của Trường, hiện là Học kỳ I năm học 2026-2027; lịch của khoa bạn có"
+        " thể khác, bạn kiểm tra lại giúp mình nhé."
+    )
+    judged = judged_response(answer)
+
+    assert judged == (
+        "Tổng số đơn là kết quả tính ở bên dưới [1].\n\n"
+        "**Phép tính số học: Tổng số đơn**\n\n"
+        "Thay số:\n1. Tổng số đơn: 27 + 42 = 69\n\n"
+        "Kết quả: Tổng số đơn: **69 đơn**"
+    )
+
+
+def test_the_judge_reads_each_chunk_with_its_document_title() -> None:
+    # 03/11/2026 (q0013): "Thông báo số 2" was in the chunk's title only.
+    from evals.judge.tasks import _contexts
+
+    chunks = [{"title": "Thông báo số 2", "content": "Hạn nộp 30/06/2020."}, {"content": "x"}]
+    assert _contexts(chunks) == [
+        "[Tài liệu: Thông báo số 2]\nHạn nộp 30/06/2020.",
+        "x",
+    ]
