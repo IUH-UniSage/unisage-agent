@@ -15,6 +15,7 @@ from app.rag.vectorstore.qdrant_store import (
     SparseQuery,
     build_access_filter,
     fetch_chunks_by_ids,
+    fetch_document_chunks,
     get_client,
     has_sparse_vector,
     search_chunks_batch,
@@ -169,10 +170,13 @@ class RetrievalService:
             query_filter=build_access_filter(security),
             sparse_queries=sparse_queries,
         )
-        return [
+        results = [
             [_to_retrieved_chunk(point, point.score) for point in points]
             for points in per_query_points
         ]
+        if settings.CHAT_RERANK_MODE in _EXPANDING_MODES and settings.CHAT_RETRIEVAL_EXPAND_DOCS:
+            results = expand_documents(client, results, build_access_filter(security))
+        return results
 
     def fetch(
         self,
@@ -187,6 +191,72 @@ class RetrievalService:
         client = self.client or get_client()
         records = fetch_chunks_by_ids(client, chunk_ids, build_access_filter(security))
         return [_to_retrieved_chunk(record, 1.0) for record in records]
+
+
+_EXPANDING_MODES = frozenset({"cross_encoder", "cross_encoder_then_llm"})
+EXPANDED_FLAG = "expanded_from_document"
+
+
+def expansion_targets(chunks: list[RetrievedChunk]) -> list[str]:
+    """Documents with at least EXPAND_MIN_HITS chunks among `chunks`, most hits first (ties
+    by first appearance), at most EXPAND_DOCS."""
+
+    hits: dict[str, int] = {}
+    for chunk in chunks:
+        document_id = chunk.metadata.get("document_id")
+        if document_id:
+            hits[document_id] = hits.get(document_id, 0) + 1
+    ranked = sorted(
+        (doc for doc, count in hits.items() if count >= settings.CHAT_RETRIEVAL_EXPAND_MIN_HITS),
+        key=lambda doc: -hits[doc],
+    )
+    return ranked[: settings.CHAT_RETRIEVAL_EXPAND_DOCS]
+
+
+def expand_documents(
+    client: QdrantClient, results: list[list[RetrievedChunk]], query_filter: Any
+) -> list[list[RetrievedChunk]]:
+    """Each sub-query's candidates plus the other chunks of its strongest documents (see
+    CHAT_RETRIEVAL_EXPAND_DOCS). An added chunk takes the lowest score its document's hits
+    have (never under the dense floor) and is flagged `expanded_from_document`."""
+
+    targets = [expansion_targets(chunks) for chunks in results]
+    wanted = sorted({doc for docs in targets for doc in docs})
+    if not wanted:
+        return results
+    cap = settings.CHAT_RETRIEVAL_EXPAND_MAX_DOC_CHUNKS
+    by_document: dict[str, list[Record]] = {}
+    for record in fetch_document_chunks(
+        client, wanted, query_filter, limit=(cap + 1) * len(wanted)
+    ):
+        by_document.setdefault(str((record.payload or {}).get("document_id")), []).append(record)
+    expanded: list[list[RetrievedChunk]] = []
+    for chunks, docs in zip(results, targets, strict=True):
+        present = {chunk.chunk_id for chunk in chunks}
+        added: list[RetrievedChunk] = []
+        for doc in docs:
+            records = by_document.get(doc, [])
+            if not records or len(records) > cap:
+                continue
+            floor = min(
+                (c.score for c in chunks if c.metadata.get("document_id") == doc), default=0.0
+            )
+            score = max(floor, settings.CHAT_RETRIEVAL_DENSE_FLOOR)
+            for record in sorted(records, key=_chunk_order):
+                chunk = _to_retrieved_chunk(record, score)
+                if chunk.chunk_id in present:
+                    continue
+                chunk.metadata[EXPANDED_FLAG] = True
+                present.add(chunk.chunk_id)
+                added.append(chunk)
+        expanded.append([*chunks, *added])
+    return expanded
+
+
+def _chunk_order(record: Record) -> tuple[int, str]:
+    chunk_id = str((record.payload or {}).get("chunk_id", ""))
+    tail = chunk_id.rsplit(":", 1)[-1]
+    return (int(tail) if tail.isdigit() else 0, chunk_id)
 
 
 def _log_timing(query_count: int, started_at: float, embedded_at: float) -> None:

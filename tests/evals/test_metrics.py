@@ -89,6 +89,13 @@ def test_recall_uses_the_first_five_context_chunks() -> None:
     assert recall_at_k(_row(expected_document_ids=[])) is None
 
 
+def test_recall_accepts_an_alternative_document() -> None:
+    # 03/11/2026 (d0056): an exact copy of the expected document ranked first.
+    other = [dict(PUBLIC, document_id="copy")]
+    assert recall_at_k(_row(context=other)) is False
+    assert recall_at_k(_row(context=other, alternative_document_ids=["copy"])) is True
+
+
 def test_numbers_accept_vietnamese_and_english_separators() -> None:
     assert {1200000.0, 7.5, 12.0} <= numbers_in("Học phí 1.200.000đ, điểm 7,5, tổng 12 tín chỉ")
     assert numbers_match([600000, 170000], "trả 600.000đ, giảm 170 000 đ")

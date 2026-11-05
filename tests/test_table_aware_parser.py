@@ -351,7 +351,9 @@ def test_pdf_overlong_heading_candidate_stays_body_text() -> None:
 
     fill_in = "1. Nganh: " + "." * 300 + " Ma nganh: " + "." * 100
     long_hash = "## " + "Noi dung in dam rat dai " * 20
-    pages = _pages(f"# Tieu de\n\n{fill_in}\n\n|A|B|\n|---|---|\n|1|2|\n\n{long_hash}\n\nKet thuc.\n")
+    pages = _pages(
+        f"# Tieu de\n\n{fill_in}\n\n|A|B|\n|---|---|\n|1|2|\n\n{long_hash}\n\nKet thuc.\n"
+    )
 
     with patch("pymupdf4llm.to_markdown", return_value=pages):
         regions = split_regions(make_pdf_bytes("x"), "form.pdf", "pdf")
@@ -517,9 +519,7 @@ def test_pdf_page_number_between_continued_tables_is_not_a_region() -> None:
     with patch("pymupdf4llm.to_markdown", return_value=pages):
         regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
 
-    assert [r.content.strip() for r in regions if r.region_type == RegionType.TEXT] == [
-        "Noi dung."
-    ]
+    assert [r.content.strip() for r in regions if r.region_type == RegionType.TEXT] == ["Noi dung."]
 
 
 def test_pdf_page_number_at_the_end_of_running_text_is_dropped() -> None:
@@ -601,3 +601,263 @@ def test_pdf_table_row_holding_only_the_running_header_is_dropped() -> None:
         regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
 
     assert all("KL7.0a" not in r.content for r in regions if r.region_type == RegionType.TABLE)
+
+
+# Page 14 of "Bản mô tả chương trình đào tạo đại học chính quy ngành Kiểm toán năm 2020.pdf",
+# exactly as pymupdf4llm reads it: section 7.1 is a borderless list of `label <tab> : value`
+# lines that the extractor turned into a 2-column table, with the section heading as its
+# header row and the next heading (`7.2`) swallowed as its last row (03/11/2026).
+_KIEM_TOAN_2020_P14 = (
+    "|**7.1 Khối lượng kiến thức toàn khóa**||\n"
+    "|---|---|\n"
+    "|- Tổng số tín chỉ của chương trình đào tạo|: 139 TC|\n"
+    "|- Tổng số tín chỉ không tính vào trung bình chung tích lũy|: 18 TC|\n"
+    "|- Tổng số tín chỉ phải tích lũy|: 139 TC|\n"
+    "|**Khối kiến thức giáo dục đại cương**|**: 48 TC**|\n"
+    "|**+**Bắt buộc|: 39 TC|\n"
+    "|+ Tự chọn|: 09 TC|\n"
+    "|**Kiến thức giáo dục chuyên nghiệp**|**: 91 TC**|\n"
+    "|-**_Khối kiến thức cơ sở ngành_**|**_: 32 TC_**|\n"
+    "|**+**Bắt buộc|: 21 TC|\n"
+    "|+ Tự chọn|: 11 TC|\n"
+    "|- Số tín chỉ thực hành: 40 TC-28%<br>Số tín chỉ lý thuyết: 98|TC-72%|\n"
+    "|**7.2 Kế hoạch đào tạo**||\n"
+    "\n\n\n"
+    "|**TT**|**Mã môn**|**Tên môn học**|**Số tín chỉ**|\n"
+    "|---|---|---|---|\n"
+    "|||**Học kỳ 1**|**17**|\n"
+    "|1|2112001|Triết học Mác - Lênin|3|\n"
+    "\n\n14 \n"
+)
+
+
+def test_pdf_key_value_pseudo_table_becomes_text_lines_under_its_heading() -> None:
+    pages = _pages("# 7. NỘI DUNG CHƯƠNG TRÌNH ĐÀO TẠO\n\nGiới thiệu.\n", _KIEM_TOAN_2020_P14)
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    tables = [r for r in regions if r.region_type == RegionType.TABLE]
+    assert all("Tổng số tín chỉ" not in r.content for r in tables)
+    section = [
+        r
+        for r in regions
+        if r.region_type == RegionType.TEXT
+        and r.heading_path[-1:] == ["7.1 Khối lượng kiến thức toàn khóa"]
+    ]
+    assert len(section) == 1
+    assert section[0].heading_path == [
+        "7. NỘI DUNG CHƯƠNG TRÌNH ĐÀO TẠO",
+        "7.1 Khối lượng kiến thức toàn khóa",
+    ]
+    assert section[0].page_start == 2
+    assert [line for line in section[0].content.splitlines() if line] == [
+        "- Tổng số tín chỉ của chương trình đào tạo: 139 TC",
+        "- Tổng số tín chỉ không tính vào trung bình chung tích lũy: 18 TC",
+        "- Tổng số tín chỉ phải tích lũy: 139 TC",
+        "Khối kiến thức giáo dục đại cương: 48 TC",
+        "+ Bắt buộc: 39 TC",
+        "+ Tự chọn: 09 TC",
+        "Kiến thức giáo dục chuyên nghiệp: 91 TC",
+        "- Khối kiến thức cơ sở ngành: 32 TC",
+        "+ Bắt buộc: 21 TC",
+        "+ Tự chọn: 11 TC",
+        "- Số tín chỉ thực hành: 40 TC-28%",
+        "Số tín chỉ lý thuyết: 98 TC-72%",
+    ]
+    # no heading text inside any region, and no `col_N` header anywhere
+    assert all("7.2 Kế hoạch đào tạo" not in r.content for r in regions)
+    assert all(
+        not any(name.startswith("col_") for name in (r.table.header_row or []))
+        for r in tables
+        if r.table is not None
+    )
+
+
+def test_pdf_heading_row_trailing_a_key_value_pseudo_table_heads_the_next_table() -> None:
+    pages = _pages("# 7. NỘI DUNG CHƯƠNG TRÌNH ĐÀO TẠO\n\nGiới thiệu.\n", _KIEM_TOAN_2020_P14)
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    tables = [r for r in regions if r.region_type == RegionType.TABLE]
+    assert len(tables) == 1
+    assert tables[0].heading_path == [
+        "7. NỘI DUNG CHƯƠNG TRÌNH ĐÀO TẠO",
+        "7.2 Kế hoạch đào tạo",
+    ]
+    assert tables[0].table is not None
+    assert tables[0].table.header_row == ["TT", "Mã môn", "Tên môn học", "Số tín chỉ"]
+
+
+def test_pdf_key_value_pseudo_table_without_a_heading_row_keeps_its_first_line() -> None:
+    # CNKT máy tính 2018: the extractor took the first `label : value` line as the header
+    pages = _pages(
+        "# 3. Khối lượng kiến thức toàn khoá\n\n"
+        "|- Tổng số tín chỉ của chương trình đào|:146 TC|\n"
+        "|---|---|\n"
+        "|- Tổng số tín chỉ không tính vào trung bình chung tích lũy|: 18 TC|\n"
+        "|- Tổng số tín chỉ phải tích lũy|: 128 TC|\n"
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert [r.region_type for r in regions] == [RegionType.TEXT]
+    assert regions[0].heading_path == ["3. Khối lượng kiến thức toàn khoá"]
+    assert regions[0].content.splitlines() == [
+        "- Tổng số tín chỉ của chương trình đào: 146 TC",
+        "- Tổng số tín chỉ không tính vào trung bình chung tích lũy: 18 TC",
+        "- Tổng số tín chỉ phải tích lũy: 128 TC",
+    ]
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        # a real two-column table with a header
+        "|Học phần|Số tín chỉ|\n|---|---|\n|Triết học|: 3|\n|Kinh tế chính trị|2|\n|Toán|3|\n",
+        # a key/value table whose values do not start with `:`
+        "|Course Outline||\n|---|---|\n|Credits|3|\n|Course description|Basic C|\n"
+        "|Pre-requisites||\n",
+        # too few rows to tell a list from a table
+        "|Mục||\n|---|---|\n|Tổng|: 139 TC|\n",
+        # three columns
+        "|A|B|C|\n|---|---|---|\n|x|: 1|y|\n|z|: 2|w|\n|u|: 3|v|\n",
+    ],
+)
+def test_pdf_ordinary_tables_are_not_read_as_key_value_lists(markdown: str) -> None:
+    pages = _pages("# 1. Muc\n\n" + markdown)
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert [r.region_type for r in regions] == [RegionType.TABLE]
+
+
+def test_pdf_key_value_lines_that_match_a_ruled_table_stay_a_table() -> None:
+    # geometry found a ruled table with this very text: the document drew it as a table
+    from app.rag.ingestion.table_evidence import EvidenceCell, EvidenceRow, TableEvidence
+
+    rows = [("Tổng số tín chỉ", ": 139 TC"), ("Bắt buộc", ": 39 TC"), ("Tự chọn", ": 09 TC")]
+    evidence = TableEvidence(
+        page_number=1,
+        bbox=(0, 0, 100, 100),
+        page_height=800,
+        rows=[
+            EvidenceRow(
+                cells=[EvidenceCell((0, i, 50, i + 1), a), EvidenceCell((50, i, 100, i + 1), b)],
+                y0=i,
+                y1=i + 1,
+            )
+            for i, (a, b) in enumerate(rows)
+        ],
+    )
+    markdown = "".join(
+        f"|{a}|{b}|\n" + ("|---|---|\n" if i == 0 else "") for i, (a, b) in enumerate(rows)
+    )
+    pages = _pages("# 1. Muc\n\n" + markdown)
+
+    with (
+        patch("pymupdf4llm.to_markdown", return_value=pages),
+        patch(
+            "app.rag.ingestion.table_aware_parser.collect_table_evidence",
+            return_value={1: [evidence]},
+        ),
+    ):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert [r.region_type for r in regions] == [RegionType.TABLE]
+
+
+def test_pdf_key_value_pseudo_table_pairs_lines_the_extractor_glued_into_one_row() -> None:
+    # CNKT hóa học 2022 glues two lines into one row; Tiến sĩ KHMT 2022 has a label that
+    # carries its own `:` before the value column's `:` (03/11/2026)
+    pages = _pages(
+        "# 3. Khối lượng kiến thức toàn khoá\n\n"
+        "|- Tổng số tín chỉ của chương trình đào tạo|:**162TC**|\n"
+        "|---|---|\n"
+        "|- Tổng số tín chỉ không tính vào trung bình chung tích lũy<br>"
+        "- Tổng số tín chỉ phải tích lũy|:**18TC**<br>:**162TC**|\n"
+        "|- Tổng số tín chỉ không tính vào trung bình chung tích lũy :|: 0 TC|\n"
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "doc.pdf", "pdf")
+
+    assert regions[0].content.splitlines() == [
+        "- Tổng số tín chỉ của chương trình đào tạo: 162TC",
+        "- Tổng số tín chỉ không tính vào trung bình chung tích lũy: 18TC",
+        "- Tổng số tín chỉ phải tích lũy: 162TC",
+        "- Tổng số tín chỉ không tính vào trung bình chung tích lũy: 0 TC",
+    ]
+
+
+def test_pdf_running_header_that_cites_a_document_is_kept_once() -> None:
+    """A running header can be the only place a fact is written (the form's issuing
+    letter, d0146): its first occurrence stays as text, the repeats are dropped."""
+
+    header = "Ban hành kèm theo Công văn số: 32 /HĐGSNN ngày 20/5/2021 của Chủ tịch HĐGS\n\n"
+    pages = _pages(
+        header + "# Mẫu số 01\n\nNội dung trang một.\n",
+        header + "Nội dung trang hai.\n",
+        header + "Nội dung trang ba.\n",
+    )
+
+    with patch("pymupdf4llm.to_markdown", return_value=pages):
+        regions = split_regions(make_pdf_bytes("x"), "form.pdf", "pdf")
+
+    text = "\n".join(r.content for r in regions)
+    assert text.count("32 /HĐGSNN") == 1
+    assert all("HĐGSNN" not in "".join(r.heading_path) for r in regions)
+
+
+def _table_region(header: list[str], rows: list[list[str]], page: int):
+    from app.rag.ingestion.canonical_table import build_table_from_plain_rows
+    from app.rag.ingestion.table_aware_parser import ParsedRegion
+    from app.schemas.ingestion import HeaderSource
+
+    table = build_table_from_plain_rows(header, rows, HeaderSource.INFERRED, 0.6, page=page)
+    return ParsedRegion(RegionType.TABLE, "", page_start=page, page_end=page, table=table)
+
+
+def test_a_banner_taken_for_the_header_gives_way_to_the_real_header_row() -> None:
+    """q0167: the page banner became the header (`col_4` for its empty cells) and the real
+    header was read as data, repeated on each page."""
+
+    from app.rag.ingestion.canonical_table import check_table_invariants
+    from app.rag.ingestion.table_aware_parser import _inherit_continuation_headers
+
+    real = ["STT", "Mã HP", "Tên học phần", "Học kỳ", "Số TC"]
+    region = _table_region(
+        ["Ngành: Ô tô", "Ngành: Ô tô", "Ngành: Ô tô", "Loại: Chính quy", "Loại: Chính quy"],
+        [real, ["1", "2113420", "Toán A1", "1", "2"], real, ["40", "2116406", "Động cơ", "5", "3"]],
+        page=1,
+    )
+
+    (fixed,) = _inherit_continuation_headers([region])
+
+    assert fixed.table.header_row == real
+    assert [row.cells[0] for row in fixed.table.rows] == ["Ngành: Ô tô", "1", "40"]
+    assert fixed.table.rows[2].cells[4] == "3"
+    assert check_table_invariants(fixed.table) == []
+
+
+def test_a_continuation_without_its_header_takes_the_header_of_the_table_before() -> None:
+    from app.rag.ingestion.canonical_table import check_table_invariants
+    from app.rag.ingestion.table_aware_parser import _inherit_continuation_headers
+
+    first = _table_region(["STT", "Đơn vị", "Người liên hệ"], [["1", "Phòng Đào tạo", "A"]], page=1)
+    cont = _table_region(
+        ["26", "Phòng Quản lý KTX", "0908657978"], [["27", "Phòng Dịch vụ", "B"]], page=2
+    )
+    far = _table_region(["9", "Phòng X", "0903"], [["10", "Phòng Y", "C"]], page=5)
+
+    _, fixed, untouched = _inherit_continuation_headers([first, cont, far])
+
+    assert fixed.table.header_row == ["STT", "Đơn vị", "Người liên hệ"]
+    assert [row.cells[1] for row in fixed.table.rows] == ["Phòng Quản lý KTX", "Phòng Dịch vụ"]
+    assert "header_inherited" in fixed.table.warnings
+    assert check_table_invariants(fixed.table) == []
+    # three pages away: not a continuation, left as it was
+    assert untouched.table.header_row == ["9", "Phòng X", "0903"]

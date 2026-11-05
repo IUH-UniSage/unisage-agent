@@ -79,17 +79,42 @@ def has_reference(row: dict[str, Any]) -> bool:
 
 
 def _contexts(items: Iterable[dict[str, Any]]) -> list[str]:
-    texts = [str(item.get("content") or "").strip() for item in items]
-    return [text[:MAX_CONTEXT_CHARS] for text in texts if text][:MAX_CONTEXTS]
+    """Each chunk with its document title first: the answer names the document ("Thông báo
+    số 2", "ngành Công nghệ thông tin") from the title the model saw, which the chunk text
+    does not repeat (03/11/2026: such answers were scored as invented)."""
+
+    texts = []
+    for item in items:
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        title = str(item.get("title") or "").strip()
+        texts.append(f"[Tài liệu: {title}]\n{content}" if title else content)
+    return [text[:MAX_CONTEXT_CHARS] for text in texts][:MAX_CONTEXTS]
 
 
-# The caution the grounding check appends ("> Lưu ý: con số 7,5 không tìm thấy ... trước khi
-# dùng."): written by code, not by the model, so it is not a claim to judge.
+# Lines written by code, not by the model, so they are not claims to judge (03/11/2026: each
+# of them was scored as an invented statement):
+# - the caution the grounding check appends ("> Lưu ý: con số 7,5 không tìm thấy ... trước
+#   khi dùng.", 29/10/2026);
+# - the profile update notice a reply opens with ("Mình đã cập nhật thông tin của bạn - ...");
+# - a calculation block's formula description and version ("Công thức:" up to "Thay số:" or
+#   "Kết quả:"), which come from the formula registry; its steps and result stay;
+# - the notice that a requested calculation was rejected ("_Mình chưa tính được ..._");
+# - the current-semester sentence the system prompt asks for ("Theo lịch dự kiến của
+#   Trường, hiện là ...").
 _CAUTION = re.compile(r"\n*> Lưu ý: con số .*? trước khi dùng\.", re.DOTALL)
+_UPDATE_NOTICE = re.compile(r"^[^\n]{0,40}đã cập nhật thông tin của [^\n]*\n*", re.MULTILINE)
+_FORMULA = re.compile(r"^Công thức:\n.*?(?=^(?:Thay số:|Kết quả:))", re.DOTALL | re.MULTILINE)
+_REJECTED = re.compile(r"^_Mình chưa tính được .*?_\s*$\n?", re.MULTILINE)
+_SEMESTER = re.compile(r"[^.\n]*Theo lịch dự kiến của Trường[^\n]*?(?:\.(?=\s|$)|$)")
 
 
 def judged_response(response: str) -> str:
-    return _CAUTION.sub("", response).strip()
+    text = _CAUTION.sub("", response)
+    for pattern in (_UPDATE_NOTICE, _FORMULA, _REJECTED, _SEMESTER):
+        text = pattern.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def with_question(question: str, contexts: list[str]) -> list[str]:
@@ -129,7 +154,7 @@ def tasks_for(row: dict[str, Any], selected: Sequence[str] = METRICS) -> list[Ta
             retrieved_contexts=with_question(question, _contexts(row.get("web_results") or [])),
         )
         if reference:
-            add("answer_coverage", response=response, reference=reference)
+            add("answer_coverage", user_input=question, response=response, reference=reference)
     elif has_reference(row):
         contexts = _contexts(row.get("context") or [])
         add(
@@ -138,7 +163,7 @@ def tasks_for(row: dict[str, Any], selected: Sequence[str] = METRICS) -> list[Ta
             response=response,
             retrieved_contexts=with_question(question, contexts),
         )
-        add("answer_coverage", response=response, reference=reference)
+        add("answer_coverage", user_input=question, response=response, reference=reference)
         add(
             "context_recall",
             user_input=question,

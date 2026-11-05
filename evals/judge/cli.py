@@ -101,6 +101,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="translate the RAGAS prompt examples to Vietnamese once and cache them",
     )
+    parser.add_argument(
+        "--coverage",
+        choices=("rubric", "ragas"),
+        default="rubric",
+        help=(
+            "answer_coverage: 'rubric' lists the facts the question asks for from the expected "
+            "answer and checks each (reads the question); 'ragas' is FactualCorrectness recall"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="estimate the cost and stop")
     parser.add_argument(
         "--explain",
@@ -238,6 +247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         adapt_prompts=args.adapt_prompts,
         embedder=embedder,
         embedding_model=plan["embedding_model"],
+        coverage=args.coverage,
     )
     run = JudgeRun(
         out=args.out,

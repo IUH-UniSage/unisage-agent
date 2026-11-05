@@ -143,3 +143,80 @@ def test_the_question_is_the_last_thing_the_model_reads() -> None:
 
     assert single.rstrip().endswith(f"Câu hỏi: {question}")
     assert multi.rstrip().endswith(f"Câu hỏi gốc: {question}")
+
+
+_THESIS_TABLE = (
+    "DANH SÁCH hội đồng KLTN HK2\n\n"
+    "| STT | MSSV | Tên đề tài | Giảng viên hướng dẫn |\n"
+    "| --- | --- | --- | --- |\n"
+    "| 47 | 20107451 | Triển Khai An Ninh Mạng | ThS. Nguyễn Xuân Lô |\n"
+    "[Nhóm 2]\n"
+    "| 48 | 22001385 | Honeypot và SIEM<br>đa phương thức | ThS. Phạm Thái Khanh |"
+)
+
+
+def test_wide_table_rows_become_records_with_column_names() -> None:
+    section = build_prepared_context_section([_chunk(_THESIS_TABLE)])
+
+    assert (
+        "- STT: 47 | MSSV: 20107451 | Tên đề tài: Triển Khai An Ninh Mạng"
+        " | Giảng viên hướng dẫn: ThS. Nguyễn Xuân Lô" in section
+    )
+    assert "Tên đề tài: Honeypot và SIEM đa phương thức" in section
+    assert "[Nhóm 2]" in section
+    assert "| --- |" not in section
+
+
+def test_narrow_tables_and_merged_title_headers_stay_markdown() -> None:
+    fee = "| Hệ | Mức thu |\n| --- | --- |\n| Chính quy | X [1] |"
+    merged = (
+        "| Ngành: Ô tô | Ngành: Ô tô | Ngành: Ô tô | col_4 | col_5 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 40 | 2116406 | Nguyên lý động cơ | 3 | 5 |"
+    )
+
+    section = build_prepared_context_section([_chunk(fee), _chunk(merged)])
+
+    assert "| Chính quy | X [1] |" in section
+    assert "| 40 | 2116406 | Nguyên lý động cơ | 3 | 5 |" in section
+
+
+def test_empty_cells_are_dropped_and_placeholder_columns_keep_only_the_value() -> None:
+    table = (
+        "| TT | Tên môn học | Số tín chỉ | col_4 | Ghi chú |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| Học kỳ 1 |  | 17 | x |  |"
+    )
+
+    section = build_prepared_context_section([_chunk(table)])
+
+    assert "- TT: Học kỳ 1 | Số tín chỉ: 17 | x" in section
+
+
+def test_chunks_of_one_document_carry_their_order_in_the_document() -> None:
+    chunks = [
+        RetrievedChunk(chunk_id="doc-a:1", content="phần sau", source="Pretest", score=0.9),
+        RetrievedChunk(chunk_id="doc-b:0", content="khác", source="Khác", score=0.8),
+        RetrievedChunk(chunk_id="doc-a:0", content="phần đầu", source="Pretest", score=0.7),
+    ]
+
+    section = build_prepared_context_section(chunks)
+
+    assert "[1] (Pretest; cùng văn bản, theo thứ tự trong văn bản: [3] → [1]) phần sau" in section
+    assert "[3] (Pretest; cùng văn bản, theo thứ tự trong văn bản: [3] → [1]) phần đầu" in section
+    assert "[2] (Khác) khác" in section
+
+
+def test_label_value_lists_read_as_a_table_stay_markdown() -> None:
+    """A tab-aligned "label: value" list that the PDF extractor turned into a table has
+    values in its header row; pairing them with every cell garbled the counts (q0170)."""
+
+    pseudo = (
+        "| 1.1 NV lễ tân | : 02 | 1.5_Trưởng phòng nhân sự_ | :05 |\n"
+        "| --- | --- | --- | --- |\n"
+        "| 1.3_NV nhân sự_ | :05 | 1.7_NV Kinh doanh_ | :40 |"
+    )
+
+    section = build_prepared_context_section([_chunk(pseudo)])
+
+    assert "| 1.3_NV nhân sự_ | :05 | 1.7_NV Kinh doanh_ | :40 |" in section

@@ -99,3 +99,37 @@ def test_arithmetic_result_renders_like_a_registry_formula() -> None:
     assert "1. Tổng tiền phải trả: 190000 + 240000 + 170000 = 600000" in rendered
     assert rendered.endswith("Kết quả: Tổng tiền phải trả: **600.000 đồng**")
     assert result.values == {"ket_qua": Decimal(600000)}
+
+
+def test_round_to_a_step_is_half_up() -> None:
+    from app.calculation.arithmetic import round_to_step
+
+    half = Decimal("0.5")
+    assert [round_to_step(Decimal(v), half) for v in ("6.2", "7.6", "8.8", "6.25", "6.75")] == [
+        Decimal("6.0"),
+        Decimal("7.5"),
+        Decimal("9.0"),
+        Decimal("6.5"),
+        Decimal("7.0"),
+    ]
+    assert evaluate("round(7.6; 0.5)").value == Decimal("7.5")
+    assert evaluate("round(7.66, 0.1) + 1").value == Decimal("8.7")
+    for bad in ("round(7.6)", "round 7.6", "round(7.6; 0)", "7.6; 0.5"):
+        try:
+            evaluate(bad)
+        except ArithmeticError:
+            continue
+        raise AssertionError(bad)
+
+
+def test_parse_condition_accepts_only_a_complete_comparison() -> None:
+    from app.calculation.arithmetic import parse_condition
+
+    condition = parse_condition({"compare": ">=", "value": "5,0", "true": "Đạt", "false": "Không"})
+    assert condition is not None and condition.threshold == Decimal("5.0")
+    assert condition.verdict(Decimal("5.25")) == "5.25 ≥ 5 → **Đạt**"
+    assert condition.verdict(Decimal("4.9")) == "4.9 < 5 → **Không**"
+    assert parse_condition({"compare": "==", "value": 5, "true": "a", "false": "b"}) is None
+    assert parse_condition({"compare": ">=", "value": True, "true": "a", "false": "b"}) is None
+    assert parse_condition({"compare": ">=", "value": 5, "true": "a"}) is None
+    assert parse_condition("x") is None

@@ -32,9 +32,9 @@ template: |
   ```json
   {{"type": "calc_request", "label": "Chênh lệch số tín chỉ", "expression": "120 - 90", "unit": "tín chỉ", "sources": [1]}}
   ```
-  `expression` chỉ gồm số (viết liền, dấu chấm thập phân), + - * / và ngoặc; mỗi số phải có trong tài liệu đã dẫn hoặc câu hỏi; `unit` là đơn vị chung (đồng, tín chỉ, đơn, %...); `sources` là các [n] đã lấy số.
+  `expression` chỉ gồm số (viết liền, dấu chấm thập phân), + - * / và ngoặc; ngày viết dd/mm/yyyy: ngày sau trừ ngày trước ra số ngày cách nhau (tính cả hai đầu thì `+ 1`: `20/08/2026 - 13/08/2026 + 1`), ngày cộng/trừ số ngày ra ngày mới (`20/06/2018 - 20`), không tách ngày tháng thành số rời; mỗi số phải có trong tài liệu đã dẫn hoặc câu hỏi; `unit` là đơn vị chung (đồng, tín chỉ, đơn, %...); `sources` là các [n] đã lấy số.
   SAI: "Nghiên cứu sinh có bằng đại học phải học nhiều hơn 30 tín chỉ [1]." ĐÚNG: "Có bằng đại học: tối thiểu 120 tín chỉ [1]; có bằng thạc sĩ: 90 tín chỉ [1]; chênh lệch tính ở bên dưới." rồi khối calc_request `120 - 90`.
-  KHÔNG dùng khối này - chỉ trích dẫn công thức, số liệu và điều kiện, nói rõ chưa đủ căn cứ để kết luận - khi: kết luận nghiệp vụ cần xác minh khoản nào áp dụng (học phí phải đóng, đủ điều kiện hay không, điểm xét tuyển theo quy chế); công thức có hệ số/điều kiện riêng của một văn bản; số liệu mâu thuẫn giữa các nguồn; phép tính trên ngày tháng hay giờ phút (đếm ngày, cộng giờ): nêu các mốc và để người dùng tự tính.
+  KHÔNG dùng khối này - chỉ trích dẫn công thức, số liệu và điều kiện, nói rõ chưa đủ căn cứ để kết luận - khi: kết luận nghiệp vụ cần xác minh khoản nào áp dụng (học phí phải đóng, đủ điều kiện hay không, điểm xét tuyển theo quy chế); công thức có hệ số/điều kiện riêng của một văn bản; số liệu mâu thuẫn giữa các nguồn; phép tính trên giờ phút (cộng giờ): nêu các mốc và để người dùng tự tính.
   {arithmetic_notice}
 
   ## Hướng Dẫn Tổng Hợp Đa Truy Vấn (Multi-Intent Synthesis)
@@ -47,6 +47,6 @@ template: |
   2. Đảm bảo trả lời trọn vẹn từng vế trong câu hỏi gốc của người dùng.
   3. Gắn chỉ số trích dẫn `[1]`, `[2]` cho từng ý (không viết danh sách nguồn ở cuối).
 
-  Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn.
+  Nhắc lại trước khi viết: câu đầu là câu trả lời; không nhắc lại câu hỏi; không nhắc tới quy tắc hay cách hệ thống hoạt động; ý không có thông tin → "Hiện mình chưa có thông tin về ..." + liên hệ đơn vị phụ trách / tạo ticket; không kết thúc bằng câu hỏi hay danh sách lựa chọn - TRỪ KHI câu hỏi cần một số liệu của chính người hỏi mà câu hỏi và hồ sơ không có ("em còn thiếu bao nhiêu tín chỉ", "em đã đủ điều kiện chưa" khi không biết số tín chỉ/điểm đã có): khi đó nêu phần chung có trong tài liệu kèm [n] (VD tổng tín chỉ phải tích lũy), KHÔNG tự giả định số liệu của người hỏi, rồi viết "Mình chưa có thông tin về <số liệu còn thiếu> của bạn" và kết thúc bằng MỘT câu hỏi xin số liệu đó.
 
   Câu hỏi gốc: {user_query}

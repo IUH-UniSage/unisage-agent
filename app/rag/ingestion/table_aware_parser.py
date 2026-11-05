@@ -20,7 +20,11 @@ from docx.text.paragraph import Paragraph as DocxParagraph
 from app.core.config import settings
 from app.core.errors.exceptions import UnsupportedFileTypeException
 from app.rag.ingestion.canonical_table import (
+    EventKind,
+    NormalizationEvent,
+    RowDisposition,
     TableBlock,
+    TableRow,
     build_table_from_plain_rows,
     normalize_for_compare,
 )
@@ -34,7 +38,7 @@ from app.rag.ingestion.table_merger import (
     merge_page_tables,
     reproject_columns,
 )
-from app.rag.ingestion.table_normalizer import build_page_table
+from app.rag.ingestion.table_normalizer import MARKDOWN_TABLE_SEPARATOR, build_page_table
 from app.rag.ingestion.table_normalizer import (
     markdown_row_cells as _markdown_row_cells,
 )
@@ -173,6 +177,25 @@ def _match_score(markdown_chars: Counter[str], rows: list[Counter[str]]) -> floa
         candidate += chars
     larger = max(sum(markdown_chars.values()), sum(candidate.values()), 1)
     return sum((markdown_chars & candidate).values()) / larger
+
+
+def _evidence_score(markdown_chars: Counter[str], candidate: TableEvidence) -> float:
+    """How well a geometric table holds the text of some markdown table lines,
+    allowing it up to `_EVIDENCE_EDGE_ROWS` extra rows at each end."""
+
+    row_chars = [
+        Counter(normalize_for_compare(" ".join(cell.text for cell in row.cells if cell)))
+        for row in candidate.rows
+    ]
+    return max(
+        (
+            _match_score(markdown_chars, row_chars[lead : len(row_chars) - trail])
+            for lead in range(_EVIDENCE_EDGE_ROWS + 1)
+            for trail in range(_EVIDENCE_EDGE_ROWS + 1)
+            if lead + trail < len(row_chars)
+        ),
+        default=0.0,
+    )
 
 
 def _heading_number(title: str) -> str | None:
@@ -326,6 +349,22 @@ def _plain_text(text: str) -> str:
     return " ".join(_MARKDOWN_EMPHASIS.sub("", _HTML_TAG.sub("", text)).split())
 
 
+_BOILERPLATE_KEEP_MIN_CHARS = 30
+_BOILERPLATE_KEEP_MIN_WORDS = 5
+
+
+def _informative_boilerplate(line: str) -> bool:
+    """A repeated line that cites something - a document number, a date ("Ban hành kèm theo
+    Công văn số 32/HĐGSNN ngày 20/5/2021") - not a letterhead name or a page counter."""
+
+    text = _plain_text(line)
+    return (
+        len(text) >= _BOILERPLATE_KEEP_MIN_CHARS
+        and len(text.split()) >= _BOILERPLATE_KEEP_MIN_WORDS
+        and any(char.isdigit() for char in text)
+    )
+
+
 def _only_boilerplate_cells(row: str, boilerplate_text: set[str]) -> bool:
     """A table row whose only text is a running header/footer the extractor
     pulled into the table (`|||...|KL7.0a|` under a page that prints `KL7.0a`
@@ -376,6 +415,120 @@ def _looks_like_pdf_heading(
     return False
 
 
+# A borderless `label <tab> : value` list (Kiểm toán 2020, mục 7.1, 03/11/2026) is read by
+# the extractor as a 2-column table whose header is the section heading (the second column
+# then named `col_2`), and it swallows the next heading as its last row. Such a "table" is
+# re-read as text lines when this share of its filled value cells (header row included -
+# the extractor may take the first `label : value` line as the header) starts with `:`.
+_KEY_VALUE_MIN_VALUES = 3
+_KEY_VALUE_MIN_SHARE = 0.6
+_LINE_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_GLUED_BULLET = re.compile(r"^([-+])(?=[^\s\d])")
+
+
+def _is_numbered_title(text: str) -> bool:
+    bare = _TITLE_LEAD_MARKS.sub("", text)
+    return bool(_heading_number(text) or _ROMAN_ORDINAL_TITLE.match(bare))
+
+
+def _list_line(text: str) -> str:
+    """`+Bắt buộc` (the bold `**+**` glued to its word) -> `+ Bắt buộc`."""
+
+    return _GLUED_BULLET.sub(r"\1 ", _plain_text(text))
+
+
+def _key_value_lines(
+    table_lines: list[str], page_evidence: list[TableEvidence]
+) -> list[str] | None:
+    """The text lines of a 2-column `label : value` pseudo-table, or None when the
+    lines are a real table. A row with only a numbered title in it (`7.1 ...`,
+    `7.2 ...`) is a section heading and comes back as a markdown heading line; a
+    value that starts with `:` is joined as `label: value`, any other value is
+    the tail of its label line, cut by the extractor (`98 | TC-72%`). Lines that a
+    ruled geometric table on the page holds are a table the document drew, and
+    stay one."""
+
+    rows = [
+        _markdown_row_cells(line)
+        for line in table_lines
+        if not MARKDOWN_TABLE_SEPARATOR.match(line.strip())
+    ]
+    if not rows or any(len(cells) != 2 for cells in rows):
+        return None
+    values = [_plain_text(value) for _label, value in rows if _plain_text(value)]
+    colon = [value for value in values if value.startswith(":")]
+    if len(values) < _KEY_VALUE_MIN_VALUES or len(colon) < _KEY_VALUE_MIN_SHARE * len(values):
+        return None
+    markdown_chars = Counter(normalize_for_compare(" ".join(table_lines)))
+    if any(
+        _evidence_score(markdown_chars, candidate) >= _EVIDENCE_MATCH_MIN
+        for candidate in page_evidence
+    ):
+        return None
+
+    lines: list[str] = []
+    for label, value in rows:
+        lines.extend(_key_value_row(label, value))
+    return lines
+
+
+def _key_value_row(label: str, value: str) -> list[str]:
+    label_lines = [line for line in (_list_line(part) for part in _LINE_BREAK.split(label)) if line]
+    value_lines = [
+        line for line in (_plain_text(part) for part in _LINE_BREAK.split(value)) if line
+    ]
+    if not value_lines:
+        if len(label_lines) == 1 and _is_numbered_title(label_lines[0]):
+            return [f"## {label_lines[0]}"]
+        return label_lines
+    if len(label_lines) > 1 and len(label_lines) == len(value_lines):
+        # two lines the extractor glued into one row (`a<br>b | :1<br>:2`)
+        return [
+            line
+            for pair in zip(label_lines, value_lines, strict=True)
+            for line in _key_value_row(*pair)
+        ]
+    value_text = " ".join(value_lines)
+    last = label_lines.pop() if label_lines else ""
+    if value_text.startswith(":"):
+        # the label may carry its own colon (`tích lũy : | : 0 TC`)
+        last = last.rstrip(": ")
+        value_text = value_text[1:].strip()
+        return [*label_lines, f"{last}: {value_text}" if last else value_text]
+    return [*label_lines, f"{last} {value_text}".strip()]
+
+
+def _rewrite_key_value_tables(
+    flat_lines: list[tuple[int, str]], evidence: dict[int, list[TableEvidence]]
+) -> list[tuple[int, str]]:
+    """`flat_lines` with every `label : value` pseudo-table (see `_key_value_lines`)
+    replaced by its text lines, so it is chunked as text under its own heading."""
+
+    output: list[tuple[int, str]] = []
+    index = 0
+    while index < len(flat_lines):
+        page_number, line = flat_lines[index]
+        end = index
+        while (
+            end < len(flat_lines)
+            and flat_lines[end][0] == page_number
+            and flat_lines[end][1].strip().startswith("|")
+        ):
+            end += 1
+        if end == index:
+            output.append((page_number, line))
+            index += 1
+            continue
+        table_lines = [text for _page, text in flat_lines[index:end]]
+        text_lines = _key_value_lines(table_lines, evidence.get(page_number, []))
+        if text_lines is None:
+            output.extend(flat_lines[index:end])
+        else:
+            output.extend((page_number, text) for text in text_lines)
+        index = end
+    return output
+
+
 def _regions_from_pdf_pages(
     pages: list[dict[str, object]],
     evidence: dict[int, list[TableEvidence]] | None = None,
@@ -424,16 +577,7 @@ def _regions_from_pdf_pages(
         for index, candidate in enumerate(candidates):
             if index in taken:
                 continue
-            row_chars = [
-                Counter(normalize_for_compare(" ".join(cell.text for cell in row.cells if cell)))
-                for row in candidate.rows
-            ]
-            score = max(
-                _match_score(markdown_chars, row_chars[lead : len(row_chars) - trail])
-                for lead in range(_EVIDENCE_EDGE_ROWS + 1)
-                for trail in range(_EVIDENCE_EDGE_ROWS + 1)
-                if lead + trail < len(row_chars)
-            )
+            score = _evidence_score(markdown_chars, candidate)
             if score > best_score:
                 best_index, best_score = index, score
         if best_index is None or best_score < _EVIDENCE_MATCH_MIN:
@@ -506,22 +650,35 @@ def _regions_from_pdf_pages(
         page_number = int(page["metadata"]["page_number"])  # type: ignore[index]
         page_text: str = page["text"]  # type: ignore[assignment]
         flat_lines.extend((page_number, line) for line in page_text.splitlines())
+    flat_lines = _rewrite_key_value_tables(flat_lines, evidence)
 
     page_number_lines = _find_pdf_page_number_lines(flat_lines, boilerplate)
     boilerplate_text = {_plain_text(line) for line in boilerplate}
 
     last_page_number = 0
+    kept_boilerplate: set[str] = set()
     for index, (page_number, line) in enumerate(flat_lines):
         stripped = line.strip()
         last_page_number = page_number
-        if stripped in boilerplate or index in page_number_lines:
+        if index in page_number_lines:
             continue
+        kept_once = False
+        if stripped in boilerplate:
+            # A running header can be the only place a fact is written: "Ban hành kèm theo
+            # Công văn số 32/HĐGSNN ngày 20/5/2021" heads every page of a form and nowhere
+            # else (d0146, 04/11/2026). Its first occurrence stays, as plain text.
+            if stripped in kept_boilerplate or not _informative_boilerplate(stripped):
+                continue
+            kept_boilerplate.add(stripped)
+            kept_once = True
         if stripped.startswith("|") and _only_boilerplate_cells(stripped, boilerplate_text):
             continue
 
-        heading_match = _MARKDOWN_HEADING.match(stripped)
-        is_promoted_heading = bool(_ORDINAL_LINE.match(stripped)) and _looks_like_pdf_heading(
-            stripped, flat_lines, index, boilerplate
+        heading_match = None if kept_once else _MARKDOWN_HEADING.match(stripped)
+        is_promoted_heading = (
+            not kept_once
+            and bool(_ORDINAL_LINE.match(stripped))
+            and _looks_like_pdf_heading(stripped, flat_lines, index, boilerplate)
         )
         raw_title = heading_match.group(2) if heading_match else stripped
         title = _clean_heading_title(raw_title)
@@ -731,6 +888,7 @@ def _finalize_pdf_tables(
         chain_layout[last_table] = _layout_of(region.table, evidence, None)
         between = []
 
+    output = _inherit_continuation_headers(output)
     table_number = 0
     finalized: list[ParsedRegion] = []
     for block_index, region in enumerate(output):
@@ -740,6 +898,201 @@ def _finalize_pdf_tables(
             table_number += 1
         finalized.append(replace(region, block_index=block_index, table=table))
     return finalized
+
+
+# A table that goes on over the next page without repeating its header, and that the merge
+# above does not join (a page title or banner between the two), comes out of the page parse
+# with its first row taken for the header: a data row (`3 | 2105871 | ...`), the page's
+# banner (`Ngành: ... | Loại đào tạo: ...`) or empty cells named `col_4`. Its chunks then
+# carry no real column names (q0167, 04/11/2026: 1050 chunks in 159 documents). Such a
+# table takes the header of the table right before it - same column count, on the same or
+# the previous page - and its own header rows are read back as data, so nothing is lost.
+_PLACEHOLDER_COLUMN = re.compile(r"^col_\d+$")
+_DATA_LIKE_CELL = re.compile(r"^[\d.,\s%()+-]+$")
+_DATA_LIKE_MIN_CELLS = 2
+_BANNER_MIN_COLUMNS = 3
+
+
+def _bad_header(header: list[str] | None) -> bool:
+    if not header:
+        return False
+    if any(_PLACEHOLDER_COLUMN.match(name) for name in header):
+        return True
+    names = [name.strip() for name in header if name.strip()]
+    if len(header) >= _BANNER_MIN_COLUMNS and len(set(names)) * 2 <= len(header):
+        return True  # one banner/group text spread over the columns
+    return sum(1 for name in header if _DATA_LIKE_CELL.match(name.strip())) >= _DATA_LIKE_MIN_CELLS
+
+
+# A table whose real header row the extractor read as data, under a banner it took for the
+# header (`Ngành: ... | Loại đào tạo: ...` over `STT | Mã HP | Tên học phần | ...`, the
+# real header then repeated on every page): the header-like row among its first rows
+# becomes the header, the banner stays as a data row, and the page repeats are dropped.
+_PROMOTE_SEARCH_ROWS = 3
+_HEADER_LIKE_MIN_FILLED = 0.6
+_HEADER_LIKE_MAX_MEAN_CHARS = 40
+
+
+def _header_text(cell: str) -> str:
+    return " ".join(_LINE_BREAK.sub(" ", cell).split())
+
+
+def _header_like(cells: list[str]) -> bool:
+    texts = [_header_text(cell) for cell in cells]
+    filled = [text for text in texts if text]
+    if not cells or len(filled) < _HEADER_LIKE_MIN_FILLED * len(cells):
+        return False
+    if any(_DATA_LIKE_CELL.match(text) for text in filled):
+        return False
+    if sum(len(text) for text in filled) / len(filled) > _HEADER_LIKE_MAX_MEAN_CHARS:
+        return False
+    return len(set(filled)) == len(filled)
+
+
+def _promote_header_row(table: TableBlock) -> TableBlock | None:
+    rows = table.canonical_rows()
+    width = len(table.header_row or [])
+    for position, row in enumerate(rows[:_PROMOTE_SEARCH_ROWS]):
+        if len(row.cells) != width or not _header_like(row.cells):
+            continue
+        # a source row that also feeds the promoted row is that row, not the banner
+        header_sources = [
+            s
+            for s in table.source_rows
+            if s.disposition == RowDisposition.HEADER and s.source_row_id not in row.source_row_ids
+        ]
+        header = [_header_text(cell) for cell in row.cells]
+        key = [normalize_for_compare(text) for text in header]
+        old_cells = next((list(s.cells) for s in header_sources if s.cells), None) or [
+            "" if _PLACEHOLDER_COLUMN.match(name) else name for name in table.header_row or []
+        ]
+        banner = TableRow(
+            cells=old_cells,
+            raw_text=" ".join(s.raw_text for s in header_sources),
+            page_start=rows[0].page_start if rows else None,
+            page_end=rows[0].page_start if rows else None,
+            confidence=0.8,
+            warnings=["header_demoted"],
+            source_row_ids=[s.source_row_id for s in header_sources],
+            source_cell_count=sum(s.source_cell_count for s in header_sources),
+            canonical_cell_count=width,
+        )
+        kept: list[TableRow] = [banner] if any(old_cells) and header_sources else []
+        promoted_ids = set(row.source_row_ids)
+        repeated_ids: list[str] = []
+        for index, other in enumerate(rows):
+            if index == position:
+                continue
+            if [normalize_for_compare(_header_text(cell)) for cell in other.cells] == key:
+                repeated_ids.extend(other.source_row_ids)
+                continue
+            kept.append(other)
+        new_index = {id(item): number for number, item in enumerate(kept, start=1)}
+        old_to_new = {
+            other.row_index: new_index[id(other)] for other in kept if other is not banner
+        }
+        renumbered = [replace(item, row_index=new_index[id(item)]) for item in kept]
+        sources = []
+        for source in table.source_rows:
+            source = replace(source, canonical_row_ids=list(source.canonical_row_ids))
+            if source.source_row_id in promoted_ids:
+                source.disposition = RowDisposition.HEADER
+                source.canonical_row_ids = []
+            elif source.source_row_id in repeated_ids:
+                source.disposition = RowDisposition.REPEATED_HEADER
+                source.canonical_row_ids = []
+            elif source.disposition == RowDisposition.HEADER:
+                source.disposition = (
+                    RowDisposition.DATA
+                    if kept and kept[0] is banner
+                    else (RowDisposition.DROPPED_EMPTY)
+                )
+                source.canonical_row_ids = [1] if kept and kept[0] is banner else []
+            else:
+                source.canonical_row_ids = [
+                    old_to_new[old] for old in source.canonical_row_ids if old in old_to_new
+                ]
+            sources.append(source)
+        events = list(table.normalization_events)
+        if repeated_ids:
+            events.append(
+                NormalizationEvent(
+                    EventKind.DROP_REPEATED_HEADER,
+                    repeated_ids,
+                    "header row repeated on a later page",
+                )
+            )
+        return replace(
+            table,
+            header_row=header,
+            header_levels=[header],
+            data_rows=[item.cells for item in renumbered],
+            rows=renumbered,
+            source_rows=sources,
+            normalization_events=events,
+            warnings=[*table.warnings, "header_promoted"],
+        )
+    return None
+
+
+def _with_header_cells(table: TableBlock) -> TableBlock:
+    """The header source rows with their cells set (a hand-built table leaves them empty):
+    what `merge_page_tables` restores as data."""
+
+    cells = ["" if _PLACEHOLDER_COLUMN.match(name) else name for name in table.header_row or []]
+    sources = [
+        replace(source, cells=list(cells))
+        if source.disposition == RowDisposition.HEADER and not source.cells
+        else source
+        for source in table.source_rows
+    ]
+    return replace(table, source_rows=sources)
+
+
+def _inherit_continuation_headers(regions: list[ParsedRegion]) -> list[ParsedRegion]:
+    output = list(regions)
+    for index, region in enumerate(output):
+        if region.table is not None and _bad_header(region.table.header_row):
+            promoted = _promote_header_row(region.table)
+            if promoted is not None:
+                output[index] = replace(region, table=promoted)
+    donor: int | None = None
+    for index, region in enumerate(output):
+        table = region.table
+        if region.region_type != RegionType.TABLE or table is None or not table.header_row:
+            continue
+        if donor is not None and _bad_header(table.header_row):
+            source = output[donor]
+            donor_table = source.table
+            assert donor_table is not None and donor_table.header_row is not None
+            adjacent = (region.page_start or 0) - (source.page_end or 0) in (0, 1)
+            if adjacent and len(donor_table.header_row) == len(table.header_row):
+                head = TableBlock(
+                    header_row=list(donor_table.header_row),
+                    data_rows=[],
+                    header_source=donor_table.header_source,
+                    header_confidence=min(donor_table.header_confidence, 0.7),
+                    # the donor's header rows are not in this table's ledger
+                    header_levels=[],
+                )
+                merged = merge_page_tables(head, _with_header_cells(table), header_present=False)
+                output[index] = replace(
+                    region,
+                    table=replace(
+                        merged,
+                        table_id=table.table_id,
+                        spilled_text=table.spilled_text,
+                        text_before=table.text_before,
+                        warnings=[*merged.warnings, "header_inherited"],
+                    ),
+                )
+                donor = index
+                continue
+        if not _bad_header(table.header_row):
+            donor = index
+        elif donor is not None and (region.page_start or 0) - (output[donor].page_end or 0) > 1:
+            donor = None
+    return output
 
 
 def _iter_docx_block_items(document: Document) -> list[DocxParagraph | DocxTable]:

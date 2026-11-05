@@ -167,6 +167,12 @@ def config_fingerprint(layer: Layer) -> str:
         "lexical_hit_score": settings.CHAT_RETRIEVAL_LEXICAL_HIT_SCORE,
         "rrf_k": settings.CHAT_RETRIEVAL_RRF_K,
         "candidates_multiplier": settings.CHAT_RETRIEVAL_HYBRID_CANDIDATES_MULTIPLIER,
+        # Same-document expansion and the cross-encoder's row windows (04/11/2026).
+        "expand_docs": settings.CHAT_RETRIEVAL_EXPAND_DOCS,
+        "expand_min_hits": settings.CHAT_RETRIEVAL_EXPAND_MIN_HITS,
+        "expand_max_doc_chunks": settings.CHAT_RETRIEVAL_EXPAND_MAX_DOC_CHUNKS,
+        "expand_keep": settings.CHAT_RETRIEVAL_EXPAND_KEEP,
+        "ce_window_chars": settings.CHAT_CROSS_ENCODER_WINDOW_CHARS,
     }
     if layer == "l1":
         parts.update(

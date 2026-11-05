@@ -1153,7 +1153,41 @@ async def plan_calculation(task_id: str, query: str, deps: CalculationDeps) -> P
     # 2022 prices), and an echoed price must not survive a change of row.
     given = {name for name, value in extracted.items() if earlier.get(name) != value}
     params = drop_stale_lookups(formula_id, earlier, params, keep=given)
+    if _marks_only_in_documents(formula_id, query, params):
+        # The extractor picked a day/hour count whose dates only a document states: asking
+        # the student for them is wrong (04/11/2026, q0055 "tổng cộng bao nhiêu ngày để nộp
+        # đề cương" asked back) - the advisory answer reads them and computes in code.
+        logger.info("calculation.deferred task=%s reason=marks_in_documents", task_id)
+        return Deferred(task_id, query, extraction.retrieval_query)
     return PlannedTask(task_id, query, formula_id, params, extraction.unknown, extraction.target)
+
+
+# Formulas over marks (dates, clock times) the student writes; a mark only a document
+# states is read by the advisory answer instead (calculation_extractor.yaml: "none").
+_MARK_IN_TEXT: dict[str, re.Pattern[str]] = {
+    "date_span": re.compile(r"(?<!\d)\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?(?!\d)"),
+    "time_span": re.compile(r"(?<!\d)\d{1,2}\s*(?:[:hg]|giờ)\s*\d{0,2}"),
+}
+
+
+# "chậm nhất phải công bố vào ngày nào": a date shifted by a document's rule, not a count
+# of days between two marks (04/11/2026, d0335 was asked for a second date).
+_ASKS_A_DATE = re.compile(
+    r"(?:vào|là|đến|tới|hạn)\s+ngày\s+(?:nào|mấy|bao nhiêu)|ngày\s+nào", re.IGNORECASE
+)
+
+
+def _marks_only_in_documents(
+    formula_id: FormulaId, query: str, params: Mapping[str, JsonValue]
+) -> bool:
+    pattern = _MARK_IN_TEXT.get(formula_id)
+    if pattern is None:
+        return False
+    if formula_id == "date_span" and _ASKS_A_DATE.search(query):
+        return True
+    if not missing_params(formula_id, params):
+        return False
+    return pattern.search(query) is None
 
 
 def _extracted_params(

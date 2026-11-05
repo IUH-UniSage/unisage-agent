@@ -21,3 +21,9 @@ tasks:
     dotenv: ['.env.{{.env}}', '.env']
     cmds:
       - '{{.UV_RUN}} evals.benchmark.evidence_study {{.CLI_ARGS}}'
+
+  pool:
+    desc: "Benchmark rerank chỉ retrieval từ bộ câu hỏi (không cần run): collect | ce | score. Vd task benchmark:pool env=eval -- collect --out benchmark_results/official-pool"
+    dotenv: ['.env.{{.env}}', '.env']
+    cmds:
+      - '{{.UV_RUN}} evals.benchmark.retrieval_pool {{.CLI_ARGS}}'

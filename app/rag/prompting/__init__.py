@@ -21,8 +21,8 @@ from app.schemas.web_search import WebSearchResult
 from .builder import (
     append_current_time,
     append_recent_history,
-    build_ask_user_form_guide,
     build_arithmetic_notice,
+    build_ask_user_form_guide,
     build_calculation_results_section,
     build_current_time_section,
     build_declared_attributes_section,
@@ -110,7 +110,7 @@ def build_system_prompt(
         ),
         user_query=render_resolved_user_query(user_query, resolved_query),
         calculation_results=build_calculation_results_section(calculation_titles),
-        arithmetic_notice=build_arithmetic_notice(arithmetic_notice),
+        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query),
     )
 
 
@@ -139,7 +139,7 @@ def build_multi_intent_prompt(
         sub_queries_list=render_sub_queries_list(sub_queries),
         user_query=user_query,
         calculation_results=build_calculation_results_section(calculation_titles),
-        arithmetic_notice=build_arithmetic_notice(arithmetic_notice),
+        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query),
     )
 
 

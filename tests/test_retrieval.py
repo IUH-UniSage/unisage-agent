@@ -254,3 +254,67 @@ def test_retrieve_never_lets_confirmed_metadata_widen_the_access_filter() -> Non
 
     signature = inspect.signature(RetrievalService.retrieve)
     assert "confirmed_metadata" not in signature.parameters
+
+
+def _hit(chunk_id: str, score: float):
+    from app.schemas.retrieval import RetrievedChunk
+
+    return RetrievedChunk(
+        chunk_id=chunk_id,
+        content=chunk_id,
+        source=f"{chunk_id.split(':')[0]}.pdf",
+        score=score,
+        metadata={"document_id": chunk_id.split(":")[0]},
+    )
+
+
+def _record(chunk_id: str):
+    from qdrant_client.http.models import Record
+
+    return Record(
+        id=chunk_id,
+        payload={"chunk_id": chunk_id, "document_id": chunk_id.split(":")[0], "content": chunk_id},
+    )
+
+
+def test_a_document_with_enough_hits_brings_its_other_chunks(monkeypatch) -> None:
+    """q0100: the course table's row chunk was not among the candidates though 8 other
+    chunks of its programme were; the rest of the programme joins for the cross-encoder."""
+
+    from unittest.mock import MagicMock
+
+    from app.core.config import settings
+    from app.rag.retrieval.service import EXPANDED_FLAG, expand_documents
+
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_EXPAND_DOCS", 1)
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_EXPAND_MIN_HITS", 2)
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_EXPAND_MAX_DOC_CHUNKS", 5)
+    client = MagicMock()
+    client.scroll.return_value = ([_record(f"plan:{i}") for i in range(4)], None)
+    hits = [_hit("plan:0", 0.8), _hit("other:3", 0.75), _hit("plan:2", 0.6)]
+
+    (result,) = expand_documents(client, [hits], query_filter=None)
+
+    assert [c.chunk_id for c in result] == ["plan:0", "other:3", "plan:2", "plan:1", "plan:3"]
+    added = result[3:]
+    assert all(c.metadata[EXPANDED_FLAG] for c in added)
+    assert all(c.score == 0.6 for c in added)  # the document's lowest hit
+    assert not any(EXPANDED_FLAG in c.metadata for c in result[:3])
+
+
+def test_a_long_document_or_a_single_hit_is_not_expanded(monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from app.core.config import settings
+    from app.rag.retrieval.service import expand_documents
+
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_EXPAND_DOCS", 2)
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_EXPAND_MIN_HITS", 2)
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_EXPAND_MAX_DOC_CHUNKS", 3)
+    client = MagicMock()
+    client.scroll.return_value = ([_record(f"big:{i}") for i in range(4)], None)
+    hits = [_hit("big:0", 0.8), _hit("big:1", 0.7), _hit("solo:1", 0.7)]
+
+    (result,) = expand_documents(client, [hits], query_filter=None)
+
+    assert result == hits

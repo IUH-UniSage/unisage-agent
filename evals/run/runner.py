@@ -191,6 +191,7 @@ def result_row(
         "evidence": question.get("evidence"),
         "expected_doc_ids": question.get("expected_doc_ids") or [],
         "expected_document_ids": expected_document_ids,
+        "alternative_document_ids": question.get("alternative_document_ids") or [],
         "expected_titles": expected_titles or [],
         "expected_numbers": question.get("expected_numbers"),
         "expected_web_outcome": question.get("expected_web_outcome"),
@@ -360,16 +361,37 @@ class Runner:
         return stop.is_set()
 
 
-def rescore(out: Path, manifest: dict[str, dict[str, str]]) -> None:
+# What a question expects, re-read by `rescore` so a fixed expected answer or label applies to
+# a finished run (03/11/2026); the question text is not: the answer was given to the old one.
+RESCORED_FIELDS = (
+    "expected_answer",
+    "expected_calculation",
+    "expected_numbers",
+    "expected_doc_ids",
+    "alternative_document_ids",
+)
+
+
+def rescore(
+    out: Path,
+    manifest: dict[str, dict[str, str]],
+    questions: dict[str, dict[str, Any]] | None = None,
+) -> None:
     """Recompute `checks` of every row in `results.jsonl` with the current `evals.run.metrics`
     (after a scoring fix) - no graph run, no model call. Expected document ids and titles are
     re-read from the manifest, so a run made while it lacked `document_id`s scores correctly
-    once it is relinked. The old file is kept as .bak."""
+    once it is relinked; with `questions`, the expectations in RESCORED_FIELDS too. The old
+    file is kept as .bak."""
 
     results = out / "results.jsonl"
     lines = [line for line in results.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows = [json.loads(line) for line in lines]
     for row in rows:
+        question = (questions or {}).get(row["id"])
+        if question is not None:
+            for name in RESCORED_FIELDS:
+                if name in question or name in row:
+                    row[name] = question.get(name)
         row["expected_document_ids"] = document_ids(row, manifest)
         if not row.get("expected_titles"):
             row["expected_titles"] = document_titles(row, manifest)
@@ -521,7 +543,8 @@ def main() -> None:
     if args.rescore:
         if args.out is None or not (args.out / "results.jsonl").is_file():
             sys.exit("--rescore needs --out <run folder with results.jsonl>")
-        rescore(args.out, read_manifest(args.dataset))
+        questions = {q["id"]: q for q in load_questions(args.dataset)}
+        rescore(args.out, read_manifest(args.dataset), questions)
         write_summary(args.out)
         return
     if os.getenv("APP_ENV") != "eval":

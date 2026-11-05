@@ -222,6 +222,17 @@ class Settings(BaseSettings):
     # Each list fetches limit x this before fusion, so a chunk strong in one list but
     # absent from the other still competes.
     CHAT_RETRIEVAL_HYBRID_CANDIDATES_MULTIPLIER: int = Field(default=2, ge=1)
+    # Same-document expansion (cross-encoder modes only): a document that already has this
+    # many chunks among a sub-query's candidates is relevant, but the chunk holding the asked
+    # row of a long table often is not among them - a wide course table dilutes each chunk's
+    # embedding and the row's words ("Anh văn 2") are common terms (q0100, q0009,
+    # 04/11/2026). The other chunks of up to EXPAND_DOCS such documents (only documents of at
+    # most EXPAND_MAX_DOC_CHUNKS chunks) join the candidates and the cross-encoder picks.
+    CHAT_RETRIEVAL_EXPAND_DOCS: int = Field(default=2, ge=0)
+    CHAT_RETRIEVAL_EXPAND_MIN_HITS: int = Field(default=3, ge=1)
+    CHAT_RETRIEVAL_EXPAND_MAX_DOC_CHUNKS: int = Field(default=40, ge=1)
+    # At most this many expanded chunks among a sub-query's cross-encoder picks.
+    CHAT_RETRIEVAL_EXPAND_KEEP: int = Field(default=2, ge=0)
     # Max sub-queries the decomposer may split one comparison question into.
     CHAT_MAX_SUB_QUERIES: int = Field(default=3, ge=2)
     # LLMRerankNode: one call to the RERANK model (EXTRACTION if none) per turn checks
@@ -253,6 +264,10 @@ class Settings(BaseSettings):
     CROSS_ENCODER_URL: str = "http://127.0.0.1:8403"
     CROSS_ENCODER_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
     CHAT_CROSS_ENCODER_KEEP: int = Field(default=8, ge=1)
+    # A table chunk longer than this many chars is scored as row windows (title, heading and
+    # column header repeated in each) and takes its best window's score: the model reads only
+    # 512 tokens and a wide table's last rows were never read (q0100, 04/11/2026).
+    CHAT_CROSS_ENCODER_WINDOW_CHARS: int = Field(default=700, ge=100)
     # Evidence sufficiency (app/graph/evidence.py), logged every turn and the trigger of
     # `auto`: a sub-query is `weak` when its best dense cosine is below MIN_COSINE and, when
     # a cross-encoder score exists, that score is below MIN_CE too. 0,60 from the threshold

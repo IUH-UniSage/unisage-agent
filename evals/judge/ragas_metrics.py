@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from pydantic import BaseModel
 from ragas.dataset_schema import SingleTurnSample
 from ragas.embeddings.base import BaseRagasEmbedding
 from ragas.llms.base import InstructorBaseRagasLLM
@@ -111,7 +112,9 @@ class AnswerCorrectness(FactualCorrectness):
     (expected claims the answer holds), precision (answer claims the expected answer backs)
     and the F1 RAGAS would report."""
 
-    async def parts(self, response: str, reference: str) -> tuple[float, float, float]:
+    async def parts(
+        self, response: str, reference: str, user_input: str = ""
+    ) -> tuple[float, float, float]:
         answer_claims = await self._decompose_and_verify_claims(response, reference)
         expected_claims = await self._decompose_and_verify_claims(reference, response)
         coverage = float(np.mean(expected_claims)) if expected_claims.size else math.nan
@@ -120,6 +123,63 @@ class AnswerCorrectness(FactualCorrectness):
         fp = int(np.sum(~answer_claims))
         fn = int(np.sum(~expected_claims))
         return coverage, precision, float(fbeta_score(tp, fp, fn, self.beta))
+
+
+class CoveredFact(BaseModel):
+    fact: str
+    reason: str
+    verdict: int  # 1 = the answer states it, 0 = missing or contradicted
+
+
+class CoverageVerdicts(BaseModel):
+    facts: list[CoveredFact]
+
+
+COVERAGE_PROMPT = """Bạn là giám khảo chấm câu trả lời của trợ lý ảo một trường đại học.
+
+Câu hỏi của người dùng:
+{question}
+
+Đáp án kỳ vọng:
+{reference}
+
+Câu trả lời của trợ lý:
+{response}
+
+Bước 1. Từ đáp án kỳ vọng, liệt kê các ý cần có để trả lời ĐÚNG CÂU HỎI. Mỗi ý là một sự kiện \
+nhỏ, kiểm tra được riêng (một con số, một ngày, một tên, một điều kiện). BỎ QUA các chi tiết \
+câu hỏi không hỏi tới (chi tiết bối cảnh, ghi chú thêm, lời khuyên, thông tin liên hệ không \
+được hỏi). Nếu đáp án kỳ vọng nêu nhiều giá trị chấp nhận được ("hoặc"), gộp thành một ý và \
+chấp nhận bất kỳ giá trị nào trong đó.
+Bước 2. Với từng ý, verdict = 1 nếu câu trả lời nêu ý đó, kể cả khi diễn đạt khác: từ đồng \
+nghĩa, viết tắt, định dạng số/ngày/đơn vị khác, cách gọi khác của cùng một tên, hoặc giá trị \
+tính đúng từ số liệu đã nêu. verdict = 0 nếu câu trả lời không nêu, nêu sai, hoặc từ chối.
+Chấm theo nội dung, không theo câu chữ.
+
+Trả về JSON: {{"facts": [{{"fact": "...", "reason": "...", "verdict": 0 hoặc 1}}]}}"""
+
+
+class QuestionCoverage:
+    """answer_coverage that reads the question (03/11/2026). RAGAS FactualCorrectness split
+    the expected answer into one or two broad claims without the question, so one off
+    detail scored a correct answer 0 (q0113: the right time and room, scored 0) and every
+    detail the question never asked for counted as missing. One call lists the facts the
+    question asks for and checks each against the answer; the score is the share found."""
+
+    def __init__(self, llm: "JudgeLLM") -> None:
+        self.llm = llm
+
+    async def parts(
+        self, response: str, reference: str, user_input: str = ""
+    ) -> tuple[float, float, float]:
+        prompt = COVERAGE_PROMPT.format(
+            question=user_input or "(không có)", reference=reference, response=response
+        )
+        verdicts = await self.llm.agenerate(prompt, CoverageVerdicts)
+        if not verdicts.facts:
+            return math.nan, math.nan, math.nan
+        coverage = sum(1 for f in verdicts.facts if f.verdict) / len(verdicts.facts)
+        return coverage, math.nan, math.nan
 
 
 # --- prompts in Vietnamese ------------------------------------------------------------------
@@ -223,7 +283,8 @@ class RagasScorer:
             return verdict, getattr(result, "reason", None), {}
         if name == "answer_coverage":
             coverage, precision, f1 = await self.metrics[name].parts(**inputs)
-            return coverage, None, {"answer_precision": precision, "factual_correctness_f1": f1}
+            extra = {"answer_precision": precision, "factual_correctness_f1": f1}
+            return coverage, None, {k: v for k, v in extra.items() if not math.isnan(v)}
         metric = self.metrics["faithfulness" if name == "web_faithfulness" else name]
         result = await metric.ascore(**inputs)
         return float(result.value), getattr(result, "reason", None), {}
@@ -259,12 +320,18 @@ class RagasScorerFactory:
     adapt_prompts: bool
     embedder: JudgeAdapter | None = None
     embedding_model: str | None = None
+    # "rubric": QuestionCoverage (reads the question, 03/11/2026); "ragas": FactualCorrectness
+    coverage: str = "rubric"
 
     def __call__(self, primary_only: bool) -> RagasScorer:
         llm = JudgeLLM(self.adapter, self.model, None if primary_only else self.fallback)
         metrics: dict[str, Any] = {
             "faithfulness": Faithfulness(llm=llm),
-            "answer_coverage": AnswerCorrectness(llm=llm, mode="f1"),
+            "answer_coverage": (
+                QuestionCoverage(llm)
+                if self.coverage == "rubric"
+                else AnswerCorrectness(llm=llm, mode="f1")
+            ),
             "context_recall": ContextRecall(llm=llm),
             "id_context_precision": IDBasedContextPrecision(),
             "id_context_recall": IDBasedContextRecall(),

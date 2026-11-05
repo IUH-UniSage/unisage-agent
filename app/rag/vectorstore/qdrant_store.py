@@ -567,6 +567,38 @@ def fetch_chunks_by_ids(
     )
 
 
+def fetch_document_chunks(
+    client: QdrantClient,
+    document_ids: Sequence[str],
+    query_filter: models.Filter | None = None,
+    limit: int = 256,
+    collection: str | None = None,
+) -> list[models.Record]:
+    """Every point (payload only) of `document_ids`, at most `limit`, with `query_filter`
+    (the caller's permissions) still applied."""
+
+    if not document_ids:
+        return []
+    must: list[models.Condition] = [
+        models.FieldCondition(key="document_id", match=models.MatchAny(any=list(document_ids)))
+    ]
+    if query_filter is not None:
+        must.append(query_filter)
+    try:
+        records, _ = client.scroll(
+            collection_name=_name(collection),
+            scroll_filter=models.Filter(must=must),
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except UnexpectedResponse as exc:
+        if _is_missing_collection(exc):
+            return []
+        raise
+    return records
+
+
 def scroll_chunks_by_document(
     client: QdrantClient, document_id: str, collection: str | None = None
 ) -> list[models.Record]:
