@@ -96,6 +96,21 @@ def test_classifier_normalises_the_query_without_changing_its_meaning() -> None:
     assert "chép NGUYÊN VĂN tin nhắn" not in template
 
 
+def test_classifier_routes_faculty_exams_and_research_to_retrieval_not_off_topic() -> None:
+    template = get_templates().agent_message_classification
+
+    # Exams/Pretests and research projects of a faculty are document lookups (2b), even
+    # when the corpus may not hold the answer: the answer step states the limitation.
+    assert "kỳ thi/Pretest và kết quả thi, đề tài/báo cáo nghiên cứu khoa học" in template
+    assert "đề thi gồm những câu nào" in template
+    assert "đề tài nghiên cứu (cấp Bộ, cấp Trường, của sinh viên)" in template
+    assert "phân loại không tự đoán là không có" in template
+    # Asking the bot to do the work itself stays off_topic.
+    assert "giải hộ bài tập/đề thi" in template
+    assert "NHỜ LÀM HỘ" in template
+    assert '"intent": "off_topic", "query": "Giải giúp mình bài tích phân này' in template
+
+
 def test_task_2_no_longer_mentions_the_pending_block_or_confirmed_metadata() -> None:
     task_2 = get_templates().task_2
     assert "missing_metadata_to_confirm" not in task_2
@@ -643,3 +658,13 @@ def test_the_arithmetic_notice_is_shown_only_on_a_deferred_calculation_turn() ->
         **{k: v for k, v in common.items() if k != "user_query"},  # type: ignore[arg-type]
     )
     assert ARITHMETIC_NOTICE in multi
+
+
+def test_answers_ask_for_the_askers_own_figure_instead_of_assuming_it() -> None:
+    # 03/11/2026 (d0354): "em còn thiếu bao nhiêu tín chỉ" got the programme total and no
+    # question back, because the prompts forbid ending with a question.
+    templates = get_templates()
+
+    for template in (templates.chat_academic_advisory, templates.chat_multi_intent_synthesis):
+        assert "TRỪ KHI câu hỏi cần một số liệu của chính người hỏi" in template
+        assert "Mình chưa có thông tin về <số liệu còn thiếu> của bạn" in template

@@ -204,6 +204,120 @@ def _page_suffix(chunk: RetrievedChunk) -> str:
     return f", tr. {chunk.page_start}"
 
 
+# Markdown tables at least this wide are rewritten one record per row
+# (`_tables_as_records`): on a 7-column list of theses the answer model took the
+# supervisor of the row below (03/11/2026, d0010, q0114, q0146, q0167).
+_RECORD_TABLE_MIN_COLUMNS = 4
+_TABLE_ROW_PATTERN = re.compile(r"^\s*\|.*\|\s*$")
+_TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
+_GROUP_LINE_PATTERN = re.compile(r"^\s*\[[^\]]*\]\s*$")
+# Header names the PDF table extractor makes up for unnamed columns carry no meaning.
+_PLACEHOLDER_HEADER_PATTERN = re.compile(r"^(?:col_?\d+)?$", re.IGNORECASE)
+_BR_PATTERN = re.compile(r"<br\s*/?>", re.IGNORECASE)
+# Header cells that are values, not column names: a data row or a "label: value" list
+# read as the header (`| 1.1 NV lễ tân | : 02 | 1.5_Trưởng phòng_ | :05 |`, `| 30 | 2103448 |`).
+_VALUE_LIKE_HEADER_PATTERN = re.compile(
+    r"^\s*:|:\s*$|^\d+(?:[.,]\d+)+\s|^[\d\W_]+$|_\S.*_|^.{100,}$"
+)
+
+
+def _table_cells(line: str) -> list[str]:
+    cells = line.strip()[1:-1].split("|")
+    return [" ".join(_BR_PATTERN.sub(" ", cell).split()) for cell in cells]
+
+
+def _usable_header(cells: Sequence[str]) -> bool:
+    """A header worth repeating on every row: wide enough, and its cells are real
+    column names - distinct, few placeholders. A merged title row read as the header
+    (`Ngành: ... | Ngành: ... | col_4`) would only mislabel every value."""
+
+    names = [cell for cell in cells if not _PLACEHOLDER_HEADER_PATTERN.match(cell)]
+    return (
+        len(cells) >= _RECORD_TABLE_MIN_COLUMNS
+        and len(set(names)) == len(names)
+        and len(names) >= 0.6 * len(cells)
+        and not any(_VALUE_LIKE_HEADER_PATTERN.search(name) for name in names)
+    )
+
+
+def _row_record(header: Sequence[str], cells: Sequence[str]) -> str | None:
+    parts = []
+    for position, value in enumerate(cells):
+        if not value:
+            continue
+        name = header[position] if position < len(header) else ""
+        parts.append(value if _PLACEHOLDER_HEADER_PATTERN.match(name) else f"{name}: {value}")
+    return "- " + " | ".join(parts) if parts else None
+
+
+def _tables_as_records(text: str) -> str:
+    """Rewrite each wide Markdown table as one line per row, every cell paired with
+    its column name (`- STT: 47 | Tên đề tài: ... | Giảng viên hướng dẫn: ...`), so the
+    answer model reads a value on the row it belongs to instead of counting `|` across
+    a long line. Narrow tables (fee tables, 2-3 columns) and all other text are kept;
+    group lines (`[Học kỳ 1 > Học phần bắt buộc]`) between rows stay where they are."""
+
+    lines = text.split("\n")
+    out: list[str] = []
+    header: list[str] | None = None
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        if _TABLE_ROW_PATTERN.match(line) and _TABLE_SEPARATOR_PATTERN.match(following):
+            cells = _table_cells(line)
+            if _usable_header(cells):
+                header = cells
+                index += 2
+                continue
+            header = None
+            out.extend((line, following))
+            index += 2
+            continue
+        if header is not None and _TABLE_ROW_PATTERN.match(line):
+            record = _row_record(header, _table_cells(line))
+            if record:
+                out.append(record)
+        elif header is not None and (_GROUP_LINE_PATTERN.match(line) or not line.strip()):
+            out.append(line)
+        else:
+            header = None
+            out.append(line)
+        index += 1
+    return "\n".join(out)
+
+
+def _document_key(chunk: RetrievedChunk) -> tuple[str, int | None]:
+    """(document, position in it) from `chunk_id` = `<document_id>:<n>`; a chunk id of
+    another shape stands for its own document."""
+
+    document, _, position = chunk.chunk_id.rpartition(":")
+    if document and position.isdigit():
+        return document, int(position)
+    return chunk.chunk_id, None
+
+
+def _sibling_notes(chunks: Sequence[RetrievedChunk]) -> dict[int, str]:
+    """For chunks of a document that has several chunks in the context: the order those
+    chunks come in the document (`"; cùng văn bản, theo thứ tự trong văn bản: [2] → [1]"`).
+    Retrieval ranks a long table's parts out of order; told nothing, the model counted
+    the rows of one part only (03/11/2026, d0009, d0044)."""
+
+    by_document: dict[str, list[tuple[int, int]]] = {}
+    for number, chunk in enumerate(chunks, 1):
+        document, position = _document_key(chunk)
+        if position is not None:
+            by_document.setdefault(document, []).append((position, number))
+    notes: dict[int, str] = {}
+    for parts in by_document.values():
+        if len(parts) < 2:
+            continue
+        order = " → ".join(f"[{number}]" for _, number in sorted(parts))
+        for _, number in parts:
+            notes[number] = f"; cùng văn bản, theo thứ tự trong văn bản: {order}"
+    return notes
+
+
 def build_prepared_context_section(
     chunks: Sequence[RetrievedChunk],
     web_results: Sequence[WebSearchResult] = (),
@@ -221,10 +335,12 @@ def build_prepared_context_section(
     so one `[n]` sequence covers both - `build_citations` resolves it the
     same way."""
 
+    siblings = _sibling_notes(chunks)
     context_chunks = (
         "\n".join(
-            f"  [{index}] ({_neutralize_frame_tags(chunk.source)}{_page_suffix(chunk)}) "
-            f"{_neutralize_frame_tags(chunk.content)}"
+            f"  [{index}] ({_neutralize_frame_tags(chunk.source)}{_page_suffix(chunk)}"
+            f"{siblings.get(index, '')}) "
+            f"{_neutralize_frame_tags(_tables_as_records(chunk.content))}"
             for index, chunk in enumerate(chunks, 1)
         )
         or _NO_RETRIEVED_CONTEXT
@@ -349,14 +465,52 @@ ARITHMETIC_NOTICE = (
     " sẵn. BẮT BUỘC: trong câu chữ chỉ chép các số thành phần kèm [n] và nói kết quả tính ở bên"
     " dưới; đưa phép tính vào khối calc_request ở cuối; KHÔNG tự viết con số kết quả."
 )
+# A plain RAG turn whose question asks for a quantity derived from cited figures (a total,
+# a difference, what is left; 04/11/2026, q0050/q0054/q0071): the answer must state that
+# quantity - through a calc_request when no document writes it - not only list the parts.
+DERIVED_QUANTITY_NOTICE = (
+    "HỆ THỐNG: câu hỏi hỏi một đại lượng tổng hợp (tổng, hiệu, phần còn lại, chênh lệch)."
+    " Nếu tài liệu ghi sẵn đúng con số đó thì chép kèm [n]; nếu không, nêu từng số thành phần"
+    ' kèm [n], viết đại lượng đó "tính ở bên dưới" và thêm khối calc_request - KHÔNG bỏ qua'
+    " đại lượng được hỏi, KHÔNG chỉ liệt kê thành phần, KHÔNG tự viết kết quả. Số tín chỉ"
+    " viết dạng 4(2, 4, 8) là 4 tín chỉ (số trước ngoặc); các số trong ngoặc không cộng vào"
+    " số tín chỉ và không tự diễn giải chúng."
+)
+# Tools of the calc_request block named only when the turn may need them.
+CALC_TOOLS_NOTICE = (
+    " Làm tròn theo bước (quy tắc do tài liệu hoặc chính câu hỏi nêu, VD lẻ dưới 0,25 → 0;"
+    " 0,25 đến dưới 0,75 → 0,5; từ 0,75 → 1): mỗi số một khối với hàm round, KHÔNG tự làm"
+    ' tròn rồi chép kết quả - VD {"type": "calc_request", "label": "Điểm 7,6 sau làm tròn",'
+    ' "expression": "round(7.6; 0.5)", "unit": "điểm", "sources": []}. Kết luận đạt/không đạt'
+    " theo một ngưỡng tài liệu nêu: thêm vào khối"
+    ' `"condition": {"compare": ">=", "value": 5.0, "true": "Đạt", "false": "Không đạt"}`'
+    " để hệ thống tự kết luận. Quy tắc, số liệu do chính câu hỏi nêu là căn cứ hợp lệ để tính."
+)
+_DERIVED = re.compile(
+    r"tổng (?:cộng|số)|cộng lại|chênh lệch|còn (?:lại|thiếu|được)|nhiều hơn|ít hơn"
+    r"|hơn bao nhiêu|gấp (?:mấy|bao nhiêu)|tất cả bao nhiêu|trung bình|làm tròn"
+    r"|(?:có|thì) đạt",
+    re.IGNORECASE,
+)
 
 
-def build_arithmetic_notice(strict: bool) -> str:
+def asks_derived_quantity(question: str) -> bool:
+    """The question asks a total/difference/remainder/rounding/verdict over figures."""
+
+    return _DERIVED.search(question or "") is not None
+
+
+def build_arithmetic_notice(strict: bool, question: str = "") -> str:
     """`{arithmetic_notice}`: the per-turn reminder when the turn is a calculation question
     the registry has no formula for (deferred to the advisory path) - the model must hand
-    the arithmetic to a calc_request block instead of stating a number."""
+    the arithmetic to a calc_request block instead of stating a number. A plain turn whose
+    question asks a derived quantity gets the softer `DERIVED_QUANTITY_NOTICE`."""
 
-    return ARITHMETIC_NOTICE if strict else ""
+    if strict:
+        return ARITHMETIC_NOTICE + CALC_TOOLS_NOTICE
+    if asks_derived_quantity(question):
+        return DERIVED_QUANTITY_NOTICE + CALC_TOOLS_NOTICE
+    return ""
 
 
 def build_calculation_results_section(titles: Sequence[str]) -> str:

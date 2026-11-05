@@ -29,10 +29,25 @@ from dataclasses import dataclass, field
 from app.rag.prompting.citations import cited_indexes
 
 # A number as Vietnamese documents write it: 1.234.567 / 1,5 / 38.350.000 / 7,9 / 2025.
-_NUMBER = re.compile(r"(?<![\w/])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)(?![\w/])")
+# Not a number: digits glued to letters or "/" (K18, 3177/QĐ), or a document code written
+# with a hyphen ("3177-QĐ-ĐHCN", 04/11/2026 d0335: flagged while the question cites it).
+_NUMBER = re.compile(r"(?<![\w/])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)(?![\w/]|-[A-ZĐ])")
 _MARKER = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 _DATE = re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b")
 _UNIT_SUFFIX = re.compile(r"(\d)(?:đ|%|k|₫)(?![\w])")
+# A unit glued to its number is split off, not dropped (03/11/2026, q0076: "lề trái 3,5cm"
+# was never read): "5tr" still scales below.
+_GLUED_UNIT = re.compile(r"(\d)(cm|mm|km|kg|m|g|ha|tr)(?![\w])", re.IGNORECASE)
+# "5 triệu" is 5.000.000 (03/11/2026, q0075); a range scales both ends ("5 - 7 triệu").
+_SCALE = re.compile(
+    r"(?:\s*[-\u2013]\s*\d+(?:[.,]\d+)?)?\s*(triệu|tr|tỷ|tỉ|nghìn|ngàn)(?![\w])", re.IGNORECASE
+)
+_SCALES = {"triệu": 1e6, "tr": 1e6, "tỷ": 1e9, "tỉ": 1e9, "nghìn": 1e3, "ngàn": 1e3}
+# A cohort code is an identifier, not a figure to verify or compute with (03/11/2026,
+# q0073, q0071: "K18" in the question, "khóa 18" in the answer). "K18" is never read
+# (a letter precedes it); "khóa 18" / "Khoá K14" are removed.
+_COHORT = re.compile(r"\bkh(?:óa|oá)\s+(?:k\s*)?\d{1,2}(?![\w/]|[.,]\d)", re.IGNORECASE)
+_PERCENT = re.compile(r"(?<![\w/.,])(\d+(?:[.,]\d+)?)\s*%")
 # Phone numbers and extensions are identifiers, not figures to verify: "028 3588 2679",
 # "0283 894 0390", "Ext: 3894", "máy lẻ 112".
 _PHONE = re.compile(
@@ -142,15 +157,63 @@ def _date_time_spans(texts: Iterable[str], *, multiples: bool = True) -> list[fl
 def numbers_in(text: str) -> dict[str, float]:
     """Numeric tokens of `text` (as written -> value), dates and citation markers removed."""
 
-    cleaned = _PHONE.sub(" ", _MARKER.sub(" ", _DATE.sub(" ", text)))
-    cleaned = _UNIT_SUFFIX.sub(r"\1 ", cleaned)  # 250.000đ -> 250.000 ; 50% -> 50
     found: dict[str, float] = {}
+    for token, value, _ in _tokens(text):
+        if token not in found:
+            found[token] = value
+    return found
+
+
+def _clean(text: str) -> str:
+    cleaned = _identifiers_removed(text)
+    cleaned = _GLUED_UNIT.sub(r"\1 \2", cleaned)  # 3,5cm -> 3,5 cm ; 5tr -> 5 tr
+    return _UNIT_SUFFIX.sub(r"\1 ", cleaned)  # 250.000đ -> 250.000 ; 50% -> 50
+
+
+def _identifiers_removed(text: str) -> str:
+    """Dates, [n] markers, phone numbers and cohort codes blanked out."""
+
+    return _PHONE.sub(" ", _MARKER.sub(" ", _DATE.sub(" ", _COHORT.sub(" ", text))))
+
+
+def _tokens(text: str) -> list[tuple[str, float, float | None]]:
+    """(token as written, value, bare figure of a scaled token or None): "5 triệu" ->
+    ("5 triệu", 5000000, 5)."""
+
+    cleaned = _clean(text)
+    out: list[tuple[str, float, float | None]] = []
     for match in _NUMBER.finditer(cleaned):
         token = match.group(1)
         value = _to_float(token)
-        if value is not None and token not in found:
-            found[token] = value
-    return found
+        if value is None:
+            continue
+        scale = _SCALE.match(cleaned, match.end())
+        if scale is None:
+            out.append((token, value, None))
+            continue
+        word = scale.group(1)
+        out.append((f"{token} {word}", value * _SCALES[word.lower()], value))
+    return out
+
+
+def stated_values(text: str, *, percent_fractions: bool = False) -> set[float]:
+    """Every value `text` states, for a source: its numbers and the bare figure of a scaled
+    one ("5" of "5 triệu"). `percent_fractions`: also the fraction a percentage is ("80%"
+    states 0,8 - an operand of "15 * 0.8", 03/11/2026, q0073, q0059); not for the answer
+    check, where 0,5 next to every grounded figure would make half-steps derivable."""
+
+    values: set[float] = set()
+    for _, value, bare in _tokens(text):
+        values.add(value)
+        if bare is not None:
+            values.add(bare)
+    if not percent_fractions:
+        return values
+    for match in _PERCENT.finditer(_identifiers_removed(text)):
+        percent = _to_float(match.group(1))
+        if percent is not None:
+            values.add(percent / 100)
+    return values
 
 
 def _verifiable(token: str, value: float) -> bool:
@@ -227,6 +290,41 @@ def _step_roundings(question: str, texts: Iterable[str]) -> list[float]:
     return out
 
 
+def _parts(question: str) -> list[float]:
+    """Whole and fractional parts of the question's decimals: "7,6 có phần lẻ 0,6"
+    (03/11/2026, d0314). Direct matches only, so no window opens for derivations."""
+
+    out: list[float] = []
+    for value in numbers_in(question).values():
+        if not value.is_integer():
+            whole = math.floor(value)
+            out += [float(whole), round(value - whole, 6)]
+    return out
+
+
+def _source_pool(texts: Sequence[str], question: str, *, allow_derived: bool) -> set[float]:
+    pool: set[float] = set()
+    for text in texts:
+        pool.update(stated_values(text))
+    pool.update(_date_time_spans(texts, multiples=allow_derived))
+    pool.update(_step_roundings(question, texts))
+    return pool
+
+
+def states_grounded(
+    answer: str, value: float, sources: Sequence[str], *, question: str = ""
+) -> bool:
+    """`answer` writes `value` and the strict check finds that value itself in the
+    sources (or a date span / rounding of them) - not derived, not merely unchecked.
+    Lets a refused calc request stay silent when the answer already states its result
+    (03/11/2026, q0055)."""
+
+    if not any(_close(value, v) for v in numbers_in(answer).values()):
+        return False
+    pool = _source_pool([*sources, question], question, allow_derived=False)
+    return any(_close(value, g) for g in pool)
+
+
 def ungrounded_numbers(
     answer: str,
     sources: Iterable[str],
@@ -241,13 +339,9 @@ def ungrounded_numbers(
     turn whose arithmetic belongs to code (`calc_request`, a deferred calculation task),
     where the model was told not to state results of its own (26/10/2026)."""
 
-    source_values: set[float] = set()
     texts = [*sources, question, *(str(v) for v in (known or {}).values())]
-    for text in texts:
-        source_values.update(numbers_in(text).values())
-    source_values.update(_date_time_spans(texts, multiples=allow_derived))
-    source_values.update(_step_roundings(question, texts))
-    grounded = sorted(source_values)
+    grounded = sorted(_source_pool(texts, question, allow_derived=allow_derived))
+    parts = _parts(question)
     out: list[str] = []
     # Two passes: a number derived from sources (a subtotal) can ground the next one
     # (a remainder) whichever order the answer states them in.
@@ -258,7 +352,7 @@ def ungrounded_numbers(
     for _ in range(2):
         for token, value in list(pending.items()):
             in_answer = [v for v in answer_values if any(_close(v, g) for g in grounded)]
-            if any(_close(value, g) for g in grounded) or (
+            if any(_close(value, g) for g in [*grounded, *parts]) or (
                 allow_derived and _derivable(value, grounded, in_answer)
             ):
                 grounded.append(value)

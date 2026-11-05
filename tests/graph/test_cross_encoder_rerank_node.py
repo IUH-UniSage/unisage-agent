@@ -8,6 +8,8 @@ from app.graph.nodes.cross_encoder_rerank import (
     CE_SCORE_KEY,
     cross_encoder_rerank,
     passage_text,
+    passage_windows,
+    person_names,
 )
 from app.graph.nodes.llm_rerank import _candidate_chunks
 from app.graph.nodes.post_retrieval_rerank import rerank_chunks
@@ -137,3 +139,141 @@ def test_passage_text_puts_the_title_and_heading_path_before_the_content() -> No
     )
     no_title = RetrievedChunk(chunk_id="y", content="b", source="", score=0.5)
     assert passage_text(no_title) == "b"
+
+
+def _table_chunk(
+    chunk_id: str, rows: int, *, source: str = "Kế hoạch đào tạo.pdf"
+) -> RetrievedChunk:
+    lines = ["KẾ HOẠCH ĐÀO TẠO", "", "| STT | Tên môn học | Số tín chỉ |", "| --- | --- | --- |"]
+    lines += [
+        f"| {n} | Học phần số {n} có tên khá dài để chiếm chỗ | 3(3,0,6) |"
+        for n in range(1, rows + 1)
+    ]
+    return RetrievedChunk(chunk_id=chunk_id, content="\n".join(lines), source=source, score=0.8)
+
+
+def test_a_short_chunk_is_one_passage() -> None:
+    chunk = _table_chunk("t", 2)
+    assert passage_windows(chunk) == [passage_text(chunk)]
+
+
+def test_a_long_table_chunk_is_scored_as_row_windows_that_repeat_the_header() -> None:
+    chunk = _table_chunk("t", 40)
+    windows = passage_windows(chunk, budget=400)
+    assert len(windows) > 1
+    for window in windows:
+        assert window.startswith(
+            "Tài liệu: Kế hoạch đào tạo\nKẾ HOẠCH ĐÀO TẠO\n| STT | Tên môn học"
+        )
+    body = [
+        line
+        for window in windows
+        for line in window.split("\n")
+        if line.startswith("| ") and "Học phần số" in line
+    ]
+    assert body == [line for line in chunk.content.split("\n") if "Học phần số" in line]
+
+
+@pytest.mark.asyncio
+async def test_a_chunk_takes_its_best_window_score_and_requests_stay_under_64_passages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_CROSS_ENCODER_WINDOW_CHARS", 120)
+    long = _table_chunk("long", 30)
+    last_row = long.content.split("\n")[-1]
+    client = FakeClient({last_row: 5.0})
+    chunks = [long, *(_table_chunk(f"x{i}", 30) for i in range(5))]
+    outcome = await cross_encoder_rerank(
+        client, ["Học phần số 30?"], rerank_chunks([chunks]), keep=2
+    )
+    kept = outcome.result.per_query[0].chunks
+    assert kept[0].chunk_id == "long"
+    assert kept[0].metadata[CE_SCORE_KEY] == 5.0
+    assert len(client.calls) > 1
+    assert all(len(passages) <= 64 for _, passages in client.calls)
+
+
+def test_person_names_reads_a_full_vietnamese_name_and_not_a_school_name() -> None:
+    assert person_names("Portfolio của sinh viên Nguyễn Chí Thanh ngành Công nghệ May") == [
+        "nguyen chi thanh"
+    ]
+    assert person_names("Trường Đại học Công nghiệp TP.HCM ở Hà Nội") == []
+    assert person_names("TS. Huỳnh Trung Hiếu Phó trưởng khoa") == [
+        "huynh trung hieu",
+        "huynh trung hieu pho",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_document_titled_with_the_person_asked_about_goes_first() -> None:
+    mine = RetrievedChunk(
+        chunk_id="mine",
+        content="mine",
+        source="u_Student portfolio - Nguyen Chi Thanh.pdf",
+        score=0.7,
+    )
+    other = RetrievedChunk(
+        chunk_id="other",
+        content="other",
+        source="u_Student portfolio - Truong Thi Yen Nhi.pdf",
+        score=0.9,
+    )
+    client = FakeClient({"other": 3.0, "mine": 1.0})
+    outcome = await cross_encoder_rerank(
+        client,
+        ["Portfolio của sinh viên Nguyễn Chí Thanh gồm những phần nào?"],
+        rerank_chunks([[other, mine]]),
+        keep=2,
+    )
+    assert [c.chunk_id for c in outcome.result.per_query[0].chunks] == ["mine", "other"]
+    # no name in the question: cross-encoder order
+    outcome = await cross_encoder_rerank(
+        client, ["Portfolio gồm những phần nào?"], rerank_chunks([[other, mine]]), keep=2
+    )
+    assert [c.chunk_id for c in outcome.result.per_query[0].chunks] == ["other", "mine"]
+
+
+@pytest.mark.asyncio
+async def test_a_name_the_standalone_rewrite_dropped_is_read_from_the_users_message() -> None:
+    mine = RetrievedChunk(
+        chunk_id="mine",
+        content="mine",
+        source="u_Student portfolio - Nguyen Chi Thanh.pdf",
+        score=0.7,
+    )
+    other = RetrievedChunk(
+        chunk_id="other",
+        content="other",
+        source="u_Student portfolio - Truong Thi Yen Nhi.pdf",
+        score=0.9,
+    )
+    client = FakeClient({"other": 3.0, "mine": 1.0})
+    outcome = await cross_encoder_rerank(
+        client,
+        ["Portfolio của sinh viên ngành Công nghệ May gồm những phần nào?"],
+        rerank_chunks([[other, mine]]),
+        keep=2,
+        asked="Portfolio của sinh viên Nguyễn Chí Thanh ngành Công nghệ May gồm những phần nào?",
+    )
+    assert [c.chunk_id for c in outcome.result.per_query[0].chunks] == ["mine", "other"]
+
+
+@pytest.mark.asyncio
+async def test_expanded_chunks_take_at_most_the_capped_number_of_kept_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RETRIEVAL_EXPAND_KEEP", 1)
+    found = RetrievedChunk(chunk_id="found", content="found", source="a.pdf", score=0.8)
+    added = [
+        RetrievedChunk(
+            chunk_id=f"e{i}",
+            content=f"e{i}",
+            source="b.pdf",
+            score=0.6,
+            metadata={"expanded_from_document": True},
+        )
+        for i in range(3)
+    ]
+    client = FakeClient({"e0": 9.0, "e1": 8.0, "e2": 7.0, "found": 1.0})
+    outcome = await cross_encoder_rerank(client, ["q"], rerank_chunks([[found, *added]]), keep=2)
+    assert [c.chunk_id for c in outcome.result.per_query[0].chunks] == ["e0", "found"]

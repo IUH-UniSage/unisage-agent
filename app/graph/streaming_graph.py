@@ -1234,7 +1234,9 @@ async def _run_advisory_flow(
         and rerank_result.has_valid_context
     ):
         trace.node("09a_CrossEncoderRerankNode")
-        ce_outcome = await cross_encoder_rerank(CrossEncoderClient(), questions, rerank_result)
+        ce_outcome = await cross_encoder_rerank(
+            CrossEncoderClient(), questions, rerank_result, asked=graph_input.user_message
+        )
         if ce_outcome.failure is None:
             rerank_result = ce_outcome.result
             llm_rerank_wanted = (
@@ -1475,7 +1477,12 @@ async def _run_advisory_flow(
     # refused with a fixed line and an AI-admin warning). Computed before the grounding
     # check so a result the answer also states in words is not "ungrounded"; streamed after.
     blocks = (
-        calc_blocks(generation_result.calc_requests, question=question, chunks=rerank_result.chunks)
+        calc_blocks(
+            generation_result.calc_requests,
+            question=question,
+            chunks=rerank_result.chunks,
+            answer=response_text,
+        )
         if generation_result.calc_requests
         else None
     )

@@ -143,3 +143,69 @@ def test_a_question_number_rounded_to_a_written_step_is_grounded() -> None:
     # 8,8 rounds to 9,0, not 8,5 (small whole numbers like 8,0 are never checked).
     wrong = "Lần lượt là 6,0; 7,5 và 8,5 [1]."
     assert check_answer(wrong, sources, question=question, strict=True).ungrounded == ["8,5"]
+
+
+def test_a_number_glued_to_its_unit_and_a_comma_decimal_are_read() -> None:
+    # Eval 03/11/2026 (q0076): "3,5cm" was not read, so "3,5" in the answer was flagged.
+    source = "dãn dòng 1,5 line; lề trên 3cm; lề trái 3,5cm; lề phải 2cm."
+    assert {3.5, 2.0, 3.0} <= set(numbers_in(source).values())
+    answer = "Lề trái 3,5 cm [1], lề phải 2 cm [1]."
+    assert check_answer(answer, [source], strict=True).ungrounded == []
+
+
+def test_amounts_written_in_trieu_ground_the_same_amount_in_digits() -> None:
+    # Eval 03/11/2026 (q0075): "tối thiểu 5 triệu" did not ground "5.000.000 đồng".
+    source = (
+        "Có thu nhập ngay khi làm việc ( tối thiểu 5 triệu \u2013 7 triệu); nhóm 4 \u2013 6 người"
+    )
+    assert check_answer("Thu nhập tối thiểu 5.000.000 đồng [1].", [source]).ungrounded == []
+    assert (
+        check_answer("Mức 5.000.000 đồng [1].", ["học phí 5 tr/tháng"], strict=True).ungrounded
+        == []
+    )
+    assert check_answer("Tối thiểu 5 triệu đồng [1].", ["5.000.000 đồng"]).ungrounded == []
+    assert check_answer("Từ 1,5 tỷ đồng [1].", ["1.500.000.000 đồng"]).ungrounded == []
+    # A range scales both ends: "5 - 7 triệu" states 5 triệu too.
+    assert check_answer("Ít nhất 5 triệu [1].", ["thu nhập 5 \u2013 7 triệu"]).ungrounded == []
+    # An invented amount is still caught, in either spelling.
+    assert check_answer("Tối thiểu 8 triệu [1].", [source], strict=True).ungrounded == ["8 triệu"]
+    assert check_answer("Tối thiểu 8.000.000 [1].", [source], strict=True).ungrounded == [
+        "8.000.000"
+    ]
+
+
+def test_a_cohort_code_is_an_identifier_not_a_figure() -> None:
+    # Eval 03/11/2026 (q0073, q0071): "K18" in the question, "khóa 18" in the answer ->
+    # "con số 18 không tìm thấy".
+    question = "Theo kế hoạch khóa luận tốt nghiệp K18 các chuyên ngành Du lịch, hẹn 15 lần?"
+    source = "Sinh viên gặp giảng viên hướng dẫn tối thiểu 80% số lần hẹn."
+    answer = "Theo kế hoạch khóa luận khóa 18, sinh viên gặp tối thiểu 80% số lần hẹn [1]."
+    assert check_answer(answer, [source], question=question, strict=True).ungrounded == []
+    assert ungrounded_numbers("Chương trình Khoá 14 (K14) có 8 tín chỉ.", ["8 tín chỉ"]) == []
+    # The same number as a figure is still verified.
+    assert ungrounded_numbers("Phải học 18 tín chỉ.", [source], question=question) == ["18"]
+
+
+def test_the_parts_of_a_question_score_are_grounded() -> None:
+    # Eval 03/11/2026 (d0314): "phần lẻ là 0,6" of 7,6 was flagged in strict mode.
+    question = "Làm tròn phần lẻ: từ 0,25 đến dưới 0,75 -> 0,5. Điểm 6,2; 7,6 và 8,8?"
+    sources = ["Phần lẻ từ 0,25 đến dưới 0,75 làm tròn thành 0,5."]
+    answer = "Điểm 7,6: phần lẻ 0,6 làm tròn thành 0,5 [1]."
+    assert check_answer(answer, sources, question=question, strict=True).ungrounded == []
+    wrong = check_answer("phần lẻ 0,4 [1].", sources, question=question, strict=True)
+    assert wrong.ungrounded == ["0,4"]
+
+
+def test_a_document_code_written_with_a_hyphen_is_not_a_figure() -> None:
+    # Eval 04/11/2026 (d0335): "Quyết định 3177-QĐ-ĐHCN" was flagged though the question
+    # cites "QĐ 3177/QĐ-ĐHCN".
+    from app.graph.grounding import check_answer, numbers_in
+
+    answer = "Theo Quyết định 3177-QĐ-ĐHCN, công bố chậm nhất 20 ngày trước ngày bảo vệ [1]."
+    assert numbers_in(answer) == {"20": 20.0}
+    report = check_answer(
+        answer, ["chậm nhất 20 ngày trước ngày bảo vệ"], question="QĐ 3177/QĐ-ĐHCN"
+    )
+    assert report.ungrounded == []
+    # Year ranges and plain figures before a hyphen are still read.
+    assert numbers_in("năm học 2024-2025 có 15-20 tín chỉ") != {}
