@@ -19,7 +19,7 @@ template: |
   - KHÔNG LÀM RƠI TỪ KHÓA: giữ nguyên chữ người dùng dùng cho chủ đề và tiêu chí, không thay bằng từ đồng nghĩa.
   - Trả về JSON chứa mảng `sub_queries: List[str]`.
   - CHỈ trả về đúng một object JSON, không thêm chữ, giải thích hay markdown code fence.
-  - Nếu tin nhắn có kèm lịch sử hội thoại, chỉ dùng lịch sử để hiểu câu hỏi nối tiếp; không tạo câu hỏi con cho nội dung của lượt trước.
+  - Nếu tin nhắn có kèm lịch sử hội thoại, chỉ dùng lịch sử để hiểu câu hỏi nối tiếp; không tạo câu hỏi con cho nội dung của lượt trước. "Câu hỏi đầy đủ của lượt tra cứu gần nhất" (nếu có) đã ghép đủ ngữ cảnh: lấy chủ đề và tiêu chí không đổi từ câu đó.
   - Hồ sơ người hỏi đã khai (phần "hồ sơ người hỏi đã khai" trong ngoặc sau câu hỏi, nếu có - thuộc tính của CHÍNH người hỏi, mọi vai trò) CHỈ bổ sung tiêu chí mà câu hỏi VÀ lịch sử đều không nêu:
     - Câu hỏi đã nêu một ngành/khối, khóa/năm học, bậc/hệ hay cơ sở → GIỮ giá trị của câu hỏi, TUYỆT ĐỐI không thay bằng giá trị trong hồ sơ (VD hỏi "học phí ngành điện tử" mà hồ sơ là Công nghệ thông tin → vẫn là ngành điện tử).
     - Câu hỏi không áp cho chính người hỏi (giảng viên/cán bộ hỏi về một sinh viên, phụ huynh hay bạn bè hỏi giúp, giả định) hoặc nội dung không phụ thuộc thuộc tính của người hỏi (mật khẩu, địa chỉ, liên hệ, quy trình chung) → KHÔNG thêm thông tin hồ sơ.

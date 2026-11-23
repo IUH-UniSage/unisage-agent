@@ -112,6 +112,34 @@ async def test_retrieve_many_async_matches_retrieve_many() -> None:
     assert [request.limit for request in requests] == [4] * 6
 
 
+@pytest.mark.asyncio
+async def test_extra_queries_are_embedded_in_the_same_call() -> None:
+    fake_openai_client = MagicMock()
+    fake_openai_client.embeddings.create.return_value = MagicMock(
+        data=[MagicMock(embedding=[0.1]), MagicMock(embedding=[0.2]), MagicMock(embedding=[0.3])]
+    )
+    embedder = OpenAIEmbedder(model="text-embedding-3-small", client=fake_openai_client)
+    fake_qdrant = MagicMock()
+    fake_qdrant.query_batch_points.return_value = [QueryResponse(points=[])] * 9
+    service = RetrievalService(client=fake_qdrant, embedder=embedder)
+
+    await service.retrieve_many_async(
+        ["q1 passage", "q2"],
+        security=AcademicSecurityContext(),
+        limit=4,
+        extra_queries=[["q1 row"], []],
+    )
+
+    fake_openai_client.embeddings.create.assert_called_once()
+    assert fake_openai_client.embeddings.create.call_args.kwargs["input"] == [
+        "q1 passage",
+        "q2",
+        "q1 row",
+    ]
+    requests = fake_qdrant.query_batch_points.call_args.kwargs["requests"]
+    assert [request.query for request in requests] == [[0.1]] * 3 + [[0.3]] * 3 + [[0.2]] * 3
+
+
 def test_retrieve_returns_empty_list_when_collection_does_not_exist() -> None:
     """A fresh environment with nothing ingested yet is a normal state, not
     an error - the graph should fall through to ticket fallback, not crash."""

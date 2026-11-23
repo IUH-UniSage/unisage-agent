@@ -96,6 +96,7 @@ def build_system_prompt(
     web_results: Sequence[WebSearchResult] = (),
     calculation_titles: Sequence[str] = (),
     arithmetic_notice: bool = False,
+    scope_notice: str = "",
 ) -> str:
     """Advisory frame for a single question. `resolved_query` (the standalone
     rewrite of a follow-up) is shown ahead of the raw message."""
@@ -110,7 +111,8 @@ def build_system_prompt(
         ),
         user_query=render_resolved_user_query(user_query, resolved_query),
         calculation_results=build_calculation_results_section(calculation_titles),
-        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query),
+        # `scope_notice` (app/graph/cohort_scope.py) shares the per-turn notice slot.
+        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query) + scope_notice,
     )
 
 
@@ -125,6 +127,7 @@ def build_multi_intent_prompt(
     web_results: Sequence[WebSearchResult] = (),
     calculation_titles: Sequence[str] = (),
     arithmetic_notice: bool = False,
+    scope_notice: str = "",
 ) -> str:
     """Multi-intent frame for several sub-queries, listed as `SQk. ...`."""
 
@@ -139,7 +142,8 @@ def build_multi_intent_prompt(
         sub_queries_list=render_sub_queries_list(sub_queries),
         user_query=user_query,
         calculation_results=build_calculation_results_section(calculation_titles),
-        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query),
+        # `scope_notice` (app/graph/cohort_scope.py) shares the per-turn notice slot.
+        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query) + scope_notice,
     )
 
 

@@ -352,6 +352,55 @@ async def test_run_and_persist_sends_citations_when_graph_produced_them(
 
 
 @pytest.mark.asyncio
+async def test_run_and_persist_stores_the_retrieval_questions_on_the_message(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    question = "Tiếng Anh 2 ngành Công nghệ kỹ thuật cơ khí khóa K21 học trước môn nào?"
+
+    async def _fake_graph(*_args: object, **_kwargs: object) -> GraphOutput:
+        return GraphOutput(response_text="Học trước Tiếng Anh 1.", retrieval_questions=[question])
+
+    monkeypatch.setattr("app.graph.streaming_session.run_graph", _fake_graph)
+
+    patched: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        if not request.url.path.endswith(_TRACE_PATH):
+            patched["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"id": "msg-2", "status": "COMPLETED"})
+
+    java_client = BackendJavaClient(
+        base_url="http://java.test", transport=httpx.MockTransport(handler)
+    )
+
+    class _SessionCtx:
+        async def __aenter__(self) -> AsyncSession:
+            return db_session
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    await run_and_persist(
+        java_client=java_client,
+        conversation_id="conv-1",
+        assistant_message_id="msg-2",
+        authorization=None,
+        graph_input=_graph_input(),
+        models=_models(mock_sync_llm_model, mock_streaming_llm_model),
+        usage_recorder=UsageRecorder(request_id="test-request", purpose="CHAT"),
+        queue=asyncio.Queue(),
+        session_factory=lambda: _SessionCtx(),  # type: ignore[arg-type]
+    )
+
+    assert patched["body"]["metadata"] == {"retrieval_questions": [question]}
+
+
+@pytest.mark.asyncio
 async def test_run_and_persist_reports_llm_unavailable_when_credentials_exhausted(
     mock_sync_llm_model: Callable[[str], FunctionModel],
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],

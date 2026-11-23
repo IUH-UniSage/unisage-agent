@@ -48,8 +48,16 @@ from app.graph.clarification_round import (
     advisory_task,
     build_round,
 )
+from app.graph.cohort_scope import check_cohort_scope
 from app.graph.evidence import levels_for
-from app.graph.grounding import caution_line, check_answer, looks_like_refusal, numbers_in
+from app.graph.grounding import (
+    caution_line,
+    check_answer,
+    looks_like_refusal,
+    miscited_sources,
+    numbers_in,
+    source_line,
+)
 from app.graph.metadata_fields import (
     Scope,
     apply_updates,
@@ -119,6 +127,7 @@ from app.graph.nodes.web_search import (
     search_web,
     select_without_judge,
 )
+from app.graph.program_scope import check_program_scope
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
 from app.graph.streaming_state import (
     AdminWarning,
@@ -146,6 +155,7 @@ logger = logging.getLogger(__name__)
 # Prefixes of the AI-admin warnings (`event: warning`) this module raises.
 _UNGROUNDED = "Câu trả lời có con số không tìm thấy trong tài liệu được trích dẫn: "
 _INVALID_CITATION = "Câu trả lời trích dẫn chỉ số nguồn không tồn tại: "
+_MISCITED = "Câu trả lời trích sai nguồn cho con số có trong một tài liệu khác: "
 _NO_CITATION = "Câu trả lời nêu số liệu nhưng không trích dẫn tài liệu nào."
 _WEB_SEARCH_FAILED = (
     "Tìm kiếm web thất bại nên câu trả lời không dùng được nguồn từ website Trường: "
@@ -1128,6 +1138,7 @@ async def _run_advisory_flow(
             decomposer_agent=build_decomposer_agent(models.query_transformation),
             confirmed_metadata=confirmed_metadata,
             history=graph_input.history,
+            role=graph_input.security.role,
             purpose="CHAT",
             credential=models.generation_credential,
             snapshot_version=models.snapshot_version,
@@ -1191,6 +1202,7 @@ async def _run_advisory_flow(
             # BM25 side of the hybrid search: the standalone questions, where a course code
             # or a document name appears verbatim.
             lexical_queries=questions,
+            extra_queries=[sub_query.extra_retrieval_texts for sub_query in sub_queries],
         )
 
         # PostRetrievalRerankNode (per sub-query, then merged). With an LLM rerank ahead,
@@ -1400,6 +1412,26 @@ async def _run_advisory_flow(
             len(questions),
         )
 
+    # Cohort, then programme scope: drop other cohorts' / programmes' documents when the
+    # asked one has some, or tell generation what the documents found are for
+    # (app/graph/cohort_scope.py, app/graph/program_scope.py).
+    scope = check_cohort_scope(questions, rerank_result.chunks)
+    program = check_program_scope(questions, confirmed_metadata.get("he_dao_tao"), scope.chunks)
+    scope_notice = scope.notice + program.notice
+    if scope.dropped or program.dropped or scope_notice:
+        rerank_result = replace(rerank_result, chunks=program.chunks)
+        logger.info(
+            "document_scope cohort asked=%s available=%s dropped=%d | program asked=%s "
+            "available=%s dropped=%d | notice=%s",
+            scope.asked,
+            list(scope.available),
+            scope.dropped,
+            program.asked,
+            list(program.available),
+            program.dropped,
+            bool(scope_notice),
+        )
+
     # Barrier: the calculation blocks go out before any advisory token.
     calculation_titles_shown = (
         await before_generation(len(rerank_result.chunks) + len(web_results) + 1)
@@ -1435,6 +1467,7 @@ async def _run_advisory_flow(
             used_ticket_fallback=True,
             admin_warnings=admin_warnings,
             context_web=fallback_web,
+            retrieval_questions=questions,
         )
 
     # GenerationSynthesisNode (streaming).
@@ -1461,6 +1494,7 @@ async def _run_advisory_flow(
         sub_queries=sub_query_questions,
         calculation_titles=calculation_titles_shown,
         strict_arithmetic=strict_numbers,
+        scope_notice=scope_notice,
         purpose="CHAT",
         credential=models.generation_credential,
         snapshot_version=models.snapshot_version,
@@ -1504,14 +1538,29 @@ async def _run_advisory_flow(
         report = check_answer(
             response_text, shown, question=question, known=computed_values, strict=strict
         )
-        if report.ungrounded:
-            caution = caution_line(report.ungrounded)
+        # A number written in a source the answer did not cite is real, its [n] is wrong:
+        # the right source is named (its [n] also lists it among the citations) instead of
+        # a "not found" caution that reads as if the number were made up.
+        miscited = miscited_sources(report.ungrounded, shown, report.cited)
+        if miscited:
+            line = source_line(miscited)
+            await token_sink(line)
+            response_text += line
+            admin_warnings.append(
+                AdminWarning(
+                    code="ANSWER_MISCITED_NUMBERS",
+                    message=f"{_MISCITED}{', '.join(miscited)}",
+                )
+            )
+        ungrounded = [token for token in report.ungrounded if token not in miscited]
+        if ungrounded:
+            caution = caution_line(ungrounded)
             await token_sink(caution)
             response_text += caution
             admin_warnings.append(
                 AdminWarning(
                     code="ANSWER_UNGROUNDED_NUMBERS",
-                    message=f"{_UNGROUNDED}{', '.join(report.ungrounded)}",
+                    message=f"{_UNGROUNDED}{', '.join(ungrounded)}",
                 )
             )
         if report.invalid_markers:
@@ -1558,4 +1607,5 @@ async def _run_advisory_flow(
         used_web_search=bool(web_results),
         admin_warnings=admin_warnings,
         evidence=evidence_rows,
+        retrieval_questions=questions,
     )

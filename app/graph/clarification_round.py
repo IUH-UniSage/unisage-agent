@@ -51,8 +51,9 @@ def advisory_questions(
     """Choice questions from the model's ask_user_form blocks, under registry names. A
     field already known to this turn's calculations, asked twice, or with fewer than 2
     usable options is dropped; so is one in the profile when the form asks about the
-    caller ("about": "self", the default). A form about someone else ("other") asks it
-    anyway: the caller's own intake is not their student's or their friend's."""
+    caller ("about": "self", the default) - unless the stored value is too coarse to pick
+    an option (`_too_coarse`). A form about someone else ("other") asks it anyway: the
+    caller's own intake is not their student's or their friend's."""
 
     questions: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -65,8 +66,7 @@ def advisory_questions(
             if not isinstance(item, Mapping):
                 continue
             field = canonical_field(str(item.get("field") or ""))
-            in_profile = about == "self" and field in confirmed_metadata
-            if not field or field in seen or in_profile or field in known_fields:
+            if not field or field in seen or field in known_fields:
                 continue
             options: list[ChoiceOption] = []
             for raw in item.get("options") or []:
@@ -77,6 +77,9 @@ def advisory_questions(
                 if label and option_id and option_id not in {o.id for o in options}:
                     options.append(ChoiceOption(id=option_id, label=label))
             if len(options) < 2:
+                continue
+            stored = confirmed_metadata.get(field) if about == "self" else None
+            if stored is not None and not _too_coarse(stored, options):
                 continue
             label = str(item.get("label") or field).strip()
             seen.add(field)
@@ -93,6 +96,19 @@ def advisory_questions(
                 }
             )
     return questions
+
+
+def _too_coarse(stored: str, options: Sequence[ChoiceOption]) -> bool:
+    """The profile value fits 2+ of the options, so it picks none of them: "Chính quy" is
+    in both "Đại học chính quy (chương trình chuẩn)" and "... tăng cường tiếng Anh" (the
+    enhanced-English programme is chính quy too, 23-11-2026). A value that fits one option,
+    or none (another spelling, "2023" against "K23"), still counts as answered."""
+
+    value = slug(stored)
+    if not value:
+        return False
+    fitting = [o for o in options if value in o.id or value in slug(o.label)]
+    return len(fitting) >= 2 and all(value != o.id for o in options)
 
 
 def advisory_task(task_id: str, origin_tasks: Sequence[ClassifiedTask]) -> PendingAdvisoryTask:

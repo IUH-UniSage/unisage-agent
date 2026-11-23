@@ -62,7 +62,7 @@ from app.integrations.backend_java_client import (
     BackendJavaHTTPError,
 )
 from app.schemas.chat import CHAT_REQUEST_MAX_BYTES, ChatStreamRequest
-from app.schemas.chat_history import HistoryMessage
+from app.schemas.chat_history import RETRIEVAL_QUESTIONS_KEY, HistoryMessage
 from app.schemas.clarification import ClarificationCancel, ClarificationSubmit, LastCalculation
 from app.schemas.security import AcademicSecurityContext
 from app.services.clarification_service import (
@@ -128,10 +128,30 @@ def _history_from_context(raw_messages: list[dict[str, Any]]) -> list[HistoryMes
     """Keeps only finished messages (drops e.g. a STREAMING placeholder left by a failed turn)."""
 
     return [
-        HistoryMessage(role=message["role"], content=message["content"])
+        _history_message(message)
         for message in raw_messages
         if message.get("status") == "COMPLETED" and message.get("content")
     ]
+
+
+def _history_message(message: dict[str, Any]) -> HistoryMessage:
+    """The ASSISTANT message's own metadata says what the turn retrieved with and
+    whether it was a calculation; anything malformed there is ignored."""
+
+    metadata = message.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    raw_questions = metadata.get(RETRIEVAL_QUESTIONS_KEY)
+    questions = (
+        [q.strip() for q in raw_questions if isinstance(q, str) and q.strip()]
+        if isinstance(raw_questions, list)
+        else []
+    )
+    return HistoryMessage(
+        role=message["role"],
+        content=message["content"],
+        retrieval_questions=questions,
+        calculation="calculation" in metadata,
+    )
 
 
 def _estimate_chat_call_cost_usd(message: str, models: GraphModels) -> Decimal:

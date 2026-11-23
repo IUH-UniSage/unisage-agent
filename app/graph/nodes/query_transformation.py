@@ -33,6 +33,29 @@ from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, RoutingMode
 
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
+_NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def _number_key(number: str) -> str:
+    """ "01" and "1", "3.20" and "3,2" are one number."""
+
+    integer, _, fraction = number.replace(",", ".").partition(".")
+    fraction = fraction.replace(".", "").rstrip("0")
+    integer = integer.lstrip("0") or "0"
+    return f"{integer}.{fraction}" if fraction else integer
+
+
+def strip_unstated_numbers(passage: str, question: str) -> str:
+    """The HyDE passage with every number its question does not state written as "...".
+    The prompt forbids them, and a small model still wrote "điểm trung bình tích lũy từ
+    3.20 đến 3.59" for "tốt nghiệp loại giỏi" in 2 of 3 runs (23-11-2026) - a guess the
+    dense search then leans on. Not for the table row: its years come from the cohort."""
+
+    stated = {_number_key(number) for number in _NUMBER_PATTERN.findall(question)}
+    return _NUMBER_PATTERN.sub(
+        lambda match: match.group(0) if _number_key(match.group(0)) in stated else "...",
+        passage,
+    )
 
 
 @dataclass(frozen=True)
@@ -42,6 +65,10 @@ class SubQuery:
 
     question: str
     retrieval_text: str
+    # More dense texts for the same sub-query (the HyDE passage as a table row): each is
+    # embedded and the dense side keeps a chunk's best cosine over all of them, so they
+    # share one vote against BM25 instead of adding votes of their own.
+    extra_retrieval_texts: tuple[str, ...] = ()
     # Which advisory task (in `transform_tasks`' order) it came from - bookkeeping, not
     # part of what the sub-query is.
     task_index: int = field(default=0, compare=False)
@@ -81,6 +108,7 @@ async def transform_query(
     *,
     confirmed_metadata: dict[str, str] | None = None,
     history: Sequence[HistoryMessage] = (),
+    role: str | None = None,
     purpose: str | None = None,
     credential: CredentialConfig | None = None,
     snapshot_version: int | None = None,
@@ -92,15 +120,21 @@ async def transform_query(
 ) -> str:
     """HyDE retrieval text: the self-contained question, then the document.
 
+    `role` (verified, from the token) tells who carries out a procedure the question
+    does not name a person for - a lecturer's "điều chỉnh điểm" is not a student's.
+
     `purpose`/`credential`/`snapshot_version`/`agent_factory`/`router`/
     `on_failover`/`on_attempt`/`budget` are the same opt-in failover/usage/budget
     wiring as `run_agent_text_with_failover()`.
     """
 
     enriched_query = _fold_confirmed_metadata_into_query(user_query, confirmed_metadata or {})
+    prompt = append_recent_history(enriched_query, history)
+    if role:
+        prompt += f"\n\n<user_role>{role}</user_role>"
     return await run_agent_text_with_failover(
         agent,
-        append_current_time(append_recent_history(enriched_query, history), confirmed_metadata),
+        append_current_time(prompt, confirmed_metadata),
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,
@@ -181,6 +215,7 @@ async def _transform_task(
     *,
     confirmed_metadata: dict[str, str] | None,
     history: Sequence[HistoryMessage],
+    role: str | None,
     purpose: str | None,
     credential: CredentialConfig | None,
     snapshot_version: int | None,
@@ -197,7 +232,10 @@ async def _transform_task(
     if mode == "MULTI" and task.sub_queries:
         return [SubQuery(question=query, retrieval_text=query) for query in task.sub_queries]
     if mode == "SINGLE" and task.hyde_text:
-        return [SubQuery(question=task.query, retrieval_text=task.hyde_text)]
+        rows = (task.hyde_row_text,) if task.hyde_row_text else ()
+        return [
+            SubQuery(question=task.query, retrieval_text=task.hyde_text, extra_retrieval_texts=rows)
+        ]
 
     if mode == "MULTI" and decomposer_agent is not None:
         sub_queries = await decompose_query(
@@ -223,6 +261,7 @@ async def _transform_task(
         task.query,
         confirmed_metadata=confirmed_metadata,
         history=history,
+        role=role,
         purpose=purpose,
         credential=credential,
         snapshot_version=snapshot_version,
@@ -232,7 +271,14 @@ async def _transform_task(
         on_attempt=on_attempt,
         budget=budget,
     )
-    return [SubQuery(question=task.query, retrieval_text=retrieval_text)]
+    passage_text, row_text = split_hyde_output(retrieval_text)
+    return [
+        SubQuery(
+            question=task.query,
+            retrieval_text=passage_text,
+            extra_retrieval_texts=(row_text,) if row_text else (),
+        )
+    ]
 
 
 async def transform_tasks(
@@ -242,6 +288,7 @@ async def transform_tasks(
     decomposer_agent: Agent[None, str] | None = None,
     confirmed_metadata: dict[str, str] | None = None,
     history: Sequence[HistoryMessage] = (),
+    role: str | None = None,
     purpose: str | None = None,
     credential: CredentialConfig | None = None,
     snapshot_version: int | None = None,
@@ -276,6 +323,7 @@ async def transform_tasks(
                 mode,
                 confirmed_metadata=confirmed_metadata,
                 history=history,
+                role=role,
                 purpose=purpose,
                 credential=credential,
                 snapshot_version=snapshot_version,
@@ -294,6 +342,22 @@ async def transform_tasks(
         for task_index, sub_queries in enumerate(per_task)
         for sub_query in sub_queries
     ]
+
+
+def split_hyde_output(hyde_output: str) -> tuple[str, str | None]:
+    """HyDE's `question / passage / row` blocks as (question + passage, question + row).
+    The row is the last block when there are three and it is written as a table row
+    (" | "); anything else is kept as the passage. The passage loses the numbers the
+    question does not state (`strip_unstated_numbers`); a one-block output stays whole."""
+
+    blocks = [block.strip() for block in hyde_output.strip().split("\n\n") if block.strip()]
+    if len(blocks) < 2:
+        return hyde_output, None
+    question = blocks[0]
+    row = blocks[-1] if len(blocks) >= 3 and " | " in blocks[-1] else None
+    passages = blocks[1:-1] if row is not None else blocks[1:]
+    passage = strip_unstated_numbers("\n\n".join(passages), question)
+    return f"{question}\n\n{passage}", f"{question}\n\n{row}" if row is not None else None
 
 
 def extract_standalone_question(hyde_output: str) -> str:

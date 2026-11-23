@@ -16,12 +16,14 @@ async def retrieve_chunks(
     security: AcademicSecurityContext,
     *,
     lexical_queries: Sequence[str] | None = None,
+    extra_queries: Sequence[Sequence[str]] | None = None,
 ) -> list[list[RetrievedChunk]]:
     """Results stay per query (in query order) so rerank can tell which
     sub-query found nothing; `rerank_chunks` merges them afterwards.
 
     `lexical_queries`: the standalone question of each query, for the BM25 side of the
-    hybrid search (the dense side embeds `queries`, the HyDE texts)."""
+    hybrid search (the dense side embeds `queries`, the HyDE texts). `extra_queries`: more
+    dense texts per query (the HyDE table row), merged into that query's dense side."""
 
     # A per-query quota keeps one sub-query from filling the whole top-k.
     limit = (
@@ -32,4 +34,5 @@ async def retrieve_chunks(
         security=security,
         limit=limit,
         lexical_queries=list(lexical_queries) if lexical_queries is not None else None,
+        extra_queries=[list(texts) for texts in extra_queries] if extra_queries else None,
     )

@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.registry.model_registry import CredentialConfig
 from app.core.registry.model_router import ModelRouter
 from app.core.timezone import now_ict
+from app.graph.nodes.query_transformation import strip_unstated_numbers
 from app.graph.streaming import (
     AgentFactory,
     AttemptRecorder,
@@ -124,6 +125,7 @@ def _normalize_task(raw_task: object, message: str) -> ClassifiedTask | None:
         query=query,
         routing_mode=routing_mode,
         hyde_text=_hyde_text(raw_task) if routing_mode == "SINGLE" else None,
+        hyde_row_text=_hyde_text(raw_task, "hyde_row") if routing_mode == "SINGLE" else None,
         sub_queries=_sub_queries(raw_task) if routing_mode == "MULTI" else None,
         **_task_web(raw_task, routing_mode) if intent == "academic_advisory" else {},
     )
@@ -162,16 +164,20 @@ def _text(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _hyde_text(raw_task: dict[str, Any]) -> str | None:
-    """Same shape HyDE returns: the standalone question, a blank line, the passage."""
+def _hyde_text(raw_task: dict[str, Any], passage_key: str = "hyde_passage") -> str | None:
+    """Same shape HyDE returns: the standalone question, a blank line, the passage
+    (`hyde_passage`, or the table-row form `hyde_row`)."""
 
     question = raw_task.get("standalone_question")
-    passage = raw_task.get("hyde_passage")
+    passage = raw_task.get(passage_key)
     if not (isinstance(question, str) and question.strip()):
         return None
     if not (isinstance(passage, str) and passage.strip()):
         return None
-    return f"{question.strip()}\n\n{passage.strip()}"
+    passage = passage.strip()
+    if passage_key == "hyde_passage":
+        passage = strip_unstated_numbers(passage, question)
+    return f"{question.strip()}\n\n{passage}"
 
 
 def _sub_queries(raw_task: dict[str, Any]) -> list[str] | None:
@@ -249,6 +255,7 @@ def describe_classification(classification: IntentClassification) -> str:
             "query": task.query,
             "routing_mode": task.routing_mode,
             "hyde_text": task.hyde_text,
+            "hyde_row_text": task.hyde_row_text,
             "sub_queries": task.sub_queries,
             "web": (
                 [

@@ -21,6 +21,9 @@ class ClassifiedTask(BaseModel):
     # QueryTransformationNode can skip its own LLM call. Never persisted: a resumed
     # task re-runs on a new query.
     hyde_text: str | None = Field(default=None, exclude=True)
+    # The same standalone question with the passage written as a table row in the
+    # documents' own column names - a second dense query, for answers held in a table.
+    hyde_row_text: str | None = Field(default=None, exclude=True)
     sub_queries: list[str] | None = Field(default=None, exclude=True)
     # What WebSearchNode looks for, as slots code turns into a keyword query
     # (app/rag/web_query.py). Not persisted either: a resumed task searches by its question.

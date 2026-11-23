@@ -320,6 +320,21 @@ def test_parse_reads_hyde_text_of_a_single_task() -> None:
     assert parsed.sub_queries is None
 
 
+def test_parse_reads_the_table_row_form_of_a_single_task() -> None:
+    task = _task("academic_advisory", "học phí CNTT 1 tín", "SINGLE")
+    task |= {
+        "standalone_question": "Học phí 01 tín chỉ ngành CNTT?",
+        "hyde_passage": "Mức thu học phí...",
+        "hyde_row": "Mức thu học phí | Khối Công nghệ | Mức thu 01 tín chỉ",
+    }
+
+    (parsed,) = parse_classification(_payload(task), "học phí CNTT 1 tín").tasks
+
+    assert parsed.hyde_row_text == (
+        "Học phí 01 tín chỉ ngành CNTT?\n\nMức thu học phí | Khối Công nghệ | Mức thu 01 tín chỉ"
+    )
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

@@ -177,11 +177,38 @@ def append_recent_history(query: str, history: Sequence[HistoryMessage]) -> str:
     if not recent:
         return query
     history_lines = "\n".join(_recent_history_line(message) for message in recent)
-    return (
+    prompt = (
         f"{query}\n\n"
         "Lịch sử hội thoại gần đây (chỉ dùng để hiểu tin nhắn nối tiếp ở trên):\n"
         f"{history_lines}"
     )
+    previous = last_retrieval_questions(history)
+    if not previous:
+        return prompt
+    previous_lines = "\n".join(f"- {question}" for question in previous)
+    return f"{prompt}\n\n{PREVIOUS_RETRIEVAL_QUESTIONS_LABEL}\n{previous_lines}"
+
+
+# Named in the HyDE / classifier / decomposer prompts - change them together.
+PREVIOUS_RETRIEVAL_QUESTIONS_LABEL = "Câu hỏi đầy đủ của lượt tra cứu gần nhất:"
+
+
+def last_retrieval_questions(history: Sequence[HistoryMessage]) -> list[str]:
+    """The standalone questions of the latest turn that retrieved, across the whole
+    history and not just the recent window: each one already folds in the turns
+    before it, so a chain of short follow-ups ("k19 thì sao" -> "k21" -> "hệ chính
+    quy á bạn") keeps its topic after the first question has left the window (the
+    "Tiếng Anh 2" of a 4-turn chain was lost, 23-11-2026). A calculation turn after
+    it ends the chain - a follow-up then belongs to the calculation."""
+
+    for message in reversed(history):
+        if message.role != "ASSISTANT":
+            continue
+        if message.retrieval_questions:
+            return list(message.retrieval_questions)
+        if message.calculation:
+            return []
+    return []
 
 
 def _neutralize_frame_tags(text: str) -> str:

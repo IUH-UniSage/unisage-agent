@@ -12,9 +12,12 @@ from app.graph.nodes.query_transformation import (
     build_decomposer_agent,
     build_query_transformation_agent,
     decompose_query,
+    split_hyde_output,
+    strip_unstated_numbers,
     transform_query,
     transform_tasks,
 )
+from app.rag.prompting.builder import PREVIOUS_RETRIEVAL_QUESTIONS_LABEL, last_retrieval_questions
 from app.schemas.chat_history import HistoryMessage
 from app.schemas.intent import ClassifiedTask, RoutingMode
 
@@ -57,6 +60,21 @@ async def test_transform_query_folds_confirmed_metadata_into_prompt(
     assert "CHỈ dùng cho tiêu chí câu hỏi không tự nêu" in seen_prompts[-1]
 
 
+@pytest.mark.asyncio
+async def test_transform_query_tells_hyde_who_is_asking() -> None:
+    seen_prompts: list[str] = []
+
+    def capturing_function(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        seen_prompts.append(getattr(messages[-1].parts[-1], "content", ""))
+        return ModelResponse(parts=[TextPart(content="hyde doc")])
+
+    agent = build_query_transformation_agent(FunctionModel(capturing_function))
+
+    await transform_query(agent, "điều chỉnh điểm cuối kỳ nhập sai", role="GIANG_VIEN")
+
+    assert "<user_role>GIANG_VIEN</user_role>" in seen_prompts[-1]
+
+
 def test_hyde_and_decomposer_keep_the_asked_value_over_the_profile() -> None:
     from app.rag.prompting import get_templates
 
@@ -94,6 +112,118 @@ async def test_transform_query_appends_recent_history_without_citation_markers()
     assert "Mức thu là ... đồng" in prompt
     assert "60.000.000" not in prompt
     assert "[1]" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_transform_query_keeps_the_last_lookup_question_past_the_history_window() -> None:
+    """A chain of short follow-ups lost its topic once the first question left the
+    4-message window: "hệ chính quy á bạn" no longer knew it was about Tiếng Anh 2."""
+
+    seen_prompts: list[str] = []
+
+    def capturing_function(messages: list[ModelMessage], _agent_info: AgentInfo) -> ModelResponse:
+        last_part = messages[-1].parts[-1]
+        seen_prompts.append(getattr(last_part, "content", ""))
+        return ModelResponse(parts=[TextPart(content="hyde doc")])
+
+    agent = build_query_transformation_agent(FunctionModel(capturing_function))
+    first = "Tiếng Anh 2 ngành Công nghệ kỹ thuật cơ khí khóa 16 học trước môn nào?"
+    latest = "Tiếng Anh 2 ngành Công nghệ kỹ thuật cơ khí khóa K21 học trước môn nào?"
+
+    await transform_query(
+        agent,
+        "hệ chính quy á bạn",
+        history=[
+            HistoryMessage(role="USER", content=first),
+            HistoryMessage(role="ASSISTANT", content="...", retrieval_questions=[first]),
+            HistoryMessage(role="USER", content="k19 thì sao"),
+            HistoryMessage(role="ASSISTANT", content="...", retrieval_questions=["k19"]),
+            HistoryMessage(role="USER", content="k21"),
+            HistoryMessage(role="ASSISTANT", content="...", retrieval_questions=[latest]),
+        ],
+    )
+
+    prompt = seen_prompts[-1]
+    assert first not in prompt
+    assert f"{PREVIOUS_RETRIEVAL_QUESTIONS_LABEL}\n- {latest}" in prompt
+
+
+def test_a_calculation_after_the_last_lookup_ends_the_chain() -> None:
+    lookup = "Học phí ngành CNTT khóa K21 là bao nhiêu?"
+    history = [
+        HistoryMessage(role="ASSISTANT", content="...", retrieval_questions=[lookup]),
+        HistoryMessage(role="USER", content="tính học phí 18 tín"),
+        HistoryMessage(role="ASSISTANT", content="...", calculation=True),
+        HistoryMessage(role="USER", content="cảm ơn"),
+        HistoryMessage(role="ASSISTANT", content="Không có gì!"),
+    ]
+
+    assert last_retrieval_questions(history) == []
+    assert last_retrieval_questions(history[:1]) == [lookup]
+
+
+def test_query_prompts_name_the_previous_lookup_question() -> None:
+    from app.rag.prompting import get_templates
+
+    templates = get_templates()
+    for template in (
+        templates.agent_hyde_generator,
+        templates.agent_message_classification_retrieval,
+        templates.agent_multi_query_decomposer,
+        templates.agent_message_classification,
+    ):
+        assert "Câu hỏi đầy đủ của lượt tra cứu gần nhất" in template
+    assert PREVIOUS_RETRIEVAL_QUESTIONS_LABEL.startswith("Câu hỏi đầy đủ của lượt tra cứu gần nhất")
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("Q?\n\nĐoạn.\n\nBảng | Cột", ("Q?\n\nĐoạn.", "Q?\n\nBảng | Cột")),
+        ("Q?\n\nĐoạn.", ("Q?\n\nĐoạn.", None)),
+        # A third block that is not a table row stays part of the passage.
+        ("Q?\n\nĐoạn.\n\nThêm.", ("Q?\n\nĐoạn.\n\nThêm.", None)),
+        # Numbers the question does not state leave the passage, never the row.
+        (
+            "Khóa K20 (nhập học 2024)?\n\nKhóa 2024 đạt từ 3.20 trở lên.\n\nCTĐT 2024-2025 | Cột",
+            (
+                "Khóa K20 (nhập học 2024)?\n\nKhóa 2024 đạt từ ... trở lên.",
+                "Khóa K20 (nhập học 2024)?\n\nCTĐT 2024-2025 | Cột",
+            ),
+        ),
+    ],
+)
+def test_split_hyde_output(output: str, expected: tuple[str, str | None]) -> None:
+    assert split_hyde_output(output) == expected
+
+
+@pytest.mark.asyncio
+async def test_the_classifier_row_becomes_an_extra_retrieval_text() -> None:
+    task = ClassifiedTask(
+        intent="academic_advisory",
+        query="học phí CNTT",
+        routing_mode="SINGLE",
+        hyde_text="Q?\n\nĐoạn.",
+        hyde_row_text="Q?\n\nBảng | Cột",
+    )
+    agent = build_query_transformation_agent(FunctionModel(lambda *_: ModelResponse(parts=[])))
+
+    (sub_query,) = await transform_tasks(agent, [(task, "SINGLE")])
+
+    assert sub_query.retrieval_text == "Q?\n\nĐoạn."
+    assert sub_query.extra_retrieval_texts == ("Q?\n\nBảng | Cột",)
+
+
+@pytest.mark.parametrize(
+    ("passage", "question", "expected"),
+    [
+        ("loại giỏi từ 3.20 đến 3.59", "tốt nghiệp loại giỏi?", "loại giỏi từ ... đến ..."),
+        ("mức thu 01 tín chỉ khóa 2025", "1 tín chỉ khóa 2025?", "mức thu 01 tín chỉ khóa 2025"),
+        ("mức thu 3,2 triệu", "có phải 3.20 triệu?", "mức thu 3,2 triệu"),
+    ],
+)
+def test_strip_unstated_numbers(passage: str, question: str, expected: str) -> None:
+    assert strip_unstated_numbers(passage, question) == expected
 
 
 class _FakeRedis:

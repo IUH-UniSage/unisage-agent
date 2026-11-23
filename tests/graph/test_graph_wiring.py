@@ -847,6 +847,7 @@ async def test_the_web_judge_runs_while_retrieval_is_still_running(
             security: AcademicSecurityContext,
             limit: int | None = None,
             lexical_queries: list[str] | None = None,
+            extra_queries: list[list[str]] | None = None,
         ) -> list[list[RetrievedChunk]]:
             await asyncio.wait_for(judged.wait(), timeout=2)
             return self.retrieve_many(queries, security=security, limit=limit)

@@ -47,6 +47,7 @@ class RetrievalServiceProtocol(Protocol):
         security: AcademicSecurityContext,
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
+        extra_queries: list[list[str]] | None = None,
     ) -> list[list[RetrievedChunk]]: ...
 
     async def retrieve_many_async(
@@ -56,6 +57,7 @@ class RetrievalServiceProtocol(Protocol):
         security: AcademicSecurityContext,
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
+        extra_queries: list[list[str]] | None = None,
     ) -> list[list[RetrievedChunk]]: ...
 
     def fetch(
@@ -105,16 +107,23 @@ class RetrievalService:
         security: AcademicSecurityContext,
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
+        extra_queries: list[list[str]] | None = None,
     ) -> list[list[RetrievedChunk]]:
         """One embedding call and one Qdrant round trip for all `queries`. `lexical_queries`
         (one per query, the standalone question) adds the BM25 side of the hybrid search
         when the collection has it (docs/specs/SPEC-hybrid-retrieval.md)."""
 
         started_at = time.monotonic()
-        query_vectors = self.embedder.embed(queries)
+        texts, extra_counts = _all_dense_texts(queries, extra_queries)
+        vectors = self.embedder.embed(texts)
         embedded_at = time.monotonic()
+        query_vectors, extra_vectors = _split_vectors(vectors, len(queries), extra_counts)
         result = self._search(
-            query_vectors, security=security, limit=limit, lexical_queries=lexical_queries
+            query_vectors,
+            security=security,
+            limit=limit,
+            lexical_queries=lexical_queries,
+            extra_vectors=extra_vectors,
         )
         _log_timing(len(queries), started_at, embedded_at)
         return result
@@ -126,6 +135,7 @@ class RetrievalService:
         security: AcademicSecurityContext,
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
+        extra_queries: list[list[str]] | None = None,
     ) -> list[list[RetrievedChunk]]:
         """`retrieve_many` for chat: embeds on the caller's event loop (see
         `EmbeddingProvider.embed_async`), only the synchronous Qdrant call goes to a worker
@@ -133,14 +143,17 @@ class RetrievalService:
         embedder's connections must always be used from the server's loop."""
 
         started_at = time.monotonic()
-        query_vectors = await self.embedder.embed_async(queries)
+        texts, extra_counts = _all_dense_texts(queries, extra_queries)
+        vectors = await self.embedder.embed_async(texts)
         embedded_at = time.monotonic()
+        query_vectors, extra_vectors = _split_vectors(vectors, len(queries), extra_counts)
         result = await asyncio.to_thread(
             self._search,
             query_vectors,
             security=security,
             limit=limit,
             lexical_queries=lexical_queries,
+            extra_vectors=extra_vectors,
         )
         _log_timing(len(queries), started_at, embedded_at)
         return result
@@ -152,6 +165,7 @@ class RetrievalService:
         security: AcademicSecurityContext,
         limit: int | None,
         lexical_queries: list[str] | None = None,
+        extra_vectors: list[list[list[float]]] | None = None,
     ) -> list[list[RetrievedChunk]]:
         effective_limit = limit if limit is not None else settings.CHAT_RETRIEVAL_MAX_CHUNKS
         client = self.client or get_client()
@@ -169,6 +183,7 @@ class RetrievalService:
             limits=[effective_limit] * len(query_vectors),
             query_filter=build_access_filter(security),
             sparse_queries=sparse_queries,
+            extra_query_vectors=extra_vectors,
         )
         results = [
             [_to_retrieved_chunk(point, point.score) for point in points]
@@ -191,6 +206,35 @@ class RetrievalService:
         client = self.client or get_client()
         records = fetch_chunks_by_ids(client, chunk_ids, build_access_filter(security))
         return [_to_retrieved_chunk(record, 1.0) for record in records]
+
+
+def _all_dense_texts(
+    queries: list[str], extra_queries: list[list[str]] | None
+) -> tuple[list[str], list[int]]:
+    """Every text to embed in one call: the queries first, then each query's extra texts
+    in query order; with how many extras each query has."""
+
+    extras = extra_queries if extra_queries is not None else [[] for _ in queries]
+    if len(extras) != len(queries):
+        raise ValueError("extra_queries must have one list per query")
+    return [*queries, *(text for texts in extras for text in texts)], [len(t) for t in extras]
+
+
+def _split_vectors(
+    vectors: list[list[float]], query_count: int, extra_counts: list[int]
+) -> tuple[list[list[float]], list[list[list[float]]] | None]:
+    """`_all_dense_texts` reversed: the query vectors, and each query's extra vectors
+    (None when no query has any)."""
+
+    query_vectors = vectors[:query_count]
+    if not any(extra_counts):
+        return query_vectors, None
+    extra_vectors: list[list[list[float]]] = []
+    cursor = query_count
+    for count in extra_counts:
+        extra_vectors.append(vectors[cursor : cursor + count])
+        cursor += count
+    return query_vectors, extra_vectors
 
 
 _EXPANDING_MODES = frozenset({"cross_encoder", "cross_encoder_then_llm"})

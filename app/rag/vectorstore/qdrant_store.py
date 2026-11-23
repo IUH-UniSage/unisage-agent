@@ -388,6 +388,7 @@ def search_chunks_batch(
     candidate_multiplier: int | None = None,
     rrf_k: int | None = None,
     lexical_hit_score: float | None = None,
+    extra_query_vectors: Sequence[Sequence[list[float]]] | None = None,
 ) -> list[list[models.ScoredPoint]]:
     """`search_chunks` for several queries at once: every query x named
     vector goes out in one `query_batch_points` round trip.
@@ -403,7 +404,11 @@ def search_chunks_batch(
     `has_sparse_vector` first.
 
     `query_filter` (the caller's permissions) is applied identically to every query, sparse
-    included: a chunk the caller may not see never surfaces by matching a code."""
+    included: a chunk the caller may not see never surfaces by matching a code.
+
+    `extra_query_vectors` (per query, may be empty): more dense vectors for the same query
+    (the HyDE passage written as a table row). They join that query's dense side - best
+    cosine per chunk over every vector - so the dense side still has one vote against BM25."""
 
     hybrid = sparse_queries is not None
     multiplier = (
@@ -412,22 +417,27 @@ def search_chunks_batch(
         else 1
     )
     requests: list[models.QueryRequest] = []
-    # Per query: how many requests went out (3 dense, +1 when it had a sparse vector).
+    # Per query: how many requests went out (3 dense per dense vector, +1 when it had a
+    # sparse vector) and how many of them were dense.
     request_counts: list[int] = []
+    dense_counts: list[int] = []
     for position, (vector, limit) in enumerate(zip(query_vectors, limits, strict=True)):
         fetch = limit * multiplier
         count = 0
-        for vector_name in _VECTOR_NAMES:
-            requests.append(
-                models.QueryRequest(
-                    query=vector,
-                    using=vector_name,
-                    limit=fetch,
-                    with_payload=True,
-                    filter=query_filter,
+        extras = extra_query_vectors[position] if extra_query_vectors is not None else ()
+        for dense_vector in (vector, *extras):
+            for vector_name in _VECTOR_NAMES:
+                requests.append(
+                    models.QueryRequest(
+                        query=dense_vector,
+                        using=vector_name,
+                        limit=fetch,
+                        with_payload=True,
+                        filter=query_filter,
+                    )
                 )
-            )
-            count += 1
+                count += 1
+        dense_counts.append(count)
         sparse = sparse_queries[position] if sparse_queries is not None else None
         if sparse is not None and sparse[0]:
             requests.append(
@@ -452,10 +462,9 @@ def search_chunks_batch(
             return [[] for _ in query_vectors]
         raise
 
-    dense_count = len(_VECTOR_NAMES)
     results: list[list[models.ScoredPoint]] = []
     cursor = 0
-    for limit, count in zip(limits, request_counts, strict=True):
+    for limit, count, dense_count in zip(limits, request_counts, dense_counts, strict=True):
         dense_responses = responses[cursor : cursor + dense_count]
         sparse_response = responses[cursor + dense_count] if count > dense_count else None
         cursor += count

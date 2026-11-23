@@ -85,3 +85,37 @@ def test_only_an_absurd_number_of_questions_is_cut() -> None:
 def test_nothing_to_ask_gives_no_round() -> None:
     empty = TaskQuestions(task=_task("T1").task, questions=[])
     assert build_round([empty], original_query="q", chain_depth=1) is None
+
+
+_PROGRAMME_FORM = {
+    "type": "ask_user_form",
+    "about": "self",
+    "fields": [
+        {
+            "field": "he_dao_tao",
+            "label": "Chương trình đào tạo",
+            "options": [
+                {"id": "chinh_quy_chuan", "label": "Đại học chính quy (chương trình chuẩn)"},
+                {
+                    "id": "chinh_quy_tang_cuong_tieng_anh",
+                    "label": "Đại học chính quy tăng cường tiếng Anh",
+                },
+            ],
+        }
+    ],
+}
+
+
+def test_a_profile_value_that_picks_no_option_is_asked_again() -> None:
+    """ "Chính quy" fits both programmes, so it does not answer which one."""
+
+    asked = advisory_questions([_PROGRAMME_FORM], confirmed_metadata={"he_dao_tao": "Chính quy"})
+
+    assert [q["field"] for q in asked] == ["he_dao_tao"]
+
+
+def test_a_profile_value_that_picks_one_option_is_not_asked_again() -> None:
+    for stored in ("chinh_quy_chuan", "Đại học chính quy tăng cường tiếng Anh", "Liên thông"):
+        assert (
+            advisory_questions([_PROGRAMME_FORM], confirmed_metadata={"he_dao_tao": stored}) == []
+        )

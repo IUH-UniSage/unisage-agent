@@ -96,6 +96,9 @@ class GraphOutput:
     # Evidence sufficiency per sub-query (app/graph/evidence.py): signals and level, for
     # the eval and the threshold study; empty when the turn had no retrieval.
     evidence: list[dict[str, Any]] = field(default_factory=list)
+    # The standalone questions this turn retrieved with, stored on the ASSISTANT
+    # message so the next turn's rewrite starts from them (`last_retrieval_questions`).
+    retrieval_questions: list[str] = field(default_factory=list)
 
     @property
     def last_calculation(self) -> LastCalculation | None:

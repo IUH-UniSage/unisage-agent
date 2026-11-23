@@ -180,10 +180,12 @@ class RetrieveManyMixin:
         security: AcademicSecurityContext,
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
+        extra_queries: list[list[str]] | None = None,
     ) -> list[list[RetrievedChunk]]:
         # Remembered so a test can assert the standalone questions reached retrieval
         # (`object.__setattr__`: most fakes are frozen dataclasses).
         object.__setattr__(self, "last_lexical_queries", lexical_queries)
+        object.__setattr__(self, "last_extra_queries", extra_queries)
         retrieve = self.retrieve  # type: ignore[attr-defined]
         return [retrieve(query, security=security, limit=limit) for query in queries]
 
@@ -194,9 +196,14 @@ class RetrieveManyMixin:
         security: AcademicSecurityContext,
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
+        extra_queries: list[list[str]] | None = None,
     ) -> list[list[RetrievedChunk]]:
         return self.retrieve_many(
-            queries, security=security, limit=limit, lexical_queries=lexical_queries
+            queries,
+            security=security,
+            limit=limit,
+            lexical_queries=lexical_queries,
+            extra_queries=extra_queries,
         )
 
     def fetch(

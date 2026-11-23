@@ -81,6 +81,7 @@ from app.graph.streaming import BudgetContext
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient, with_java_retries
+from app.schemas.chat_history import RETRIEVAL_QUESTIONS_KEY
 from app.schemas.clarification import LastCalculation, PendingRound
 
 logger = logging.getLogger(__name__)
@@ -401,6 +402,8 @@ async def run_and_persist(
                     "status": "open",
                     "panel": pending_round.panel.public().model_dump(mode="json"),
                 }
+            if graph_output is not None and graph_output.retrieval_questions:
+                metadata[RETRIEVAL_QUESTIONS_KEY] = graph_output.retrieval_questions
             if graph_output is not None and graph_output.calculation_items:
                 metadata["calculation"] = {
                     "schema_version": 1,

@@ -209,3 +209,19 @@ def test_a_document_code_written_with_a_hyphen_is_not_a_figure() -> None:
     assert report.ungrounded == []
     # Year ranges and plain figures before a hyphen are still read.
     assert numbers_in("năm học 2024-2025 có 15-20 tín chỉ") != {}
+
+
+def test_a_number_in_an_uncited_source_is_miscited_not_made_up() -> None:
+    from app.graph.grounding import miscited_sources, source_line
+
+    sources = [
+        "| 2 | Tiếng Anh 2 | 4203015254 | 3(3,0,6) | 4203015253(a) |",
+        "| 2 | Anh văn 2 | 4297015256 | 4(4,0,8) | 4297015255(a) |",
+    ]
+
+    found = miscited_sources(["4297015256", "4297015255", "999"], sources, cited=[1])
+
+    assert found == {"4297015256": [2], "4297015255": [2]}
+    assert source_line(found) == "\n\n> Nguồn của 4297015256, 4297015255: [2]."
+    # A number inside a longer one is not that number.
+    assert miscited_sources(["42970"], sources, cited=[1]) == {}

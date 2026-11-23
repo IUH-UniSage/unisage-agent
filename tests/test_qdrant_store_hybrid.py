@@ -35,6 +35,32 @@ def _scored(point_id: str, score: float) -> ScoredPoint:
 # --------------------------------------------------------------------------- search
 
 
+def test_extra_dense_vectors_join_the_dense_side_of_their_query() -> None:
+    """The HyDE table row is one more dense vector of the same query: its hits merge into
+    that query's dense ranking (best cosine per chunk), never into another query's."""
+
+    client = MagicMock()
+    client.query_batch_points.return_value = (
+        [QueryResponse(points=[_scored("prose", 0.6)])] * 3  # q1, passage
+        + [QueryResponse(points=[_scored("table", 0.8), _scored("prose", 0.5)])] * 3  # q1, row
+        + [QueryResponse(points=[_scored("other", 0.7)])] * 3  # q2, no extra
+    )
+
+    results = search_chunks_batch(
+        client,
+        query_vectors=[[0.1], [0.2]],
+        limits=[4, 4],
+        extra_query_vectors=[[[0.3]], []],
+    )
+
+    requests = client.query_batch_points.call_args.kwargs["requests"]
+    assert [request.query for request in requests] == [[0.1]] * 3 + [[0.3]] * 3 + [[0.2]] * 3
+    assert [[(p.id, p.score) for p in points] for points in results] == [
+        [("table", 0.8), ("prose", 0.6)],
+        [("other", 0.7)],
+    ]
+
+
 def test_hybrid_sends_a_bm25_request_per_query_with_the_same_filter() -> None:
     client = MagicMock()
     client.query_batch_points.return_value = [QueryResponse(points=[])] * 8
