@@ -11,7 +11,10 @@ from app.core.registry.model_registry import index_collections
 from app.database.repositories.ingestion_job import delete_draft, set_draft_department
 from app.rag.vectorstore import qdrant_store
 from app.schemas.document_index import IndexMetadataUpdateRequest
-from app.services.retrieval_cache_invalidation import invalidate_document
+from app.services.retrieval_cache_invalidation import (
+    invalidate_document,
+    invalidate_visibility_change,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,11 @@ async def update_index_metadata(
         )
     if request.department_id is not None:
         await set_draft_department(session, document_id, request.department_id)
-    await invalidate_document(document_id)
+    # Purge what referenced the document and bump the scopes that can see it now: a user
+    # who just gained access must not keep the cached "no information" answer.
+    await invalidate_visibility_change(
+        document_id, department_id=request.department_id, is_public=request.is_public
+    )
     logger.info(
         "document %s: access payload rewritten on %d point(s) (department=%s, level=%d, public=%s)",
         document_id,

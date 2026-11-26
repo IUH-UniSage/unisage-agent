@@ -62,14 +62,56 @@ async def test_invalidate_after_embed_purges_and_bumps_the_documents_scope(
 
     await inv.invalidate_after_embed("doc-1", department_id="CNTT", is_public=False)
     assert await cache.get("l2", rc.entry_key("l2", "a")) is None
-    assert await cache.read_generations(["public", "dept:CNTT", "dept:KT"]) == {
+    # The wildcard scope too: SUPER_ADMIN's keys depend on dept:*, not dept:CNTT.
+    assert await cache.read_generations(["public", "dept:CNTT", "dept:KT", "dept:*"]) == {
         "public": 0,
         "dept:CNTT": 1,
         "dept:KT": 0,
+        "dept:*": 1,
     }
 
     await inv.invalidate_after_embed("doc-2", department_id="CNTT", is_public=True)
-    assert await cache.read_generations(["public", "dept:CNTT"]) == {"public": 1, "dept:CNTT": 1}
+    assert await cache.read_generations(["public", "dept:CNTT", "dept:*"]) == {
+        "public": 1,
+        "dept:CNTT": 1,
+        "dept:*": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_wildcard_key_changes_after_an_embed_in_any_department(
+    fake_cache: tuple[FakeRedisStore, RedisRetrievalCache],
+) -> None:
+    """SA-001 (department access `*`) asked before the document existed; after the embed
+    its key must not match the cached "no information" entry any more."""
+
+    from app.graph.nodes.retrieval_cache import scope_of
+    from app.schemas.security import AcademicSecurityContext, DepartmentAccessEntry
+
+    _store, cache = fake_cache
+    admin = AcademicSecurityContext(
+        role="SUPER_ADMIN",
+        department_access=[DepartmentAccessEntry(department_id="*", access_level=100)],
+    )
+    _scope, scopes = scope_of(admin)
+    before = await cache.read_generations(scopes)
+    await inv.invalidate_after_embed("doc-1", department_id="CNPM", is_public=False)
+    assert await cache.read_generations(scopes) != before
+
+
+@pytest.mark.asyncio
+async def test_visibility_change_bumps_the_scopes_that_can_see_the_document(
+    fake_cache: tuple[FakeRedisStore, RedisRetrievalCache],
+) -> None:
+    _store, cache = fake_cache
+    await inv.invalidate_visibility_change("doc-1", department_id="KT", is_public=False)
+    assert await cache.read_generations(["public", "dept:KT", "dept:*"]) == {
+        "public": 0,
+        "dept:KT": 1,
+        "dept:*": 1,
+    }
+    await inv.invalidate_visibility_change("doc-1", department_id="KT", is_public=True)
+    assert (await cache.read_generations(["public"]))["public"] == 1
 
 
 @pytest.mark.asyncio
@@ -97,7 +139,11 @@ async def test_index_metadata_update_and_delete_invalidate_the_document(
         purged.append(document_id)
         return 1
 
+    async def fake_visibility(document_id: str, **_: Any) -> None:
+        purged.append(document_id)
+
     monkeypatch.setattr(document_index_service, "invalidate_document", fake_invalidate)
+    monkeypatch.setattr(document_index_service, "invalidate_visibility_change", fake_visibility)
     monkeypatch.setattr(document_index_service, "index_collections", lambda: ("unisage_chunks",))
     client = MagicMock()
     with (
