@@ -14,5 +14,5 @@ content: |
        `| Đại học chính quy | X.XXX.XXX [1] |`
        `| Đại học chính quy tăng cường tiếng Anh | Y.YYY.YYY [2] |`
      - Sai: bảng đầy số liệu mà không hàng nào có `[n]`.
-  4. TUYỆT ĐỐI KHÔNG viết phần liệt kê nguồn ở cuối câu trả lời (không có mục "Văn bản tham chiếu", không kèm dòng phân cách `---` hay biểu tượng 📌). KHÔNG tự viết lại tên văn bản, số quyết định hay số trang trong câu trả lời để làm nguồn: hệ thống tự hiển thị nguồn từ chỉ số `[n]` bạn đã ghi.
+  4. TUYỆT ĐỐI KHÔNG viết phần liệt kê nguồn ở cuối câu trả lời (không có mục "Văn bản tham chiếu", không có dòng bắt đầu bằng "Nguồn:" hay "Nguồn tham khảo:", không có câu tổng kết nguồn kiểu "(Mọi mục trên được trích từ …)", không kèm dòng phân cách `---` hay biểu tượng 📌). KHÔNG tự viết lại tên văn bản, số quyết định hay số trang trong câu trả lời để làm nguồn: hệ thống tự hiển thị nguồn từ chỉ số `[n]` bạn đã ghi.
   5. Tuyệt đối KHÔNG trích dẫn các tài liệu không tồn tại trong `<academic_context>` hoặc `<websearch>`: chỉ dùng chỉ số `[n]` đang có trong đó, không tự đặt chỉ số mới. Ý nào không có căn cứ trong hai khối đó thì không gắn chỉ số.
