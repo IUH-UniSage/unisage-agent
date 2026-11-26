@@ -87,3 +87,33 @@ def test_nothing_happens_without_a_cohort_document_or_one_asked_cohort(
 
     assert scope.chunks == chunks
     assert scope.notice == ""
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # 25/11/2026: "K15" was not read, so a K18 question got K15's plan as K18's.
+        (
+            "Thông báo kế hoạch thực hiện khóa luận tốt nghiệp K15 ngành Công nghệ thực phẩm "
+            "năm học 2022-2023",
+            2019,
+        ),
+        ("Chương trình đào tạo ngành Kế toán khóa K22 (chính quy)", 2026),
+        ("Lịch thi HK2 năm học 2025-2026", None),  # "HK2" is a term, not a cohort
+    ],
+)
+def test_document_cohort_reads_k_numbers(title: str, expected: int | None) -> None:
+    assert document_cohort(f"{title}.pdf") == expected
+
+
+def test_a_cohort_without_documents_is_told_even_when_titles_write_k15() -> None:
+    k15 = _chunk(
+        "k15",
+        "Thông báo kế hoạch thực hiện khóa luận tốt nghiệp K15 ngành Công nghệ thực phẩm "
+        "năm học 2022-2023",
+    )
+    scope = check_cohort_scope(
+        ["Kế hoạch thực hiện khóa luận tốt nghiệp ngành công nghệ thực phẩm K18"], [k15]
+    )
+    assert scope.asked == 2022 and scope.available == (2019,)
+    assert "KHÔNG có tài liệu của khóa này" in scope.notice

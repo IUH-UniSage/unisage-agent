@@ -126,6 +126,7 @@ def _normalize_task(raw_task: object, message: str) -> ClassifiedTask | None:
         routing_mode=routing_mode,
         hyde_text=_hyde_text(raw_task) if routing_mode == "SINGLE" else None,
         hyde_row_text=_hyde_text(raw_task, "hyde_row") if routing_mode == "SINGLE" else None,
+        course=_text(raw_task.get("hoc_phan")) if routing_mode == "SINGLE" else None,
         sub_queries=_sub_queries(raw_task) if routing_mode == "MULTI" else None,
         **_task_web(raw_task, routing_mode) if intent == "academic_advisory" else {},
     )

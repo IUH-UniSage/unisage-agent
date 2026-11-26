@@ -1,5 +1,5 @@
 {
-  "_comment": "Sổ đăng ký tên field DUY NHẤT cho mọi giá trị người dùng khai hoặc nhập trên form (app/graph/metadata_fields.py). Mỗi field: `scope` = `profile` (thuộc tính ổn định của CHÍNH người dùng - sinh viên: khóa, ngành...; giảng viên/cán bộ: học vị, chức danh... - lưu vào hồ sơ student_profiles theo người dùng) hoặc `calculation` (số liệu của MỘT phép tính, lưu theo phép tính đó trong recent_calculations của hội thoại); `key_aliases` = các tên khoá khác cùng nghĩa, luôn được quy về `field` trước khi dùng. Không phải whitelist đóng: field lạ vẫn dùng được, nhưng khái niệm nào có ở đây thì BẮT BUỘC dùng đúng `field`. Mọi tên tham số `ParamSpec` của app/calculation/formulas.py phải có ở đây (test). Bảng cho node 10 (ask_user_form_guide.yaml) chỉ render field `profile`.",
+  "_comment": "Sổ đăng ký tên field DUY NHẤT cho mọi giá trị người dùng khai hoặc nhập trên form (app/graph/metadata_fields.py). Mỗi field: `scope` = `profile` (thuộc tính ổn định của CHÍNH người dùng - sinh viên: khóa, ngành...; giảng viên/cán bộ: học vị, chức danh... - lưu vào hồ sơ student_profiles theo người dùng) hoặc `calculation` (số liệu của MỘT phép tính, lưu theo phép tính đó trong recent_calculations của hội thoại) hoặc `retrieval` (ngữ cảnh tra cứu của hội thoại - học phần, chủ đề - lưu trong `retrieval_slots` của tin nhắn trả lời, app/graph/retrieval_slots.py); `key_aliases` = các tên khoá khác cùng nghĩa, luôn được quy về `field` trước khi dùng. Không phải whitelist đóng: field lạ vẫn dùng được, nhưng khái niệm nào có ở đây thì BẮT BUỘC dùng đúng `field`. Mọi tên tham số `ParamSpec` của app/calculation/formulas.py phải có ở đây (test). Bảng cho node 10 (ask_user_form_guide.yaml) chỉ render field `profile`.",
   "fields": [
     {
       "field": "he_dao_tao",
@@ -901,6 +901,39 @@
       "example_options": [],
       "priority": "low",
       "description": "Tổng thời gian của các khoảng giờ."
+    },
+    {
+      "field": "hoc_phan",
+      "scope": "retrieval",
+      "key_aliases": [
+        "mon_hoc",
+        "mon",
+        "ten_hoc_phan",
+        "ten_mon_hoc",
+        "course"
+      ],
+      "concept": "Học phần / môn học được hỏi",
+      "aliases": [
+        "học phần",
+        "môn học",
+        "môn"
+      ],
+      "description": "Ngữ cảnh tra cứu của hội thoại (retrieval_slots), không phải hồ sơ: tên học phần đầy đủ theo văn bản."
+    },
+    {
+      "field": "chu_de",
+      "scope": "retrieval",
+      "key_aliases": [
+        "subject",
+        "topic",
+        "chu_de_hoi"
+      ],
+      "concept": "Chủ đề / điều đang hỏi",
+      "aliases": [
+        "chủ đề",
+        "điều đang hỏi"
+      ],
+      "description": "Ngữ cảnh tra cứu của hội thoại (retrieval_slots): điều lượt tra cứu hỏi (VD học phần tiên quyết, số tín chỉ)."
     }
   ]
 }

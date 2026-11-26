@@ -78,7 +78,9 @@ def test_ticket_fallback_and_calculation_prompts_carry_the_current_time() -> Non
         build_ticket_fallback_prompt(
             user_query="Học phí kỳ này?", security=AcademicSecurityContext(), confirmed_metadata={}
         ),
-        build_calculation_review_prompt(user_query="x", calculation_payload="[]", history=[]),
+        build_calculation_review_prompt(
+            user_query="học phí kỳ này bao nhiêu", calculation_payload="[]", history=[]
+        ),
     ]
     for prompt in prompts:
         assert "<current_time>" in prompt

@@ -101,19 +101,21 @@ async def cross_encoder_rerank(
         order = _cap_expanded(
             sorted(range(len(chunks)), key=lambda i: (not named[i], -scores[i], i)), chunks, keep
         )
+        order, extra = _with_table_siblings(order, chunks, keep)
+        take = keep + extra
         kept = [
             chunks[i].model_copy(
                 update={"metadata": {**chunks[i].metadata, CE_SCORE_KEY: scores[i]}}
             )
-            for i in order[:keep]
+            for i in order[:take]
         ]
         per_query_kept.append(kept)
         logger.info(
             "cross-encoder SQ%d %r: kept [%s]; dropped [%s]",
             query_index + 1,
             question,
-            "; ".join(_label(chunks[i], scores[i]) for i in order[:keep]),
-            "; ".join(_label(chunks[i], scores[i]) for i in order[keep:]),
+            "; ".join(_label(chunks[i], scores[i]) for i in order[:take]),
+            "; ".join(_label(chunks[i], scores[i]) for i in order[take:]),
         )
 
     narrowed = turn_result(per_query_kept, best_scores=rerank_result.best_scores)
@@ -266,6 +268,48 @@ def _cap_expanded(order: list[int], chunks: Sequence[RetrievedChunk], keep: int)
             taken += 1
         head.append(index)
     return head + over
+
+
+def _table_key(chunk: RetrievedChunk) -> tuple[str, tuple[str, ...]] | None:
+    if chunk.metadata.get("region_type") != "table":
+        return None
+    return chunk.source, tuple(chunk.heading_path)
+
+
+def _with_table_siblings(
+    order: list[int], chunks: Sequence[RetrievedChunk], keep: int
+) -> tuple[list[int], int]:
+    """Bring back the other chunks of a table whose chunk was kept: a fee table is cut into
+    several chunks that share one document and heading path, and the cut at `keep` kept one
+    row-group and dropped its siblings (the newest cohorts' rows). They SWAP in for the
+    lowest-ranked kept chunks of other content and sit right after their table's first kept
+    chunk, so the head stays `keep` long: the turn is capped at CHAT_CONTEXT_MAX_CHUNKS (8)
+    and the calculation reads its first 5, so chunks added past the head would be cut again.
+    At most CHAT_CROSS_ENCODER_TABLE_SIBLINGS are swapped. Returns the new order and 0 (the
+    number of chunks added to the head, kept for the caller's slice)."""
+
+    cap = settings.CHAT_CROSS_ENCODER_TABLE_SIBLINGS
+    if cap <= 0 or len(order) <= keep:
+        return order, 0
+    head, rest = order[:keep], order[keep:]
+    wanted = {key for i in head if (key := _table_key(chunks[i])) is not None}
+    if not wanted:
+        return order, 0
+    pulled = [i for i in rest if _table_key(chunks[i]) in wanted][:cap]
+    victims = [i for i in reversed(head) if _table_key(chunks[i]) not in wanted][: len(pulled)]
+    pulled = pulled[: len(victims)]
+    if not pulled:
+        return order, 0
+    gone = set(victims)
+    new_head = [i for i in head if i not in gone]
+    for sibling in pulled:  # right after the first kept chunk of the same table
+        key = _table_key(chunks[sibling])
+        at = next((n for n, i in enumerate(new_head) if _table_key(chunks[i]) == key), 0)
+        while at + 1 < len(new_head) and _table_key(chunks[new_head[at + 1]]) == key:
+            at += 1
+        new_head.insert(at + 1, sibling)
+    moved = set(pulled)
+    return new_head + victims + [i for i in rest if i not in moved], 0
 
 
 def _label(chunk: RetrievedChunk, ce_score: float) -> str:

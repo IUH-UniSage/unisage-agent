@@ -576,6 +576,27 @@ def fetch_chunks_by_ids(
     )
 
 
+def document_titles(client: QdrantClient, collection: str | None = None) -> dict[str, str]:
+    """document_id -> object_key of every point's document (payload only, paged)."""
+
+    titles: dict[str, str] = {}
+    offset: Any = None
+    while True:
+        records, offset = client.scroll(
+            collection_name=_name(collection),
+            limit=5000,
+            offset=offset,
+            with_payload=["document_id", "object_key"],
+            with_vectors=False,
+        )
+        for record in records:
+            payload = record.payload or {}
+            if payload.get("document_id") and payload.get("object_key"):
+                titles[str(payload["document_id"])] = str(payload["object_key"])
+        if offset is None:
+            return titles
+
+
 def fetch_document_chunks(
     client: QdrantClient,
     document_ids: Sequence[str],

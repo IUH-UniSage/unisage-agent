@@ -23,6 +23,7 @@ import logging
 import time
 from collections.abc import Callable
 from contextvars import ContextVar, Token
+from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
@@ -103,10 +104,13 @@ class GraphTrace:
         user_id: str | None,
         client_ip: str | None,
         on_status: Callable[[str, str | None], None] | None = None,
+        on_debug: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         # Told (node name, page URL or None) each time a node starts or a web page is
         # read, so the chat stream can show the user what is happening (`event: status`).
         self._on_status = on_status
+        # APP_DEBUG data for the chat stream (`event: debug`).
+        self._on_debug = on_debug
         self._conversation_id = conversation_id
         self._message_id = message_id
         self._user_id = user_id or "guest"
@@ -114,6 +118,10 @@ class GraphTrace:
         self._started_at = time.perf_counter()
         self._current: tuple[str, float] | None = None
         self._first_token_seen = False
+
+    def debug(self, payload: dict[str, Any]) -> None:
+        if self._on_debug is not None:
+            self._on_debug(payload)
 
     def node(
         self,

@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 # The ASSISTANT message metadata key holding the standalone questions that turn
 # retrieved with (written by `run_and_persist`, read back from Java's turn context).
 RETRIEVAL_QUESTIONS_KEY = "retrieval_questions"
+# Its fields as named values (app/graph/retrieval_slots.py), same message.
+RETRIEVAL_SLOTS_KEY = "retrieval_slots"
 
 
 class HistoryMessage(BaseModel):
@@ -29,4 +31,6 @@ class HistoryMessage(BaseModel):
     role: str
     content: str
     retrieval_questions: list[str] = Field(default_factory=list)
+    # `retrieval_slots` (ASSISTANT only): the same turn's fields - học phần, ngành, khóa...
+    retrieval_slots: dict[str, str] = Field(default_factory=dict)
     calculation: bool = False

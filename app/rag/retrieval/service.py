@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import Record, ScoredPoint
 
 from app.core.config import settings
@@ -58,6 +58,7 @@ class RetrievalServiceProtocol(Protocol):
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
         extra_queries: list[list[str]] | None = None,
+        exclude_document_ids: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]: ...
 
     def fetch(
@@ -136,6 +137,7 @@ class RetrievalService:
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
         extra_queries: list[list[str]] | None = None,
+        exclude_document_ids: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
         """`retrieve_many` for chat: embeds on the caller's event loop (see
         `EmbeddingProvider.embed_async`), only the synchronous Qdrant call goes to a worker
@@ -154,6 +156,7 @@ class RetrievalService:
             limit=limit,
             lexical_queries=lexical_queries,
             extra_vectors=extra_vectors,
+            exclude_document_ids=exclude_document_ids,
         )
         _log_timing(len(queries), started_at, embedded_at)
         return result
@@ -166,7 +169,12 @@ class RetrievalService:
         limit: int | None,
         lexical_queries: list[str] | None = None,
         extra_vectors: list[list[list[float]]] | None = None,
+        exclude_document_ids: list[str] | None = None,
     ) -> list[list[RetrievedChunk]]:
+        """`exclude_document_ids`: documents left out of every list (dense and BM25 alike) -
+        a second search for the programme the user asked about, without the other
+        programmes' documents that won the first one (app/graph/program_scope.py)."""
+
         effective_limit = limit if limit is not None else settings.CHAT_RETRIEVAL_MAX_CHUNKS
         client = self.client or get_client()
         sparse_queries: list[SparseQuery | None] | None = None
@@ -181,7 +189,7 @@ class RetrievalService:
             client,
             query_vectors=query_vectors,
             limits=[effective_limit] * len(query_vectors),
-            query_filter=build_access_filter(security),
+            query_filter=_without_documents(build_access_filter(security), exclude_document_ids),
             sparse_queries=sparse_queries,
             extra_query_vectors=extra_vectors,
         )
@@ -192,6 +200,36 @@ class RetrievalService:
         if settings.CHAT_RERANK_MODE in _EXPANDING_MODES and settings.CHAT_RETRIEVAL_EXPAND_DOCS:
             results = expand_documents(client, results, build_access_filter(security))
         return results
+
+    async def document_titles_async(self) -> dict[str, str]:
+        """document_id -> object key of every document in the collection, read once every
+        _TITLES_TTL_SECONDS (one scroll of ~22 000 points takes 0.3 s). Ids only pick which
+        documents to read; reading them still goes through the caller's filter."""
+
+        now = time.monotonic()
+        if _TITLES.read_at and now - _TITLES.read_at < _TITLES_TTL_SECONDS:
+            return dict(_TITLES.titles)
+        client = self.client or get_client()
+        titles = await asyncio.to_thread(qdrant_store.document_titles, client)
+        _TITLES.read_at, _TITLES.titles = now, titles
+        return dict(titles)
+
+    async def fetch_documents_async(
+        self,
+        document_ids: list[str],
+        *,
+        security: AcademicSecurityContext,
+        limit: int,
+    ) -> list[RetrievedChunk]:
+        """Every chunk of `document_ids` (at most `limit`), in document order, still filtered
+        by the caller's permissions - for reading a whole table (app/graph/course_lookup.py).
+        Score 1: they are picked by what they contain, not by similarity."""
+
+        client = self.client or get_client()
+        records = await asyncio.to_thread(
+            fetch_document_chunks, client, document_ids, build_access_filter(security), limit
+        )
+        return [_to_retrieved_chunk(record, 1.0) for record in sorted(records, key=_chunk_order)]
 
     def fetch(
         self,
@@ -236,6 +274,17 @@ def _split_vectors(
         cursor += count
     return query_vectors, extra_vectors
 
+
+_TITLES_TTL_SECONDS = 600.0
+
+
+@dataclass
+class _TitleCache:
+    read_at: float = 0.0
+    titles: dict[str, str] = field(default_factory=dict)
+
+
+_TITLES = _TitleCache()
 
 _EXPANDING_MODES = frozenset({"cross_encoder", "cross_encoder_then_llm"})
 EXPANDED_FLAG = "expanded_from_document"
@@ -343,4 +392,17 @@ def _to_retrieved_chunk(point: ScoredPoint | Record, score: float) -> RetrievedC
             "dense_rank": payload.get(qdrant_store.DENSE_RANK_KEY),
             "bm25_rank": payload.get(qdrant_store.BM25_RANK_KEY),
         },
+    )
+
+
+def _without_documents(access: models.Filter, document_ids: list[str] | None) -> models.Filter:
+    """The caller's access filter, minus the given documents."""
+
+    if not document_ids:
+        return access
+    return models.Filter(
+        must=[access],
+        must_not=[
+            models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids))
+        ],
     )

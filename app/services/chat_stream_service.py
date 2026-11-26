@@ -46,6 +46,7 @@ from app.graph.metadata_fields import canonical_profile
 from app.graph.queue_items import (
     ClarificationClosedItem,
     ClarificationItem,
+    DebugItem,
     DoneItem,
     ErrorItem,
     QueueItem,
@@ -53,6 +54,7 @@ from app.graph.queue_items import (
     TokenItem,
     WarningItem,
 )
+from app.graph.retrieval_slots import clean_slots
 from app.graph.streaming import BudgetContext
 from app.graph.streaming_session import ClaimContext, run_and_persist
 from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
@@ -62,7 +64,11 @@ from app.integrations.backend_java_client import (
     BackendJavaHTTPError,
 )
 from app.schemas.chat import CHAT_REQUEST_MAX_BYTES, ChatStreamRequest
-from app.schemas.chat_history import RETRIEVAL_QUESTIONS_KEY, HistoryMessage
+from app.schemas.chat_history import (
+    RETRIEVAL_QUESTIONS_KEY,
+    RETRIEVAL_SLOTS_KEY,
+    HistoryMessage,
+)
 from app.schemas.clarification import ClarificationCancel, ClarificationSubmit, LastCalculation
 from app.schemas.security import AcademicSecurityContext
 from app.services.clarification_service import (
@@ -146,10 +152,12 @@ def _history_message(message: dict[str, Any]) -> HistoryMessage:
         if isinstance(raw_questions, list)
         else []
     )
+    raw_slots = metadata.get(RETRIEVAL_SLOTS_KEY)
     return HistoryMessage(
         role=message["role"],
         content=message["content"],
         retrieval_questions=questions,
+        retrieval_slots=clean_slots(raw_slots) if isinstance(raw_slots, dict) else {},
         calculation="calculation" in metadata,
     )
 
@@ -222,6 +230,8 @@ async def _sse_token_generator(queue: "asyncio.Queue[QueueItem]") -> AsyncGenera
         elif isinstance(item, ErrorItem):
             payload = {"code": item.code, "message": item.message, "retryable": item.retryable}
             yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        elif isinstance(item, DebugItem):
+            yield f"event: debug\ndata: {json.dumps(item.payload, ensure_ascii=False)}\n\n"
         elif isinstance(item, WarningItem):
             payload = {"code": item.code, "message": item.message}
             yield f"event: warning\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

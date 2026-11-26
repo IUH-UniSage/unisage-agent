@@ -29,7 +29,6 @@ from app.core.observability.graph_trace import GraphTrace, bind_trace, unbind_tr
 from app.core.registry.model_registry import CredentialConfig
 from app.core.timezone import now_ict
 from app.core.usage.usage_recorder import UsageRecorder
-from app.graph.address import address_for
 from app.graph.calc_requests import calc_blocks
 from app.graph.calculation_turn import (
     CalculationTask,
@@ -49,15 +48,21 @@ from app.graph.clarification_round import (
     build_round,
 )
 from app.graph.cohort_scope import check_cohort_scope
+from app.graph.course_lookup import (
+    MAX_DOCUMENT_CHUNKS,
+    CourseLookup,
+    course_summary,
+    lookup_course_rows,
+)
 from app.graph.evidence import levels_for
 from app.graph.grounding import (
-    caution_line,
     check_answer,
     looks_like_refusal,
     miscited_sources,
     numbers_in,
     source_line,
 )
+from app.graph.major_scope import check_major_scope
 from app.graph.metadata_fields import (
     Scope,
     apply_updates,
@@ -65,7 +70,6 @@ from app.graph.metadata_fields import (
     concept,
     field_scope,
     normalize_value,
-    update_notice,
 )
 from app.graph.nodes.calculation import (
     CalculationDeps,
@@ -127,7 +131,13 @@ from app.graph.nodes.web_search import (
     search_web,
     select_without_judge,
 )
-from app.graph.program_scope import check_program_scope
+from app.graph.program_scope import check_program_scope, document_program
+from app.graph.retrieval_slots import (
+    carry_over,
+    task_slots,
+    with_context,
+    with_course,
+)
 from app.graph.streaming import BudgetContext, FailoverCallback, TokenSink
 from app.graph.streaming_state import (
     AdminWarning,
@@ -138,6 +148,7 @@ from app.graph.streaming_state import (
 )
 from app.graph.web_policy import decide_fallback
 from app.integrations.cross_encoder_client import CrossEncoderClient
+from app.rag.prompting.builder import last_retrieval_slots
 from app.rag.prompting.citations import (
     build_citations,
     build_context_trace,
@@ -151,6 +162,9 @@ from app.schemas.intent import ClassifiedTask, IntentClassification, RoutingMode
 from app.schemas.web_search import WebSearchResult, WebSlots
 
 logger = logging.getLogger(__name__)
+
+# Chunks kept from the second search for a programme the first search did not find.
+_MISSING_PROGRAM_CHUNKS = 8
 
 # Prefixes of the AI-admin warnings (`event: warning`) this module raises.
 _UNGROUNDED = "Câu trả lời có con số không tìm thấy trong tài liệu được trích dẫn: "
@@ -299,16 +313,15 @@ async def _run_graph(
             )
 
     # A correction of the profile applies at once: saved now, used by every later step.
+    # The save is silent (25/11/2026): the profile is the assistant's memory, so the reply
+    # no longer opens with "Em đã cập nhật thông tin của …" - it only answers the question.
     confirmed_metadata, changed = apply_updates(
         confirmed_metadata, classification.metadata_updates, now_ict().date()
     )
-    notice = ""
     if changed:
         logger.info("profile.updated fields=%s", sorted(changed))
         if on_profile_change is not None:
             await on_profile_change(dict(confirmed_metadata))
-        notice = f"{update_notice(changed, address_for(graph_input.security))}\n\n"
-        await token_sink(notice)
     output = await _classified_turn(
         graph_input,
         models,
@@ -322,7 +335,7 @@ async def _run_graph(
         cached_turn=cached_turn,
         l1_pending=l1_pending,
     )
-    return replace(output, response_text=notice + output.response_text) if notice else output
+    return output
 
 
 async def _classified_turn(
@@ -1150,6 +1163,20 @@ async def _run_advisory_flow(
         )
         for sub_query in sub_queries:
             trace.prompt("06_QueryTransformationNode", sub_query.retrieval_text)
+    # RetrievalSlots: a follow-up's named fields (học phần, ngành, khóa) carried from the
+    # previous lookup turn when its rewrite dropped them (app/graph/retrieval_slots.py).
+    retrieval_slots: dict[str, str] = {}
+    if len(sub_queries) == 1 and len(advisory_tasks) == 1 and advisory_tasks[0][1] == "SINGLE":
+        rewritten = extract_standalone_question(sub_queries[0].retrieval_text)
+        retrieval_slots, added = carry_over(
+            last_retrieval_slots(graph_input.history),
+            task_slots(advisory_tasks[0][0], rewritten),
+            graph_input.user_message,
+            rewritten,
+        )
+        if added:
+            sub_queries = [with_context(sub_queries[0], added)]
+            logger.info("retrieval_slots carried %s into %r", added, rewritten)
     # The standalone question of each sub-query (HyDE's rewrite, or the decomposed
     # question itself) - what the LLM rerank and the web judge judge against.
     questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]
@@ -1240,6 +1267,9 @@ async def _run_advisory_flow(
         settings.CHAT_RERANK_MODE not in ("none", "auto")
         or (settings.CHAT_RERANK_MODE == "auto" and weak_evidence)
     )
+    # Every candidate before the rerank narrows them: the programme documents among them are
+    # read whole for the asked course's row (app/graph/course_lookup.py).
+    candidate_chunks = list(rerank_result.chunks)
     if (
         cached_result is None
         and settings.CHAT_RERANK_MODE in ("cross_encoder", "cross_encoder_then_llm")
@@ -1412,25 +1442,109 @@ async def _run_advisory_flow(
             len(questions),
         )
 
-    # Cohort, then programme scope: drop other cohorts' / programmes' documents when the
-    # asked one has some, or tell generation what the documents found are for
-    # (app/graph/cohort_scope.py, app/graph/program_scope.py).
-    scope = check_cohort_scope(questions, rerank_result.chunks)
+    # CourseLookup: the row of the course the question names, from the whole tables of the
+    # programme documents found - the rerank keeps 8 chunks and the row's chunk may not be
+    # one of them. The added chunks go first; the scope checks below treat them like the rest.
+    lookup = CourseLookup()
+    fetch_documents = getattr(models.retrieval, "fetch_documents_async", None)
+    if fetch_documents is not None and rerank_result.chunks:
+        security = graph_input.security
+        lookup = await lookup_course_rows(
+            candidate_chunks,
+            rerank_result.chunks,
+            course=next((task.course for task, _ in advisory_tasks if task.course), None),
+            texts=[graph_input.user_message, *questions],
+            fetch_documents=lambda ids: fetch_documents(
+                ids, security=security, limit=MAX_DOCUMENT_CHUNKS * len(ids)
+            ),
+            titles=getattr(models.retrieval, "document_titles_async", None),
+        )
+        if lookup.added:
+            rerank_result = replace(rerank_result, chunks=[*lookup.added, *rerank_result.chunks])
+        logger.info(
+            "course_lookup courses=%s programme_documents=%d added=[%s]",
+            lookup.courses,
+            lookup.documents,
+            "; ".join(chunk.chunk_id for chunk in lookup.added),
+        )
+
+    # Cohort, programme, then major scope: drop other cohorts' / programmes' / majors'
+    # documents when the asked one has some, or tell generation what the documents found are
+    # for (app/graph/cohort_scope.py, app/graph/program_scope.py, app/graph/major_scope.py).
+    # The asked major's documents first: the cohort check alone kept other majors' khóa 21
+    # programmes and dropped the asked major's only plan, khóa 16 ("còn ngành cntt" after a
+    # khóa 21 question, 25/11/2026). The major check below runs again for its notice.
+    by_major = check_major_scope(questions, rerank_result.chunks, graph_input.user_message)
+    scope = check_cohort_scope(questions, by_major.chunks)
     program = check_program_scope(questions, confirmed_metadata.get("he_dao_tao"), scope.chunks)
-    scope_notice = scope.notice + program.notice
-    if scope.dropped or program.dropped or scope_notice:
-        rerank_result = replace(rerank_result, chunks=program.chunks)
+    if program.asked and program.available and program.asked not in program.available:
+        # The programme asked about (or just picked in the clarification panel) has no
+        # document among the results while another programme's has: "Tiếng Anh 2 khóa 21 cơ
+        # khí" found only the "tăng cường tiếng Anh" programme, whose title matches "Tiếng
+        # Anh" (25/11/2026). Search again without that programme's documents.
+        others = sorted(
+            {
+                chunk.chunk_id.split(":", 1)[0]
+                for chunk in scope.chunks
+                if document_program(chunk.source) not in (None, program.asked)
+            }
+        )
+        found = await retrieve_chunks(
+            [sub_query.retrieval_text for sub_query in sub_queries],
+            models.retrieval,
+            graph_input.security,
+            lexical_queries=questions,
+            extra_queries=[sub_query.extra_retrieval_texts for sub_query in sub_queries],
+            exclude_document_ids=others,
+        )
+        known = {chunk.chunk_id for chunk in scope.chunks}
+        extra = list(
+            {
+                chunk.chunk_id: chunk
+                for chunks in found
+                for chunk in chunks
+                if chunk.chunk_id not in known and document_program(chunk.source) == program.asked
+            }.values()
+        )[:_MISSING_PROGRAM_CHUNKS]
+        logger.info(
+            "document_scope program asked=%s missing: second search without %d document(s) "
+            "found %d chunk(s)",
+            program.asked,
+            len(others),
+            len(extra),
+        )
+        if extra:
+            program = check_program_scope(
+                questions, confirmed_metadata.get("he_dao_tao"), [*extra, *scope.chunks]
+            )
+    major = check_major_scope(questions, program.chunks, graph_input.user_message)
+    scope_notice = scope.notice + program.notice + major.notice
+    if by_major.dropped or scope.dropped or program.dropped or major.dropped or scope_notice:
+        rerank_result = replace(rerank_result, chunks=major.chunks)
         logger.info(
             "document_scope cohort asked=%s available=%s dropped=%d | program asked=%s "
-            "available=%s dropped=%d | notice=%s",
+            "available=%s dropped=%d | major asked=%s available=%s dropped=%d | notice=%s",
             scope.asked,
             list(scope.available),
             scope.dropped,
             program.asked,
             list(program.available),
             program.dropped,
+            major.asked,
+            list(major.available),
+            major.dropped,
             bool(scope_notice),
         )
+    # The asked courses' rows of the final context, written out by code (course_lookup.py).
+    scope_notice += course_summary(rerank_result.chunks, lookup)
+    if lookup.course_name and retrieval_slots and "hoc_phan" not in retrieval_slots:
+        # The classifier did not name the course; the table did.
+        retrieval_slots = with_course(retrieval_slots, lookup.course_name)
+
+    # APP_DEBUG: what this turn retrieved with, as `event: debug` before the first token
+    # (visible in the browser's network tab, not drawn by the chat).
+    if settings.APP_DEBUG:
+        trace.debug({"retrieval_questions": questions, "retrieval_slots": retrieval_slots})
 
     # Barrier: the calculation blocks go out before any advisory token.
     calculation_titles_shown = (
@@ -1468,6 +1582,7 @@ async def _run_advisory_flow(
             admin_warnings=admin_warnings,
             context_web=fallback_web,
             retrieval_questions=questions,
+            retrieval_slots=retrieval_slots,
         )
 
     # GenerationSynthesisNode (streaming).
@@ -1522,7 +1637,13 @@ async def _run_advisory_flow(
     )
     # GroundingCheck: numbers and [n] of the answer against the sources it was shown
     # (chunks, then web pages, numbered in that order). The text is already streamed, so a
-    # finding adds a caution line and an AI-admin warning rather than a rewrite.
+    # finding goes to `metadata.grounding` - the client shows it as a warning under the
+    # answer, so the user checks the number against the source - and to the AI admins.
+    # Lines written into the answer ("> Lưu ý: ...", "> Nguồn của ...") read as part of it,
+    # and "Nguồn của 930.000: [1]" as a confirmation of a figure from the wrong row of the
+    # fee table (25/11/2026).
+    grounding: dict[str, Any] = {}
+    citation_extra = ""
     if settings.CHAT_GROUNDING_CHECK:
         shown = [chunk.content for chunk in rerank_result.chunks] + [
             page.content for page in web_results
@@ -1538,14 +1659,15 @@ async def _run_advisory_flow(
         report = check_answer(
             response_text, shown, question=question, known=computed_values, strict=strict
         )
-        # A number written in a source the answer did not cite is real, its [n] is wrong:
-        # the right source is named (its [n] also lists it among the citations) instead of
-        # a "not found" caution that reads as if the number were made up.
+        # A number written in a source the answer did not cite: its [n] is wrong, or the
+        # number is another row's. The warning names that source, which also joins the
+        # answer's citations (`citation_extra`) so the user can open it.
         miscited = miscited_sources(report.ungrounded, shown, report.cited)
         if miscited:
-            line = source_line(miscited)
-            await token_sink(line)
-            response_text += line
+            citation_extra = source_line(miscited)
+            grounding["miscited"] = [
+                {"value": token, "sources": list(indexes)} for token, indexes in miscited.items()
+            ]
             admin_warnings.append(
                 AdminWarning(
                     code="ANSWER_MISCITED_NUMBERS",
@@ -1554,9 +1676,7 @@ async def _run_advisory_flow(
             )
         ungrounded = [token for token in report.ungrounded if token not in miscited]
         if ungrounded:
-            caution = caution_line(ungrounded)
-            await token_sink(caution)
-            response_text += caution
+            grounding["ungrounded"] = ungrounded
             admin_warnings.append(
                 AdminWarning(
                     code="ANSWER_UNGROUNDED_NUMBERS",
@@ -1601,11 +1721,15 @@ async def _run_advisory_flow(
         response_text=response_text,
         confirmed_metadata=confirmed_metadata,
         ask_forms=generation_result.ask_forms,
-        citations=build_citations(response_text, rerank_result.chunks, web_results),
+        citations=build_citations(
+            response_text + citation_extra, rerank_result.chunks, web_results
+        ),
+        grounding={"schema_version": 1, **grounding} if grounding else None,
         context_chunks=context_chunks,
         context_web=context_web,
         used_web_search=bool(web_results),
         admin_warnings=admin_warnings,
         evidence=evidence_rows,
         retrieval_questions=questions,
+        retrieval_slots=retrieval_slots,
     )

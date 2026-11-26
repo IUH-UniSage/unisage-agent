@@ -86,6 +86,15 @@ def _no_live_web_search(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_debug_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    """APP_DEBUG (on by default) puts a retrieval block at the top of every answer
+    (app/graph/retrieval_slots.py `debug_header`): off, so tests see the answer alone.
+    Tests of the block turn it back on."""
+
+    monkeypatch.setattr(settings, "APP_DEBUG", False)
+
+
+@pytest.fixture(autouse=True)
 def _no_retrieval_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """The retrieval cache (SPEC-retrieval-cache.md) is off in every test unless a test
     injects its own cache: a dev `.env` points it at a live Redis, and a graph test must

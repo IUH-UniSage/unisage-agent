@@ -99,6 +99,12 @@ class GraphOutput:
     # The standalone questions this turn retrieved with, stored on the ASSISTANT
     # message so the next turn's rewrite starts from them (`last_retrieval_questions`).
     retrieval_questions: list[str] = field(default_factory=list)
+    # Their fields (học phần, ngành, khóa...), stored next to them (`retrieval_slots`).
+    retrieval_slots: dict[str, str] = field(default_factory=dict)
+    # metadata.grounding: numbers of the answer the grounding check did not find in the
+    # source it cites ({"schema_version": 1, "ungrounded": [...], "miscited": [{"value",
+    # "sources"}]}), shown by the client as a warning under the answer; None when clean.
+    grounding: dict[str, Any] | None = None
 
     @property
     def last_calculation(self) -> LastCalculation | None:

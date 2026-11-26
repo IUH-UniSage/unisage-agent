@@ -335,6 +335,27 @@ def test_parse_reads_the_table_row_form_of_a_single_task() -> None:
     )
 
 
+def test_parse_reads_the_course_of_a_single_task() -> None:
+    task = _task("academic_advisory", "AV2 nganh co khi may tin", "SINGLE")
+    task |= {
+        "standalone_question": "Học phần Anh văn 2 ngành Công nghệ kỹ thuật cơ khí mấy tín chỉ?",
+        "hyde_passage": "Học phần Anh văn 2 có ... tín chỉ.",
+        "hoc_phan": " Anh văn 2 ",
+    }
+
+    (parsed,) = parse_classification(_payload(task), "AV2 nganh co khi may tin").tasks
+
+    assert parsed.course == "Anh văn 2"
+
+
+def test_parse_leaves_the_course_empty_when_not_written_or_blank() -> None:
+    task = _task("academic_advisory", "học phí CNTT", "SINGLE") | {"hoc_phan": "  "}
+
+    (parsed,) = parse_classification(_payload(task), "học phí CNTT").tasks
+
+    assert parsed.course is None
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

@@ -64,6 +64,7 @@ from app.database.session import async_session_factory
 from app.graph.progress import status_reporter
 from app.graph.queue_items import (
     ClarificationItem,
+    DebugItem,
     DoneItem,
     ErrorItem,
     QueueItem,
@@ -81,7 +82,7 @@ from app.graph.streaming import BudgetContext
 from app.graph.streaming_graph import run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, GraphOutput
 from app.integrations.backend_java_client import BackendJavaClient, with_java_retries
-from app.schemas.chat_history import RETRIEVAL_QUESTIONS_KEY
+from app.schemas.chat_history import RETRIEVAL_QUESTIONS_KEY, RETRIEVAL_SLOTS_KEY
 from app.schemas.clarification import LastCalculation, PendingRound
 
 logger = logging.getLogger(__name__)
@@ -296,6 +297,7 @@ async def run_and_persist(
         user_id=graph_input.security.user_id,
         client_ip=client_ip,
         on_status=status_reporter(put_status),
+        on_debug=lambda payload: queue.put_nowait(DebugItem(payload)),
     )
 
     # Bound up front (not just declared) so `finally` below can always read it, even
@@ -402,8 +404,12 @@ async def run_and_persist(
                     "status": "open",
                     "panel": pending_round.panel.public().model_dump(mode="json"),
                 }
+            if status == "COMPLETED" and graph_output is not None and graph_output.grounding:
+                metadata["grounding"] = graph_output.grounding
             if graph_output is not None and graph_output.retrieval_questions:
                 metadata[RETRIEVAL_QUESTIONS_KEY] = graph_output.retrieval_questions
+                if graph_output.retrieval_slots:
+                    metadata[RETRIEVAL_SLOTS_KEY] = graph_output.retrieval_slots
             if graph_output is not None and graph_output.calculation_items:
                 metadata["calculation"] = {
                     "schema_version": 1,

@@ -135,11 +135,11 @@ async def test_a_correction_is_saved_first_and_announced_at_the_top_of_the_reply
         on_profile_change=save,
     )
 
-    notice = "Mình đã cập nhật thông tin của bạn - khóa nhập học: 2023."
+    # Saved silently (25/11/2026): no "Mình đã cập nhật thông tin…" line in the reply.
     assert saved == [{"khoa_nhap_hoc": "2023", "nganh_hoc": "CNTT"}]
     assert output.confirmed_metadata == saved[0]
-    assert tokens[0] == f"{notice}\n\n"
-    assert output.response_text.startswith(f"{notice}\n\n") and len(tokens) == 2
+    assert not any("đã cập nhật thông tin" in token for token in tokens)
+    assert "đã cập nhật thông tin" not in output.response_text
 
 
 @pytest.mark.asyncio
@@ -244,7 +244,7 @@ async def test_a_follow_up_after_a_correction_recomputes_with_the_new_intake() -
     assert result.confirmed_metadata["khoa_nhap_hoc"] == "2023"
     assert result.last_calculation is not None
     assert result.last_calculation.params["khoa_nhap_hoc"] == "2023"
-    assert result.response_text.startswith("Mình đã cập nhật thông tin của bạn")
+    assert "đã cập nhật thông tin" not in result.response_text
 
 
 @pytest.mark.asyncio

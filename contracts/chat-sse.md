@@ -53,6 +53,7 @@ Mỗi câu hỏi của panel phải có đúng một answer: không thiếu, kh�
 | `clarification` | `ClarificationPanel` (§3) | Tối đa 1 lần, sau token cuối, trước `done`. **Khi đã nhận event này, server bảo đảm panel đã được lưu ở cả state lẫn `messages.metadata`** |
 | `clarification_closed` | `{"panel_id": "7f1c…", "status": "cancelled"}` | Chỉ có trong response của lệnh huỷ |
 | `warning` | `{"code", "message"}` | Như cũ (chỉ AI admin) |
+| `debug` | `{"retrieval_questions": [...], "retrieval_slots": {...}}` | Chỉ khi agent bật `APP_DEBUG`, gửi trước token đầu tiên của lượt tra cứu; để xem ở tab Network, client không hiển thị |
 | `error` | `{"code", "message", "retryable"}` | Như cũ, tối đa 1 lần, ngay trước `done` |
 | `done` | `{}` | Luôn là event cuối |
 

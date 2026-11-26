@@ -23,6 +23,7 @@ import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from app.graph.cohort_scope import ONLY_WHAT_WAS_ASKED
 from app.rag.prompting.citations import source_title
 from app.schemas.retrieval import RetrievedChunk
 
@@ -141,6 +142,7 @@ def _missing_notice(asked: str, available: Sequence[str]) -> str:
         f"{_LABELS[asked]}.\n"
         "- Lưu ý các chương trình có thể khác nhau về tên môn, mã học phần và số tín chỉ; "
         "không trộn mã, số liệu giữa các chương trình.\n"
+        f"{ONLY_WHAT_WAS_ASKED}\n"
         f"- Cuối: gợi ý xác nhận với Phòng Đào tạo cho {_LABELS[asked]}."
     )
 
@@ -178,6 +180,7 @@ def _unnamed_notice(available: Sequence[str]) -> str:
         f"{layout}\n"
         "- Không trộn mã, số liệu giữa các chương trình; mỗi phần chỉ trích dẫn [n] của chính "
         "tài liệu chương trình đó.\n"
+        f"{ONLY_WHAT_WAS_ASKED}\n"
         "- Cuối: hỏi người được hỏi đang học chương trình nào bằng MỘT khối ask_user_form "
         f"(`about` theo người được hỏi), dùng đúng field và options này: {form}"
     )

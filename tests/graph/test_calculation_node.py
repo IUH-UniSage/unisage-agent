@@ -1279,7 +1279,7 @@ async def test_a_deferred_turn_flags_a_sum_the_model_states_itself(
 ) -> None:
     """Strict grounding on a deferred calculation question: "16 tín chỉ" is 3 + 4 + 2 + 7,
     derivable in a normal turn, but here the model was told to request the sum - the
-    caution line and the AI-admin warning follow."""
+    metadata.grounding warning and the AI-admin warning follow."""
 
     monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
     query = "Ngành Logistics, 4 môn đó cộng lại mấy tín?"
@@ -1305,8 +1305,53 @@ async def test_a_deferred_turn_flags_a_sum_the_model_states_itself(
         _usage_recorder(),
     )
 
-    assert "> Lưu ý: con số 16 không tìm thấy trong tài liệu được trích dẫn" in result.response_text
+    # Shown by the client under the answer, not written into it.
+    assert result.grounding == {"schema_version": 1, "ungrounded": ["16"]}
+    assert "Lưu ý" not in result.response_text
     assert "ANSWER_UNGROUNDED_NUMBERS" in [warning.code for warning in result.admin_warnings]
+
+
+@pytest.mark.asyncio
+async def test_a_number_from_an_uncited_source_is_a_grounding_warning(
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """930.000 cited as [1] is written only in source [2] (the next intake's row, 25/11/2026):
+    metadata.grounding names [2], which joins the citations, and the answer text is left as
+    the model wrote it - no "> Nguồn của ..." line."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    query = "Ngành Logistics, 4 môn đó cộng lại mấy tín?"
+    fee_2025 = RetrievedChunk(
+        chunk_id="hp:1", content="Khóa 2025: môn lý thuyết 980.000 đồng", source="HP.pdf", score=0.9
+    )
+    fee_2024 = RetrievedChunk(
+        chunk_id="hp:2", content="Khóa 2024: môn lý thuyết 930.000 đồng", source="HP.pdf", score=0.8
+    )
+    answer = "Môn lý thuyết khóa 2025 là 930.000 đồng [1]."
+    result = await run_graph(
+        _input(query),
+        GraphModels(
+            classification=_scripted(
+                {"tasks": [{"intent": "academic_calculation", "query": query}]},
+                {"formula_id": "none", "params": {}, "retrieval_query": None},
+            ),
+            query_transformation=_echo_model(),
+            generation=mock_streaming_llm_model([answer]),
+            retrieval=_RecordingRetrieval([fee_2025, fee_2024]),
+        ),
+        _sink([]),
+        _TRACE,
+        _usage_recorder(),
+    )
+
+    assert result.grounding == {
+        "schema_version": 1,
+        "miscited": [{"value": "930.000", "sources": [2]}],
+    }
+    assert result.response_text.strip() == answer
+    assert [citation["index"] for citation in result.citations] == [1, 2]
+    assert "ANSWER_MISCITED_NUMBERS" in [warning.code for warning in result.admin_warnings]
 
 
 @pytest.mark.asyncio
