@@ -21,6 +21,7 @@ Every test here is marked `integration` and only runs inside the
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from collections.abc import Iterator
@@ -38,7 +39,9 @@ _EXPIRE_LEASE_SQL = (
 pytestmark = pytest.mark.integration
 
 SA_LOGIN_CODE = "SA-001"
-SA_LOGIN_PASSWORD = "123123"  # matches DEFAULT_SUPERADMIN_PASS in docker-compose.integration.yml
+# DEFAULT_SUPERADMIN_PASS of docker-compose.integration.yml, passed to test-runner as
+# E2E_SEED_PASSWORD (tests/e2e/.env, git-ignored).
+SA_LOGIN_PASSWORD = os.environ.get("E2E_SEED_PASSWORD", "")
 
 # Same Postgres the backend-java service itself uses (see that service's
 # DB_* env vars in docker-compose.integration.yml) - a separate connection so
@@ -53,6 +56,9 @@ def sa_client(registry_reset, backend_internal_client: httpx.Client) -> Iterator
     Super Admin (DataInitializer, not @Profile-gated, so it exists in every
     profile including `integration`). Depends on `registry_reset` so this
     module always starts from the freshly-seeded state."""
+
+    if not SA_LOGIN_PASSWORD:
+        pytest.skip("E2E_SEED_PASSWORD is not set (tests/e2e/.env)")
 
     # httpx.URL str()s with a trailing slash - naive f-string concatenation
     # here produced a literal "//auth/login" (double slash), which the

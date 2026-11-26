@@ -11,6 +11,9 @@
 # No service publishes a port to the host in this file - see docker-compose.integration.debug.yml
 # for the one exception (gateway on 127.0.0.1, debug-only, never used in CI).
 #
+# The seeded accounts' password is not in this file: set E2E_SEED_PASSWORD in
+# tests/e2e/.env (git-ignored; see tests/e2e/.env.example).
+#
 # Every credential/secret value below is test-only, shared across every
 # service in this file, and never used outside this compose network.
 
@@ -113,9 +116,9 @@ services:
       JWT_SECRET: "unisage-integration-test-jwt-secret-not-for-real-use"
       JWT_ACCESS_TOKEN_EXPIRATION: "86400000"
       JWT_REFRESH_TOKEN_EXPIRATION: "2592000000"
-      DEFAULT_SUPERADMIN_PASS: "123123"
-      DEFAULT_INGESTADMIN_PASS: "123123"
-      DEFAULT_USER_PASS: "123123"
+      DEFAULT_SUPERADMIN_PASS: "${E2E_SEED_PASSWORD:?set E2E_SEED_PASSWORD in tests/e2e/.env}"
+      DEFAULT_INGESTADMIN_PASS: "${E2E_SEED_PASSWORD:?set E2E_SEED_PASSWORD in tests/e2e/.env}"
+      DEFAULT_USER_PASS: "${E2E_SEED_PASSWORD:?set E2E_SEED_PASSWORD in tests/e2e/.env}"
       APP_ENCRYPTION_KEY: "it-integration-app-encryption-key-0123456789abcdef"
       MINIO_ENDPOINT: "http://minio:9000"
       MINIO_ROOT_USER: minioadmin
@@ -326,6 +329,8 @@ services:
       UNISAGE_AGENT_BASE_URL: "http://unisage-agent:8000"
       FAKE_LLM_PROVIDER_ADMIN_BASE_URL: "http://fake-llm-provider:8000/admin"
       CELERY_BEAT_CONTAINER_NAME: "it-celery-beat"
+      # Password of the seeded accounts, for the login fixtures (same value as DEFAULT_*_PASS).
+      E2E_SEED_PASSWORD: "${E2E_SEED_PASSWORD:?set E2E_SEED_PASSWORD in tests/e2e/.env}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - it_reports:/reports
