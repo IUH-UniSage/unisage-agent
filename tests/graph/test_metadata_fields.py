@@ -36,7 +36,7 @@ def test_no_alias_names_two_fields_or_shadows_a_field() -> None:
     fields = {entry["field"] for entry in entries}
     seen: dict[str, str] = {}
     for entry in entries:
-        assert entry["scope"] in {"profile", "calculation"}
+        assert entry["scope"] in {"profile", "calculation", "retrieval"}
         for alias in entry["key_aliases"]:
             key = slug(alias)
             assert key not in fields, key
@@ -49,6 +49,10 @@ def test_key_aliases_resolve_to_one_name() -> None:
     assert canonical_field("Training Type") == "he_dao_tao"
     assert canonical_field("da_nop") == "so_tien_da_nop"
     assert canonical_field("truong_moi_la") == "truong_moi_la"
+    # retrieval_slots: one name per concept (app/graph/retrieval_slots.py).
+    assert {canonical_field(n) for n in ("nganh", "chuyen_nganh", "nganh_dao_tao")} == {"nganh_hoc"}
+    assert {canonical_field(n) for n in ("mon_hoc", "mon", "ten_hoc_phan")} == {"hoc_phan"}
+    assert field_scope("hoc_phan", "profile") == "retrieval"
 
 
 def test_unknown_fields_take_the_scope_of_where_they_were_asked() -> None:

@@ -100,9 +100,14 @@ class RecordingRetrieval:
         security: AcademicSecurityContext,
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
+        extra_queries: list[list[str]] | None = None,
     ) -> list[list[RetrievedChunk]]:
         results = self.inner.retrieve_many(
-            queries, security=security, limit=limit, lexical_queries=lexical_queries
+            queries,
+            security=security,
+            limit=limit,
+            lexical_queries=lexical_queries,
+            extra_queries=extra_queries,
         )
         _record(queries, results)
         return results
@@ -114,9 +119,14 @@ class RecordingRetrieval:
         security: AcademicSecurityContext,
         limit: int | None = None,
         lexical_queries: list[str] | None = None,
+        extra_queries: list[list[str]] | None = None,
     ) -> list[list[RetrievedChunk]]:
         results = await self.inner.retrieve_many_async(
-            queries, security=security, limit=limit, lexical_queries=lexical_queries
+            queries,
+            security=security,
+            limit=limit,
+            lexical_queries=lexical_queries,
+            extra_queries=extra_queries,
         )
         _record(queries, results)
         return results

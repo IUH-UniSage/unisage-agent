@@ -6,7 +6,7 @@ import pytest
 
 from app.core.observability.graph_trace import GraphTrace
 from app.graph.progress import stage_for_node, status_reporter
-from app.graph.queue_items import DoneItem, QueueItem, StatusItem
+from app.graph.queue_items import DebugItem, DoneItem, QueueItem, StatusItem
 from app.services.chat_stream_service import _sse_token_generator
 
 
@@ -97,5 +97,24 @@ async def test_status_is_streamed_as_an_sse_event() -> None:
         'event: status\ndata: {"stage": "retrieving"}\n\n'
         'event: status\ndata: {"stage": "web_searching", '
         '"url": "https://pdt.iuh.edu.vn/thông-báo"}\n\n'
+        "event: done\ndata: {}\n\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_debug_is_streamed_as_an_sse_event() -> None:
+    queue: asyncio.Queue[QueueItem] = asyncio.Queue()
+    payload = {
+        "retrieval_questions": ["Cơ lưu chất mấy tín?"],
+        "retrieval_slots": {"hoc_phan": "Cơ lưu chất"},
+    }
+    for item in (DebugItem(payload), DoneItem()):
+        queue.put_nowait(item)
+
+    body = "".join([chunk async for chunk in _sse_token_generator(queue)])
+
+    assert body == (
+        'event: debug\ndata: {"retrieval_questions": ["Cơ lưu chất mấy tín?"], '
+        '"retrieval_slots": {"hoc_phan": "Cơ lưu chất"}}\n\n'
         "event: done\ndata: {}\n\n"
     )

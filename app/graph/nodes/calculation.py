@@ -88,8 +88,11 @@ BUILTIN_IDS: frozenset[str] = frozenset(FORMULAS)
 UnresolvedReason = Literal["legacy_llm", "bad_target", "not_resumable"]
 # Plans that are not a registry formula (never redone with new numbers, never resumed).
 NON_REGISTRY_PLANS = frozenset({"llm", "arithmetic"})
-# Documents read for one formula's lookups.
-LLM_CHUNKS_LIMIT = 5
+# Documents read for one formula's lookups. A fee schedule is cut into several table chunks
+# (one per group of rows) next to programme plans and other fee notes: five slots left the
+# row of the student's cohort out and the student was asked for a price the decision holds
+# (live 06/11/2026), so the calculation reads as many chunks as the advisory context does.
+LLM_CHUNKS_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -532,7 +535,11 @@ async def _search(
     ):
         if deps.trace is not None:
             deps.trace.step("09a_CrossEncoderRerankNode", parent="07_CalculationNode")
-        ce_outcome = await cross_encoder_rerank(CrossEncoderClient(), [question], result)
+        # The cross-encoder reads the search text (lookup + what is known about the student + the
+        # document's name), not the bare message: "toi k14 mà" alone says nothing about fees, and a
+        # programme plan of cohort 13 outranked the fee table (live 06/11/2026).
+        ce_question = queries[0] if queries else question
+        ce_outcome = await cross_encoder_rerank(CrossEncoderClient(), [ce_question], result)
         if ce_outcome.failure is None:
             result = ce_outcome.result
             llm_rerank_wanted = (
@@ -883,11 +890,17 @@ async def fill_from_documents(
     ]
     if not wanted:
         return DocumentValues()
+    # The search names the document the formula reads (`Formula.source`): "khóa K18" in the
+    # message alone pulled the training plans of cohort 18 over the fee decision and the
+    # student was asked to type a price the decision holds (live 06/11/2026). How a cohort
+    # and the rows that merge old cohorts are phrased is taught to the model in the prompts
+    # (hyde_generator, message_classification_retrieval, calculation_value_extractor).
     context = " ".join(
         str(value) for name, value in known.items() if isinstance(value, str) and value.strip()
     )
+    source = FORMULAS[formula_id].source
     queries = [
-        f"{lookup} {context} {query}".strip()
+        f"{lookup} {context} {query} {source}".strip()
         for lookup in dict.fromkeys(spec.lookup for spec in wanted if spec.lookup)
     ]
     chunks = await _search(query, queries, deps)

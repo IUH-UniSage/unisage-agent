@@ -19,7 +19,7 @@ from app.core.academic_calendar import INTAKE_FIELD, parse_intake_year
 from app.graph.address import STUDENT, Address
 from app.rag.prompting.loader import get_known_metadata_fields
 
-Scope = Literal["profile", "calculation"]
+Scope = Literal["profile", "calculation", "retrieval"]
 VALUE_MAX_LENGTH = 200
 
 
@@ -63,7 +63,9 @@ def field_scope(name: str, default: Scope) -> Scope:
     entry = _entries().get(canonical_field(name))
     if entry is None:
         return default
-    return "profile" if entry["scope"] == "profile" else "calculation"
+    if entry["scope"] == "profile":
+        return "profile"
+    return "retrieval" if entry["scope"] == "retrieval" else "calculation"
 
 
 def is_profile_field(name: str) -> bool:

@@ -264,6 +264,11 @@ class Settings(BaseSettings):
     CROSS_ENCODER_URL: str = "http://127.0.0.1:8403"
     CROSS_ENCODER_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
     CHAT_CROSS_ENCODER_KEEP: int = Field(default=8, ge=1)
+    # When a kept chunk is a table chunk, up to this many more chunks of the SAME table (same
+    # document, same heading path, region_type table) that the top-K cut dropped are added back:
+    # a fee table is split into several chunks with one title, so keeping one row-group and
+    # dropping the others answered with the oldest cohort only (hoc phi 2025-2026, 06/11/2026).
+    CHAT_CROSS_ENCODER_TABLE_SIBLINGS: int = Field(default=4, ge=0)
     # A table chunk longer than this many chars is scored as row windows (title, heading and
     # column header repeated in each) and takes its best window's score: the model reads only
     # 512 tokens and a wide table's last rows were never read (q0100, 04/11/2026).

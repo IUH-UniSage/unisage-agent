@@ -277,3 +277,58 @@ async def test_expanded_chunks_take_at_most_the_capped_number_of_kept_slots(
     client = FakeClient({"e0": 9.0, "e1": 8.0, "e2": 7.0, "found": 1.0})
     outcome = await cross_encoder_rerank(client, ["q"], rerank_chunks([[found, *added]]), keep=2)
     assert [c.chunk_id for c in outcome.result.per_query[0].chunks] == ["e0", "found"]
+
+
+def _table(chunk_id: str, score: float, source: str = "fees.pdf") -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=chunk_id,
+        content=chunk_id,
+        source=source,
+        score=score,
+        heading_path=["QUYET DINH", "MUC THU HOC PHI"],
+        metadata={"region_type": "table"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_dropped_chunks_of_a_kept_table_swap_in_up_to_the_sibling_cap(
+    monkeypatch,
+) -> None:
+    """06/11/2026 hoc phi 2025-2026: one row-group of the fee table was kept, the groups with
+    the newest cohorts were cut by the top-K and the answer named only the oldest cohort.
+    The head stays `keep` long (the turn is capped at 8, the calculation reads 5)."""
+    monkeypatch.setattr(settings, "CHAT_CROSS_ENCODER_TABLE_SIBLINGS", 2)
+    tables = [_table(f"t{i}", 0.5) for i in range(5)]
+    other = [_chunk(f"x{i}", 0.6) for i in range(3)]
+    other_table = _table("u0", 0.5, source="other.pdf")
+    chunks = [*other, tables[0], *tables[1:], other_table]
+    client = FakeClient(
+        {"x0": 9, "x1": 8, "x2": 7, "t0": 6, "t1": 1, "t2": 1, "t3": 1, "t4": 1, "u0": 0.5}
+    )
+    from app.graph.nodes.post_retrieval_rerank import turn_result
+
+    result = await cross_encoder_rerank(
+        client, ["q"], turn_result([chunks], best_scores=[0.9]), keep=4
+    )
+    got = [c.chunk_id for c in result.result.per_query[0].chunks]
+    assert len(got) == 4  # still `keep` long
+    assert got == [
+        "x0",
+        "t0",
+        "t1",
+        "t2",
+    ]  # the two lowest other chunks made room, siblings follow their table
+    assert "u0" not in got and "t3" not in got  # nothing from another file, capped at 2
+
+
+@pytest.mark.asyncio
+async def test_no_sibling_is_pulled_when_no_table_chunk_was_kept(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "CHAT_CROSS_ENCODER_TABLE_SIBLINGS", 4)
+    from app.graph.nodes.post_retrieval_rerank import turn_result
+
+    chunks = [_chunk("a", 0.9), _chunk("b", 0.8), _table("t0", 0.5), _table("t1", 0.5)]
+    client = FakeClient({"a": 9, "b": 8, "t0": 1, "t1": 1})
+    result = await cross_encoder_rerank(
+        client, ["q"], turn_result([chunks], best_scores=[0.9]), keep=2
+    )
+    assert [c.chunk_id for c in result.result.per_query[0].chunks] == ["a", "b"]

@@ -67,8 +67,10 @@ def _base_params(
     chunks: Sequence[RetrievedChunk],
     web_results: Sequence[WebSearchResult],
     history: Sequence[HistoryMessage],
+    question: str | None = None,
 ) -> dict[str, str]:
-    """Blocks shared by every GenerationSynthesisNode frame."""
+    """Blocks shared by every GenerationSynthesisNode frame. `question` decides whether the
+    current-term caveat rule is given (`build_current_time_section`)."""
 
     templates = get_templates()
     return {
@@ -79,7 +81,9 @@ def _base_params(
         "academic_domain_rules": templates.academic_domain_rules,
         "response_style": templates.response_style,
         "citation_rules": templates.citation_rules,
-        "prepared_context": build_prepared_context_section(chunks, web_results, confirmed_metadata),
+        "prepared_context": build_prepared_context_section(
+            chunks, web_results, confirmed_metadata, question
+        ),
         "task_1": templates.task_1,
         "task_2": build_task_2_section(),
     }
@@ -96,6 +100,7 @@ def build_system_prompt(
     web_results: Sequence[WebSearchResult] = (),
     calculation_titles: Sequence[str] = (),
     arithmetic_notice: bool = False,
+    scope_notice: str = "",
 ) -> str:
     """Advisory frame for a single question. `resolved_query` (the standalone
     rewrite of a follow-up) is shown ahead of the raw message."""
@@ -107,10 +112,13 @@ def build_system_prompt(
             chunks=chunks,
             web_results=web_results,
             history=history,
+            # A follow-up's own words may lack the time word its standalone form has.
+            question=f"{user_query} {resolved_query or ''}",
         ),
         user_query=render_resolved_user_query(user_query, resolved_query),
         calculation_results=build_calculation_results_section(calculation_titles),
-        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query),
+        # `scope_notice` (app/graph/cohort_scope.py) shares the per-turn notice slot.
+        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query) + scope_notice,
     )
 
 
@@ -125,6 +133,7 @@ def build_multi_intent_prompt(
     web_results: Sequence[WebSearchResult] = (),
     calculation_titles: Sequence[str] = (),
     arithmetic_notice: bool = False,
+    scope_notice: str = "",
 ) -> str:
     """Multi-intent frame for several sub-queries, listed as `SQk. ...`."""
 
@@ -135,11 +144,13 @@ def build_multi_intent_prompt(
             chunks=chunks,
             web_results=web_results,
             history=history,
+            question=user_query,
         ),
         sub_queries_list=render_sub_queries_list(sub_queries),
         user_query=user_query,
         calculation_results=build_calculation_results_section(calculation_titles),
-        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query),
+        # `scope_notice` (app/graph/cohort_scope.py) shares the per-turn notice slot.
+        arithmetic_notice=build_arithmetic_notice(arithmetic_notice, user_query) + scope_notice,
     )
 
 
@@ -166,7 +177,7 @@ def build_ticket_fallback_prompt(
         response_style=templates.response_style,
         ticket_fallback=templates.ticket_fallback,
         web_sources=build_web_sources_section(web_sources),
-        current_time=build_current_time_section(confirmed_metadata),
+        current_time=build_current_time_section(confirmed_metadata, user_query),
         user_query=user_query,
     )
 
@@ -208,7 +219,7 @@ def build_calculation_review_prompt(
         header=templates.header,
         calculation_payload=calculation_payload,
         history_message=build_history_section(history),
-        current_time=build_current_time_section(confirmed_metadata),
+        current_time=build_current_time_section(confirmed_metadata, user_query),
         user_query=user_query,
     )
 

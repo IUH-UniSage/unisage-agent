@@ -1,3 +1,5 @@
+import pytest
+
 from app.rag.prompting import (
     build_multi_intent_prompt,
     build_system_prompt,
@@ -220,3 +222,33 @@ def test_label_value_lists_read_as_a_table_stay_markdown() -> None:
     section = build_prepared_context_section([_chunk(pseudo)])
 
     assert "| 1.3_NV nhân sự_ | :05 | 1.7_NV Kinh doanh_ | :40 |" in section
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("hạn chót nộp đơn đổi GVHD học kỳ này là ngày nào", True),
+        ("hp ky nay bao nhieu", True),
+        ("năm nay trường tuyển bao nhiêu chỉ tiêu", True),
+        ("lịch thi học kỳ tới khi nào", True),
+        ("diem khoa luan ktpm tinh trong so gvhd, phan bien, hoi dong the nao", False),
+        ("ngành của mình phải tích lũy bao nhiêu tín chỉ", False),
+    ],
+)
+def test_mentions_relative_time(question: str, expected: bool) -> None:
+    from app.rag.prompting.builder import mentions_relative_time
+
+    assert mentions_relative_time(question) is expected
+
+
+def test_term_caveat_rule_only_for_questions_naming_a_relative_time() -> None:
+    """25/11/2026: told unconditionally, the model opened an answer about thesis weights
+    with "Theo lịch dự kiến của Trường, hiện là Học kỳ I…"."""
+
+    from app.rag.prompting.builder import build_current_time_section
+
+    caveat = "Theo lịch dự kiến của Trường"
+    assert caveat in build_current_time_section({}, "học phí kỳ này bao nhiêu")
+    assert caveat in build_current_time_section({})
+    plain = build_current_time_section({}, "trọng số điểm khóa luận KTPM")
+    assert caveat not in plain and "KHÔNG thêm" in plain

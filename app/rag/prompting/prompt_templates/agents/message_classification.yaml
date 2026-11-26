@@ -18,7 +18,7 @@ template: |
   {calculation_formulas}
 
   ## Decision Rules
-  1. CÂU NỐI TIẾP ngắn ("sao không có ngành X?", "còn khóa 2024 thì sao?") khi lịch sử đang nói chủ đề học vụ → theo chủ đề đó, KHÔNG `off_topic` vì thiếu ngữ cảnh.
+  1. CÂU NỐI TIẾP ngắn ("sao không có ngành X?", "còn khóa 2024 thì sao?") khi lịch sử đang nói chủ đề học vụ → theo chủ đề đó, KHÔNG `off_topic` vì thiếu ngữ cảnh. Tin nhắn CHỈ nêu/sửa tiêu chí ("còn khóa <N>?", "<hệ khác> á") sau "Câu hỏi đầy đủ của lượt tra cứu gần nhất" → `academic_advisory`, chủ đề theo câu đó.
   1b. CÂU LÀM RÕ ("ý tôi là...", "ý em là...", "tôi muốn hỏi...") LUÔN kế thừa nhãn của câu hỏi ngay trước (trừ khi câu trước đó là lời từ chối off_topic), KHÔNG BAO GIỜ tự nó là `off_topic`.
   1c. NỐI TIẾP PHÉP TÍNH: nhãn theo VIỆC người dùng đang làm. Lượt trước nhờ TÍNH (lịch sử có yêu cầu tính hoặc có `<previous_calculation_turn>`) và tin nhắn này chỉ bổ sung dữ kiện/trường hợp ("đại học chính quy á", "khóa 2024", "3 tín", "TX 8 9"), đổi một con số ("nếu giữa kỳ 8 thì sao?"), hỏi ngược về chính phép tính đó ("thế cuối kỳ cần bao nhiêu để được A+?") hoặc ĐỔI phương án đã chọn → `academic_calculation`, `query` gộp yêu cầu tính ban đầu với dữ kiện mới (đổi phương án thì ghi phương án mới, bỏ phương án cũ, VD "Tính học phí theo phương án 2 (<tên>) giúp tôi, không phải phương án 1"). Chỉ sang `academic_advisory` khi hỏi rõ một quy định/thông tin mới ("điều kiện tốt nghiệp là gì?").
   1d. SỬA hoặc BỔ SUNG thông tin mà phép tính vừa rồi dùng ("tôi nhầm, tôi khoá 20", "à ngành tôi thuộc khối kinh tế", "tôi học ở phân hiệu Quảng Ngãi", "kỳ này 15 tín lý thuyết", "giữa kỳ được 9") và câu GIẢ ĐỊNH trên phép tính đó ("nếu là khoá 2023 thì học phí bao nhiêu", "nếu cuối kỳ 7 thì sao") → `academic_calculation`, `query` = yêu cầu tính ban đầu + dữ kiện mới. Sửa thông tin của CHÍNH người dùng thì ghi cả `metadata_updates`; câu giả định thì KHÔNG ghi.
@@ -50,7 +50,7 @@ template: |
   `query` là câu của NGƯỜI DÙNG lượt này đã chuẩn hoá, KHÔNG phải câu bạn diễn giải:
   1. GIỮ NGUYÊN từ ngữ, con số, tên riêng và MỌI chữ phủ định/điều kiện ("không biết", "chưa", "không phải", "nếu", "trừ", "ngoài"); không đảo nghĩa, không thêm dữ kiện. VD "tôi không biết tổng bao nhiêu" KHÔNG thành "biết tổng là bao nhiêu".
   2. Sửa lỗi chính tả, thiếu dấu, viết tắt khi CHẮC nghĩa ("khogn" → "không", "kì nay" → "kỳ này", "hp" → "học phí", "đkhp" → "đăng ký học phần", "wf"/"wifi" → "Wi-Fi", "ktx" → "ký túc xá").
-  3. Chỉ bổ sung ngữ cảnh từ lịch sử khi tin nhắn không đứng riêng được (câu nối tiếp, trả lời câu hỏi của trợ lý, đại từ "nó", "môn đó"): thêm việc đang làm và dữ kiện người dùng đã nêu, giữ nguyên phần vừa nói; không chép câu trả lời hay số liệu của trợ lý.
+  3. Chỉ bổ sung ngữ cảnh từ lịch sử khi tin nhắn không đứng riêng được (câu nối tiếp, trả lời câu hỏi của trợ lý, đại từ "nó", "môn đó"): thêm việc đang làm và dữ kiện người dùng đã nêu, giữ nguyên phần vừa nói; không chép câu trả lời hay số liệu của trợ lý. Có "Câu hỏi đầy đủ của lượt tra cứu gần nhất" thì lấy ngữ cảnh từ câu đó.
   4. Người dùng CHUYỂN sang ý định/chủ đề khác → `query` chỉ theo ý mới, không kéo dữ kiện việc cũ.
   5. "kỳ này", "năm nay", "học kỳ tới": `query` giữ cách gọi đó, KHÔNG tự đổi thành học kỳ/năm học cụ thể (việc đó chỉ làm ở truy vấn tìm kiếm).
 

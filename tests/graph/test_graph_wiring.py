@@ -847,6 +847,7 @@ async def test_the_web_judge_runs_while_retrieval_is_still_running(
             security: AcademicSecurityContext,
             limit: int | None = None,
             lexical_queries: list[str] | None = None,
+            extra_queries: list[list[str]] | None = None,
         ) -> list[list[RetrievedChunk]]:
             await asyncio.wait_for(judged.wait(), timeout=2)
             return self.retrieve_many(queries, security=security, limit=limit)
@@ -1345,7 +1346,7 @@ _FEE_CHUNK = RetrievedChunk(
 
 
 @pytest.mark.asyncio
-async def test_a_figure_absent_from_every_source_gets_a_caution_and_a_warning(
+async def test_a_figure_absent_from_every_source_gets_a_grounding_warning(
     mock_sync_llm_model: Callable[[str], FunctionModel],
     mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
     monkeypatch: pytest.MonkeyPatch,
@@ -1362,8 +1363,9 @@ async def test_a_figure_absent_from_every_source_gets_a_caution_and_a_warning(
 
     result = await run_graph(_fee_input(), models, _sink(tokens), _TRACE, _usage_recorder())
 
-    assert "42.500.000 không tìm thấy trong tài liệu" in result.response_text
-    assert "".join(tokens).endswith(result.response_text[-40:])  # the caution was streamed too
+    # metadata.grounding, shown by the client under the answer - not a line of the answer.
+    assert result.grounding == {"schema_version": 1, "ungrounded": ["42.500.000"]}
+    assert "Lưu ý" not in result.response_text
     assert [w.code for w in result.admin_warnings] == ["ANSWER_UNGROUNDED_NUMBERS"]
 
 
@@ -1690,3 +1692,36 @@ def test_a_form_about_the_caller_skips_what_their_profile_has() -> None:
     assert advisory_questions([_FORM], confirmed_metadata=profile) == []
     (asked,) = advisory_questions([{**_FORM, "about": "other"}], confirmed_metadata=profile)
     assert (asked["field"], asked["about"]) == ("he_dao_tao", "other")
+
+
+@pytest.mark.asyncio
+async def test_app_debug_sends_the_retrieval_context_as_a_debug_event_not_as_tokens(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    mock_streaming_llm_model: Callable[[Sequence[str]], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "APP_DEBUG", True)
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    monkeypatch.setattr(settings, "CHAT_LLM_RERANK_ENABLED", False)
+    tokens: list[str] = []
+    events: list[dict[str, object]] = []
+    trace = GraphTrace(
+        conversation_id="c", message_id="m", user_id=None, client_ip=None, on_debug=events.append
+    )
+    models = GraphModels(
+        classification=make_classification_llm_model("academic_advisory"),
+        query_transformation=mock_sync_llm_model("HyDE học phí"),
+        generation=mock_streaming_llm_model(["Học phí là 1.000 đồng [1]."]),
+        retrieval=FakeRetrievalService([_FEE_CHUNK]),
+    )
+
+    result = await run_graph(_fee_input(), models, _sink(tokens), trace, _usage_recorder())
+
+    assert events == [
+        {
+            "retrieval_questions": result.retrieval_questions,
+            "retrieval_slots": result.retrieval_slots,
+        }
+    ]
+    # The chat shows the answer alone.
+    assert "".join(tokens) == result.response_text

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 
 from app.core.academic_calendar import (
@@ -112,7 +113,8 @@ def build_known_metadata_fields_section(*, every_scope: bool = False) -> str:
     rows = "\n".join(
         f"    | {entry['concept']} | `{entry['field']}` | {entry['description']} |"
         for entry in get_known_metadata_fields()
-        if every_scope or entry.get("scope", "profile") == "profile"
+        if entry.get("scope", "profile") == "profile"
+        or (every_scope and entry.get("scope") == "calculation")
     )
     return (
         "| Khái niệm (mọi cách diễn đạt tương đương) | Tên field bắt buộc dùng lại | Ghi chú |\n"
@@ -177,11 +179,84 @@ def append_recent_history(query: str, history: Sequence[HistoryMessage]) -> str:
     if not recent:
         return query
     history_lines = "\n".join(_recent_history_line(message) for message in recent)
-    return (
+    prompt = (
         f"{query}\n\n"
         "Lịch sử hội thoại gần đây (chỉ dùng để hiểu tin nhắn nối tiếp ở trên):\n"
         f"{history_lines}"
     )
+    previous = last_retrieval_questions(history)
+    if not previous:
+        return prompt
+    previous_lines = "\n".join(f"- {question}" for question in previous)
+    prompt = f"{prompt}\n\n{PREVIOUS_RETRIEVAL_QUESTIONS_LABEL}\n{previous_lines}"
+    slots = last_retrieval_slots(history)
+    if not slots:
+        return prompt
+    return f"{prompt}\n{PREVIOUS_RETRIEVAL_SLOTS_LABEL} {describe_slots(slots)}"
+
+
+# Named in the HyDE / classifier / decomposer prompts - change them together.
+PREVIOUS_RETRIEVAL_QUESTIONS_LABEL = "Câu hỏi đầy đủ của lượt tra cứu gần nhất:"
+
+
+def last_retrieval_questions(history: Sequence[HistoryMessage]) -> list[str]:
+    """The standalone questions of the latest turn that retrieved, across the whole
+    history and not just the recent window: each one already folds in the turns
+    before it, so a chain of short follow-ups ("k19 thì sao" -> "k21" -> "hệ chính
+    quy á bạn") keeps its topic after the first question has left the window (the
+    "Tiếng Anh 2" of a 4-turn chain was lost, 23-11-2026). A calculation turn after
+    it ends the chain - a follow-up then belongs to the calculation."""
+
+    for message in reversed(history):
+        if message.role != "ASSISTANT":
+            continue
+        if message.retrieval_questions:
+            return list(message.retrieval_questions)
+        if message.calculation:
+            return []
+    return []
+
+
+PREVIOUS_RETRIEVAL_SLOTS_LABEL = "Ngữ cảnh của lượt đó:"
+_SLOT_LABELS = {
+    "chu_de": "điều đang hỏi",
+    "hoc_phan": "học phần",
+    "nganh_hoc": "ngành",
+    "khoa_nhap_hoc": "khóa",
+    "he_dao_tao": "hệ",
+    "bac_dao_tao": "bậc",
+    "co_so_hoc": "cơ sở",
+}
+
+
+def describe_slots(slots: Mapping[str, str]) -> str:
+    """`retrieval_slots` as one line: "học phần: Cơ lưu chất; ngành: ...; khóa: K21 (nhập
+    học 2025)"."""
+
+    return "; ".join(
+        f"{_SLOT_LABELS[field]}: "
+        + (
+            f"{cohort_label(int(value))} (nhập học {value})"
+            if field == "khoa_nhap_hoc" and value.isdigit()
+            else value
+        )
+        for field, value in slots.items()
+        if field in _SLOT_LABELS
+    )
+
+
+def last_retrieval_slots(history: Sequence[HistoryMessage]) -> dict[str, str]:
+    """The `retrieval_slots` of the turn `last_retrieval_questions` reads ({} when it has
+    none, or a calculation ended the chain)."""
+
+    for message in reversed(history):
+        if message.role != "ASSISTANT":
+            continue
+        if message.retrieval_questions:
+            return dict(message.retrieval_slots)
+        if message.calculation:
+            return {}
+    return {}
 
 
 def _neutralize_frame_tags(text: str) -> str:
@@ -322,6 +397,7 @@ def build_prepared_context_section(
     chunks: Sequence[RetrievedChunk],
     web_results: Sequence[WebSearchResult] = (),
     confirmed_metadata: Mapping[str, str] | None = None,
+    question: str | None = None,
 ) -> str:
     """Build `{prepared_context}` - the `<academic_context>` block, chunks numbered
     to match the `[1][2]` citation indices the generation prompt asks the model to use,
@@ -348,21 +424,56 @@ def build_prepared_context_section(
     return get_templates().prepared_context.format(
         context_chunks=context_chunks,
         web_search_context=_build_web_search_context(web_results, first_index=len(chunks) + 1),
-        current_time=build_current_time_section(confirmed_metadata),
+        current_time=build_current_time_section(confirmed_metadata, question),
     )
 
 
-def build_current_time_section(confirmed_metadata: Mapping[str, str] | None = None) -> str:
+# Relative time words, matched without diacritics: "kỳ này", "học kỳ tới", "năm nay"...
+_RELATIVE_TIME = re.compile(
+    r"\b(?:(?:hoc )?ky (?:nay|toi|sau|truoc)|hk (?:nay|toi|sau)|nam hoc (?:nay|toi|sau)"
+    r"|nam (?:nay|sau|toi|ngoai)|hien nay|hien gio|bay gio|luc nay|dot (?:nay|toi)"
+    r"|sap toi|gan nhat|moi nhat|thang (?:nay|toi|sau))\b"
+)
+
+_TERM_CAVEAT_RULE = (
+    "- Học kỳ hiện tại tính theo LỊCH DỰ KIẾN chung của Trường; mỗi khoa có thể có thời gian "
+    "khác. Câu trả lời nào DỰA VÀO học kỳ hiện tại phải kèm MỘT câu lưu ý để sinh viên tự xác "
+    'nhận (VD "Theo lịch dự kiến của Trường, hiện là Học kỳ I năm học 2026-2027; lịch của khoa '
+    'bạn có thể khác, bạn kiểm tra lại giúp mình nhé.").'
+)
+_NO_TERM_CAVEAT_RULE = (
+    "- Câu hỏi KHÔNG nhắc tới thời gian tương đối (kỳ này, năm nay, học kỳ tới...): KHÔNG thêm "
+    "câu lưu ý về học kỳ hiện tại hay lịch dự kiến của Trường."
+)
+
+
+def mentions_relative_time(text: str) -> bool:
+    """The question uses a time word whose meaning depends on today ("kỳ này", "năm nay")."""
+
+    decomposed = unicodedata.normalize("NFD", text.replace("đ", "d").replace("Đ", "D"))
+    plain = "".join(char for char in decomposed if not unicodedata.combining(char)).lower()
+    return bool(_RELATIVE_TIME.search(plain))
+
+
+def build_current_time_section(
+    confirmed_metadata: Mapping[str, str] | None = None, question: str | None = None
+) -> str:
     """`<current_time>`: today (ICT), the current term of the provisional school
     calendar and the student's own term number (from `khoa_nhap_hoc`) - one block,
-    given to every chat flow."""
+    given to every chat flow.
+
+    The "Theo lịch dự kiến của Trường, hiện là Học kỳ I..." caveat rule is kept only when
+    the question (if given) names a relative time: told it unconditionally, the model
+    opened answers about thesis weights with it (25/11/2026)."""
 
     today = now_ict().date()
     intake = parse_intake_year((confirmed_metadata or {}).get(INTAKE_FIELD), today)
+    caveat = question is None or mentions_relative_time(question)
     return get_templates().current_time.format(
         current_date=today.strftime("%d/%m/%Y"),
         current_term=describe_current_term(today),
         student_term=describe_student_term(today, intake),
+        term_caveat_rule=_TERM_CAVEAT_RULE if caveat else _NO_TERM_CAVEAT_RULE,
     )
 
 

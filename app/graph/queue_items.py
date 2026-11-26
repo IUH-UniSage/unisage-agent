@@ -55,6 +55,15 @@ class StatusItem:
 
 
 @dataclass(frozen=True)
+class DebugItem:
+    """One `event: debug` - APP_DEBUG only: what the turn retrieved with
+    (`retrieval_questions`, `retrieval_slots`), for the browser's network tab. The chat
+    client does not draw it."""
+
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ClarificationItem:
     """One `event: clarification` - the public panel JSON (contracts/chat-sse.md §3).
     Only queued after the round is stored AND projected into the message metadata."""
@@ -81,6 +90,7 @@ QueueItem = (
     | StatusItem
     | ErrorItem
     | WarningItem
+    | DebugItem
     | ClarificationItem
     | ClarificationClosedItem
     | DoneItem

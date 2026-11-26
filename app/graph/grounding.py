@@ -23,7 +23,7 @@ from __future__ import annotations
 import itertools
 import math
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from app.rag.prompting.citations import cited_indexes
@@ -405,6 +405,40 @@ REFUSAL_HINTS = (
 def looks_like_refusal(answer: str) -> bool:
     lowered = answer.lower()
     return any(hint in lowered for hint in REFUSAL_HINTS)
+
+
+def miscited_sources(
+    ungrounded: Sequence[str], source_texts: Sequence[str], cited: Collection[int]
+) -> dict[str, list[int]]:
+    """Ungrounded numbers that are written, as they are, in a source the answer did not
+    cite: the number is real and only its [n] is wrong. With two programmes' tables side by
+    side, the enhanced-English codes were cited as [1], the standard programme (23-11-2026)
+    - a "not found" caution then reads as if the codes were made up. Number -> the
+    1-based indexes of the uncited sources holding it."""
+
+    found: dict[str, list[int]] = {}
+    for token in ungrounded:
+        indexes = [
+            index
+            for index, text in enumerate(source_texts, start=1)
+            if index not in cited and re.search(rf"(?<![\d.,]){re.escape(token)}(?![\d])", text)
+        ]
+        if indexes:
+            found[token] = indexes
+    return found
+
+
+def source_line(miscited: Mapping[str, Sequence[int]]) -> str:
+    """The line that gives the right source of `miscited_sources` numbers."""
+
+    by_sources: dict[tuple[int, ...], list[str]] = {}
+    for token, indexes in miscited.items():
+        by_sources.setdefault(tuple(indexes), []).append(token)
+    parts = [
+        f"{', '.join(tokens)}: {''.join(f'[{index}]' for index in indexes)}"
+        for indexes, tokens in by_sources.items()
+    ]
+    return f"\n\n> Nguồn của {'; '.join(parts)}."
 
 
 def caution_line(ungrounded: Sequence[str]) -> str:
