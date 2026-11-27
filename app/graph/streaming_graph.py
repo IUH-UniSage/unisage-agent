@@ -135,6 +135,7 @@ from app.graph.nodes.web_search import (
 from app.graph.program_scope import check_program_scope, document_program
 from app.graph.retrieval_slots import (
     carry_over,
+    clean_slots,
     task_slots,
     with_context,
     with_course,
@@ -485,6 +486,11 @@ async def _run_resume(
     answers_by_task: dict[str, dict[str, JsonValue]] = {}
     # Answers about someone else: part of the re-answered question, never the profile.
     case_answers: list[str] = []
+    # Answers about the caller: saved to the profile AND part of the re-answered question.
+    # The profile alone reached the rewrite as "what the asker declared", which it applies
+    # only to a question about the asker: "hoc phi nganh cntt" + "Nhập học 2022" was
+    # re-answered for no cohort and asked for the cohort again (27/11/2026).
+    own_answers: list[str] = []
     today = now_ict().date()
     for answer in resume.answers.values():
         question = answer.question
@@ -500,6 +506,8 @@ async def _run_resume(
         if question.origin == "advisory" and question.about == "other":
             case_answers.append(f"{concept(name)}: {answer.display}")
             continue
+        if question.origin == "advisory":
+            own_answers.append(f"{concept(name)}: {answer.display}")
         default_scope: Scope = "profile" if question.origin == "advisory" else "calculation"
         if field_scope(name, default_scope) == "profile":
             # The profile keeps what the student picked as they read it: an advisory
@@ -534,7 +542,7 @@ async def _run_resume(
             advisory = AdvisoryPart(
                 task_id=task.task_id,
                 tasks=[(origin, origin.routing_mode or "SINGLE") for origin in task.origin_tasks],
-                question=_with_case_answers(pending.original_query, case_answers),
+                question=_with_case_answers(pending.original_query, case_answers, own_answers),
             )
 
     return await _turn_with_calculations(
@@ -554,16 +562,22 @@ async def _run_resume(
     )
 
 
-def _with_case_answers(question: str, case_answers: Sequence[str]) -> str:
-    """The question with what the user just answered about the person it asks about -
-    their attributes belong to this question, not to `<declared_attributes>`, which
-    holds only the caller's own."""
+def _with_case_answers(
+    question: str, case_answers: Sequence[str], own_answers: Sequence[str] = ()
+) -> str:
+    """The question with what the user just answered on the panel. About the person it asks
+    about: their attributes belong to this question, not to `<declared_attributes>`, which
+    holds only the caller's own. About the caller: also in the profile, and written here
+    because the answer was given for this question."""
 
-    if not case_answers:
-        return question
-    return (
-        f"{question}\n(Về trường hợp được hỏi, người dùng vừa cho biết: {'; '.join(case_answers)})"
-    )
+    if case_answers:
+        question = (
+            f"{question}\n(Về trường hợp được hỏi, người dùng vừa cho biết: "
+            f"{'; '.join(case_answers)})"
+        )
+    if own_answers:
+        question = f"{question}\n(Người dùng vừa trả lời cho câu hỏi này: {'; '.join(own_answers)})"
+    return question
 
 
 @dataclass(frozen=True)
@@ -1178,6 +1192,13 @@ async def _run_advisory_flow(
         if added:
             sub_queries = [with_context(sub_queries[0], added)]
             logger.info("retrieval_slots carried %s into %r", added, rewritten)
+        if graph_input.resume is not None:
+            # A panel answer completes the question the panel turn asked about: its fields
+            # (topic, major) stay, the answer adds or replaces one (only the cohort was left
+            # after "hoc phi nganh cntt" + "Nhập học 2022", 27/11/2026).
+            retrieval_slots = clean_slots(
+                {**last_retrieval_slots(graph_input.history), **retrieval_slots}
+            )
     # The standalone question of each sub-query (HyDE's rewrite, or the decomposed
     # question itself) - what the LLM rerank and the web judge judge against.
     questions = [extract_standalone_question(sub_query.retrieval_text) for sub_query in sub_queries]

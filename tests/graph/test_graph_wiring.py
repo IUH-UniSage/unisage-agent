@@ -25,6 +25,7 @@ from app.graph.progress import status_reporter
 from app.graph.streaming import TokenSink
 from app.graph.streaming_graph import _web_request, run_graph
 from app.graph.streaming_state import GraphInput, GraphModels, ResumeInput
+from app.schemas.chat_history import HistoryMessage
 from app.schemas.clarification import Answer, ClarificationSubmit, PendingRound
 from app.schemas.intent import ClassifiedTask
 from app.schemas.retrieval import RetrievedChunk
@@ -1684,6 +1685,83 @@ async def test_a_panel_about_someone_else_answers_that_question_and_saves_nothin
 
     assert result.confirmed_metadata == own_profile
     assert "Về trường hợp được hỏi, người dùng vừa cho biết: Hệ đào tạo: Liên thông" in prompts[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_panel_answer_about_the_caller_is_saved_and_written_into_the_question(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ "hoc phi nganh cntt" + "Nhập học 2022": the answer went to the profile only, the
+    rewrite left it out for a question it did not read as the asker's own, and the answer
+    asked for the cohort again (27/11/2026). It is now also part of the question."""
+
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    pending = _advisory_round(
+        [ClassifiedTask(intent="academic_advisory", query="học phí", routing_mode="SINGLE")]
+    )
+    prompts: list[str] = []
+    models = GraphModels(
+        classification=mock_sync_llm_model("off_topic"),
+        query_transformation=_echo_query_transformation_model(),
+        generation=_capturing_generation(prompts),
+        retrieval=_RecordingRetrievalService([_DUMMY_CHUNK]),
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message="Hệ đào tạo: Liên thông",
+        is_first_turn=False,
+        security=AcademicSecurityContext(user_id="u1", role="SINH_VIEN"),
+        confirmed_metadata={},
+        resume=_resume(pending, "lien_thong"),
+    )
+
+    result = await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.confirmed_metadata.get("he_dao_tao")
+    assert "Người dùng vừa trả lời cho câu hỏi này: Hệ đào tạo: Liên thông" in prompts[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_panel_answer_keeps_the_fields_of_the_turn_that_asked(
+    mock_sync_llm_model: Callable[[str], FunctionModel],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "CHAT_RERANK_SCORE_THRESHOLD", 0.0)
+    pending = _advisory_round(
+        [
+            ClassifiedTask(
+                intent="academic_advisory", query="học phí khóa K18", routing_mode="SINGLE"
+            )
+        ]
+    )
+    models = GraphModels(
+        classification=mock_sync_llm_model("off_topic"),
+        query_transformation=_echo_query_transformation_model(),
+        generation=_capturing_generation([]),
+        retrieval=_RecordingRetrievalService([_DUMMY_CHUNK]),
+    )
+    graph_input = GraphInput(
+        conversation_id="c1",
+        user_message="Hệ đào tạo: Liên thông",
+        is_first_turn=False,
+        security=AcademicSecurityContext(user_id="u1", role="SINH_VIEN"),
+        history=[
+            HistoryMessage(role="USER", content="hoc phi nganh cntt"),
+            HistoryMessage(
+                role="ASSISTANT",
+                content="Bạn nhập học năm nào?",
+                retrieval_questions=["Học phí ngành CNTT là bao nhiêu?"],
+                retrieval_slots={"chu_de": "mức thu học phí", "nganh_hoc": "Công nghệ thông tin"},
+            ),
+        ],
+        resume=_resume(pending, "lien_thong"),
+    )
+
+    result = await run_graph(graph_input, models, _sink([]), _TRACE, _usage_recorder())
+
+    assert result.retrieval_slots["chu_de"] == "mức thu học phí"
+    assert result.retrieval_slots["nganh_hoc"] == "Công nghệ thông tin"
 
 
 def test_a_form_about_the_caller_skips_what_their_profile_has() -> None:
