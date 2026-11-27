@@ -55,6 +55,7 @@ from app.graph.course_lookup import (
     lookup_course_rows,
 )
 from app.graph.evidence import levels_for
+from app.graph.fee_lookup import FeeLookup, fee_summary, lookup_fee_rows, without_programmes
 from app.graph.grounding import (
     check_answer,
     looks_like_refusal,
@@ -1468,6 +1469,37 @@ async def _run_advisory_flow(
             "; ".join(chunk.chunk_id for chunk in lookup.added),
         )
 
+    # FeeLookup: the rows of the fee schedule a fee question asks for (system, intake, group),
+    # from the whole schedule - a question naming a major and a cohort reads like the
+    # programmes' titles and their chunks push the schedule's row out (app/graph/fee_lookup.py).
+    fee = FeeLookup()
+    if fetch_documents is not None and rerank_result.chunks:
+        security = graph_input.security
+        fee = await lookup_fee_rows(
+            candidate_chunks,
+            rerank_result.chunks,
+            texts=[graph_input.user_message, *questions],
+            fetch_documents=lambda ids: fetch_documents(
+                ids, security=security, limit=MAX_DOCUMENT_CHUNKS * len(ids)
+            ),
+            titles=getattr(models.retrieval, "document_titles_async", None),
+        )
+        if fee.added or fee.rows:
+            rerank_result = replace(
+                rerank_result,
+                chunks=without_programmes([*fee.added, *rerank_result.chunks], fee),
+            )
+        if fee.documents:
+            logger.info(
+                "fee_lookup system=%s intake=%s groups=%s rows=%d missing=%s added=[%s]",
+                fee.system,
+                fee.intake,
+                sorted(fee.groups),
+                len(fee.rows),
+                fee.missing_intake,
+                "; ".join(chunk.chunk_id for chunk in fee.added),
+            )
+
     # Cohort, programme, then major scope: drop other cohorts' / programmes' / majors'
     # documents when the asked one has some, or tell generation what the documents found are
     # for (app/graph/cohort_scope.py, app/graph/program_scope.py, app/graph/major_scope.py).
@@ -1537,6 +1569,7 @@ async def _run_advisory_flow(
         )
     # The asked courses' rows of the final context, written out by code (course_lookup.py).
     scope_notice += course_summary(rerank_result.chunks, lookup)
+    scope_notice += fee_summary(rerank_result.chunks, fee)
     if lookup.course_name and retrieval_slots and "hoc_phan" not in retrieval_slots:
         # The classifier did not name the course; the table did.
         retrieval_slots = with_course(retrieval_slots, lookup.course_name)
