@@ -184,3 +184,21 @@ def test_task_slots_drop_a_major_the_question_does_not_name() -> None:
         "chu_de": "học phần tiên quyết",
         "hoc_phan": "Cơ lưu chất",
     }
+
+
+def test_task_slots_keep_a_major_the_question_names_by_its_abbreviation() -> None:
+    """ "hoc phi nganh cntt": the classifier wrote "Công nghệ thông tin", the question only
+    "cntt" - the major was dropped and the follow-up "K18 thì sao" had none (27/11/2026)."""
+
+    task = ClassifiedTask(
+        intent="academic_advisory",
+        query="hoc phi nganh cntt",
+        web=WebSlots(
+            topics=["hoc_phi"], subject="mức thu học phí", nganh_hoc="Công nghệ thông tin"
+        ),
+    )
+
+    assert task_slots(task, "Học phí ngành CNTT là bao nhiêu?") == {
+        "chu_de": "mức thu học phí",
+        "nganh_hoc": "Công nghệ thông tin",
+    }

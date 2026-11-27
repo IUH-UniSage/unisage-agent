@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from app.graph.cohort_scope import asked_cohort, cohort_label
-from app.graph.major_scope import fold
+from app.graph.major_scope import asked_majors, fold
 from app.graph.metadata_fields import canonical_field
 from app.graph.nodes.query_transformation import SubQuery, extract_standalone_question
 from app.schemas.intent import ClassifiedTask
@@ -75,7 +75,7 @@ def task_slots(task: ClassifiedTask, question: str) -> dict[str, str]:
     # major, 25/11/2026): kept only when the question states them.
     for field in ("nganh_hoc", "he_dao_tao", "bac_dao_tao", "co_so_hoc"):
         value = raw.get(field)
-        if value and not _named(value, question):
+        if value and not _named(value, question, major=field == "nganh_hoc"):
             raw[field] = None
     year = asked_cohort(question)
     if year is not None:
@@ -83,13 +83,16 @@ def task_slots(task: ClassifiedTask, question: str) -> dict[str, str]:
     return clean_slots(raw)
 
 
-def _named(value: str, question: str) -> bool:
+def _named(value: str, question: str, *, major: bool = False) -> bool:
     """`question` names `value`: every word of it, accents ignored ("Cơ khí" in "ngành
-    Công nghệ kỹ thuật cơ khí")."""
+    Công nghệ kỹ thuật cơ khí"), or - for a major - its known abbreviation ("cntt" for
+    "Công nghệ thông tin": "hoc phi nganh cntt" lost its major, 27/11/2026)."""
 
     words = fold(value).split()
     folded = f" {fold(question)} "
-    return bool(words) and all(f" {word} " in folded for word in words)
+    if bool(words) and all(f" {word} " in folded for word in words):
+        return True
+    return major and bool(words) and " ".join(words) in asked_majors(question, [])
 
 
 def clean_slots(raw: Mapping[str, object]) -> dict[str, str]:
